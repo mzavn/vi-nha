@@ -92,6 +92,7 @@ Quy trình chung và cổng cứng: khối `mk-specs` cuối file (do `install.s
 
 - **Người duyệt nghiệp vụ là người duy trì repo.** Rule về tiền, quyền truy cập, bảo mật: người duy trì quyết, AI chỉ đề xuất. Người duy trì nói "cứ làm" thì vẫn viết proposal, nhưng không cần chờ duyệt nghiệp vụ.
 - **Thay đổi DB**: migration mới trong `migrations/` (số kế tiếp sau migration cuối), cập nhật `docs/schema.sql` + `schema_version`, `test/schema.test.ts` phải xanh. `migrations/0030_baseline.sql` và migration đã phát hành: không sửa. Trước khi chạy migration trên production: sao lưu D1 production.
+- **Link SePay luôn là link giới thiệu** (`gcid=arqcwdek`) ở app, README, tài liệu, GitBook: đăng ký `https://my.sepay.vn/register?gcid=arqcwdek`, trang chủ `https://sepay.vn?gcid=arqcwdek`, loa thanh toán `https://sepay.vn/loa-thanh-toan.html?gcid=arqcwdek`, đặt loa `https://sepay.vn/dat-loa-thanh-toan-sepay.html?gcid=arqcwdek`. Ngoại lệ: link tài liệu kỹ thuật `developer.sepay.vn` / `docs.sepay.vn` trích làm nguồn.
 - **Lệnh**: `npm run specs:gen` (sinh `traceability.md`, `open-issues.md`, dòng đếm/chỉ số README), `npm run specs:check` (phải 0 unresolved).
 - **Definition of Done** (thêm vào DoD của skill): `npm test`, `npm run typecheck`, `npm run build` xanh · đã chạy thử đường thay đổi (UI: xem tận mắt trên mobile 390px).
 - **Ngôn ngữ**: giao diện, tin nhắn, chú thích, tên test, specs viết tiếng Việt; tên biến / hằng / hàm / kiểu / file, giá trị lưu DB, trường và đường dẫn API, địa chỉ màn PWA, tên và mô tả tool MCP viết tiếng Anh. Bảng tra: `docs/glossary.md`.

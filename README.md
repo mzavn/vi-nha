@@ -4,7 +4,7 @@
 > every income is split immediately into wallets (wealth building, tax, fun, must-pay, nice-to-have), locked money is never
 > touched, and the app answers one question each day — *how much is left to spend this week?* It runs entirely on **your
 > own Cloudflare account** (Workers + D1, Free plan is enough) as an installable PWA, can ingest bank transactions
-> automatically through SePay (Vietnamese banks), sends reminders via web push / Telegram / Zalo, and exposes an MCP server
+> automatically through [SePay](https://sepay.vn?gcid=arqcwdek) (Vietnamese banks), sends reminders via web push / Telegram / Zalo, and exposes an MCP server
 > so Claude can read and record transactions. The interface and documentation are in **Vietnamese**.
 > Install with the **Deploy to Cloudflare** button, `npm run setup`, or by asking an AI coding agent to follow
 > [`docs/cai-bang-ai.md`](docs/cai-bang-ai.md). License: AGPL-3.0, Copyright (C) 2026 MZA. Security reports: [`SECURITY.md`](SECURITY.md).
@@ -80,7 +80,7 @@ Trên điện thoại: mở bằng trình duyệt → "Thêm vào màn hình ch�
 
 - **Gói Free của Cloudflare chỉ có 5 cron cho cả tài khoản.** Ví nhà dùng 2 (nhắc việc, rà soát giao dịch ban đêm).
   Tài khoản đã dùng hết cron cho việc khác thì deploy sẽ báo lỗi.
-- **Tự ghi sổ ngân hàng cần [SePay](https://sepay.vn)** (dịch vụ bên thứ ba, nối tài khoản ngân hàng Việt Nam; giá xem ở sepay.vn).
+- **Tự ghi sổ ngân hàng cần [SePay](https://sepay.vn?gcid=arqcwdek)** (dịch vụ bên thứ ba, nối tài khoản ngân hàng Việt Nam; giá xem ở [sepay.vn](https://sepay.vn?gcid=arqcwdek)).
   Chưa có tài khoản: [đăng ký SePay qua link giới thiệu của Ví nhà](https://my.sepay.vn/register?gcid=arqcwdek) (cũng có trong app: Cài đặt › Kết nối › SePay).
   Không có SePay thì vẫn dùng được: ghi tay, chia tiền, nhắc việc đều chạy.
 - **Nối Claude (hoặc ứng dụng AI khác) thì số liệu bạn hỏi sẽ đi qua nhà cung cấp AI đó.** Không nối thì số liệu chỉ nằm
