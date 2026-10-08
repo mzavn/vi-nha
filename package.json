@@ -29,7 +29,7 @@
     "@cloudflare/workers-types": "^5.20260921.1",
     "@preact/preset-vite": "^2.10.6",
     "@tailwindcss/vite": "^4.3.3",
-    "@types/node": "^26.6.2",
+    "@types/node": "^26.6.4",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
     "vite": "^8.3.0",
