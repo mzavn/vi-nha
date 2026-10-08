@@ -181,12 +181,34 @@
     padding-right: max(12px, env(safe-area-inset-right, 0px));
     border-bottom-color: var(--border);
   }
+  /* Khung nằm trong .guide (ẩn bằng `hidden` khi sang màn khác, giữ khung sống); dòng "Đang tải…" nằm dưới khung tới khi GitBook tải xong. */
+  .app-guide .guide,
+  .app-guide .guide-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .app-guide .guide-body {
+    position: relative;
+  }
+  .app-guide .guide-loading {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    margin: 0;
+    color: var(--fg-2);
+    font-size: 14px;
+    pointer-events: none;
+  }
   .app-guide .guide-frame {
+    position: relative;
     flex: 1;
     min-height: 0;
     width: 100%;
     border: 0;
-    background: var(--surface);
+    background: transparent;
   }
   /* Có nút "+" nổi: chừa thêm chiều cao của nút (56px + 16px cách thanh dưới + 16px thở) để nội dung cuối không bị che. */
   .app.has-fab {
@@ -1973,6 +1995,10 @@
     margin: 0;
     font-size: 12px;
     color: var(--bad);
+  }
+  .side-about {
+    margin: 0;
+    padding: 0 4px;
   }
 
   /* ── Hôm nay: bảng điều khiển ──

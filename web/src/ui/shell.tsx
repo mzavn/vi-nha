@@ -4,6 +4,8 @@
 import { useEffect, useState } from "preact/hooks";
 import { errorText } from "../lib/api";
 import { shortDate, timeHM } from "../lib/period";
+import { appVersionLabel } from "../lib/settings";
+import { SOURCE_URL } from "../lib/splits";
 import { go, logout, syncNow, toast, useApp, type Tab } from "../state/store";
 import { Icon } from "./icons";
 import { Seg } from "./parts";
@@ -212,6 +214,12 @@ export function Sidebar() {
             {signOutEverywhereNote(app.member?.name, all.unsynced)}
           </p>
         )}
+        <p class="side-k side-about">
+          Ví nhà · {appVersionLabel(__APP_VERSION__)} ·{" "}
+          <a class="link" href={SOURCE_URL} target="_blank" rel="noopener">
+            Mã nguồn
+          </a>
+        </p>
       </div>
     </aside>
   );

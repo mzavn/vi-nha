@@ -66,6 +66,10 @@ export const ASSIGN_CHOICES: Record<"in" | "out", { value: AssignChoice; label: 
 
 /** Hướng dẫn sử dụng (GitBook) — thanh bên máy tính và Cài đặt › Máy này dẫn tới. */
 export const GUIDE_URL = "https://mzavn.gitbook.io/vi-nha";
+/** Đăng ký SePay qua link giới thiệu của Ví nhà — Cài đặt › Kết nối › SePay. */
+export const SEPAY_REGISTER_URL = "https://my.sepay.vn/register?gcid=arqcwdek";
+/** Mã nguồn Ví nhà (AGPL-3.0) — Cài đặt › Máy này › Về Ví nhà (điện thoại) và chân thanh bên (máy tính). */
+export const SOURCE_URL = "https://github.com/mzavn/vi-nha";
 
 /** Trang hướng dẫn "Tiền vào: chọn loại nào?" — banner "Tiền vào luôn phải hỏi" ở màn Gán dẫn tới. */
 export const GUIDE_PICK_KIND_URL = `${GUIDE_URL}/ngan-hang/tien-vao-chon-loai`;

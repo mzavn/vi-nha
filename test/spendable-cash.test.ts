@@ -32,8 +32,8 @@ const piggyBank = (id: string, balance: number) => acct(id, balance, { role: "pi
 describe("tiền chi được — công thức (hàm thuần)", () => {
   it("cộng tài khoản đang tính, trừ Tích sản ngoài heo và Thuế; heo và tài khoản tắt nằm ở danh sách không tính", () => {
     const r = spendableCash(
-      [acct("mb-spending-husband", 3_200_000), acct("mb-spending-wife", 230_000), acct("cash", 500_000), acct("credit-card", -1_500_000, { spendable: false }), piggyBank("piggy-bank-husband", 5_000), piggyBank("piggy-bank-wife", 71_300)],
-      2_076_300,
+      [acct("mb-spending-husband", 3_200_000), acct("mb-spending-wife", 230_000), acct("cash", 500_000), acct("credit-card", -1_500_000, { spendable: false }), piggyBank("piggy-bank-husband", 5_000), piggyBank("piggy-bank-wife", 50_000)],
+      2_055_000,
       600_000,
     );
     expect(r).toEqual({
@@ -44,7 +44,7 @@ describe("tiền chi được — công thức (hàm thuần)", () => {
         { accountId: "cash", name: "cash", balance: 500_000 },
       ],
       wealthBuildingHeld: 2_000_000,
-      wealthBuildingOutside: 76_300,
+      wealthBuildingOutside: 55_000,
       taxHeld: 600_000,
       excluded: [
         { accountId: "credit-card", name: "credit-card", role: null },

@@ -1,5 +1,5 @@
 // Tab Tích sản (pwa UC-707, GET /v1/wealth-building — ADR-86): tiền nào, loại nào, đang ở đâu, đến từ đâu. Thuần để test.
-// Mọi số đi qua `Money` / `formatVnd` — không rút gọn kiểu "76k" trên card này.
+// Mọi số đi qua `Money` / `formatVnd` — không rút gọn kiểu "55k" trên card này.
 
 import { formatSigned, formatVnd } from "./money";
 import { ROLE_LABEL, wealthBuildingAccountLabel } from "./wealth-building-accounts";
@@ -71,7 +71,7 @@ export function wealthBuildingPlaces(b: WealthBuildingBreakdown): WealthBuilding
   return { lines, extra: over > 0 ? placesExtra(b.accounts, held, cash, over) : null };
 }
 
-/** "Heo đất và phao dự phòng đang có 136.364 ₫: 76.300 ₫ là tiền Tích sản, 60.064 ₫ còn lại …" — chỉ kể loại tài khoản đang có tiền. */
+/** "Heo đất và phao dự phòng đang có 135.000 ₫: 55.000 ₫ là tiền Tích sản, 80.000 ₫ còn lại …" — chỉ kể loại tài khoản đang có tiền. */
 function placesExtra(accounts: WealthBuildingAccount[], held: number, cash: number, over: number): string {
   const roles = (["piggy_bank", "buffer", "term_deposit"] as const).filter((r) => accounts.some((a) => a.role === r && a.balance > 0)).map((r) => ROLE_LABEL[r].toLowerCase());
   const names = roles.length > 1 ? `${roles.slice(0, -1).join(", ")} và ${roles.at(-1)}` : (roles[0] ?? "");
@@ -148,7 +148,7 @@ export function safetyFundMonthsText(fund: SafetyFundView): string | null {
   return `${covered} / ${fund.months}`;
 }
 
-/** "Có 76.300 ₫ · cần 110.550.000 ₫" ("cần ước tính …" khi mức cần đang ước từ ngân sách). */
+/** "Có 55.000 ₫ · cần 96.000.000 ₫" ("cần ước tính …" khi mức cần đang ước từ ngân sách). */
 export function safetyFundCashText(fund: SafetyFundView, estimated = false): string {
   return `Có ${formatVnd(fund.cash)} · cần ${estimated ? "ước tính " : ""}${formatVnd(fund.target)}`;
 }

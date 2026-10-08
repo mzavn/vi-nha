@@ -2,3 +2,9 @@
 # Chạy thử trên máy: chép file này thành .dev.vars rồi điền. Trên Cloudflare: nút Deploy hỏi lúc cài,
 # `npm run setup` tự đặt (`wrangler secret put APP_PASSWORD`). Khoá SePay, Telegram, Zalo đặt sau trong app (Cài đặt).
 APP_PASSWORD=
+
+# Tuỳ chọn — ĐỂ TRỐNG trừ khi bạn viết script gọi API. Ai có token này gọi được toàn bộ /v1/* với
+# `Authorization: Bearer <token>`, đóng vai BẤT KỲ thành viên nào qua header `X-Member-Id` (không có header = chủ hộ),
+# và "Đăng xuất mọi máy" KHÔNG thu hồi nó. Đổi / thu hồi: đặt giá trị mới (`npx wrangler secret put API_TOKEN`) hoặc xoá
+# secret trong Cloudflare dashboard. Trống thì mọi yêu cầu có header Authorization đều bị từ chối.
+# API_TOKEN=

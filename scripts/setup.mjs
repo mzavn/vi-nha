@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // Cài Ví nhà lên tài khoản Cloudflare của bạn: `npm run setup`. Chạy lại an toàn (không tạo D1 / KV thứ hai, không đổi
 // mật khẩu trừ khi có --reset-password). Chạy được không cần gõ gì (cho agent AI, không có TTY) bằng cờ / biến môi trường;
-// có TTY thì hỏi. Kịch bản cho agent AI: docs/cai-bang-ai.md.
+// có TTY thì hỏi. Mật khẩu tự sinh khi không có TTY không in ra (agent đọc được đầu ra) mà ghi vào ~/.vi-nha/<tên-worker>.txt.
+// Kịch bản cho agent AI: docs/cai-bang-ai.md.
 import { spawnSync } from "node:child_process";
 import { randomInt } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
@@ -19,7 +21,8 @@ const PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
 export const USAGE = `Cài Ví nhà lên Cloudflare: npm run setup [-- <cờ>]
 
   --account-id <id>     account Cloudflare dùng để cài (hoặc biến CLOUDFLARE_ACCOUNT_ID); cần khi đăng nhập có nhiều account
-  --generate-password   tự sinh mật khẩu chung, in ra MỘT lần (hoặc đặt sẵn biến APP_PASSWORD)
+  --generate-password   tự sinh mật khẩu chung (hoặc đặt sẵn biến APP_PASSWORD): có terminal thì in ra MỘT lần; không có
+                        terminal (agent AI chạy) thì không in, ghi vào ~/.vi-nha/<tên-worker>.txt (chỉ in đường dẫn)
   --reset-password      đặt lại mật khẩu chung dù đã có
   --yes                 không hỏi xác nhận (bắt buộc khi không có terminal, ví dụ agent AI chạy)
   --name <tên>          cài dưới tên Worker khác (Worker, D1 cùng tên mới; KV <tên>-oauth-kv) — để chạy thử, ghi vào wrangler.jsonc
@@ -73,6 +76,28 @@ export function parseArgs(argv, env = {}) {
 export function generatePassword(random = randomInt) {
   const group = () => Array.from({ length: 5 }, () => PASSWORD_ALPHABET[random(PASSWORD_ALPHABET.length)]).join("");
   return [group(), group(), group(), group()].join("-");
+}
+
+/** File giữ mật khẩu tự sinh khi không có terminal: `~/.vi-nha/<tên-worker>.txt`. */
+export function passwordFilePath(name, home = homedir()) {
+  return join(home, ".vi-nha", `${name}.txt`);
+}
+
+/** Ghi (đè) mật khẩu vào file: thư mục 0700, file 0600 — siết lại cả khi đã có sẵn với quyền rộng hơn. */
+export function savePasswordFile(path, password) {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  chmodSync(dirname(path), 0o700);
+  // File có sẵn với quyền rộng: siết về 0600 trước khi ghi mật khẩu mới (mode của writeFileSync chỉ áp khi tạo file).
+  if (existsSync(path)) chmodSync(path, 0o600);
+  writeFileSync(path, `${password}\n`, { mode: 0o600 });
+}
+
+/** Lời báo mật khẩu tự sinh: có terminal thì in một lần; không có (agent AI đọc đầu ra) thì chỉ đường dẫn file. */
+export function generatedPasswordMessage({ password, interactive, savedPath }) {
+  if (interactive) return `\nMật khẩu chung (chỉ in MỘT lần — ghi lại ngay, không gửi qua chat):\n\n  ${password}\n`;
+  return `\nMật khẩu chung đã tự sinh và lưu vào file (không in ra đây):\n\n  ${savedPath}\n
+Người dùng tự mở file này và chép mật khẩu vào chỗ an toàn (trình quản lý mật khẩu, sổ tay); chép xong có thể xoá file.
+Agent AI: không đọc, không mở file này, không dán mật khẩu vào chat.\n`;
 }
 
 const topLevelString = (key) => new RegExp(`^(  "${key}"\\s*:\\s*)"([^"]*)"`, "m");
@@ -234,7 +259,7 @@ async function main() {
       password = generatePassword();
       generated = true;
     }
-    if (!password) fail(EXIT.needInput, "Cần mật khẩu chung: thêm --generate-password (tự sinh, in ra một lần) hoặc đặt biến môi trường APP_PASSWORD.");
+    if (!password) fail(EXIT.needInput, "Cần mật khẩu chung: thêm --generate-password (tự sinh) hoặc đặt biến môi trường APP_PASSWORD.");
     if (password.length < PASSWORD_MIN) fail(EXIT.needInput, `Mật khẩu chung cần ít nhất ${PASSWORD_MIN} ký tự.`);
   }
 
@@ -249,16 +274,26 @@ async function main() {
   if (!wrangler(["d1", "migrations", "apply", "DB", "--remote"], { configPath }).ok) fail(EXIT.error, "Migration lỗi (xem log phía trên). Chạy lại npm run setup.");
 
   step("7/7 Mật khẩu chung");
+  let savedPath = null;
   if (password) {
+    // Không có terminal: ghi file trước khi đặt — ghi lỗi thì dừng khi mật khẩu cũ (nếu có) còn nguyên.
+    if (generated && !interactive) {
+      savedPath = passwordFilePath(name);
+      try {
+        savePasswordFile(savedPath, password);
+      } catch (e) {
+        fail(EXIT.error, `Không ghi được file mật khẩu ${savedPath}: ${e.message}\nChưa đổi mật khẩu chung. Sửa quyền thư mục rồi chạy lại.`);
+      }
+    }
     const put = wrangler(["secret", "put", "APP_PASSWORD"], { configPath, input: password, capture: true });
-    if (!put.ok) fail(EXIT.error, `Đặt mật khẩu lỗi:\n${put.stderr || put.stdout}`);
+    if (!put.ok) fail(EXIT.error, `Đặt mật khẩu lỗi:\n${put.stderr || put.stdout}${savedPath ? `\nMật khẩu trong ${savedPath} CHƯA được đặt — chạy lại chính lệnh này (file sẽ được ghi đè).` : ""}`);
     console.log(hasPassword ? "Đã đặt lại mật khẩu chung." : "Đã đặt mật khẩu chung.");
   } else {
     console.log("Mật khẩu chung đã có từ lần cài trước — giữ nguyên (đổi: npm run setup -- --reset-password).");
   }
 
   console.log(`\n✅ Xong. Ví nhà: ${url ?? `https://${name}.<subdomain>.workers.dev (xem dòng "Deployed" phía trên)`}`);
-  if (generated) console.log(`\nMật khẩu chung (chỉ in MỘT lần — ghi lại ngay, không gửi qua chat):\n\n  ${password}\n`);
+  if (generated) console.log(generatedPasswordMessage({ password, interactive, savedPath }));
   console.log(`Bước tiếp: mở địa chỉ trên → màn Thiết lập: nhập mật khẩu chung, thêm người trong nhà, tài khoản, bộ ví.
 Địa chỉ workers.dev mới đăng ký có thể cần vài phút mới mở được.
 Cập nhật bản mới sau này: git pull && npm run deploy`);

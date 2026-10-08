@@ -14,9 +14,10 @@ import { connectionRows } from "../lib/ai-connections";
 import { canAddMember, passwordLine } from "../lib/members";
 import { formatVnd } from "../lib/money";
 import { dayKey, previousDay, shortDate } from "../lib/period";
-import { ACCOUNT_KIND_LABEL, allocationSummary, auditView, bankName, formatPercent, groupWallets, MATCH_LABEL, MEANING_LABEL, scheduleRows, secretLabel, sepayLabel, streamSummary, syncRangeError } from "../lib/settings";
+import { ACCOUNT_KIND_LABEL, allocationSummary, appVersionLabel, auditView, bankName, formatPercent, groupWallets, MATCH_LABEL, MEANING_LABEL, scheduleRows, secretLabel, sepayLabel, streamSummary, syncRangeError } from "../lib/settings";
 import { deviceLabel, isIos, lastOkText, seriesView, sqliteUtcToIso, type PushState } from "../lib/push";
 import { balanceText } from "../lib/rental";
+import { SEPAY_REGISTER_URL, SOURCE_URL } from "../lib/splits";
 import type {
   Allocation,
   AuditEntry,
@@ -371,6 +372,12 @@ function DeviceCard() {
         </button>
       </div>
       <div class="field">
+        <span class="k">Về Ví nhà · {appVersionLabel(__APP_VERSION__)}</span>
+        <a class="btn" href={SOURCE_URL} target="_blank" rel="noopener">
+          Mã nguồn
+        </a>
+      </div>
+      <div class="field">
         <span class="k">Đang dùng: {member?.name}</span>
         <button type="button" class="btn" onClick={onLogout}>
           {confirmOut ? "Vẫn đăng xuất" : "Đăng xuất"}
@@ -520,6 +527,15 @@ function Connections({ d, ro, open }: SectionProps) {
   return (
     <Card id="connections" title="Kết nối" flush note="Khoá và token chỉ ghi: đã lưu thì app chỉ hiện 2 ký tự cuối, không bao giờ hiện lại cả khoá.">
       <div class="set-sub">SePay</div>
+      <div class="srow srow-stack">
+        <span class="srow-t">Chưa có tài khoản SePay?</span>
+        <span class="srow-s">SePay báo giao dịch ngân hàng về app, khỏi nhập tay. Đăng ký qua link giới thiệu của Ví nhà.</span>
+        <span class="copyrow">
+          <a class="btn" href={SEPAY_REGISTER_URL} target="_blank" rel="noopener">
+            Đăng ký SePay
+          </a>
+        </span>
+      </div>
       <div class="srow srow-stack">
         <span class="srow-t">Địa chỉ webhook</span>
         <span class="srow-s">Mọi tài khoản SePay dán cùng địa chỉ này vào mục Webhook, mỗi tài khoản kèm khoá webhook riêng của nó.</span>

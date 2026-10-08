@@ -13,7 +13,7 @@ describe("Tiền chi được ở Hôm nay (ADR-85, ADR-88)", () => {
         amount: 1_330_000,
         accounts: [acc("mb-spending-husband", "MB chi tiêu (chồng)", 3_200_000), acc("mb-spending-wife", "MB chi tiêu (vợ)", 230_000), acc("cash", "Tiền mặt", 500_000)],
         wealthBuildingHeld: 2_000_000,
-        wealthBuildingOutside: 1_076_300,
+        wealthBuildingOutside: 1_055_000,
         taxHeld: 600_000,
         excluded: [
           { accountId: "credit-card", name: "Thẻ tín dụng", role: null },
@@ -32,7 +32,7 @@ describe("Tiền chi được ở Hôm nay (ADR-85, ADR-88)", () => {
       ["tax", "Trừ Thuế đang giữ", -600_000],
     ]);
     expect(v).toMatchObject({ amount: 1_330_000, short: false, meta: "Tiền thật trong các tài khoản đang tính, trừ phần Tích sản và Thuế phải giữ." });
-    expect(v.excluded).toBe(`Không tính: Thẻ tín dụng, MB tiết kiệm (vợ), heo đất — trong đó 1.076.300${NBSP}₫ là Tích sản, không trừ lại`);
+    expect(v.excluded).toBe(`Không tính: Thẻ tín dụng, MB tiết kiệm (vợ), heo đất — trong đó 1.055.000${NBSP}₫ là Tích sản, không trừ lại`);
   });
 
   it("dòng trừ bằng 0 thì không hiện; không có Tích sản nằm ngoài thì chỉ kể tên, nhãn trừ Tích sản không kèm ngoặc; tính hết thì không có câu Không tính", () => {

@@ -358,7 +358,7 @@ function WealthBuildingTab() {
           <span style={{ color: "var(--fg-2)" }}>Tổng Tích sản</span>
           <Money value={total} class="font-semibold" />
         </div>
-        {/* Thanh chỉ để thấy tỉ lệ; số đầy đủ nằm ở các dòng bên dưới (không rút gọn "76k" trên card này). */}
+        {/* Thanh chỉ để thấy tỉ lệ; số đầy đủ nằm ở các dòng bên dưới (không rút gọn "55k" trên card này). */}
         <div
           style={{ display: "flex", gap: "2px", height: "10px", borderRadius: "5px", overflow: "hidden", margin: "6px 0 2px", background: "var(--surface-3)" }}
           role="img"
