@@ -1,35 +1,39 @@
 # Nhật ký thay đổi
 
-Mỗi bản phát hành một mục. Mục có dòng **"có migration"** nghĩa là database được nâng cấp khi deploy
-(`npm run deploy` hoặc Cloudflare tự build lại) — không cần làm gì thêm, nhưng nên sao lưu D1 trước vào `.wrangler/`
-(thư mục không lên git; bản sao lưu chứa khoá kết nối và mọi giao dịch, đừng commit):
-`mkdir -p .wrangler/backups && npx wrangler d1 export vi-nha --remote --output .wrangler/backups/vi-nha-<ngày>.sql`.
+Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
+trước: `mkdir -p .wrangler/backups && npx wrangler d1 export vi-nha --remote --output .wrangler/backups/vi-nha.sql`.
 
-## v1.0.1 — 2026-10-08
+## v1.0.1 — 08/10/2026
 
-Không có migration.
+Không cần nâng cấp database.
 
-- Màn **Hướng dẫn** mở ngay trong app (nhúng GitBook), tràn hết màn; mở một lần thì quay lại hiện ngay, không tải lại.
-- Cài đặt › Kết nối › SePay: hàng **Chưa có tài khoản SePay?** với link đăng ký (link giới thiệu của Ví nhà).
-- Cài đặt › Máy này (điện thoại) và chân thanh bên (máy tính): **Về Ví nhà** — phiên bản đang chạy và link **Mã nguồn** (AGPL-3.0). Thêm `NOTICE`
-  (Copyright (C) 2026 MZA), `SECURITY.md`, mục "Liên hệ" trong README.
-- Nhờ AI cài (`npm run setup` không có terminal + `--generate-password`): mật khẩu chung **không in ra** nữa mà ghi vào
-  `~/.vi-nha/<tên-worker>.txt` (chỉ chủ máy đọc được), agent chỉ đưa đường dẫn; Thiết lập nhà do người dùng tự làm trong
-  app. Có terminal thì vẫn in một lần như cũ.
-- README và `.dev.vars.example` ghi rõ `API_TOKEN` (tuỳ chọn, toàn quyền, "Đăng xuất mọi máy" không thu hồi) và việc font
-  Google / màn Hướng dẫn GitBook thấy IP khi mở app.
-- `.gitignore` chặn file sao lưu D1 ở gốc repo (`/*.sql`, `backup*.sql`, `backups/`).
-- Nâng `@modelcontextprotocol/sdk` (vá GHSA-6qxp-vccf-f47h). CI: quyền chỉ đọc, action ghim SHA, Dependabot.
+**Mới**
 
-## v1.0.0 — 2026-10-08
+- Đọc hướng dẫn ngay trong app: bấm **Hướng dẫn** là mở, không phải ra trình duyệt.
+- Cài đặt › Máy này cho biết đang chạy phiên bản nào, kèm link tới mã nguồn.
+- Chưa có SePay? Cài đặt › Kết nối có nút đăng ký.
+
+**An toàn hơn**
+
+- Nhờ AI cài thì AI không còn thấy mật khẩu chung: mật khẩu được lưu vào một file trên máy bạn, bạn tự mở xem.
+- Cập nhật bản vá bảo mật cho thư viện nối Claude.
+- File sao lưu database không còn dễ bị đẩy nhầm lên GitHub.
+
+Cho người sửa code: CI chỉ có quyền đọc, Dependabot, cách báo lỗ hổng ở `SECURITY.md`.
+
+## v1.0.0 — 08/10/2026
 
 Bản công khai đầu tiên.
 
-- **Có migration: baseline** — `migrations/0030_baseline.sql` dựng toàn bộ database (schema v1.30) trong một file.
-  Migration sau này đánh số từ `0031`.
-- Ghi chi tiêu, chia thu nhập theo Profit First, ví và quỹ, đối soát, sổ nợ / phải thu, cho thuê lại.
-- Tự ghi sổ ngân hàng qua SePay (webhook + rà soát ban đêm), luật tự gán.
+Ví nhà là sổ tiền của cả nhà theo Profit First: lương về là chia ngay vào các ví, phần cần giữ thì khoá lại, phần còn
+lại là tiền được tiêu.
+
+- Ghi khoản chi trong vài giây, biết ngay tuần này còn bao nhiêu.
+- Chia thu nhập theo Profit First; ví, quỹ, sổ nợ, cho thuê.
+- Nối SePay để giao dịch ngân hàng tự về.
 - Nhắc việc qua thông báo trên máy, Telegram, Zalo.
-- Nối Claude qua OAuth (MCP).
-- Màn Thiết lập lần đầu: mật khẩu chung, 1–6 người (mật khẩu riêng tuỳ chọn), tài khoản, bộ ví mẫu.
-- Cài bằng nút Deploy to Cloudflare, `npm run setup` hoặc nhờ AI (`docs/cai-bang-ai.md`).
+- Hỏi số liệu nhà mình qua Claude.
+
+Cài bằng nút Deploy to Cloudflare, `npm run setup` hoặc nhờ AI — xem README. Chạy được trên gói Cloudflare miễn phí.
+
+Ghi chú: database dựng từ một file `migrations/0030_baseline.sql`; các bản sau đánh số từ `0031`.
