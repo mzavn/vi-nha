@@ -5,12 +5,16 @@ on:
   push:
     branches: [main]
 
+# GITHUB_TOKEN chỉ đọc. Workflow này chạy code của PR lạ (pull_request, không _target): không bao giờ thêm secret vào đây.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           # node:sqlite (test) cần Node 22.13 trở lên
           node-version: "22.x"

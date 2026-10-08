@@ -58,7 +58,7 @@ Reviewer agent (subagent `reviewer`, 2026-10-08). Bắt buộc — đã sửa: (
 - [x] Code: `publish/`, `scripts/publish-public.mjs`, `scripts/setup.mjs`, `docs/cai-bang-ai.md`, check-private theo thư mục
 - [x] Dựng thư mục public cục bộ, chạy xanh (AC-1, AC-2, AC-6)
 - [x] Bản thử trên workers.dev bằng `npm run setup` (AC-3, AC-7), xoá sau khi thử — 2026-10-08: `setup.mjs --name vi-nha-thu --yes` từ thư mục public, 20 s, thoát 0 (deploy tự tạo D1 + KV, migration `0030_baseline` chạy, mật khẩu chung đặt qua stdin). `POST /v1/setup` với 3 người có mật khẩu riêng → 201; đăng nhập mật khẩu riêng 200, sai 401; webhook không khóa 401; `/mcp` không token 401; metadata OAuth đúng issuer. CPU 9 request: max 21,1 ms, P50 10,8 ms, 0 lỗi (không bị chặn vượt CPU) — giữ màn Thiết lập nhận mật khẩu riêng cho cả 3 người. Chưa thử: ghi khoản chi trên giao diện bản thử. Đã xoá Worker, D1, KV.
-- [ ] Chủ nhà đồng ý → tạo `mzavn/vi-nha`, đẩy `v1.0.0`
+- [x] Chủ nhà đồng ý → tạo `mzavn/vi-nha`, đẩy `v1.0.0` — 2026-10-08 (chủ nhà: "Đẩy ngay"; tác giả commit "MZA", skill mk-specs ghi công MZA trỏ org). Repo public, AGPL-3.0, bật báo lỗ hổng riêng, release v1.0.0; CI lần đầu xanh (npm ci, test, typecheck, specs:check).
 - [ ] Hai đồng nghiệp thử nút Deploy / AI (AC-4, AC-5)
 - [ ] Hợp nhất: UC-509 + History, ADR, BR-14; archive
 - [ ] Cập nhật tài liệu: GitBook (trang "Cài Ví nhà cho nhà bạn": ba cách), README private

@@ -7,3 +7,8 @@ node_modules/
 # Sinh ra bởi `npm run build` (nguồn ở web/); deploy luôn build trước
 /public/
 .private-names
+# Bản sao lưu D1 (`wrangler d1 export`) chứa khoá kết nối và mọi giao dịch — không bao giờ commit.
+# Chỉ chặn file .sql ở gốc repo và tên backup*; migrations/ và docs/*.sql vẫn theo dõi. Nên ghi vào .wrangler/backups/.
+/*.sql
+backup*.sql
+backups/

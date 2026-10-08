@@ -8,7 +8,7 @@
 ## History
 - v1 (2026-09-22, commit `b92fc0f`): đếm → so với sổ → lệch thì một bút toán `adjust` vào ví nhận phần còn lại; luôn ghi `cash_counts`.
 - v2 (2026-09-22, commit `b8e8f0c`): tài khoản có feed mà còn log `pending` thì từ chối — log chưa gán là tiền đã đi thật nhưng chưa vào sổ; đếm lúc đó rồi gán log sau là trừ khoản đó lần hai (`plans/reports/redteam-260922-0100-money-correctness.md` #2).
-- v3 (2026-10-03, commit `a18730c`): ghi chú bút toán viết số như tiền trên app ("sổ −1.675.000 ₫, thật 850.000 ₫") thay vì số trần "-1675000" (audit 261003); dòng cũ giữ nguyên chữ đã ghi.
+- v3 (2026-10-03, commit `a18730c`): ghi chú bút toán viết số như tiền trên app ("sổ −1.500.000 ₫, thật 800.000 ₫") thay vì số trần "-1500000" (audit 261003); dòng cũ giữ nguyên chữ đã ghi.
 
 ## Preconditions
 - Tài khoản active; có một luật `remainder` active (ví Có thì tốt).
@@ -17,7 +17,7 @@
 1. Route kiểm `counted` là số nguyên (sai → `invalid_input`); service kiểm `counted ≥ 0`.
 2. Nếu tài khoản `sepay_enabled=1`: đếm số log `pending` của tài khoản; > 0 → từ chối `pending_logs`.
 3. `book` = `v_account_book.book_balance` của tài khoản; `diff = counted − book`.
-4. `diff ≠ 0` → một dòng `transactions` `meaning='adjust'`, `amount = |diff|`, `source='manual'`, `by_member_id` = người đếm, `at = now`, `note = "Đối soát số dư: sổ <book>, thật <counted>"` (hai số viết như tiền trên app: `−1.675.000 ₫`):
+4. `diff ≠ 0` → một dòng `transactions` `meaning='adjust'`, `amount = |diff|`, `source='manual'`, `by_member_id` = người đếm, `at = now`, `note = "Đối soát số dư: sổ <book>, thật <counted>"` (hai số viết như tiền trên app: `−1.500.000 ₫`):
    - tiền thật **nhiều hơn** sổ: `wallet_id` = ví `remainder` (+), `counter_account_id` = tài khoản (vào);
    - tiền thật **ít hơn** sổ: `counter_wallet_id` = ví `remainder` (−), `account_id` = tài khoản (ra).
 5. Luôn ghi một dòng `cash_counts (at, account_id, counted, book, adjust_tx_id)`; `adjust_tx_id` = id bút toán vừa ghi hoặc NULL khi khớp. Bước 4–5 trong **một batch**.

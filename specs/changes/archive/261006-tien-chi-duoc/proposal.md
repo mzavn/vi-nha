@@ -43,13 +43,13 @@ Thuế đang giữ        = max(0, tiers.tax.balance)
 | MB chi tiêu vợ (đang tính) | 230.000 |
 | Tiền mặt (đang tính) | 500.000 |
 | Thẻ tín dụng (không tính — mặc định tắt) | −1.500.000 |
-| Heo đất MB (chồng) + Heo đất MB (vợ) (khóa, không tính) | 5.000 + 71.300 = 76.300 |
-| Tích sản (`tichsanCash`) | 76.300 (toàn bộ đang ở heo) + 2.000.000 (lương chia vào) = 2.076.300 |
+| Heo đất MB (chồng) + Heo đất MB (vợ) (khóa, không tính) | 5.000 + 50.000 = 55.000 |
+| Tích sản (`tichsanCash`) | 55.000 (toàn bộ đang ở heo) + 2.000.000 (lương chia vào) = 2.055.000 |
 | Thuế | 600.000 |
 
-Tiền chi được = (3.200.000 + 230.000 + 500.000) − max(0, 2.076.300 − 76.300) − 600.000 = 3.930.000 − 2.000.000 − 600.000 = **1.330.000 ₫**.
+Tiền chi được = (3.200.000 + 230.000 + 500.000) − max(0, 2.055.000 − 55.000) − 600.000 = 3.930.000 − 2.000.000 − 600.000 = **1.330.000 ₫**.
 
-Prod hôm nay: Tích sản 76.300 ₫ là 9.000 ₫ chuyển từ ví "Heo đất" cũ (3/10) + 62.300 ₫ heo vợ + 5.000 ₫ heo chồng — toàn bộ là tiền heo. Nếu số dư sổ hai con heo cộng lại ≥ 76.300 thì "Tích sản đang giữ" = 0 và dòng không hiện; tiền chi được = tổng các tài khoản đang tính − Thuế.
+Prod hôm nay: Tích sản 55.000 ₫ là 9.000 ₫ chuyển từ ví "Heo đất" cũ (3/10) + 41.000 ₫ heo vợ + 5.000 ₫ heo chồng — toàn bộ là tiền heo. Nếu số dư sổ hai con heo cộng lại ≥ 55.000 thì "Tích sản đang giữ" = 0 và dòng không hiện; tiền chi được = tổng các tài khoản đang tính − Thuế.
 
 ### UC-103 (ledger — snapshot)
 - Main Flow: batch đọc thêm số dư sổ từng tài khoản đang dùng (`v_account_book` JOIN `accounts`: `locked`, `spendable`); `buildSnapshot` trả thêm

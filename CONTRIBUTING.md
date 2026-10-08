@@ -8,7 +8,10 @@ Mở [issue](https://github.com/mzavn/vi-nha/issues): bạn làm gì, mong thấ
 nếu là giao diện. **Đừng dán số tài khoản, số dư thật, mật khẩu hay khoá API** vào issue.
 
 Lỗi bảo mật: đừng mở issue công khai — dùng [Report a vulnerability](https://github.com/mzavn/vi-nha/security/advisories/new)
-của GitHub.
+của GitHub (chi tiết: [`SECURITY.md`](SECURITY.md)).
+
+Muốn hỏi riêng người duy trì (MZA): nhắn qua Facebook <https://www.facebook.com/minhtv11>. Lỗi bảo mật vẫn báo qua GitHub
+như trên, không gửi qua Facebook.
 
 ## Pull request
 

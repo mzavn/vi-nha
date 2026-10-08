@@ -7,11 +7,13 @@
 > automatically through SePay (Vietnamese banks), sends reminders via web push / Telegram / Zalo, and exposes an MCP server
 > so Claude can read and record transactions. The interface and documentation are in **Vietnamese**.
 > Install with the **Deploy to Cloudflare** button, `npm run setup`, or by asking an AI coding agent to follow
-> [`docs/cai-bang-ai.md`](docs/cai-bang-ai.md). License: AGPL-3.0.
+> [`docs/cai-bang-ai.md`](docs/cai-bang-ai.md). License: AGPL-3.0, Copyright (C) 2026 MZA. Security reports: [`SECURITY.md`](SECURITY.md).
 
 Ví nhà trả lời một câu mỗi ngày: **"Tuần này còn bao nhiêu để chi?"**. Lương về là app chia ngay vào các ví — Tích sản,
 Thuế, Hưởng thụ, Must, Có thì tốt; phần đã khoá thì không đụng tới, phần còn lại mới là tiền được tiêu. App chạy trên
-**tài khoản Cloudflare của chính nhà bạn** (gói Free là đủ): số liệu nằm ở database của bạn, không đi qua máy chủ nào khác.
+**tài khoản Cloudflare của chính nhà bạn** (gói Free là đủ): số liệu nằm ở database của bạn, không lưu ở máy chủ nào khác.
+(Font chữ tải từ Google Fonts và màn Hướng dẫn nhúng GitBook, nên Google / GitBook thấy địa chỉ IP và loại trình duyệt khi
+bạn mở app — không thấy số liệu.)
 
 <p>
   <img src="https://2736867949-files.gitbook.io/~/files/v0/b/gitbook-x-prod.appspot.com/o/spaces%2FAkew07JyqLl5qmM1Jo26%2Fuploads%2Fgit-blob-bec8d942a542b3e9a038fd40f26db73269458726%2Fhom-nay-01-tong-quan-m.jpg?alt=media" alt="Màn Hôm nay" width="260">
@@ -26,7 +28,7 @@ Thuế, Hưởng thụ, Must, Có thì tốt; phần đã khoá thì không đ�
 |---|---|
 | **Ghi khoản chi trong vài giây** | Gõ số tiền, chạm danh mục, bấm Lưu — app nói ngay ví đó còn bao nhiêu. Mất mạng vẫn ghi được, có mạng thì tự gửi |
 | **Chia lương theo Profit First** | Thu nhập về → Tích sản → Thuế → Hưởng thụ → Must → Có thì tốt; app tính sẵn mỗi ví nhận bao nhiêu và nhắc các lệnh chuyển tiền cần làm |
-| **Tự ghi sổ ngân hàng** | Tài khoản nối [SePay](https://sepay.vn) tự báo tiền vào / ra; bạn chỉ chọn "khoản này là gì", khoản lặp lại thì đặt luật tự gán |
+| **Tự ghi sổ ngân hàng** | Tài khoản nối [SePay](https://my.sepay.vn/register?gcid=arqcwdek) tự báo tiền vào / ra; bạn chỉ chọn "khoản này là gì", khoản lặp lại thì đặt luật tự gán |
 | **Đối soát** | Sổ so với giao dịch ngân hàng và số dư thật; lệch là báo |
 | **Nợ và phải thu** | Mình nợ ai, ai nợ mình, người thuê nhà còn phải trả bao nhiêu |
 | **Nhắc việc** | Tin sáng, tổng kết tuần, giao dịch chưa gán — qua thông báo trên máy, Telegram hoặc Zalo |
@@ -66,7 +68,8 @@ thứ hai, không đổi mật khẩu (đổi: `npm run setup -- --reset-passwor
 
 Mở thư mục repo trong Claude Code, Codex, Cursor… và nói: *"Cài Ví nhà cho tôi theo docs/cai-bang-ai.md"*.
 Agent chạy các lệnh trong [`docs/cai-bang-ai.md`](docs/cai-bang-ai.md); bạn chỉ cần bấm đăng nhập Cloudflare khi được
-nhắc và trả lời vài câu (nhà có mấy người, có những tài khoản nào).
+nhắc và trả lời vài câu (nhà có mấy người, có những tài khoản nào). Agent **không thấy mật khẩu chung**: script ghi nó vào
+file `~/.vi-nha/vi-nha.txt` trên máy bạn, agent chỉ đưa đường dẫn để bạn tự mở; màn Thiết lập trong app bạn tự làm.
 
 ### Sau khi cài
 
@@ -78,9 +81,14 @@ Trên điện thoại: mở bằng trình duyệt → "Thêm vào màn hình ch�
 - **Gói Free của Cloudflare chỉ có 5 cron cho cả tài khoản.** Ví nhà dùng 2 (nhắc việc, rà soát giao dịch ban đêm).
   Tài khoản đã dùng hết cron cho việc khác thì deploy sẽ báo lỗi.
 - **Tự ghi sổ ngân hàng cần [SePay](https://sepay.vn)** (dịch vụ bên thứ ba, nối tài khoản ngân hàng Việt Nam; giá xem ở sepay.vn).
+  Chưa có tài khoản: [đăng ký SePay qua link giới thiệu của Ví nhà](https://my.sepay.vn/register?gcid=arqcwdek) (cũng có trong app: Cài đặt › Kết nối › SePay).
   Không có SePay thì vẫn dùng được: ghi tay, chia tiền, nhắc việc đều chạy.
 - **Nối Claude (hoặc ứng dụng AI khác) thì số liệu bạn hỏi sẽ đi qua nhà cung cấp AI đó.** Không nối thì số liệu chỉ nằm
   trong Cloudflare của bạn.
+- **`API_TOKEN` (tuỳ chọn) — để trống trừ khi bạn viết script gọi API.** Ai có token này gọi được toàn bộ `/v1/*` với
+  `Authorization: Bearer <token>`, đóng vai **bất kỳ thành viên** nào qua header `X-Member-Id` (không có header thì là chủ
+  hộ), và **"Đăng xuất mọi máy" không thu hồi nó**. Cần thì đặt bằng `npx wrangler secret put API_TOKEN` (chuỗi ngẫu nhiên
+  dài); lộ hay không dùng nữa thì đặt lại giá trị mới hoặc xoá secret đó trong Cloudflare dashboard.
 - Mật khẩu chung là chìa khoá vào app: đặt dài, không dùng lại mật khẩu khác; quên thì đặt lại bằng
   `npm run setup -- --reset-password` hoặc trong Cloudflare dashboard (Worker → Settings → Variables and Secrets).
 - Muốn dùng tên miền riêng thay cho `workers.dev`: thêm `routes` vào `wrangler.jsonc`
@@ -89,6 +97,13 @@ Trên điện thoại: mở bằng trình duyệt → "Thêm vào màn hình ch�
 ## Cập nhật bản mới
 
 Xem có gì mới ở [`CHANGELOG.md`](CHANGELOG.md) — mục nào ghi "có migration" thì database được nâng cấp tự động khi deploy.
+Nên sao lưu database trước (thay `<ngày>` bằng ngày hôm nay, ví dụ `261008`). Bản sao lưu chứa khoá kết nối và mọi giao
+dịch — để trong `.wrangler/` (thư mục không lên git), đừng commit, đừng gửi ai:
+
+```bash
+mkdir -p .wrangler/backups
+npx wrangler d1 export vi-nha --remote --output .wrangler/backups/vi-nha-<ngày>.sql
+```
 
 - **Cài bằng nút Deploy:** repo GitHub của bạn kéo bản mới từ `mzavn/vi-nha` (nút **Sync fork** nếu repo là fork, hoặc
   `git pull https://github.com/mzavn/vi-nha.git main` rồi `git push`) — Cloudflare tự build và deploy lại khi repo có commit mới.
@@ -111,9 +126,17 @@ npm test && npm run typecheck && npm run specs:check
 
 - `src/` Worker (Hono, D1, cron, MCP) · `web/` PWA (Preact, Tailwind) · `migrations/` database · `test/` vitest.
 - `specs/` là đặc tả đã chốt (Spec-Driven Development) — đọc `specs/README.md`; `docs/` là nguyên lý và thiết kế.
-- Đóng góp: [`CONTRIBUTING.md`](CONTRIBUTING.md). Luật cho agent AI: [`AGENTS.md`](AGENTS.md).
+- Đóng góp: [`CONTRIBUTING.md`](CONTRIBUTING.md). Luật cho agent AI: [`AGENTS.md`](AGENTS.md). Báo lỗ hổng bảo mật:
+  [`SECURITY.md`](SECURITY.md).
+
+## Liên hệ
+
+Người duy trì: MZA — Facebook <https://www.facebook.com/minhtv11>. Lỗi và đề xuất: mở
+[issue](https://github.com/mzavn/vi-nha/issues). Lỗ hổng bảo mật: **không** mở issue công khai, xem [`SECURITY.md`](SECURITY.md).
 
 ## Giấy phép
 
-[GNU AGPL-3.0](LICENSE). Bạn được dùng, sửa, chia sẻ tự do; nếu sửa rồi cho người khác dùng qua mạng thì phải công bố mã
-nguồn bản đã sửa theo cùng giấy phép.
+Ví nhà — Copyright (C) 2026 MZA. Phát hành theo [GNU AGPL-3.0](LICENSE) (xem thêm [`NOTICE`](NOTICE)). Bạn được dùng, sửa,
+chia sẻ tự do; nếu sửa rồi cho người khác dùng qua mạng thì phải công bố mã nguồn bản đã sửa theo cùng giấy phép — app có
+sẵn hàng **Cài đặt › Máy này › Về Ví nhà** (phiên bản + link mã nguồn); bản đã sửa thì trỏ link đó về mã nguồn của bạn
+(`SOURCE_URL` trong `web/src/lib/splits.ts`).

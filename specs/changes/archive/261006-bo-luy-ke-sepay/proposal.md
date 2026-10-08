@@ -8,7 +8,7 @@
 ## Vì sao
 Chủ nhà, 2026-10-06: "tôi nghĩ là bạn bỏ phần lấy lũy kế của sepay đi, nó không đúng đâu à, bỏ hẳn cái data mà sepay trả về đó, đừng quan tâm lũy kế của nó nữa nè".
 
-Tài khoản `mb-spending-wife`: SePay gửi `accumulated` = 1.400.000 trong khi số dư thật (chủ nhà xem app MB) là 2.250.000 và sổ khớp đúng số thật. App vẫn báo "Lệch đối soát" 850.000 ₫ giả ở Hôm nay, card Tiền chi được, Ví & quỹ › Tài khoản và tin sáng. ADR-83 (3/10) đã bỏ số **âm**; số dương lệch gốc là đúng ca [OPEN] ADR-83 để lại — máy không phân biệt được với webhook sót thật.
+Tài khoản `mb-spending-wife`: SePay gửi `accumulated` = 1.400.000 trong khi số dư thật (chủ nhà xem app MB) là 2.000.000 và sổ khớp đúng số thật (số minh hoạ, không phải số thật của nhà). App vẫn báo "Lệch đối soát" 600.000 ₫ giả ở Hôm nay, card Tiền chi được, Ví & quỹ › Tài khoản và tin sáng. ADR-83 (3/10) đã bỏ số **âm**; số dương lệch gốc là đúng ca [OPEN] ADR-83 để lại — máy không phân biệt được với webhook sót thật.
 
 ## Thay đổi spec
 
@@ -68,7 +68,7 @@ Tài khoản `mb-spending-wife`: SePay gửi `accumulated` = 1.400.000 trong khi
 
 ## Quyết định
 **ADR-87: Bỏ hẳn số lũy kế SePay; đối soát = sổ ↔ giao dịch đã gán + số dư người nhà tự nhập.**
-- Bối cảnh: như "Vì sao". `accumulated` sai ở cả hai dấu (−610.000 ngày 3/10, ADR-83; 1.400.000 ngày 6/10 khi thật là 2.250.000); MB không có quan sát thật nào khớp (ADR-57 còn treo).
+- Bối cảnh: như "Vì sao". `accumulated` sai ở cả hai dấu (âm ngày 3/10, ADR-83; ngày 6/10 dương mà vẫn lệch số thật — số minh hoạ ở "Vì sao"); MB không có quan sát thật nào khớp (ADR-57 còn treo).
 - Lựa chọn: không đọc, không lưu, không so; migration bỏ cột và view; đối soát còn `book_drift`, "chưa gán", Nhập số dư.
 - Phương án bị loại:
   - **Giữ cột, chỉ ngừng so** (view trả NULL): dữ liệu sai vẫn nằm trong bảng, lời mời dùng lại; chủ nhà nói "bỏ hẳn".

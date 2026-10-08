@@ -182,7 +182,7 @@
 
 ### AC-21: MB tất toán sổ tích lũy (nội dung thật) — cùng gợi ý rút heo của chính chủ (ADR-77, ADR-82)
 - Given nhà như prod sau migration 0017 + 0019 + 0020
-- When log `in` 421.000 ở `mb-main-husband` nội dung "Tat toan truoc han tien gui sotich luy AC - 1234567890123 ngay20261003 cua NGUYEN VAN A" (khớp mẫu `TICH LUY`, migration 0019)
+- When log `in` 400.000 ở `mb-main-husband` nội dung "Tat toan truoc han tien gui sotich luy AC - 1234567890123 ngay20261003 cua NGUYEN VAN A" (khớp mẫu `TICH LUY`, migration 0019)
 - Then log `pending`, 0 giao dịch; gợi ý đúng bằng gợi ý của AC-20 (`label:"Rút heo về MB chồng"`, cùng `note`, không ví)
 - Tests: [`test/piggy-bank.test.ts`](../../test/piggy-bank.test.ts) › "rút heo về tài khoản › MB tất toán sổ tích lũy (nội dung thật): cùng gợi ý rút heo của chính chủ về tài khoản"
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   accountPayload,
   accountToForm,
+  appVersionLabel,
   auditView,
   bankHint,
   allocationSummary,
@@ -451,5 +452,12 @@ describe("mã lương chọn nguồn thu", () => {
     expect(rulePayload(f, false)).toMatchObject({ ok: true, value: { income_stream_id: "salary-wife" } });
     expect(rulePayload({ ...f, meaning: "spend", wallet_id: "food", category_id: "groceries" }, false)).toMatchObject({ ok: true, value: { income_stream_id: null } });
     expect(rulePayload({ ...f, income_stream_id: "" }, false)).toMatchObject({ ok: true, value: { income_stream_id: null } });
+  });
+});
+
+describe("về Ví nhà", () => {
+  it("phiên bản lấy từ package.json lúc build; không có thì ghi Bản phát triển", () => {
+    expect(appVersionLabel("1.0.1")).toBe("Phiên bản 1.0.1");
+    expect(appVersionLabel("")).toBe("Bản phát triển");
   });
 });

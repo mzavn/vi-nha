@@ -39,35 +39,35 @@ const shown = (lines: WealthBuildingLine[]) => lines.map((l) => [l.label, l.valu
 describe("tab Tích sản: tiền nào, loại nào, đang ở đâu (ADR-86)", () => {
   // Như prod 2026-10-06: 9.000 ví Heo đất cũ + 11 lần bỏ heo của vợ + 1 lần của chồng.
   const prod = breakdown({
-    cash: 76_300,
-    accounts: [piggyBank("husband", 5_000), piggyBank("wife", 71_300)],
+    cash: 55_000,
+    accounts: [piggyBank("husband", 5_000), piggyBank("wife", 50_000)],
     flows: [
-      flow({ kind: "piggy_bank", accountId: "piggy-bank-wife", accountName: "Heo đất MB (Vợ)", memberName: "Vợ", count: 11, amount: 62_300 }),
+      flow({ kind: "piggy_bank", accountId: "piggy-bank-wife", accountName: "Heo đất MB (Vợ)", memberName: "Vợ", count: 11, amount: 41_000 }),
       flow({ kind: "wallet", walletId: "piggy-bank", walletName: "Heo đất", walletActive: false, amount: 9_000 }),
       flow({ kind: "piggy_bank", accountId: "piggy-bank-husband", accountName: "Heo đất MB (Chồng)", memberName: "Chồng", count: 1, amount: 5_000 }),
     ],
   });
 
-  it("như prod: tiền 76.300 nằm ở hai con heo, đến từ bỏ heo từng người và số dư ví Heo đất cũ — đủ ₫, không rút gọn", () => {
+  it("như prod: tiền 55.000 nằm ở hai con heo, đến từ bỏ heo từng người và số dư ví Heo đất cũ — đủ ₫, không rút gọn", () => {
     expect(shown(wealthBuildingKinds(prod, LABELS))).toEqual([
-      ["Tiền", 76_300],
+      ["Tiền", 55_000],
       ["Tài sản", 0],
     ]);
     expect(wealthBuildingKinds(prod, LABELS)[1]!.note).toBe("chưa mua tài sản nào");
     const places = wealthBuildingPlaces(prod);
     expect(shown(places.lines)).toEqual([
       ["Heo đất Chồng", 5_000],
-      ["Heo đất Vợ", 71_300],
+      ["Heo đất Vợ", 50_000],
     ]);
     expect(places.extra).toBeNull();
     const src = wealthBuildingSources(prod, LABELS);
     expect(shown(src.ins)).toEqual([
-      ["Bỏ heo đất Vợ (11 lần)", 62_300],
+      ["Bỏ heo đất Vợ (11 lần)", 41_000],
       ["Chuyển số dư ví Heo đất cũ", 9_000],
       ["Bỏ heo đất Chồng (1 lần)", 5_000],
     ]);
     expect(src.outs).toEqual([]);
-    expect(src.cash).toBe(76_300);
+    expect(src.cash).toBe(55_000);
     const text = JSON.stringify([wealthBuildingKinds(prod, LABELS), places, src]);
     expect(text).not.toMatch(/\d+k\b|\d,\dtr/);
   });
@@ -90,22 +90,22 @@ describe("tab Tích sản: tiền nào, loại nào, đang ở đâu (ADR-86)", 
   });
 
   it("như prod sau khi nhập số dư đầu heo: câu phần dư cộng lại khớp các dòng, chỉ kể loại tài khoản đang có tiền", () => {
-    const buffer: Place = { ...piggyBank("wife", 2_464), accountId: "buffer-wife", name: "MB tiết kiệm (vợ)", role: "buffer" };
-    const places = wealthBuildingPlaces({ ...prod, accounts: [piggyBank("husband", 33_600), piggyBank("wife", 100_300), buffer] });
+    const buffer: Place = { ...piggyBank("wife", 10_000), accountId: "buffer-wife", name: "MB tiết kiệm (vợ)", role: "buffer" };
+    const places = wealthBuildingPlaces({ ...prod, accounts: [piggyBank("husband", 30_000), piggyBank("wife", 95_000), buffer] });
     expect(shown(places.lines)).toEqual([
-      ["Heo đất Chồng", 33_600],
-      ["Heo đất Vợ", 100_300],
-      ["Phao dự phòng · MB tiết kiệm (vợ)", 2_464],
+      ["Heo đất Chồng", 30_000],
+      ["Heo đất Vợ", 95_000],
+      ["Phao dự phòng · MB tiết kiệm (vợ)", 10_000],
     ]);
     expect(places.lines[0]!.note).toBe("tiết kiệm tiền lẻ — rút về được khi cần");
     expect(places.extra).toBe(
-      `Heo đất và phao dự phòng đang có 136.364${NBSP}₫: 76.300${NBSP}₫ là tiền Tích sản, 60.064${NBSP}₫ còn lại là số dư có từ trước khi dùng app hoặc tiền lãi — chưa tính vào Tích sản.`,
+      `Heo đất và phao dự phòng đang có 135.000${NBSP}₫: 55.000${NBSP}₫ là tiền Tích sản, 80.000${NBSP}₫ còn lại là số dư có từ trước khi dùng app hoặc tiền lãi — chưa tính vào Tích sản.`,
     );
   });
 
   it("như prod sau migration 0027 (ADR-91): số dư có sẵn là một nguồn vào; Tích sản bằng heo + phao thì không còn câu phần dư", () => {
-    const buffer: Place = { ...piggyBank("wife", 2_464), accountId: "buffer-wife", name: "MB tiết kiệm (vợ)", role: "buffer" };
-    const after = { ...prod, cash: 136_364, accounts: [piggyBank("husband", 33_600), piggyBank("wife", 100_300), buffer], flows: [...prod.flows, flow({ kind: "opening", amount: 60_064 })] };
+    const buffer: Place = { ...piggyBank("wife", 10_000), accountId: "buffer-wife", name: "MB tiết kiệm (vợ)", role: "buffer" };
+    const after = { ...prod, cash: 135_000, accounts: [piggyBank("husband", 30_000), piggyBank("wife", 95_000), buffer], flows: [...prod.flows, flow({ kind: "opening", amount: 80_000 })] };
     const places = wealthBuildingPlaces(after);
     expect(places.extra).toBeNull();
     expect(places.lines.map((l) => l.key)).not.toContain("regular");
@@ -113,9 +113,9 @@ describe("tab Tích sản: tiền nào, loại nào, đang ở đâu (ADR-86)", 
     expect(src.ins.at(-1)).toMatchObject({
       label: "Số dư có sẵn khi mở tài khoản (1 lần)",
       note: "tiền có sẵn trong heo / phao / sổ tiết kiệm trước khi ghi vào app — tính một lần vào Tích sản",
-      value: 60_064,
+      value: 80_000,
     });
-    expect(src.ins.reduce((s, l) => s + l.value, 0)).toBe(136_364);
+    expect(src.ins.reduce((s, l) => s + l.value, 0)).toBe(135_000);
   });
 
   it("heo âm hiện đúng số âm và lý do; không trừ vào Tích sản — phần còn lại vẫn ở tài khoản thường", () => {
@@ -138,20 +138,20 @@ describe("tab Tích sản: tiền nào, loại nào, đang ở đâu (ADR-86)", 
     const buffer: Place = { ...piggyBank("wife", 200_000), accountId: "buffer-wife", name: "MB tiết kiệm (vợ)", role: "buffer" };
     const so: Place = { ...piggyBank("wife", 800_000), accountId: "term-deposit-6m", name: "Sổ 6 tháng", role: "term_deposit" };
     const b = breakdown({
-      cash: 1_076_300,
-      accounts: [piggyBank("husband", 5_000), piggyBank("wife", 71_300), buffer, so],
+      cash: 1_055_000,
+      accounts: [piggyBank("husband", 5_000), piggyBank("wife", 50_000), buffer, so],
       flows: [flow({ kind: "buffer", accountId: "buffer-wife", accountName: "MB tiết kiệm (vợ)", memberName: "Vợ", count: 1, amount: 1_000_000 })],
     });
     const places = wealthBuildingPlaces(b);
     expect(shown(places.lines)).toEqual([
       ["Heo đất Chồng", 5_000],
-      ["Heo đất Vợ", 71_300],
+      ["Heo đất Vợ", 50_000],
       ["Phao dự phòng · MB tiết kiệm (vợ)", 200_000],
       ["Sổ tiết kiệm · Sổ 6 tháng", 800_000],
     ]);
     expect(places.lines.map((l) => l.note).slice(2)).toEqual(["rút được ngay khi cần", "gửi có kỳ hạn — tất toán mới rút được"]);
     expect(places.extra).toBeNull();
-    expect(shown(wealthBuildingPlaces({ ...b, cash: 1_500_000 }).lines).at(-1)).toEqual(["Trong các tài khoản thường", 423_700]);
+    expect(shown(wealthBuildingPlaces({ ...b, cash: 1_500_000 }).lines).at(-1)).toEqual(["Trong các tài khoản thường", 445_000]);
     expect(shown(wealthBuildingSources(b, LABELS).ins)).toEqual([["Chuyển vào phao MB tiết kiệm (vợ) (1 lần)", 1_000_000]]);
   });
 
@@ -194,12 +194,12 @@ describe("tab Tích sản: tiền nào, loại nào, đang ở đâu (ADR-86)", 
   });
 
   it("phao khẩn cấp: có tiền mà làm tròn ra 0 tháng thì nói 'dưới 0,1', không '0'; số tiền nói có / cần", () => {
-    const fund = { cash: 76_300, target: 110_550_000, months: 6, monthsCovered: 0 };
+    const fund = { cash: 55_000, target: 96_000_000, months: 6, monthsCovered: 0 };
     expect(safetyFundMonthsText(fund)).toBe("dưới 0,1 / 6");
     expect(safetyFundMonthsText({ ...fund, cash: 0 })).toBe("0 / 6");
     expect(safetyFundMonthsText({ ...fund, monthsCovered: 2.5 })).toBe("2,5 / 6");
     expect(safetyFundMonthsText({ ...fund, monthsCovered: null })).toBeNull();
-    expect(safetyFundCashText(fund)).toBe(`Có 76.300${NBSP}₫ · cần 110.550.000${NBSP}₫`);
-    expect(safetyFundCashText(fund, true)).toBe(`Có 76.300${NBSP}₫ · cần ước tính 110.550.000${NBSP}₫`);
+    expect(safetyFundCashText(fund)).toBe(`Có 55.000${NBSP}₫ · cần 96.000.000${NBSP}₫`);
+    expect(safetyFundCashText(fund, true)).toBe(`Có 55.000${NBSP}₫ · cần ước tính 96.000.000${NBSP}₫`);
   });
 });

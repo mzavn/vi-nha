@@ -33,6 +33,8 @@ export default defineConfig({
   root: here("."),
   publicDir: here("./public"),
   plugins: [preact(), tailwindcss(), serviceWorker()],
+  // Phiên bản hiện ở Cài đặt › Máy này › Về Ví nhà: bản public do scripts/publish-public.mjs đặt, repo phát triển không có → "".
+  define: { __APP_VERSION__: JSON.stringify(JSON.parse(readFileSync(here("../package.json"), "utf8")).version ?? "") },
   build: {
     outDir: here("../public"),
     emptyOutDir: true,

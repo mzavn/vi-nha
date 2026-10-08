@@ -1,9 +1,19 @@
 // `npm run setup` (scripts/setup.mjs): phần thuần — đọc cờ, sinh mật khẩu, sửa wrangler.jsonc. Phần gọi Cloudflare thử thật.
-import { existsSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { generatePassword, parseArgs, readConfigString, setConfigString, setDatabaseName } from "../scripts/setup.mjs";
+import {
+  generatedPasswordMessage,
+  generatePassword,
+  parseArgs,
+  passwordFilePath,
+  readConfigString,
+  savePasswordFile,
+  setConfigString,
+  setDatabaseName,
+} from "../scripts/setup.mjs";
 
 const ACCOUNT = "0123456789abcdef0123456789abcdef";
 /** wrangler.jsonc của bản public: repo gốc giữ ở publish/, repo public ở thư mục gốc. */
@@ -86,5 +96,48 @@ describe("setup: sửa wrangler.jsonc", () => {
   it("thiếu name / database_name → lỗi rõ ràng", () => {
     expect(() => setConfigString("{\n}\n", "account_id", ACCOUNT)).toThrow(/thiếu dòng "name"/);
     expect(() => setDatabaseName("{\n}\n", "x")).toThrow(/database_name/);
+  });
+});
+
+describe("setup: mật khẩu tự sinh khi không có terminal", () => {
+  it("file mật khẩu nằm ở ~/.vi-nha/<tên-worker>.txt", () => {
+    expect(passwordFilePath("vi-nha", "/home/an")).toBe(join("/home/an", ".vi-nha", "vi-nha.txt"));
+    expect(passwordFilePath("vi-nha-thu", "/home/an")).toBe(join("/home/an", ".vi-nha", "vi-nha-thu.txt"));
+  });
+
+  it("ghi file quyền 0600 trong thư mục 0700, chạy lại thì ghi đè", () => {
+    const home = mkdtempSync(join(tmpdir(), "vi-nha-home-"));
+    try {
+      const file = passwordFilePath("vi-nha", home);
+      savePasswordFile(file, "aaaaa-bbbbb-ccccc-ddddd");
+      expect(readFileSync(file, "utf8")).toBe("aaaaa-bbbbb-ccccc-ddddd\n");
+      if (process.platform !== "win32") {
+        expect(statSync(dirname(file)).mode & 0o777).toBe(0o700);
+        expect(statSync(file).mode & 0o777).toBe(0o600);
+      }
+      // Thư mục / file có sẵn với quyền rộng hơn (vd tạo tay) thì siết lại; --reset-password ghi đè mật khẩu cũ.
+      chmodSync(dirname(file), 0o755);
+      chmodSync(file, 0o644);
+      savePasswordFile(file, "eeeee-fffff-ggggg-hhhhh");
+      expect(readFileSync(file, "utf8")).toBe("eeeee-fffff-ggggg-hhhhh\n");
+      if (process.platform !== "win32") {
+        expect(statSync(dirname(file)).mode & 0o777).toBe(0o700);
+        expect(statSync(file).mode & 0o777).toBe(0o600);
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("không có terminal: chỉ in đường dẫn, không in mật khẩu; có terminal: in một lần", () => {
+    const password = "aaaaa-bbbbb-ccccc-ddddd";
+    const savedPath = "/home/an/.vi-nha/vi-nha.txt";
+    const agent = generatedPasswordMessage({ password, interactive: false, savedPath });
+    expect(agent).toContain(savedPath);
+    expect(agent).not.toContain(password);
+    expect(agent).toMatch(/tự mở/);
+    const human = generatedPasswordMessage({ password, interactive: true, savedPath: null });
+    expect(human).toContain(password);
+    expect(human.split(password).length).toBe(2);
   });
 });

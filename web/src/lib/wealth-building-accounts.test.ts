@@ -40,9 +40,9 @@ describe("chuyển nội bộ vào tài khoản Tích sản (ADR-88)", () => {
 
 describe("số dư có sẵn khi thành tài khoản Tích sản (ADR-91)", () => {
   it("thêm phao / sổ có số dư, hay đổi tài khoản thường có tiền sang phao: nhắc số đó vào Tích sản; đã là tài khoản Tích sản, vẫn tính vào tiền chi được, hay không có tiền thì không nhắc", () => {
-    const base = { wasRole: false, role: "buffer" as const, spendable: false, balance: 2_464 };
+    const base = { wasRole: false, role: "buffer" as const, spendable: false, balance: 10_000 };
     expect(openingCreditHint(base)).toBe(
-      "Số dư hiện có 2.464\u00a0₫ sẽ được tính vào Tích sản — một lần, không trừ ví nào; phần Tích sản đang nằm ở tài khoản thường coi như đã chuyển vào đây.",
+      "Số dư hiện có 10.000\u00a0₫ sẽ được tính vào Tích sản — một lần, không trừ ví nào; phần Tích sản đang nằm ở tài khoản thường coi như đã chuyển vào đây.",
     );
     expect(openingCreditHint({ ...base, role: "term_deposit" })).not.toBeNull();
     expect(openingCreditHint({ ...base, wasRole: true })).toBeNull();

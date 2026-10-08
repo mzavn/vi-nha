@@ -6,13 +6,13 @@
 - Người duyệt nghiệp vụ: chủ nhà · Người duyệt kỹ thuật: —
 
 ## Vì sao
-Chủ nhà 2026-10-06, nhìn Ví & quỹ › Tích sản (card chỉ có thanh "tiền 76k", "Phao khẩn cấp ước tính 0 / 6 tháng chi Must", "76.300 ₫ trên mức cần 110.550.000 ₫", nút Mua tài sản):
+Chủ nhà 2026-10-06, nhìn Ví & quỹ › Tích sản (card chỉ có thanh "tiền 55k", "Phao khẩn cấp ước tính 0 / 6 tháng chi Must", "55.000 ₫ trên mức cần 96.000.000 ₫", nút Mua tài sản):
 
-> "tích sản sao đã có 76.300 vậy? tôi chưa đưa vào mà??"
+> "tích sản sao đã có 55.000 vậy? tôi chưa đưa vào mà??"
 >
 > "nếu là tích sản thì phải rõ là tiền nào, loại nào chứ? để ntn thì rất khó hiểu và phải đoán nó là tiền gì, đang ở đâu"
 
-Số 76.300 ₫ là đúng sổ (prod): 9.000 ₫ chuyển từ ví Heo đất cũ ngày 3/10 (bút toán hệ thống của ADR-82) + 11 lần bỏ heo của vợ (62.300 ₫) + 1 lần bỏ heo của chồng (5.000 ₫) — tự gán theo rule heo (ADR-82: bỏ heo là Có thì tốt → Tích sản). Card không nói được điều nào trong đó: không nguồn, không chỗ nằm, chip "một ví, hai trạng thái tiền" không giải thích gì, nhãn "76k" rút gọn.
+Số 55.000 ₫ là đúng sổ (prod): 9.000 ₫ chuyển từ ví Heo đất cũ ngày 3/10 (bút toán hệ thống của ADR-82) + 11 lần bỏ heo của vợ (41.000 ₫) + 1 lần bỏ heo của chồng (5.000 ₫) — tự gán theo rule heo (ADR-82: bỏ heo là Có thì tốt → Tích sản). Card không nói được điều nào trong đó: không nguồn, không chỗ nằm, chip "một ví, hai trạng thái tiền" không giải thích gì, nhãn "55k" rút gọn.
 
 ## Thay đổi spec
 ### ledger UC-107: thêm `GET /v1/tichsan` — Tích sản theo loại, chỗ nằm, nguồn
@@ -28,13 +28,13 @@ Số 76.300 ₫ là đúng sổ (prod): 9.000 ₫ chuyển từ ví Heo đất c
 ### pwa UC-707: tab Tích sản tự giải thích
 - MODIFIED Main Flow bước 3 (card Tích sản), đọc `GET /v1/tichsan` (snapshot vẫn cấp phao):
   1. Bỏ chip "một ví, hai trạng thái tiền"; dưới tiêu đề một câu: "Tiền để dành lâu dài của nhà — gồm tiền (còn dùng được lúc khẩn cấp) và tài sản đã mua bằng tiền đó. Không chi trực tiếp từ đây."
-  2. **Loại**: hàng **Tổng Tích sản** số to; **Tiền** X ₫; **Tài sản** Y ₫ kèm từng loại ("Vàng · 1 lần mua"…). Thanh hai phần giữ, **không** chữ rút gọn trên thanh (bỏ "tiền 76k"); mọi số trên card dùng `formatVnd`.
+  2. **Loại**: hàng **Tổng Tích sản** số to; **Tiền** X ₫; **Tài sản** Y ₫ kèm từng loại ("Vàng · 1 lần mua"…). Thanh hai phần giữ, **không** chữ rút gọn trên thanh (bỏ "tiền 55k"); mọi số trên card dùng `formatVnd`.
   3. **Tiền đang ở đâu**: mỗi heo một dòng "Heo đất {người}" (số dư sổ), rồi "Trong các tài khoản thường" (phần còn lại, ẩn khi 0) — "app không theo dõi tài khoản nào: ví chỉ là phần ngân sách". Heo dương cộng lại nhiều hơn tiền Tích sản → dòng chú "Heo có hơn Tích sản X ₫ — tiền bỏ heo từ trước khi dùng app hoặc tiền lãi, chưa thuộc ví nào". Heo âm → số đỏ, chú "sổ ghi rút ra nhiều hơn bỏ vào — tiền lãi hoặc tiền heo từ trước khi dùng app chưa tách". Heo có log chờ gán → "còn N khoản bỏ / rút heo đang chờ gán (±X)".
   4. **Tiền đến từ đâu** (card riêng): vào — "Bỏ heo đất {người} (N lần)", "Chia từ thu nhập (N lần chia)", "Chuyển số dư ví {ví} cũ" (ví đã tắt), "Chuyển từ ví {ví}", "Quét dư cuối tháng (N lần)", "Thuế dư sau quyết toán", "Khác"; ra — "Mua tài sản: {loại}", "Chuyển sang ví {ví}", "Khác"; dòng cuối "Còn lại là tiền" = `cash`. Nhóm 0 ẩn; chưa có gì → "Chưa có khoản nào vào Tích sản."
   5. Nút **Xem các khoản Tích sản** → Sổ giao dịch (UC-716) lọc ví Tích sản, **mọi tháng** (`month: null`); câu chú: "Phần chia từ thu nhập không hiện thành dòng riêng trong sổ — sổ chỉ có khoản thu gốc; tổng ở trên đã gồm phần đó." (sheet chi tiết khoản thu không kê phần chia theo ví, nên không hướng người đọc tới đó).
   - Phao khẩn cấp, Mua tài sản, card "Tài sản đang giữ" giữ nguyên.
 - 3a (màn rộng): ba card xếp hai cột (`dk-cols`).
-- ADDED AC-17: Given Tích sản như prod (tiền 76.300: heo vợ 71.300, heo chồng 5.000; vào: bỏ heo vợ 11 lần 62.300, bỏ heo chồng 1 lần 5.000, chuyển số dư ví Heo đất cũ 9.000) When xem Then thấy "Tiền 76.300 ₫", "Tài sản 0 ₫"; chỗ nằm "Heo đất vợ 71.300 ₫", "Heo đất chồng 5.000 ₫", không có dòng tài khoản thường; nguồn "Bỏ heo đất vợ (11 lần) 62.300 ₫", "Bỏ heo đất chồng (1 lần) 5.000 ₫", "Chuyển số dư ví Heo đất cũ 9.000 ₫"; không chữ "76k" nào.
+- ADDED AC-17: Given Tích sản như prod (tiền 55.000: heo vợ 50.000, heo chồng 5.000; vào: bỏ heo vợ 11 lần 41.000, bỏ heo chồng 1 lần 5.000, chuyển số dư ví Heo đất cũ 9.000) When xem Then thấy "Tiền 55.000 ₫", "Tài sản 0 ₫"; chỗ nằm "Heo đất vợ 50.000 ₫", "Heo đất chồng 5.000 ₫", không có dòng tài khoản thường; nguồn "Bỏ heo đất vợ (11 lần) 41.000 ₫", "Bỏ heo đất chồng (1 lần) 5.000 ₫", "Chuyển số dư ví Heo đất cũ 9.000 ₫"; không chữ "55k" nào.
 - ADDED AC-18: Given heo 12.000 nhưng tiền Tích sản 10.000; hoặc heo chồng −4.000 không có log chờ; hoặc heo chồng có log rút 50.000 chờ gán When xem Then lần lượt: "Heo có hơn Tích sản 2.000 ₫ …" và không dòng tài khoản thường; heo chồng "−4.000 ₫" kèm chú "sổ ghi rút ra nhiều hơn bỏ vào …"; "còn 1 khoản bỏ / rút heo đang chờ gán (−50.000 ₫)".
 - ADDED AC-19: Given chia lương 2 lần (phần Tích sản 1.000.000), mua vàng 300.000 When xem Then "Chia từ thu nhập (2 lần chia) 1.000.000 ₫", ra "Mua tài sản: Vàng 300.000 ₫", "Còn lại là tiền 700.000 ₫"; loại: "Tài sản 300.000 ₫" kèm "Vàng".
 - ADDED AC-20: When bấm **Xem các khoản Tích sản** Then mở Sổ giao dịch lọc ví Tích sản, tháng "Tất cả".

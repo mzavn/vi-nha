@@ -15,3 +15,6 @@ export declare function generatePassword(random?: (max: number) => number): stri
 export declare function readConfigString(text: string, key: string): string | null;
 export declare function setConfigString(text: string, key: string, value: string): string;
 export declare function setDatabaseName(text: string, value: string): string;
+export declare function passwordFilePath(name: string, home?: string): string;
+export declare function savePasswordFile(path: string, password: string): void;
+export declare function generatedPasswordMessage(args: { password: string; interactive: boolean; savedPath: string | null }): string;

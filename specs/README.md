@@ -56,7 +56,7 @@ ID là vĩnh viễn: không đánh số lại, không dùng lại ID đã xoá. 
 ## 4. Chỉ mục Use Case
 
 82 UC · 908 AC · 697 AC có test · **211 AC chưa có test** (chi tiết: [traceability.md](traceability.md)).
-Chỉ số: AC Coverage 76,8% · Spec Coverage 97,5% (79/81 UC) · Trace Ratio 86,4% (19/22 commit từ 2026-10-07) — định nghĩa ở `.claude/skills/mk-specs/references/traceability.md` §4.
+Chỉ số: AC Coverage 76,8% · Spec Coverage 97,5% (79/81 UC) · Trace Ratio 90,0% (27/30 commit từ 2026-10-07) — định nghĩa ở `.claude/skills/mk-specs/references/traceability.md` §4.
 
 ### [Sổ cái (ledger)](ledger/README.md)
 

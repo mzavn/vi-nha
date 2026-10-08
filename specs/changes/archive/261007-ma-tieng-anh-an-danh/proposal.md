@@ -89,7 +89,7 @@ Reviewer agent (subagent `reviewer`, 2026-10-07). Đã sửa:
 - [x] Review kỹ thuật; chủ nhà duyệt; commit propose (`56414fd`)
 - [x] Diễn tập 0029 trên bản export prod (2026-10-08, bản sao prod, engine D1 local: chi theo danh mục, sổ nợ, sổ người thuê, sổ phải thu, số dư ví, sổ tài khoản, số dòng khớp; `foreign_key_check` sạch)
 - [x] Test (đỏ trước) → code → xanh (`21b9db0`, 787 test); `npm run check:private` sạch ở `src/`, `web/`, `test/`, `docs/schema.sql`, `docs/seed.sql`, `scripts/`, `specs/`
-- [x] Sao lưu D1 (`.wrangler/backups/before-0029-2610080003.sql`) → migrate → deploy 2026-10-08 00:01 (version `a9f57252`); kiểm prod: v1.29, kết nối `default`, nguồn cho thuê `rental`, 17/17 danh mục có icon, số liệu Hôm nay không đổi, khoá ngoại sạch. Chủ nhà: "Tải bản mới" trên điện thoại
+- [x] Sao lưu D1 (`.wrangler/backups/before-0029-<ngày giờ>.sql`) → migrate → deploy 2026-10-08; kiểm prod: v1.29, kết nối `default`, nguồn cho thuê `rental`, 17/17 danh mục có icon, số liệu Hôm nay không đổi, khoá ngoại sạch. Chủ nhà: "Tải bản mới" trên điện thoại
 - [x] Hợp nhất: UC + History, ADR-94, `docs/glossary.md` (mã hệ thống)
 - [x] `specs:gen`, `specs:check` 0 lỗi; archive
 - [x] Cập nhật tài liệu: `docs/glossary.md` (mã hệ thống, hộ mẫu), `docs/seed.sql`, ẩn danh `docs/`, README (ví dụ); GitBook: `tools/chup-anh.mjs` theo mã mục Cài đặt mới, `seed-demo.mjs` danh mục `debt-payment`, chụp lại 185 ảnh

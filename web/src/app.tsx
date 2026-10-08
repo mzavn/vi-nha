@@ -5,7 +5,7 @@
 import { useEffect, useRef } from "preact/hooks";
 import { Assign } from "./screens/assign";
 import { Entry } from "./screens/entry";
-import { Guide } from "./screens/guide";
+import { GuideSlot } from "./screens/guide";
 import { LedgerBook } from "./screens/ledger-book";
 import { Login } from "./screens/login";
 import { Settings } from "./screens/settings";
@@ -82,7 +82,7 @@ export function App() {
         {app.tab === "wallets" && <Wallets />}
         {app.tab === "settings" && <Settings />}
         {app.tab === "ledger" && <LedgerBook />}
-        {app.tab === "guide" && <Guide />}
+        <GuideSlot />
       </main>
 
       {app.tab !== "entry" && app.tab !== "settings" && app.tab !== "ledger" && app.tab !== "guide" && (
@@ -132,7 +132,7 @@ function DesktopApp() {
         {app.tab === "wallets" && <Wallets />}
         {app.tab === "settings" && <Settings />}
         {app.tab === "ledger" && <LedgerBook />}
-        {app.tab === "guide" && <Guide />}
+        <GuideSlot />
       </main>
       <TxSheet />
       <Toast />

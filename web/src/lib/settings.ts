@@ -641,3 +641,8 @@ export function auditView(e: AuditEntry): { title: string; sub: string; fields: 
     fields: fields.length ? `đổi: ${fields.join(", ")}` : null,
   };
 }
+
+/** Phiên bản ở Cài đặt › Máy này › Về Ví nhà và chân thanh bên: `version` của package.json lúc build; trống (repo phát triển) → "Bản phát triển". */
+export function appVersionLabel(version: string): string {
+  return version ? `Phiên bản ${version}` : "Bản phát triển";
+}

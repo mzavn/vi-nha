@@ -1,0 +1,11 @@
+# Dependabot: mở PR nâng thư viện npm và GitHub Actions (action ghim SHA kèm chú thích phiên bản) mỗi tuần.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
