@@ -1,0 +1,56 @@
+# Cấu hình skill mk-specs cho repo này (YAML rút gọn — xem .claude/skills/mk-specs/references/traceability.md)
+version: 1
+language: vi
+specs_dir: specs
+
+# Thứ tự = thứ tự trong traceability.md / open-issues.md
+contexts:
+  - id: ledger
+    title: "Sổ cái (ledger)"
+  - id: allocation
+    title: "Chia tiền (allocation)"
+  - id: ingest
+    title: "Bank feed (ingest)"
+  - id: notify
+    title: "Nhắc & Telegram (notify)"
+  - id: access
+    title: "Truy cập & cấu hình (access)"
+  - id: mcp
+    title: "MCP cho Claude"
+  - id: pwa
+    title: "PWA"
+  - id: rental
+    title: "Cho thuê lại (rental)"
+  - id: debt
+    title: "Sổ nợ (debt)"
+  - id: receivable
+    title: "Sổ phải thu (receivable)"
+
+ids:
+  uc: 'UC-\d{3,4}'
+  br: 'BR-\d+'
+  adr: 'ADR-\d+'
+
+decisions_file: decisions.md
+
+tests:
+  list_command: "npx vitest list --json"
+  file_pattern: '[^`]+\.test\.tsx?'
+  citation_style: pointer
+
+readme:
+  file: README.md
+  banner:
+    match: '^> (Cập nhật|Hợp nhất) '
+    keep: 5
+  lines:
+    - match: '^(?P<uc>\d+) UC · (?P<ac>\d+) AC · (?P<tested>\d+) AC có test · \*\*(?P<untested>\d+) AC chưa có test\*\*'
+    - match: '^Chỉ số: AC Coverage (?P<ac_coverage>\S+) · Spec Coverage (?P<spec_coverage>\S+) \((?P<spec_covered>\d+)/(?P<spec_active>\d+) UC\) · Trace Ratio (?P<trace_ratio>\S+) \((?P<traced>\d+)/(?P<trace_total>\d+) commit từ (?P<since>[\d-]+|—)\)'
+    - match: 'Toàn bộ (?P<divergence>\d+) divergence và (?P<open>\d+) câu hỏi mở'
+    - match: 'BR-01…BR-(?P<br_last>\d+)'
+    - match: 'ADR-01…ADR-(?P<adr_last>\d+)'
+
+metrics:
+  since: "2026-10-07"
+  active_status: [implemented, partial]
+  exempt_scopes: [specs, deps]

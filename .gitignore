@@ -1,0 +1,9 @@
+node_modules/
+.wrangler/
+.dev.vars
+.DS_Store
+.prod.secrets
+.claude/worktrees/
+# Sinh ra bởi `npm run build` (nguồn ở web/); deploy luôn build trước
+/public/
+.private-names

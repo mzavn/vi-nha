@@ -1,0 +1,94 @@
+# Entity model — access
+
+Context này sở hữu: **Member**, **ZaloLinkCode**, **Session**, **AuthFailure**, **InfraCredential**, **IntegrationSecret**, **SepayConnection**, **Config**. Các entity được màn Cài đặt sửa nhưng thuộc context khác (chỉ nhắc tên): Account, Wallet, Category (ledger); Allocation (luật nạp — engine ở allocation); Rule (ingest); kết nối Claude / ứng dụng AI (grant OAuth trong KV `OAUTH_KV`, ADR-97 — xem [mcp/entities.md](../mcp/entities.md); Cài đặt liệt kê và gỡ ở UC-508).
+
+## Member (thành viên) — bảng `members`
+Một người trong hộ: danh tính đăng nhập, người được ghi vào `by_member_id`, người nhận tin Telegram và Zalo, chủ của các máy đã bật thông báo (`push_subscriptions.member_id` — notify UC-410).
+
+| Trường | Ý nghĩa & luật |
+|---|---|
+| `id` | TEXT PK, sinh từ tên (bỏ dấu, chữ thường, gạch nối) lúc thiết lập nhà (UC-510) hoặc thêm người (`POST /v1/settings/members`, UC-507 1a); hộ mẫu `docs/seed.sql`: `husband`, `wife`. Không trùng với bất kỳ người nào, kể cả người đã tắt. Có thể chứa dấu `.` mà phiên vẫn đọc được (commit `4b6d298`) |
+| `name` | Bắt buộc, tối đa 40 ký tự; lúc tạo không trùng tên người khác (không phân biệt hoa thường, bỏ dấu cách hai đầu — `nameKey`) |
+| `role` | Một trong `owner`, `adult`, `teen`, `child`, `guest` (DB CHECK, `migrations/0001_schema.sql`). Người đầu lúc thiết lập là `owner`, mọi người sau / thêm sau là `adult` — ngang quyền (ADR-96; `teen` / `child` / `guest` chưa có luật). Chỉ dùng để xếp chủ hộ lên đầu (`ORDER BY role = 'owner' DESC`), chọn người xem mặc định và chặn tắt chủ hộ. Không sửa được qua API |
+| `tg_chat_id` | Dãy số, nhóm có `-` ở đầu: server kiểm `^-?\d{3,20}$` (`updateMember`); rỗng/`null` = xoá. Đặt / đổi / xoá → nhật ký + cảnh báo cả nhà và chat cũ (ADR-90, UC-507) |
+| `zalo_chat_id` | Chat riêng của người này với bot Zalo của nhà (migration 0018, schema v1.18, ADR-80); `NULL` = chưa nối. **Chỉ webhook ghi** (`POST /webhooks/zalo` — người đó nhắn mã nối, notify UC-411), và chỉ khi đang `NULL` (ADR-90 — nối lại phải bỏ nối trước); `PATCH /members/:id` chỉ nhận `null` (bỏ nối, có cảnh báo cả nhà và chat cũ), chuỗi bất kỳ → 400 (UC-507). Không có kiểm dạng: giữ nguyên chuỗi `chat.id` Zalo gửi. Hai người có thể trùng chat (một chat nhắn mã của hai người) — chat đó nhận một tin mỗi `(kind, day_key)` |
+| `active` | `1` = dùng được. Thành viên `active=0` không hiện ở màn đăng nhập, không đăng nhập được (kể cả ở trang uỷ quyền Claude), phiên cũ bị từ chối, mọi kết nối Claude họ đã uỷ quyền bị gỡ (ADR-98), không chọn được qua `X-Member-Id`/MCP `by_member_id`; ví `private` của họ không còn bị ẩn (UC-504). Đổi qua `PATCH /members/:id { active }` (UC-507 1b, ADR-96): không tắt được chủ hộ; tối đa 6 người `active = 1` (`MAX_ACTIVE_MEMBERS`, kiểm trong câu ghi); tắt không xoá ví / tài khoản / giao dịch |
+| `password_hash` | Mật khẩu riêng tuỳ chọn (migration 0030, ADR-95): `pbkdf2-sha256$<vòng>$<muối base64url>$<băm base64url>` (mặc định 20.000 vòng, muối 16 byte — `src/services/passwords.ts`; số vòng nằm trong chuỗi nên tăng sau không cần migration); `NULL` = vào bằng mật khẩu chung. Đặt / đổi / gỡ qua `PUT /members/:id/password` (UC-507 1c). Không bao giờ trả ra — `GET /v1/settings` chỉ có `has_password` |
+| `session_gen` | Số nguyên, mặc định 0 (migration 0030). Tăng khi đổi / gỡ mật khẩu riêng và khi tắt người → mọi cookie cũ của người đó hết hiệu lực (Session); cùng lúc mọi kết nối Claude của người đó bị gỡ (ADR-98). Grant OAuth mang `session_gen` lúc uỷ quyền: lệch → `/mcp` trả 401 và thu hồi grant (lớp phòng hậu, mcp UC-601 AC-10) |
+
+Bất biến: thành viên đang dùng phiên phải còn `active` ở **mỗi** request (`requireAuth` › `activeMember`).
+
+## ZaloLinkCode (mã nối Zalo) — bảng `zalo_link_codes` (migration 0018, ADR-80)
+- Một dòng = mã đang chờ của một người: `member_id` (TEXT PK, `REFERENCES members(id)` — **mỗi người tối đa một mã**), `code` (6 chữ số, `UNIQUE`), `expires_at` (ISO UTC = lúc tạo + 15 phút, `ZALO_CODE_TTL_MS`), `created_by` / `created_via` (người tạo mã và đường gọi — `session|token|mcp`; migration 0026, ADR-90 — nhật ký lúc mã được dùng ghi người này).
+- Vòng đời: `(không có)` --`POST /v1/settings/members/:id/zalo-code` (201)--> **đang chờ** --nhắn đúng mã trong chat riêng trước `expires_at`--> **đã dùng** (dòng bị xoá, `members.zalo_chat_id` được ghi trong cùng batch); **đang chờ** --tạo mã mới cho cùng người--> mã cũ bị thay (hết dùng); **đang chờ** --người đó đã nối chat khác--> bị xoá khi có người nhắn mã (không đè); **đang chờ** --quá `expires_at`--> **hết hạn** (không nối được; dòng bị xoá ở lần tạo mã kế tiếp của bất kỳ ai).
+- Bất biến: mã chỉ dùng một lần; mã hết hạn không bao giờ nối được dù dòng còn; chỉ tạo được khi đã đặt cả bot token lẫn khoá webhook Zalo (409 `zalo_not_ready`) **và** người đó chưa nối Zalo (409 `zalo_linked`). Mã không bao giờ trả ra ở `GET /v1/settings` — chỉ ở phản hồi 201 cho người bấm.
+
+## ZaloCodeFailure (mã Zalo nhắn sai) — bảng `zalo_code_failures` (migration 0026, ADR-90)
+- Một dòng mỗi lần một chat riêng nhắn dãy 6 số không khớp mã còn hạn nào: `id`, `chat_id`, `at` (ISO UTC); index `(chat_id, at)`.
+- Chat có ≥ 5 dòng trong 1 giờ qua (`ZALO_CODE_MAX_FAILURES`) không được thử mã (kể cả mã đúng) tới khi dòng cũ quá 1 giờ. Dòng cũ hơn 1 giờ bị xoá ở lần sai kế tiếp (của bất kỳ chat nào).
+
+## AuditLog (nhật ký thay đổi) — bảng `audit_log` (migration 0026, ADR-90)
+- Một dòng mỗi thay đổi đáng ngờ: `id` (thứ tự), `at` (`datetime('now')`, UTC), `member_id` (người làm — phiên, `X-Member-Id` / chủ hộ khi gọi bằng token, người tạo mã khi nối Zalo, người đã uỷ quyền khi nối / ghi qua Claude; `NULL` được), `via` (`session` PWA và trang uỷ quyền · `token` `API_TOKEN` · `mcp` việc ghi qua Claude, ADR-97), `action`, `target` (`tx:<id>`, `account:<id>`, `member:<id>`, `sepay:<id>`, `push:<id>`, `log:<id>`, `tenant:<id>`, `client:<tên miền | tên ứng dụng>` hoặc `NULL`), `detail` (JSON hợp lệ hoặc `NULL`).
+- `action`: `tx.void`, `tx.replace`, `tx.unassign { voided, logs }` · `account.create|update { fields }` · `member.update { fields }`, `member.zalo_code`, `member.zalo_link`, `member.create { fields }`, `member.deactivate`, `member.activate`, `member.password { set }` (không bao giờ mật khẩu) · `setup.done { members, accounts, taxable, must }` (người làm = chủ hộ vừa tạo, `via = session` — UC-510) · `integrations.update { set, cleared }` · `sepay.create|update { fields[, active] }` · `push.add|remove { member_id, device }` · `session.revoke_all` (ADR-89; từ ADR-98 gỡ cả mọi kết nối Claude) · `mcp.connect { member_id, scopes }` (trang uỷ quyền, `target = client:<…>`), `mcp.revoke { member_id, grant_id }` (Cài đặt gỡ một kết nối, `target = client:<…>`) — UC-508 · việc ghi qua Claude, `via = mcp` (mcp UC-603…UC-605): `tx.create { meaning, by_member_id }` (`tx:<id>`), `log.assign { splits }` (`log:<id>`), `income.allocate` (`tx:<id khoản thu>`), `tenant.paid_for_us { category_id }` (`tenant:<id>`).
+- Bất biến: **chỉ thêm** — trigger `audit_log_no_update` / `audit_log_no_delete` chặn mọi UPDATE/DELETE; `detail` không bao giờ chứa khoá/token (chỉ **tên** trường đã gửi, `fieldNames`, và giá trị không bí mật); ghi sau khi việc chính thành công, việc lỗi không ghi. Đọc: `GET /v1/settings/audit` (50 dòng mới nhất, UC-505).
+
+## Session (phiên đăng nhập) — cookie `pf_session`; server giữ khoá ký (`config` `secret:session_key`), thế hệ phiên (`session_epoch`) và `members.session_gen`
+- Giá trị (từ migration 0030, ADR-95): `<member_id>.<cách vào>.<session_gen>.<exp>.<sig>`; `cách vào` = `h` (mật khẩu chung) | `p` (mật khẩu riêng); `session_gen` = của người đó lúc phát; `exp` = giây Unix, bằng lúc phát + 30 ngày (`SESSION_DAYS = 30`); `sig` = HMAC-SHA256 base64url của `"<member_id>.<cách vào>.<session_gen>.<exp>"` với khoá `session:<session_key>:<thế hệ>` (phiên riêng) hoặc `session:<session_key>:<thế hệ>:<APP_PASSWORD>` (phiên chung — đổi mật khẩu chung chỉ làm hết phiên chung) (`src/routes/auth.ts` › `sign`, `issueSession`). Không mang băm hay mật khẩu nào. `API_TOKEN` không còn là một phần khoá ký.
+- Thuộc tính cookie: `HttpOnly`, `SameSite=Lax`, `Path=/`, `Max-Age` 30 ngày, `Secure` khi request là `https:`.
+- Đọc (`readSession`): tách từ **cuối** — chữ ký, hạn, `session_gen`, cách vào; phần còn lại (có thể chứa `.`) là `member_id`; một câu SQL đọc người (`active`, `session_gen`, có mật khẩu riêng) cùng khoá ký và thế hệ phiên. Ít hơn 5 phần, hạn / `session_gen` không phải số, hạn đã qua, người không `active`, `session_gen` lệch, cách vào khác cách người đó đang dùng (có mật khẩu riêng thì cookie `h` bị từ chối), phiên chung mà thiếu `APP_PASSWORD`, chữ ký sai (so `safeEqual`) → không có phiên.
+- Trạng thái: `issued` → `valid` → một trong: `expired` (quá `exp`) · `invalidated` (phiên chung: đổi `APP_PASSWORD`; mọi phiên: **Đăng xuất mọi máy** tăng thế hệ phiên; mọi phiên của một người: `session_gen` tăng khi đổi / gỡ mật khẩu riêng hay bị tắt) · `member_inactive` · `cleared` (đăng xuất máy này: chỉ xoá cookie ở trình duyệt). Cùng các việc làm phiên hết hiệu lực đó, kết nối Claude cũng bị gỡ (ADR-98): Đăng xuất mọi máy → của cả nhà; đổi / gỡ mật khẩu riêng, tắt người → của người đó; đổi `APP_PASSWORD` → các kết nối uỷ quyền bằng mật khẩu chung.
+- Khoá ký `secret:session_key`: 32 byte ngẫu nhiên base64url, sinh ở lần phát phiên đầu tiên (`INSERT OR IGNORE` rồi đọc lại — hai lần đăng nhập đầu cùng lúc dùng cùng khoá); không API nào trả ra. Deploy bản 0030 (2026-10-08) đổi khoá ký → mọi máy đăng nhập lại một lần.
+- Thu hồi: `POST /v1/session/revoke-all` (UC-501 8b) vô hiệu **mọi** phiên của mọi người cùng lúc và gỡ mọi kết nối Claude của cả nhà (ADR-98); không thu hồi được từng phiên / từng máy (kết nối Claude thì gỡ được từng cái — UC-508). `API_TOKEN` (Bearer) không phụ thuộc thế hệ phiên.
+
+## AuthFailure (lần sai mật khẩu / khoá webhook) — bảng `auth_failures` (migration 0025, ADR-89)
+- Một dòng mỗi `(scope, ip)`: `scope` ∈ `login` (sai mật khẩu `POST /v1/session`, `POST /v1/setup`, `PUT /v1/settings/members/:id/password`) · `webhook` (khoá sai ở `/webhooks/sepay` hoặc `/webhooks/zalo`, chung một bộ đếm); `ip` = header `CF-Connecting-IP` (`unknown` khi không có — chạy local); `ip = '*'` là dòng đếm chung mọi IP của `login`. `first_at` = lần sai đầu của cửa sổ (ISO UTC), `failures` ≥ 1.
+- Cửa sổ cố định 15 phút từ `first_at`. Ngưỡng (`THROTTLE_LIMITS`, `src/services/auth-throttle.ts`): `login` 10 lần mỗi IP, 30 lần chung mọi IP; `webhook` 20 lần mỗi IP, không có trần chung (kẻ lạ không chặn được webhook thật của SePay / Zalo). Tới ngưỡng → chặn (429) tới hết cửa sổ.
+- Dòng quá 15 phút bị xoá ở lần sai kế tiếp; đăng nhập đúng xoá dòng `login` của IP đó (dòng `*` giữ nguyên). Không lưu mật khẩu hay khoá đã thử.
+
+## InfraCredential (bí mật hạ tầng) — biến môi trường Worker (`src/env.d.ts`)
+| Tên | Dùng cho | Đặt ở đâu |
+|---|---|---|
+| `API_TOKEN` | Bearer cho `/v1/*` (tuỳ chọn — không đặt thì REST bằng token bị khoá; **không** còn là một phần khoá ký phiên từ ADR-95) | `wrangler secret` |
+| `APP_PASSWORD` | Mật khẩu chung của nhà — ô bắt buộc duy nhất lúc deploy: đăng nhập người chưa có mật khẩu riêng (màn đăng nhập và trang uỷ quyền Claude), thiết lập nhà lần đầu (UC-510), đổi mật khẩu riêng của bất kỳ ai (UC-507 1c); trộn vào khoá ký **phiên chung** và làm khoá HMAC cho dấu mật khẩu chung của kết nối Claude uỷ quyền bằng mật khẩu chung (đổi thì các kết nối đó hết hiệu lực — ADR-98) | `wrangler secret` |
+| `SEPAY_API_KEY`, `SEPAY_API_TOKEN` | Dự phòng khoá webhook / token API của **kết nối SePay mặc định `default`** (SepayConnection) | `wrangler secret` |
+| `TG_BOT_TOKEN` | Phương án dự phòng cho IntegrationSecret `telegram_bot_token` | `wrangler secret` |
+| `ZALO_BOT_TOKEN`, `ZALO_WEBHOOK_SECRET` | Phương án dự phòng cho IntegrationSecret `zalo_bot_token`, `zalo_webhook_secret` (ADR-80) | `wrangler secret` |
+
+Luật: giá trị rỗng/không đặt ⇒ cửa tương ứng khoá hẳn. `.dev.vars.example` chỉ có tên biến, giá trị rỗng. Production đặt bằng `wrangler secret put <TÊN>` (`README.md`).
+
+`MCP_SECRET` (đoạn path `/mcp/<MCP_SECRET>`) đã bỏ từ ADR-97: Claude nối bằng OAuth, biến này không còn được đọc. Binding KV `OAUTH_KV` (`wrangler.jsonc` › `kv_namespaces`, không phải bí mật, mỗi bản cài một namespace) lưu client, grant và token OAuth của kết nối Claude — thư viện chỉ lưu băm của token / mã, `props` của grant được mã hoá (mcp [entities](../mcp/entities.md)).
+
+## IntegrationSecret (khoá kết nối) — `config` khoá `secret:<name>` + dự phòng env
+- `name` ∈ `SECRET_NAMES` = `telegram_bot_token` (→ dự phòng `TG_BOT_TOKEN`), `zalo_bot_token` (→ `ZALO_BOT_TOKEN`), `zalo_webhook_secret` (→ `ZALO_WEBHOOK_SECRET`) (`src/services/secrets.ts`, ADR-80). Khoá SePay không còn ở đây từ migration 0015 — xem SepayConnection.
+- Giá trị hiệu lực (`getSecret`): dòng `config` nếu khác rỗng, không thì biến env, không thì `""` (= chưa cấu hình).
+- Mô tả ra ngoài (`describeSecret` → `describeValue`): `{ set, hint, source }` — `hint` = **2 ký tự cuối** nếu dài ≥ 8 (không bao giờ quá 25% khoá — ADR-90; trước đó 4 ký tự), `"••"` nếu ngắn hơn, `null` nếu chưa đặt; `source` = `"app"` nếu có giá trị lưu trong app, `"server"` nếu chỉ có env, `null` nếu chưa đặt (commit `6fcbdf8`). Kết nối SePay dùng cùng luật.
+- Trạng thái: `unset` ⇄ `server` (ngoài app, chỉ đổi trên Cloudflare) ; `unset|server` → `app` (lưu từ Cài đặt) ; `app` → xoá → quay về `server` hoặc `unset`.
+- Bất biến: **không API nào trả nguyên khoá** (`getSettings`, `updateIntegrations` chỉ trả `describeSecret`); khoá đặt qua API phải dài ≥ 8 ký tự sau `trim` (`secretValue`); `zalo_webhook_secret` thêm: tối đa 256 ký tự, chỉ `A–Z a–z 0–9 _ -` (Zalo gửi lại nó trong header `X-Bot-Api-Secret-Token`).
+
+## SepayConnection (kết nối SePay) — bảng `sepay_connections` (migration 0015, ADR-75)
+- Một dòng cho mỗi tài khoản công ty SePay của nhà (của chồng, của vợ): `id` (mặc định là slug của tên, vd "SePay của vợ" → `sepay-cua-vo`), `name`, `api_token` (rà soát 02:00, đồng bộ lại, nút Kiểm tra), `webhook_key` (SePay gửi kèm `Authorization: Apikey <khoá>`; khoá đặt mới ≥ 24 ký tự, khoá đã lưu trước ADR-89 vẫn dùng được), `active`, `created_at`.
+- Kết nối mặc định `default` ("SePay chính") do migration tạo, mang khoá cũ `config` `secret:sepay_api_token` / `secret:sepay_webhook_key`; **chỉ nó** dùng `SEPAY_API_TOKEN` / `SEPAY_API_KEY` khi cột để trống (`DEFAULT_SEPAY_CONNECTION_ID` trong `src/domain/system-ids.ts`, `loadSepayConnections`; mã `chinh` trước migration 0029 — ADR-94).
+- Mô tả ra ngoài như IntegrationSecret (`api_token`, `webhook_key` đều là `{ set, hint, source }`) kèm `accounts` — id các tài khoản thuộc kết nối (UC-505, UC-508).
+- Bất biến: không API nào trả nguyên token/khoá; hai kết nối không cùng khoá webhook (`409 duplicate_key`); không xoá được, chỉ tắt (`active = 0` → webhook từ chối khoá, rà soát/đồng bộ lại bỏ qua, tài khoản không chọn mới được).
+- Quan hệ: SepayConnection 1—N Account (`accounts.sepay_connection_id`, NULL khi tài khoản tắt SePay; tài khoản bật SePay luôn thuộc đúng một kết nối — UC-506). Log ngân hàng đến qua kết nối nào chỉ khớp vào tài khoản của kết nối đó (ingest UC-301, UC-304).
+
+## Config (tham số hệ thống) — bảng `config (k TEXT PRIMARY KEY, v TEXT NOT NULL)`
+| Khoá | Ý nghĩa | Ai đặt / đọc |
+|---|---|---|
+| `schema_version` | Phiên bản schema, hiện `1.30` (`migrations/0030_setup_and_member_passwords.sql`) | migration; `GET /v1/health` đọc |
+| `setup_done` | Thời điểm thiết lập nhà xong (ISO UTC); có dòng = đã thiết lập. Ghi một lần, trong cùng batch tạo nhà — khoá chính chặn thiết lập hai lần (UC-510); migration 0030 ghi sẵn cho DB đã có thành viên | `POST /v1/setup` ghi; `GET /v1/setup`, `POST /v1/session` (409 `setup_required`) đọc (`isSetUp`) |
+| `secret:session_key` | Khoá ký phiên (Session). Tiền tố `secret:` nhưng **không** phải IntegrationSecret: không nằm trong `SECRET_NAMES`, không hiện ở Cài đặt; **không API nào trả ra** (như `secret:vapid_private_jwk`) | Tự sinh ở `issueSession`; `readSession` đọc |
+| `session_epoch` | Thế hệ phiên đăng nhập (số nguyên dạng chữ; thiếu = `0`, migration không chèn). Luôn trộn vào khoá ký cookie (Session, ADR-89) | `POST /v1/session/revoke-all` tăng 1 (`revokeAllSessions`); `issueSession`, `readSession` đọc mỗi lần |
+| `salary_min_amount` | Ngưỡng tối thiểu để khoản khớp mẫu lương được tự ghi + tự chia; `0` = bỏ ngưỡng (commit `eb7846e`) | Cài đặt ghi (0..1e12); ingest đọc qua `ledger.salaryMinAmount` (mặc định 1.000.000 khi thiếu/không hợp lệ) |
+| `safety_fund_months` | Số tháng chi Must của **Quỹ an tâm** (seed `6`; trước migration 0028 là khoá `emergency_months`, "phao khẩn cấp" — ADR-92, ADR-93) | Cài đặt ghi (1..36); ledger `getSnapshot`, view `v_safety_fund` đọc |
+| `secret:<name>` | IntegrationSecret | `setSecret` |
+| `secret:vapid_private_jwk` | Khoá riêng VAPID (ECDSA P-256, JWK) ký thông báo đẩy. Tiền tố `secret:` nhưng **không** phải IntegrationSecret: không nằm trong `SECRET_NAMES`, không hiện ở Cài đặt, không đặt/xoá được từ app, không có dự phòng env. **Không API nào trả ra, không ghi log** (`getPush` chỉ trả `vapid_public`; lỗi gửi chỉ log mã HTTP/thông điệp) | Tự sinh một lần ở `src/services/push.ts` › `ensureVapid` (lần `GET /v1/push` / `POST /v1/push/test` đầu); `loadVapid` đọc. Xem notify UC-410, ADR-64 |
+| `vapid_public` | Khoá công khai VAPID, raw 65 byte base64url — công khai, trả trong `GET /v1/push` làm `applicationServerKey` | Sinh cùng khoá riêng; PWA và service worker đọc qua `/v1/push` |
+| `vapid_subject` | `sub` của JWT VAPID = origin của request đã sinh khoá (vd `https://vi-nha.example`) | Sinh cùng khoá riêng; không đổi được từ app |
+| `notify_daily_time`, `notify_daily_enabled`, `notify_weekly_day`, `notify_weekly_time`, `notify_weekly_enabled`, `notify_pending_enabled`, `notify_quiet_start`, `notify_quiet_end` | Giờ nhắc của cả nhà (migration 0011, ADR-68; giờ làm tròn bước 15 phút ở migration 0012, ADR-70) — nghĩa và mặc định ở [notify/entities.md](../notify/entities.md) § Giờ nhắc | `PATCH /v1/settings/notify-schedule` ghi (UC-507); `GET /v1/settings` › `notifySchedule` (UC-505) và mỗi lượt cron (`loadNotifyState`, notify UC-401) đọc |
+| `rental_headcount`, `rental_shared_categories`, `rental_income_stream_id` | Cấu hình cho thuê (migration 0007) — thuộc context rental, xem [rental/entities.md](../rental/entities.md) | `PATCH /v1/rental/config` ghi; `src/services/rental.ts` đọc |
+| `tz`, `split_days`, `currency` | Seed (`migrations/0002_seed.sql`) | Không thấy mã nào trong `src/`/`web/src` đọc — xem [OPEN] ở UC-507 |
+
+Bất biến: tối đa 6 Member `active = 1` (ADR-96); đúng một `owner`.
+
+Quan hệ: Member 1—N Session (không lưu) ; Member 1—0..1 ZaloLinkCode ; Member 1—N kết nối Claude (grant OAuth trong KV `OAUTH_KV`, `userId` = `member_id` — mcp) ; Member được tham chiếu bởi Account.`owner_member_id`, Wallet.`member_id`, Transaction.`by_member_id`, Rule.`by_member_id` (các context khác).

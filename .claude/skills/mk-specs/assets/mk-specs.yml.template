@@ -1,0 +1,41 @@
+# mk-specs — cấu hình cho project này (đặt ở specs/mk-specs.yml)
+# Cú pháp: YAML rút gọn (map, list, 'chuỗi', "chuỗi", số, true/false/null, [a, b], chú thích #).
+# Regex viết trong '…' để dấu \ giữ nguyên. Chi tiết: .claude/skills/mk-specs/references/traceability.md
+version: 1
+language: vi                 # vi | en — chữ trong file sinh ra
+specs_dir: specs
+
+# Context theo thứ tự hiện trong file sinh ra. Bỏ trống thì dùng contexts_glob.
+contexts:
+  - id: checkout
+    title: "Đặt hàng (checkout)"
+# contexts_glob: "*"         # hoặc "use-cases/*" — mọi thư mục con có file UC
+
+ids:
+  uc: 'UC-\d{3}'
+  br: 'BR-\d+'
+  adr: 'ADR-\d+'
+
+decisions_file: decisions.md
+
+tests:
+  list_command: null         # vd "npx vitest list --json" — in JSON [{file, name}]
+  file_pattern: '[^`]+\.(?:test|spec)\.[cm]?[jt]sx?'
+  citation_style: pointer    # pointer | name | both
+
+readme:
+  file: README.md
+  banner:
+    match: '^> (Cập nhật|Hợp nhất) '
+    keep: 5
+  lines:
+    - match: '^(?P<uc>\d+) UC · (?P<ac>\d+) AC · (?P<tested>\d+) AC có test · \*\*(?P<untested>\d+) AC chưa có test\*\*'
+    - match: '^Chỉ số: AC Coverage (?P<ac_coverage>\S+) · Spec Coverage (?P<spec_coverage>\S+) \((?P<spec_covered>\d+)/(?P<spec_active>\d+) UC\) · Trace Ratio (?P<trace_ratio>\S+) \((?P<traced>\d+)/(?P<trace_total>\d+) commit từ (?P<since>[\d-]+|—)\)'
+    - match: 'Toàn bộ (?P<divergence>\d+) divergence và (?P<open>\d+) câu hỏi mở'
+    - match: 'BR-01…BR-(?P<br_last>\d+)'
+    - match: 'ADR-01…ADR-(?P<adr_last>\d+)'
+
+metrics:
+  since: null                # ngày bắt đầu đo Trace Ratio, vd "2026-01-31" (ngày áp dụng)
+  active_status: [implemented, partial]
+  exempt_scopes: [specs, deps]

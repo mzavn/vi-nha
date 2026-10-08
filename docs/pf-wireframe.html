@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="vi" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ví nhà — wireframe</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;650&family=IBM+Plex+Mono:wght@450;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f1f2f4; --surface:#fff; --surface-2:#fafafa; --surface-3:#f6f6f7;
+  --border:#e1e3e5; --border-strong:#c9cccf;
+  --fg:#1a1c1d; --fg-2:#5c5f62; --fg-3:#8c9196;
+  --primary:#18181b; --primary-fg:#fff;
+  --ok:#0f7b52; --ok-bg:#e7f5ee; --warn:#8a6116; --warn-bg:#fdf3dc; --bad:#b32318; --bad-bg:#fdecea;
+  --lock:#3d3a6e; --lock-bg:#eceaf6;
+  --r:10px; --r-sm:7px;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0d0d0e; --surface:#161718; --surface-2:#1c1d1f; --surface-3:#202123;
+  --border:#2b2d30; --border-strong:#3a3d41;
+  --fg:#f2f2f3; --fg-2:#a7abaf; --fg-3:#7c8084;
+  --primary:#f2f2f3; --primary-fg:#161718;
+  --ok:#5fd0a0; --ok-bg:#12281f; --warn:#e5b95c; --warn-bg:#2a2214; --bad:#f08b80; --bad-bg:#2c1817;
+  --lock:#a9a3e8; --lock-bg:#1d1b2e;
+}}
+:root[data-theme="dark"]{
+  --bg:#0d0d0e; --surface:#161718; --surface-2:#1c1d1f; --surface-3:#202123;
+  --border:#2b2d30; --border-strong:#3a3d41;
+  --fg:#f2f2f3; --fg-2:#a7abaf; --fg-3:#7c8084;
+  --primary:#f2f2f3; --primary-fg:#161718;
+  --ok:#5fd0a0; --ok-bg:#12281f; --warn:#e5b95c; --warn-bg:#2a2214; --bad:#f08b80; --bad-bg:#2c1817;
+  --lock:#a9a3e8; --lock-bg:#1d1b2e;
+}
+*,*::before,*::after{box-sizing:inherit}
+html{-webkit-text-size-adjust:100%; scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+.num{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}
+button{font:inherit;color:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--fg);outline-offset:2px;border-radius:4px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* ---- chrome ---- */
+.app{max-width:720px;margin:0 auto;padding:0 12px 92px}
+.topbar{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--bg);
+  padding:14px 0 10px;display:flex;align-items:flex-end;justify-content:space-between;gap:12px;
+  border-bottom:1px solid transparent}
+.topbar.stuck{border-bottom-color:var(--border)}
+.topbar h1{margin:0;font-size:19px;font-weight:650;letter-spacing:-.018em}
+.topbar .sub{color:var(--fg-2);font-size:12.5px;margin-top:1px}
+.btn{border:1px solid var(--border-strong);background:var(--surface);border-radius:var(--r-sm);
+  padding:7px 13px;font-size:13px;font-weight:500;white-space:nowrap}
+.btn:hover{background:var(--surface-3)}
+.btn-primary{background:var(--primary);color:var(--primary-fg);border-color:var(--primary)}
+.btn-primary:hover{opacity:.9;background:var(--primary)}
+.btn-sm{padding:5px 10px;font-size:12.5px}
+.btn-ghost{border-color:transparent;background:transparent;color:var(--fg-2)}
+
+/* ---- card (Polaris section) ---- */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
+  margin-bottom:12px;overflow:hidden}
+.card-h{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:12px 14px 10px}
+.card-h h2{margin:0;font-size:14px;font-weight:600;letter-spacing:-.01em}
+.card-h .hint{font-size:12px;color:var(--fg-3)}
+.card-b{padding:0 14px 14px}
+.card-b.flush{padding:0}
+.rowsep{border-top:1px solid var(--border)}
+
+/* ---- hero ---- */
+.hero{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
+  padding:18px 16px 16px;margin-bottom:12px}
+.hero .lab{font-size:13px;color:var(--fg-2)}
+.hero .big{font-size:40px;font-weight:600;letter-spacing:-.035em;line-height:1.05;margin:4px 0 2px}
+.hero .meta{font-size:12.5px;color:var(--fg-3)}
+.hero .split{display:flex;gap:10px;margin-top:14px;padding-top:13px;border-top:1px solid var(--border)}
+.hero .split div{flex:1}
+.hero .split .k{font-size:11.5px;color:var(--fg-3)}
+.hero .split .v{font-size:15px;font-weight:550;margin-top:1px}
+
+/* ---- banner (Polaris) ---- */
+.banner{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:var(--r-sm);
+  border:1px solid;margin-bottom:8px;font-size:13px}
+.banner .ic{flex:none;width:16px;height:16px;border-radius:50%;margin-top:1px;
+  display:grid;place-items:center;font-size:10px;font-weight:700;color:#fff}
+.b-bad{background:var(--bad-bg);border-color:color-mix(in srgb,var(--bad) 30%,transparent);color:var(--bad)}
+.b-bad .ic{background:var(--bad)}
+.b-warn{background:var(--warn-bg);border-color:color-mix(in srgb,var(--warn) 32%,transparent);color:var(--warn)}
+.b-warn .ic{background:var(--warn)}
+.banner strong{font-weight:600}
+.banner .act{margin-left:auto;text-decoration:underline;font-weight:500;background:none;border:0;padding:0;color:inherit}
+
+/* ---- tier rows ---- */
+.tier{padding:11px 14px;display:grid;grid-template-columns:1fr auto;gap:3px 10px;align-items:baseline}
+.tier+.tier{border-top:1px solid var(--border)}
+.tier .nm{font-weight:500;display:flex;align-items:center;gap:7px}
+.tier .amt{font-size:13.5px;font-weight:550}
+.tier .sub{grid-column:1/-1;font-size:12px;color:var(--fg-3);display:flex;justify-content:space-between;gap:8px}
+.bar{grid-column:1/-1;height:5px;border-radius:99px;background:var(--surface-3);overflow:hidden;margin-top:5px}
+.bar i{display:block;height:100%;border-radius:99px;background:var(--fg-2)}
+.bar.lock i{background:var(--lock)}
+.bar.ok i{background:var(--ok)}
+.bar.bad i{background:var(--bad)}
+.dot{width:6px;height:6px;border-radius:50%;flex:none}
+.d-lock{background:var(--lock)} .d-nice{background:#7a5ea8} .d-must{background:var(--fg-2)} .d-have{background:var(--ok)}
+.chip{font-size:11px;font-weight:550;padding:1px 7px;border-radius:99px;background:var(--surface-3);
+  color:var(--fg-2);border:1px solid var(--border)}
+.chip.lock{background:var(--lock-bg);color:var(--lock);border-color:transparent}
+.chip.bad{background:var(--bad-bg);color:var(--bad);border-color:transparent}
+.chip.ok{background:var(--ok-bg);color:var(--ok);border-color:transparent}
+
+/* ---- table ---- */
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:right;font-weight:500;color:var(--fg-3);font-size:11.5px;padding:8px 14px;
+  border-bottom:1px solid var(--border);background:var(--surface-2)}
+th:first-child{text-align:left}
+td{padding:9px 14px;border-bottom:1px solid var(--border);text-align:right}
+td:first-child{text-align:left}
+tr:last-child td{border-bottom:0}
+.neg{color:var(--bad);font-weight:550}
+
+/* ---- keypad / nhập ---- */
+.amount{font-size:38px;font-weight:600;letter-spacing:-.03em;text-align:center;padding:18px 0 4px}
+.amount .cur{font-size:19px;color:var(--fg-3);font-weight:450;margin-left:3px}
+.quick{display:flex;gap:7px;justify-content:center;padding-bottom:14px;flex-wrap:wrap}
+.catgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;padding:0 14px 12px}
+@media(min-width:520px){.catgrid{grid-template-columns:repeat(6,1fr)}}
+.cat{border:1px solid var(--border);background:var(--surface);border-radius:var(--r-sm);
+  padding:11px 5px 8px;text-align:center;display:grid;gap:4px;justify-items:center}
+.cat .em{font-size:19px;line-height:1}
+.cat .t{font-size:11.5px;color:var(--fg-2);line-height:1.2}
+.cat[aria-pressed="true"]{border-color:var(--fg);background:var(--surface-3)}
+.cat[aria-pressed="true"] .t{color:var(--fg);font-weight:550}
+.field{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;
+  border-top:1px solid var(--border);font-size:13px}
+.field .k{color:var(--fg-2)}
+.field select,.field input{border:1px solid var(--border);background:var(--surface);color:var(--fg);
+  border-radius:6px;padding:5px 8px;font:inherit;font-size:13px;max-width:60%}
+.pad{padding:12px 14px 14px}
+.wfull{width:100%;padding:11px;font-size:14px;font-weight:550}
+
+/* ---- log list ---- */
+.log{padding:11px 14px;display:grid;grid-template-columns:1fr auto;gap:2px 10px;
+  border-top:1px solid var(--border);width:100%;text-align:left;background:none;border-left:0;border-right:0;border-bottom:0}
+.log:hover{background:var(--surface-3)}
+.log .t{font-size:12px;color:var(--fg-3)}
+.log .a{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
+.log .a.in{color:var(--ok)}
+.log .c{grid-column:1;font-size:13px;color:var(--fg-2);word-break:break-word}
+.log .g{grid-column:2;justify-self:end}
+
+/* ---- sheet ---- */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.42);z-index:40;display:none}
+.scrim.on{display:block}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:50;background:var(--surface);
+  border-radius:16px 16px 0 0;border-top:1px solid var(--border);
+  max-height:86vh;overflow:auto;display:none;
+  padding-bottom:calc(14px + env(safe-area-inset-bottom,0px))}
+.sheet.on{display:block}
+.sheet-h{position:sticky;top:0;background:var(--surface);padding:14px 16px 10px;
+  border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+.sheet-h h3{margin:0;font-size:15px;font-weight:600}
+.grab{width:34px;height:4px;border-radius:99px;background:var(--border-strong);margin:8px auto 0}
+.seg{display:flex;gap:6px;flex-wrap:wrap;padding:12px 16px 4px}
+.seg button{border:1px solid var(--border);background:var(--surface);border-radius:99px;
+  padding:5px 11px;font-size:12.5px}
+.seg button[aria-pressed="true"]{background:var(--primary);color:var(--primary-fg);border-color:var(--primary)}
+.wf{padding:4px 16px 0;font-size:13px}
+.wf .r{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px dashed var(--border)}
+.wf .r.total{border-bottom:0;border-top:1px solid var(--border);margin-top:4px;font-weight:600}
+.wf .r .s{color:var(--fg-3);font-size:11.5px;display:block}
+
+/* ---- bottom nav ---- */
+.nav{position:fixed;left:0;right:0;bottom:0;z-index:30;background:var(--surface);
+  border-top:1px solid var(--border);display:grid;grid-template-columns:repeat(4,1fr);
+  padding-bottom:env(safe-area-inset-bottom,0px)}
+.nav button{background:none;border:0;padding:9px 2px 10px;display:grid;gap:3px;justify-items:center;
+  font-size:11px;color:var(--fg-3)}
+.nav button .em{font-size:17px;line-height:1}
+.nav button[aria-current="page"]{color:var(--fg);font-weight:600}
+.fab{position:fixed;right:16px;bottom:calc(74px + env(safe-area-inset-bottom,0px));z-index:31;
+  width:50px;height:50px;border-radius:50%;background:var(--primary);color:var(--primary-fg);
+  border:0;font-size:25px;line-height:1;box-shadow:0 6px 18px rgba(0,0,0,.22)}
+.toast{position:fixed;left:50%;transform:translateX(-50%) translateY(14px);
+  bottom:calc(88px + env(safe-area-inset-bottom,0px));z-index:60;
+  background:var(--fg);color:var(--bg);padding:10px 15px;border-radius:99px;font-size:13px;
+  opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;max-width:90vw;text-align:center}
+.toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+.hide{display:none!important}
+.note{font-size:12px;color:var(--fg-3);padding:0 14px 13px}
+.tabs{display:flex;gap:5px;overflow-x:auto;padding:2px 0 12px;-webkit-overflow-scrolling:touch}
+.tabs button{border:1px solid var(--border);background:var(--surface);border-radius:99px;
+  padding:6px 12px;font-size:12.5px;white-space:nowrap}
+.tabs button[aria-pressed="true"]{background:var(--primary);color:var(--primary-fg);border-color:var(--primary)}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11.5px;color:var(--fg-3);padding:0 14px 12px}
+.legend span{display:flex;align-items:center;gap:5px}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar" id="topbar">
+    <div><h1 id="pgTitle">Hôm nay</h1><div class="sub" id="pgSub">Chủ nhật 20/9 · tuần 38 (14–20/9)</div></div>
+    <button class="btn btn-primary" id="pgAction">Chia tiền</button>
+  </header>
+
+  <!-- ══ 1. HÔM NAY ══ -->
+  <section id="s-today">
+    <div class="hero">
+      <div class="lab">Còn để chi tuần này</div>
+      <div class="big num">3.250.000 <span class="cur">₫</span></div>
+      <div class="meta">Ăn uống · Đi lại · Có thì tốt — còn 1 ngày trong tuần</div>
+      <div class="split">
+        <div><div class="k">Đã khóa tháng này</div><div class="v num">9.000.000 ₫</div></div>
+        <div><div class="k">Tài sản</div><div class="v num">5.000.000 ₫</div></div>
+        <div><div class="k">Tiền mặt</div><div class="v num">1.750.000 ₫</div></div>
+      </div>
+    </div>
+
+    <div class="banner b-bad">
+      <span class="ic">!</span>
+      <div><strong>Sổ lệch 120.000 ₫ ở VCB.</strong> Có giao dịch chưa vào sổ.</div>
+      <button class="act" data-go="assign">Đối soát</button>
+    </div>
+    <div class="banner b-warn">
+      <span class="ic">5</span>
+      <div><strong>5 giao dịch chưa gán</strong>, trong đó 1 khoản tiền vào cần xác nhận.</div>
+      <button class="act" data-go="assign">Gán</button>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><h2>Dòng thác tháng 9</h2><span class="hint">rót từ trên xuống</span></div>
+      <div class="card-b flush">
+        <div class="tier">
+          <div class="nm"><i class="dot d-lock"></i>Tích sản <span class="chip lock">khóa</span></div>
+          <div class="amt num">9.000.000 ₫</div>
+          <div class="sub"><span>cash 4.000.000 → tài sản 5.000.000</span><span>30% thu nhập</span></div>
+          <div class="bar lock"><i style="width:100%"></i></div>
+        </div>
+        <div class="tier">
+          <div class="nm"><i class="dot d-lock"></i>Thuế <span class="chip lock">khóa</span></div>
+          <div class="amt num">0 ₫</div>
+          <div class="sub"><span>Lương đã khấu trừ tại nguồn</span><span>10% nếu thu ngoài</span></div>
+        </div>
+        <div class="tier">
+          <div class="nm"><i class="dot d-nice"></i>Hưởng thụ</div>
+          <div class="amt num">2.500.000 / 4.000.000</div>
+          <div class="sub"><span>Chơi chung 2 người · Du lịch</span><span>62%</span></div>
+          <div class="bar"><i style="width:62%"></i></div>
+        </div>
+        <div class="tier">
+          <div class="nm"><i class="dot d-must"></i>Vận hành — Must</div>
+          <div class="amt num">10.560.000 / 13.000.000</div>
+          <div class="sub"><span>Nhà · Ăn · Đi lại · Điện nước · Về quê</span><span>81%</span></div>
+          <div class="bar"><i style="width:81%"></i></div>
+        </div>
+        <div class="tier">
+          <div class="nm"><i class="dot d-have"></i>Có thì tốt <span class="chip">phần còn lại</span></div>
+          <div class="amt num">4.150.000 / 4.000.000</div>
+          <div class="sub"><span>Vượt 150.000 ₫ — tuần sau bóp lại</span><span class="chip bad">104%</span></div>
+          <div class="bar bad"><i style="width:100%"></i></div>
+        </div>
+      </div>
+      <div class="legend">
+        <span><i class="dot d-lock"></i>khóa, không chạm</span>
+        <span><i class="dot d-nice"></i>bóp trước khi thiếu</span>
+        <span><i class="dot d-have"></i>nhận phần dư</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><h2>Quỹ mục tiêu</h2></div>
+      <div class="card-b flush">
+        <div class="tier">
+          <div class="nm">Phao khẩn cấp</div><div class="amt num">0,4 / 6 tháng</div>
+          <div class="sub"><span>4.000.000 trên mức cần 63.360.000</span><span>6%</span></div>
+          <div class="bar ok"><i style="width:6%"></i></div>
+        </div>
+        <div class="tier">
+          <div class="nm">Du lịch</div><div class="amt num">6.750.000 / 15.000.000</div>
+          <div class="sub"><span>Hạn 20/12 · cần 2.750.000/tháng</span><span>45%</span></div>
+          <div class="bar ok"><i style="width:45%"></i></div>
+        </div>
+        <div class="tier">
+          <div class="nm">Về quê</div><div class="amt num">1.200.000 / 10.000.000</div>
+          <div class="sub"><span>Tết 2027</span><span>12%</span></div>
+          <div class="bar ok"><i style="width:12%"></i></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><h2>Chuyển tiền cần làm</h2><span class="chip bad">2 quá hạn</span></div>
+      <div class="card-b flush">
+        <table>
+          <tr><th>Từ → đến</th><th>Số tiền</th><th></th></tr>
+          <tr><td>VCB → TCB<div class="t" style="font-size:11.5px;color:var(--fg-3)">Tích sản · PF-b1</div></td>
+              <td class="num">9.000.000</td><td><button class="btn btn-sm" data-toast="Đã chép nội dung PF-b1">Chép</button></td></tr>
+          <tr><td>VCB → MB<div class="t" style="font-size:11.5px;color:var(--fg-3)">Thuế · PF-b1</div></td>
+              <td class="num">0</td><td><button class="btn btn-sm" data-toast="Không cần chuyển — thuế kỳ này bằng 0">Bỏ qua</button></td></tr>
+        </table>
+      </div>
+      <div class="note">Phân bổ trong app chỉ là ảo cho tới khi tiền đi thật giữa các tài khoản.</div>
+    </div>
+  </section>
+
+  <!-- ══ 2. NHẬP ══ -->
+  <section id="s-entry" class="hide">
+    <div class="card">
+      <div class="card-b flush">
+        <div class="amount num" id="amt">0 <span class="cur">₫</span></div>
+        <div class="quick">
+          <button class="btn btn-sm" data-add="20000">20k</button>
+          <button class="btn btn-sm" data-add="50000">50k</button>
+          <button class="btn btn-sm" data-add="100000">100k</button>
+          <button class="btn btn-sm" data-add="200000">200k</button>
+          <button class="btn btn-sm btn-ghost" id="amtClear">Xóa</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><h2>Danh mục</h2><span class="hint">6 mục hay dùng nhất</span></div>
+      <div class="catgrid" id="cats">
+        <button class="cat" data-cat="Xăng xe" data-wallet="Đi lại" aria-pressed="false"><span class="em">⛽</span><span class="t">Xăng xe</span></button>
+        <button class="cat" data-cat="Đi chợ" data-wallet="Ăn uống" aria-pressed="false"><span class="em">🧺</span><span class="t">Đi chợ</span></button>
+        <button class="cat" data-cat="Cà phê" data-wallet="Chơi (chồng)" aria-pressed="false"><span class="em">☕</span><span class="t">Cà phê</span></button>
+        <button class="cat" data-cat="Grab" data-wallet="Đi lại" aria-pressed="false"><span class="em">🚕</span><span class="t">Grab</span></button>
+        <button class="cat" data-cat="Ăn ngoài" data-wallet="Ăn uống" aria-pressed="false"><span class="em">🍜</span><span class="t">Ăn ngoài</span></button>
+        <button class="cat" data-cat="Y tế" data-wallet="Có thì tốt" aria-pressed="false"><span class="em">💊</span><span class="t">Y tế</span></button>
+      </div>
+      <div class="card-b" style="padding-top:0"><button class="btn" style="width:100%" data-toast="Còn 14 danh mục khác">Tất cả danh mục</button></div>
+    </div>
+
+    <div class="card">
+      <div class="field"><span class="k">Ví</span><span id="fWallet" style="font-weight:550">Chọn danh mục trước</span></div>
+      <div class="field"><span class="k">Trả bằng</span>
+        <select id="fAcct"><option>Tiền mặt (chồng)</option><option>VCB (chính)</option><option>Tiền mặt (vợ)</option><option>Momo</option></select></div>
+      <div class="field"><span class="k">Ghi chú</span><input id="fNote" placeholder="không bắt buộc"></div>
+      <div class="field"><span class="k">Ngày</span><span>Hôm nay, 20/9</span></div>
+      <div class="pad"><button class="btn btn-primary wfull" id="saveEntry">Lưu khoản chi</button></div>
+      <div class="note">Loại khác: thu nhập ngoài · hoàn tiền · mua tài sản · cho vay · chuyển nội bộ.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><h2>Đếm ví tiền mặt</h2><span class="chip warn" style="background:var(--warn-bg);color:var(--warn);border-color:transparent">đến hẹn</span></div>
+      <div class="card-b">
+        <div style="display:flex;justify-content:space-between;padding:4px 0 10px">
+          <span style="color:var(--fg-2)">Sổ đang ghi</span><span class="num" style="font-weight:600">1.750.000 ₫</span>
+        </div>
+        <button class="btn" style="width:100%" data-toast="Nhập số tiền thật đang có trong ví">Đếm và ghi chênh lệch</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 3. GÁN ══ -->
+  <section id="s-assign" class="hide">
+    <div class="card">
+      <div class="card-h"><h2>Chưa gán</h2><span class="hint">5 giao dịch</span></div>
+      <div class="card-b flush" id="logs">
+        <button class="log" data-log="salary">
+          <span class="t">09:10 · VCB</span><span class="a in num">+30.000.000</span>
+          <span class="c">LUONG THANG 9 CTY HDV</span><span class="g chip ok">khớp mẫu lương</span>
+        </button>
+        <button class="log" data-log="atm">
+          <span class="t">20/9 08:42 · VCB</span><span class="a num">−2.000.000</span>
+          <span class="c">RUT TIEN ATM 0011xxx</span><span class="g chip">có thể là rút tiền mặt</span>
+        </button>
+        <button class="log" data-log="ean">
+          <span class="t">19/9 14:22 · VCB</span><span class="a num">−250.000</span>
+          <span class="c">CHUYEN TIEN EAN CHO NAU</span><span class="g chip">gợi ý: Ăn uống</span>
+        </button>
+        <button class="log" data-log="unknown">
+          <span class="t">19/9 11:05 · VCB</span><span class="a in num">+1.500.000</span>
+          <span class="c">NGUYEN VAN A CHUYEN TIEN</span><span class="g chip bad">tiền vào — phải hỏi</span>
+        </button>
+        <button class="log" data-log="shop">
+          <span class="t">18/9 20:31 · VCB</span><span class="a num">−890.000</span>
+          <span class="c">POS SHOPEE 88231</span><span class="g chip">chưa có luật</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><h2>Đã tự gán hôm nay</h2><span class="hint">4 giao dịch</span></div>
+      <div class="card-b flush">
+        <table>
+          <tr><th>Nội dung</th><th>Ví</th><th>Số tiền</th></tr>
+          <tr><td>VCB → TCB · PF-b1<div style="font-size:11.5px;color:var(--fg-3)">ghép cặp 2 log → 1 chuyển nội bộ</div></td><td>—</td><td class="num">9.000.000</td></tr>
+          <tr><td>EAN chợ sáng</td><td>Ăn uống</td><td class="num">180.000</td></tr>
+          <tr><td>EPL cà phê</td><td>Chơi (chồng)</td><td class="num">65.000</td></tr>
+          <tr><td>Tiền điện tháng 9</td><td>Điện nước mạng</td><td class="num">280.000</td></tr>
+        </table>
+      </div>
+      <div class="note">Tiền vào không bao giờ tự gán, trừ khoản khớp mẫu lương.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><h2>Đối soát</h2></div>
+      <div class="card-b flush">
+        <table>
+          <tr><th>Tài khoản</th><th>Sổ</th><th>Ngân hàng</th><th>Lệch</th></tr>
+          <tr><td>VCB (chính)</td><td class="num">12.430.000</td><td class="num">12.550.000</td><td class="num neg">+120.000</td></tr>
+          <tr><td>TCB (Tích sản)</td><td class="num">4.000.000</td><td class="num">4.000.000</td><td class="num">0</td></tr>
+          <tr><td>MB (Thuế)</td><td class="num">0</td><td class="num">0</td><td class="num">0</td></tr>
+          <tr><td>Tiền mặt (chồng)<div style="font-size:11.5px;color:var(--fg-3)">đếm ví 6 ngày trước</div></td><td class="num">1.750.000</td><td>—</td><td>—</td></tr>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 4. VÍ & QUỸ ══ -->
+  <section id="s-wallets" class="hide">
+    <div class="tabs" id="wtabs">
+      <button aria-pressed="true" data-t="w">Ngân sách</button>
+      <button aria-pressed="false" data-t="a">Tích sản</button>
+      <button aria-pressed="false" data-t="c">Tài khoản</button>
+      <button aria-pressed="false" data-t="d">Danh mục</button>
+    </div>
+
+    <div id="t-w">
+      <div class="card">
+        <div class="card-h"><h2>Tháng 9/2026</h2>
+          <div style="display:flex;gap:5px">
+            <button class="btn btn-sm" data-toast="Đổi sang xem theo tuần">Tuần</button>
+            <button class="btn btn-sm btn-primary">Tháng</button>
+          </div>
+        </div>
+        <div class="card-b flush">
+          <table>
+            <tr><th>Ví</th><th>Dự kiến</th><th>Thực tế</th><th>Còn lại</th></tr>
+            <tr><td>Nhà ở</td><td class="num">8.000.000</td><td class="num">8.000.000</td><td class="num">0</td></tr>
+            <tr><td>Ăn uống</td><td class="num">2.500.000</td><td class="num">2.310.000</td><td class="num">190.000</td></tr>
+            <tr><td>Đi lại</td><td class="num">1.200.000</td><td class="num">250.000</td><td class="num">950.000</td></tr>
+            <tr><td>Điện nước mạng</td><td class="num">300.000</td><td class="num">280.000</td><td class="num">20.000</td></tr>
+            <tr><td>Về quê</td><td class="num">1.000.000</td><td class="num">0</td><td class="num">1.000.000</td></tr>
+            <tr><td>Chơi (chồng)</td><td class="num">1.500.000</td><td class="num">1.340.000</td><td class="num">160.000</td></tr>
+            <tr><td>Chơi (vợ)</td><td class="num">1.500.000</td><td class="num">1.160.000</td><td class="num">340.000</td></tr>
+            <tr><td>Có thì tốt</td><td class="num">4.000.000</td><td class="num">4.150.000</td><td class="num neg">−150.000</td></tr>
+          </table>
+        </div>
+        <div class="note">Có thì tốt là ví nhận phần còn lại — vượt ở đây nghĩa là tháng sau phải bóp, không phải rút Tích sản.</div>
+      </div>
+    </div>
+
+    <div id="t-a" class="hide">
+      <div class="card">
+        <div class="card-h"><h2>Tích sản</h2><span class="chip lock">một ví, hai trạng thái tiền</span></div>
+        <div class="card-b">
+          <div style="display:flex;gap:2px;height:34px;border-radius:7px;overflow:hidden;margin:4px 0 10px">
+            <div style="flex:4;background:var(--lock-bg);color:var(--lock);display:grid;place-items:center;font-size:12px;font-weight:600">cash 4,0tr</div>
+            <div style="flex:5;background:var(--lock);color:#fff;display:grid;place-items:center;font-size:12px;font-weight:600">tài sản 5,0tr</div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0">
+            <span style="color:var(--fg-2)">Phao khẩn cấp</span><span>0,4 / 6 tháng chi Must</span>
+          </div>
+          <div class="bar ok" style="margin:6px 0 12px"><i style="width:6%"></i></div>
+          <button class="btn" style="width:100%" disabled data-toast="">Mua tài sản — mở khi phao đầy</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h2>Tài sản đang giữ</h2></div>
+        <div class="card-b flush">
+          <table>
+            <tr><th>Loại</th><th>Ngày</th><th>Số tiền</th></tr>
+            <tr><td>Chứng chỉ quỹ</td><td>20/9</td><td class="num">5.000.000</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div id="t-c" class="hide">
+      <div class="card">
+        <div class="card-h"><h2>Tài khoản</h2><button class="btn btn-sm" data-toast="Thêm tài khoản mới">Thêm</button></div>
+        <div class="card-b flush">
+          <table>
+            <tr><th>Tài khoản</th><th>Sổ</th><th>Lệch</th></tr>
+            <tr><td>VCB (chính)<div style="font-size:11.5px;color:var(--fg-3)">SePay đang chạy</div></td><td class="num">12.430.000</td><td class="num neg">+120.000</td></tr>
+            <tr><td>TCB (Tích sản)<div style="font-size:11.5px;color:var(--fg-3)">ngân hàng khác — tạo ma sát</div></td><td class="num">4.000.000</td><td class="num">0</td></tr>
+            <tr><td>MB (Thuế)</td><td class="num">0</td><td class="num">0</td></tr>
+            <tr><td>VCB (vợ)</td><td class="num">3.210.000</td><td class="num">0</td></tr>
+            <tr><td>Tiền mặt (chồng)<div style="font-size:11.5px;color:var(--fg-3)">không có feed — đếm ví</div></td><td class="num">1.750.000</td><td>—</td></tr>
+            <tr><td>Tiền mặt (vợ)</td><td class="num">420.000</td><td>—</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div id="t-d" class="hide">
+      <div class="card">
+        <div class="card-h"><h2>Chi theo danh mục</h2><span class="hint">tháng 9 so với tháng 8</span></div>
+        <div class="card-b flush">
+          <table>
+            <tr><th>Danh mục</th><th>Tháng 9</th><th>Tháng 8</th></tr>
+            <tr><td>Nhà ở</td><td class="num">8.000.000</td><td class="num">0</td></tr>
+            <tr><td>Đi chợ / nấu ăn</td><td class="num">2.310.000</td><td class="num">2.480.000</td></tr>
+            <tr><td>Y tế</td><td class="num">1.900.000</td><td class="num">320.000</td></tr>
+            <tr><td>Mua sắm</td><td class="num">1.250.000</td><td class="num">890.000</td></tr>
+            <tr><td>Biếu bố mẹ</td><td class="num">1.000.000</td><td class="num">1.000.000</td></tr>
+            <tr><td>Cà phê / tụ tập</td><td class="num">740.000</td><td class="num">1.120.000</td></tr>
+            <tr><td>Xăng xe</td><td class="num">250.000</td><td class="num">610.000</td></tr>
+          </table>
+        </div>
+        <div class="note">Nhà ở ghi cả cục vào tháng trả, không rải đều — tháng này nặng, các tháng sau nhẹ.</div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<button class="fab" id="fab" aria-label="Nhập khoản chi">+</button>
+
+<nav class="nav">
+  <button data-go="today" aria-current="page"><span class="em">◱</span>Hôm nay</button>
+  <button data-go="entry"><span class="em">＋</span>Nhập</button>
+  <button data-go="assign"><span class="em">▤</span>Gán</button>
+  <button data-go="wallets"><span class="em">◧</span>Ví &amp; quỹ</button>
+</nav>
+
+<div class="scrim" id="scrim"></div>
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="shTitle">
+  <div class="grab"></div>
+  <div class="sheet-h"><h3 id="shTitle">Gán giao dịch</h3>
+    <button class="btn btn-sm btn-ghost" id="shClose">Đóng</button></div>
+  <div id="shBody"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const vnd=n=>n.toLocaleString('vi-VN')+' ₫';
+const TITLES={today:['Hôm nay','Chủ nhật 20/9 · tuần 38 (14–20/9)','Chia tiền'],
+  entry:['Nhập khoản chi','Tiền mặt và tài khoản không có feed','Loại khác'],
+  assign:['Gán giao dịch','5 chưa gán · 1 khoản tiền vào','Tạo luật'],
+  wallets:['Ví & quỹ','Tháng 9/2026','Xuất sổ']};
+
+function go(k){
+  $$('section[id^=s-]').forEach(s=>s.classList.add('hide'));
+  $('#s-'+k).classList.remove('hide');
+  $$('.nav button').forEach(b=>b.removeAttribute('aria-current'));
+  $(`.nav button[data-go="${k}"]`).setAttribute('aria-current','page');
+  const [t,s,a]=TITLES[k]; $('#pgTitle').textContent=t; $('#pgSub').textContent=s; $('#pgAction').textContent=a;
+  $('#fab').classList.toggle('hide',k==='entry');
+  window.scrollTo({top:0});
+}
+$$('[data-go]').forEach(b=>b.addEventListener('click',()=>go(b.dataset.go)));
+$('#fab').addEventListener('click',()=>go('entry'));
+
+let toastT; function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('on');
+  clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('on'),2200);}
+document.addEventListener('click',e=>{const b=e.target.closest('[data-toast]');
+  if(b&&b.dataset.toast)toast(b.dataset.toast);});
+
+/* ---- nhập tay ---- */
+let amt=0, cat=null, wallet=null;
+function renderAmt(){$('#amt').innerHTML=amt.toLocaleString('vi-VN')+' <span class="cur">₫</span>';}
+$$('[data-add]').forEach(b=>b.addEventListener('click',()=>{amt+=+b.dataset.add;renderAmt();}));
+$('#amtClear').addEventListener('click',()=>{amt=0;renderAmt();});
+$('#cats').addEventListener('click',e=>{const c=e.target.closest('.cat'); if(!c)return;
+  $$('.cat').forEach(x=>x.setAttribute('aria-pressed','false'));
+  c.setAttribute('aria-pressed','true'); cat=c.dataset.cat; wallet=c.dataset.wallet;
+  $('#fWallet').textContent=wallet;});
+$('#saveEntry').addEventListener('click',()=>{
+  if(!amt){toast('Nhập số tiền trước');return;}
+  if(!cat){toast('Chọn danh mục — ví sẽ tự điền theo');return;}
+  const left={'Đi lại':950000,'Ăn uống':190000,'Chơi (chồng)':160000,'Có thì tốt':-150000}[wallet]-amt;
+  toast(`Đã ghi ${vnd(amt)}. ${wallet} còn ${vnd(left)} tháng này`);
+  amt=0;renderAmt();$$('.cat').forEach(x=>x.setAttribute('aria-pressed','false'));
+  cat=null;$('#fWallet').textContent='Chọn danh mục trước';});
+
+/* ---- sheet gán ---- */
+const SHEETS={
+ salary:{title:'Tiền vào 30.000.000 ₫',body:`
+  <div class="seg"><button aria-pressed="true">Thu nhập</button><button>Chuyển nội bộ</button><button>Hoàn tiền</button><button>Cho vay trả lại</button></div>
+  <div class="field"><span class="k">Đã khấu trừ thuế tại nguồn?</span>
+    <select><option>Rồi — không trích thuế</option><option>Chưa — trích 10%</option></select></div>
+  <div class="card-h" style="padding-bottom:4px"><h2>Chia thử trước khi ghi</h2></div>
+  <div class="wf">
+    <div class="r"><span>Tích sản <span class="s">30% · khóa</span></span><span class="num">9.000.000</span></div>
+    <div class="r"><span>Thuế <span class="s">lương đã khấu trừ</span></span><span class="num">0</span></div>
+    <div class="r"><span>Du lịch <span class="s">mục tiêu · cần 2.750.000/tháng</span></span><span class="num">1.000.000</span></div>
+    <div class="r"><span>Chơi (chồng) · Chơi (vợ)</span><span class="num">3.000.000</span></div>
+    <div class="r"><span>Must: Nhà, Ăn, Đi lại, Điện nước, Về quê</span><span class="num">13.000.000</span></div>
+    <div class="r"><span>Có thì tốt <span class="s">phần còn lại</span></span><span class="num">4.000.000</span></div>
+    <div class="r total"><span>Tổng</span><span class="num">30.000.000</span></div>
+  </div>
+  <div class="note" style="padding-top:10px">Sau khi ghi sẽ sinh 1 lệnh chuyển thật: VCB → TCB 9.000.000, nội dung PF-b1.</div>
+  <div class="pad"><button class="btn btn-primary wfull" data-close data-toast="Đã chia. Còn 1 lệnh chuyển tiền cần làm">Chia và ghi sổ</button></div>`},
+ atm:{title:'Tiền ra 2.000.000 ₫',body:`
+  <div class="seg"><button>Chi tiêu</button><button aria-pressed="true">Chuyển nội bộ</button><button>Cho vay</button></div>
+  <div class="field"><span class="k">Từ</span><span>VCB (chính)</span></div>
+  <div class="field"><span class="k">Vào</span><select><option>Tiền mặt (chồng)</option><option>Tiền mặt (vợ)</option><option>TCB (Tích sản)</option></select></div>
+  <div class="banner b-warn" style="margin:12px 16px 0"><span class="ic">i</span>
+    <div>Rút tiền mặt <strong>không phải chi tiêu</strong>. Tiền chỉ đổi chỗ, ví không bị trừ.</div></div>
+  <div class="pad"><button class="btn btn-primary wfull" data-close data-toast="Đã ghi chuyển nội bộ. Tiền mặt: 3.750.000 ₫">Ghi chuyển nội bộ</button></div>`},
+ ean:{title:'Tiền ra 250.000 ₫',body:`
+  <div class="seg"><button aria-pressed="true">Chi tiêu</button><button>Chuyển nội bộ</button><button>Cho vay</button></div>
+  <div class="field"><span class="k">Ví</span><select><option>Ăn uống</option><option>Có thì tốt</option><option>Chơi (chồng)</option></select></div>
+  <div class="field"><span class="k">Danh mục</span><select><option>Đi chợ / nấu ăn</option><option>Ăn ngoài</option></select></div>
+  <div class="field"><span class="k">Ai chi</span><select><option>Chồng</option><option>Vợ</option></select></div>
+  <div class="field"><span class="k">Tách nhiều dòng</span><button class="btn btn-sm" data-toast="Tổng các dòng phải bằng 250.000">Tách</button></div>
+  <div class="field"><span class="k">Nhớ luật cho mã EAN</span><input type="checkbox" checked style="max-width:none;width:auto"></div>
+  <div class="pad"><button class="btn btn-primary wfull" data-close data-toast="Đã gán. Ăn uống còn 190.000 ₫ tháng này">Gán và tạo luật</button></div>`},
+ unknown:{title:'Tiền vào 1.500.000 ₫',body:`
+  <div class="banner b-bad" style="margin:12px 16px 0"><span class="ic">?</span>
+    <div>Tiền vào <strong>luôn phải hỏi</strong>. Máy không đoán được đây là thu nhập hay người ta trả lại tiền.</div></div>
+  <div class="seg"><button>Thu nhập mới</button><button aria-pressed="true">Hoàn về ví</button><button>Chuyển nội bộ</button><button>Bỏ qua</button></div>
+  <div class="field"><span class="k">Hoàn về khoản chi</span><select><option>18/9 · Shopee 890.000</option><option>15/9 · Trả hộ vé máy bay 1.500.000</option></select></div>
+  <div class="field"><span class="k">Ví nhận lại</span><span>Có thì tốt</span></div>
+  <div class="note">Hoàn tiền tính vào kỳ hiện tại, không chia lại như thu nhập, nhưng vẫn nối về khoản chi gốc.</div>
+  <div class="pad"><button class="btn btn-primary wfull" data-close data-toast="Đã hoàn về Có thì tốt. Vượt giảm còn 0 ₫">Ghi hoàn tiền</button></div>`},
+ shop:{title:'Tiền ra 890.000 ₫',body:`
+  <div class="seg"><button aria-pressed="true">Chi tiêu</button><button>Chuyển nội bộ</button><button>Mua tài sản</button></div>
+  <div class="field"><span class="k">Ví</span><select><option>Có thì tốt</option><option>Chơi (chồng)</option></select></div>
+  <div class="field"><span class="k">Danh mục</span><select><option>Mua sắm</option><option>Thiết bị công việc</option><option>Y tế</option></select></div>
+  <div class="field"><span class="k">Nhớ luật cho "SHOPEE"</span><input type="checkbox" style="max-width:none;width:auto"></div>
+  <div class="pad"><button class="btn btn-primary wfull" data-close data-toast="Đã gán. Có thì tốt vượt 150.000 ₫">Gán</button></div>`}
+};
+function openSheet(k){const s=SHEETS[k];$('#shTitle').textContent=s.title;$('#shBody').innerHTML=s.body;
+  $('#sheet').classList.add('on');$('#scrim').classList.add('on');
+  $('#shBody').querySelectorAll('.seg').forEach(g=>g.addEventListener('click',e=>{
+    const b=e.target.closest('button'); if(!b)return;
+    [...g.children].forEach(x=>x.removeAttribute('aria-pressed'));
+    b.setAttribute('aria-pressed','true');}));}
+function closeSheet(){$('#sheet').classList.remove('on');$('#scrim').classList.remove('on');}
+$('#logs').addEventListener('click',e=>{const l=e.target.closest('.log'); if(l)openSheet(l.dataset.log);});
+$('#shClose').addEventListener('click',closeSheet);
+$('#scrim').addEventListener('click',closeSheet);
+document.addEventListener('click',e=>{if(e.target.closest('[data-close]'))closeSheet();});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeSheet();});
+
+/* ---- tabs ví ---- */
+$('#wtabs').addEventListener('click',e=>{const b=e.target.closest('button'); if(!b)return;
+  [...$('#wtabs').children].forEach(x=>x.setAttribute('aria-pressed','false'));
+  b.setAttribute('aria-pressed','true');
+  ['w','a','c','d'].forEach(t=>$('#t-'+t).classList.toggle('hide',t!==b.dataset.t));});
+
+$('#pgAction').addEventListener('click',()=>{
+  const cur=$$('.nav button').find(b=>b.hasAttribute('aria-current')).dataset.go;
+  if(cur==='today'){go('assign');openSheet('salary');} else toast('Chưa nối trong bản wireframe');});
+
+const tb=$('#topbar');
+addEventListener('scroll',()=>tb.classList.toggle('stuck',scrollY>6),{passive:true});
+renderAmt();
+</script>
+</body>
+</html>
