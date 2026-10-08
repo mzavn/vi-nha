@@ -1,0 +1,4 @@
+# Mật khẩu chung của cả nhà — chỉ biến này là bắt buộc. Dùng ở màn Thiết lập lần đầu và để đăng nhập.
+# Chạy thử trên máy: chép file này thành .dev.vars rồi điền. Trên Cloudflare: nút Deploy hỏi lúc cài,
+# `npm run setup` tự đặt (`wrangler secret put APP_PASSWORD`). Khoá SePay, Telegram, Zalo đặt sau trong app (Cài đặt).
+APP_PASSWORD=

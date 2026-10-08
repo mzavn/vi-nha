@@ -1,0 +1,39 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "vi-nha",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  // Cần cho Client ID Metadata Document của OAuth (UC-601): fetch ra ngoài không đi đường nội bộ của zone (chống SSRF).
+  "compatibility_flags": ["global_fetch_strictly_public"],
+  // Chạy ở https://vi-nha.<subdomain>.workers.dev. Muốn dùng tên miền riêng: thêm "routes" (xem README).
+  "workers_dev": true,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // API, webhook, MCP và OAuth luôn vào Worker; mọi đường dẫn khác là PWA
+    "run_worker_first": ["/v1/*", "/webhooks/*", "/mcp", "/mcp/*", "/oauth/*", "/.well-known/*"]
+  },
+  // Không có id: lần deploy đầu (nút Deploy to Cloudflare hoặc `npm run setup`) Cloudflare tự tạo D1 "vi-nha" và KV,
+  // các lần sau tìm lại theo tên / theo Worker đã deploy.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "vi-nha",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // OAuth cho Claude (UC-601): client, grant, token — thư viện chỉ lưu băm của token / mã, `props` mã hoá.
+  "kv_namespaces": [{ "binding": "OAUTH_KV" }],
+  "triggers": {
+    // Worker chạy theo UTC; giờ VN = UTC+7. Hai biểu thức cùng vào một lượt (src/cron/index.ts, ADR-70): tin theo
+    // Giờ nhắc ở Cài đặt (src/cron/schedule.ts), báo log chưa gán đã chờ >= 60 giây, dọn lượt gửi thử kẹt;
+    // lượt 02:00 VN chạy thêm rà soát giao dịch hôm trước qua API SePay (không gửi tin). ~87 lượt/ngày.
+    // Gói Free: tối đa 5 cron cho CẢ tài khoản Cloudflare — Ví nhà dùng 2.
+    "crons": [
+      "*/15 0-17,21-23 * * *", // mỗi 15 phút, trừ 01:00–03:59 VN
+      "0 18,19,20 * * *" // 01:00, 02:00, 03:00 VN — đêm gần như không có giao dịch, chỉ chạy mỗi giờ
+    ]
+  },
+  "observability": { "enabled": true }
+}

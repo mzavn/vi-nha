@@ -1,0 +1,204 @@
+/* Trang uỷ quyền Claude (/oauth/authorize, UC-601 AC-9): file tĩnh ngoài /oauth/ để CSP style-src 'self' nạp được.
+   Token theo docs/DESIGN.md — chỉ ánh xạ, không thêm màu. */
+:root {
+  --bg: #f1f2f4;
+  --surface: #ffffff;
+  --surface-3: #f6f6f7;
+  --border: #e1e3e5;
+  --border-strong: #c9cccf;
+  --fg: #1a1c1d;
+  --fg-2: #5c5f62;
+  --fg-3: #6b6f73;
+  --primary: #18181b;
+  --on-primary: #ffffff;
+  --warn: #8a6116;
+  --warn-bg: #fdf3dc;
+  --bad: #b32318;
+  --bad-bg: #fdecea;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d0d0e;
+    --surface: #161718;
+    --surface-3: #202123;
+    --border: #2b2d30;
+    --border-strong: #3a3d41;
+    --fg: #f2f2f3;
+    --fg-2: #a7abaf;
+    --fg-3: #868a8e;
+    --primary: #f2f2f3;
+    --on-primary: #0d0d0e;
+    --warn: #e5b95c;
+    --warn-bg: #2a2214;
+    --bad: #f08b80;
+    --bad-bg: #2c1817;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  min-height: 100vh;
+  padding: max(24px, env(safe-area-inset-top)) 12px max(24px, env(safe-area-inset-bottom));
+  background: var(--bg);
+  color: var(--fg);
+  font: 400 14px/1.45 Inter, system-ui, sans-serif;
+}
+.card {
+  max-width: 440px;
+  margin: 0 auto;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+h1 {
+  margin: 0 0 8px;
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: -0.018em;
+}
+.sub,
+.note {
+  margin: 0 0 12px;
+  color: var(--fg-2);
+  font-size: 12.5px;
+}
+.note {
+  margin: 12px 0 0;
+  color: var(--fg-3);
+  font-size: 11.5px;
+}
+.banner {
+  margin: 0 0 12px;
+  padding: 10px 11px;
+  border-radius: 7px;
+  font-weight: 600;
+}
+.banner.bad {
+  background: var(--bad-bg);
+  color: var(--bad);
+}
+.banner.warn {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+.domain {
+  display: flex;
+  flex-direction: column;
+  margin: 0 0 12px;
+  padding: 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+}
+.domain strong {
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: -0.018em;
+  overflow-wrap: anywhere;
+}
+.domain span {
+  color: var(--fg-3);
+  font-size: 11.5px;
+}
+.facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  margin: 0 0 12px;
+  font-size: 12.5px;
+}
+.facts dt {
+  color: var(--fg-2);
+}
+.facts dd {
+  margin: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--fg-2);
+  font-size: 12.5px;
+}
+select,
+input[type="password"] {
+  min-height: 44px;
+  padding: 0 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  font-size: 16px;
+}
+.scopes {
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.scopes legend {
+  padding: 0 4px;
+  margin-left: 7px;
+  color: var(--fg-2);
+  font-size: 12.5px;
+}
+.scope {
+  display: flex;
+  gap: 11px;
+  align-items: flex-start;
+  min-height: 44px;
+  padding: 11px;
+}
+.scope + .scope {
+  border-top: 1px solid var(--border);
+}
+.scope input {
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
+  accent-color: var(--primary);
+}
+.scope span {
+  display: flex;
+  flex-direction: column;
+}
+.scope b {
+  font-weight: 600;
+}
+.scope small {
+  color: var(--fg-3);
+  font-size: 11.5px;
+}
+button {
+  min-height: 44px;
+  border-radius: 7px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.primary {
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: var(--on-primary);
+}
+.secondary {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--fg);
+}
+:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
