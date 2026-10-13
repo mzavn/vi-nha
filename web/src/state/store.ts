@@ -11,9 +11,10 @@ import { cacheClear, cacheGet, cacheSet, queueStore, StorageUnavailableError } f
 import { createSyncer, type QueuedEntry } from "../offline/queue";
 import { syncPush, unbindPush } from "./push";
 
-/** Bốn tab ở thanh dưới, cộng ba màn phụ không chiếm tab: Cài đặt (nút bánh răng ở Hôm nay), Sổ giao dịch (`#ledger`, UC-716) và Hướng dẫn (`#guide`, nhúng GitBook). */
-export type { Tab, WalletsTab } from "../lib/hash-route";
-import { hashFor, parseHash, type Tab, type WalletsTab } from "../lib/hash-route";
+/** Bốn tab ở thanh dưới, cộng bốn màn phụ không chiếm tab: Cài đặt (nút bánh răng ở Hôm nay), Sổ giao dịch (`#ledger`, UC-716), Hướng dẫn (`#guide`, nhúng GitBook)
+ *  và Tài sản & tự do (`#net-worth`, UC-717 — mở từ tab Nợ và thanh bên). */
+export type { NetWorthSection, Tab, WalletsTab } from "../lib/hash-route";
+import { hashFor, parseHash, type NetWorthSection, type Tab, type WalletsTab } from "../lib/hash-route";
 
 export interface AppState {
   /** "setup": nhà chưa thiết lập (DB mới), hiện màn Thiết lập thay màn đăng nhập (UC-701 AC-8). */
@@ -31,6 +32,8 @@ export interface AppState {
   syncing: boolean;
   tab: Tab;
   walletsTab: WalletsTab;
+  /** Phần đang xem ở màn Tài sản & tự do. */
+  netWorthSection: NetWorthSection;
   tierFilter: string | null;
   /** Phần Cài đặt mở thẳng tới (vd "Đổi tài khoản" ở card Tiền chi được); Cài đặt đọc xong thì xoá. */
   settingsFocus: "accounts" | null;
@@ -67,6 +70,7 @@ let state: AppState = {
   syncing: false,
   tab: route.tab,
   walletsTab: route.walletsTab ?? "budget",
+  netWorthSection: route.netWorthSection ?? "sheet",
   tierFilter: null,
   settingsFocus: null,
   assignFocus: null,
@@ -110,7 +114,7 @@ export const toast = (text: string) => setState({ toast: { id: ++toastSeq, text 
 // ── Điều hướng: màn trong hash ("#wallets/wealth-building") để F5, nút quay lại và lối tắt màn hình chính mở đúng chỗ ──
 export function go(tab: Tab, patch: Partial<AppState> = {}) {
   setState(patch);
-  const hash = hashFor(tab, state.walletsTab);
+  const hash = hashFor(tab, state.walletsTab, state.netWorthSection);
   if (location.hash !== hash) location.hash = hash.slice(1);
   else setState({ tab });
 }
@@ -119,6 +123,12 @@ export function go(tab: Tab, patch: Partial<AppState> = {}) {
 export function setWalletsTab(walletsTab: WalletsTab) {
   setState({ walletsTab });
   history.replaceState(null, "", hashFor("wallets", walletsTab));
+}
+
+/** Đổi phần của màn Tài sản & tự do: ghi vào hash (thay chỗ) để F5 mở đúng phần. */
+export function setNetWorthSection(netWorthSection: NetWorthSection) {
+  setState({ netWorthSection });
+  history.replaceState(null, "", hashFor("net-worth", state.walletsTab, netWorthSection));
 }
 
 // ── Hàng đợi ───────────────────────────────────────────────────────
@@ -413,7 +423,7 @@ export function start() {
   setUnauthorizedHandler(toLogin);
   addEventListener("hashchange", () => {
     const r = parseHash(location.hash);
-    setState(r.walletsTab ? { tab: r.tab, walletsTab: r.walletsTab } : { tab: r.tab });
+    setState({ tab: r.tab, ...(r.walletsTab ? { walletsTab: r.walletsTab } : {}), ...(r.netWorthSection ? { netWorthSection: r.netWorthSection } : {}) });
     scrollTo({ top: 0 });
   });
   addEventListener("online", () => {

@@ -3,11 +3,11 @@
 > Bản công khai: hash commit trong History, Status và các dòng "Cập nhật / Hợp nhất" là của repo gốc (private) nơi phát triển — repo này nhận từng bản phát hành qua script, nên không có các commit đó. Link tới `plans/` và test migration cũ của repo gốc đã thành chữ thường.
 
 > Dựng lại ngày 2026-10-01 từ code, test, `docs/`, `plans/`, báo cáo và `git log` (tới commit `a68c9d6`).
-> Hợp nhất change [`261007-doi-ten-tieng-anh`](changes/archive/261007-doi-ten-tieng-anh/proposal.md) ngày 2026-10-07 (code commit `7424f26`): **tên trong code, dữ liệu, đường dẫn bằng tiếng Anh** (ADR-92 — giao diện, tin nhắn, chú thích, tên test, specs vẫn tiếng Việt). Migration 0028 (schema v1.28): `wallets.tier` `wealth_building`, `accounts.role` `piggy_bank` / `buffer` / `term_deposit`, `config.safety_fund_months`, view `v_wealth_building`, `v_safety_fund` — số liệu không đổi (ledger UC-107 AC-11, AC-12); `GET /v1/wealth-building` thay `GET /v1/tichsan`, snapshot `tiers.wealth_building`, `safetyFund` (ledger UC-103, UC-107; access UC-505, UC-506; receivable UC-1005); tool MCP `get_reconciliation`, `get_spending_by_category`, `allocate_income`, `list_tenants`, `add_tenant_shared_expense`, mô tả tiếng Anh (mcp UC-601 AC-6, UC-602 AC-5); địa chỉ màn `#today`, `#entry`, `#assign`, `#wallets/<tab con>`, `#ledger`, `#settings`, địa chỉ cũ về Hôm nay (pwa UC-711 AC-6, AC-11, AC-12); bản lưu offline của phiên bản trước bị bỏ (pwa UC-710 AC-11). **"Phao khẩn cấp" thành "Quỹ an tâm"** (ADR-93; notify UC-402, pwa UC-702/707/709).
-> Hợp nhất change [`261007-ma-tieng-anh-an-danh`](changes/archive/261007-ma-tieng-anh-an-danh/proposal.md) ngày 2026-10-08 (code commit `21b9db0`): **mã hệ thống tiếng Anh, hộ mẫu tiếng Anh, ẩn danh tên người** (ADR-94 — code chỉ đọc thẳng mã hệ thống; mã ví / tài khoản / danh mục / người do người dùng tạo là dữ liệu). Migration 0029 (schema v1.29): kết nối SePay `chinh` → `default` (access UC-508 AC-18, AC-19), danh mục `tra-no` → `debt-payment`, `cho-vay` → `lending` (ledger UC-109 AC-5, debt UC-901 AC-8), nguồn cho thuê `cho-thue` → `rental` (rental UC-801 AC-8), icon danh mục thành dữ liệu `categories.icon` (UC-109 AC-6) — số liệu không đổi. Hộ mẫu `docs/seed.sql` mã tiếng Anh, test dựng từ `docs/schema.sql` + `docs/seed.sql` (UC-109 AC-7); test migration cũ chuyển sang `test/migrations/`. Mã mục màn Cài đặt tiếng Anh (pwa UC-709, UC-714, UC-704); health trả `v1.29` (UC-509).
-> Hợp nhất change [`261007-thiet-lap-lan-dau`](changes/archive/261007-thiet-lap-lan-dau/proposal.md) ngày 2026-10-08 (code commit `1ed22e1`): **thiết lập nhà lần đầu, thêm / tắt thành viên, mật khẩu riêng tuỳ chọn** — access UC-510 mới (`GET/POST /v1/setup`: mật khẩu chung → 1–6 người → tài khoản → bộ ví mẫu Profit First, Tích sản 10%, Thuế 10% tuỳ chọn; chỉ một lần, AC-1…AC-8); đăng nhập bằng mật khẩu chung hoặc mật khẩu riêng (PBKDF2 20.000 vòng), khoá ký phiên tự sinh trong D1 — không cần `API_TOKEN` (ADR-95; UC-501 AC-12…AC-15, đóng [OPEN] `API_TOKEN` rỗng); tối đa 6 người ngang quyền, tắt người không xoá dữ liệu, ví `private` của người đã tắt không còn ẩn (ADR-96; UC-507 AC-11…AC-14, UC-504 AC-4); `has_password` ở Cài đặt (UC-505); `/v1/setup` trước `requireAuth` (UC-503); màn Thiết lập và Cài đặt › Thành viên (pwa UC-701 AC-8, AC-9, UC-709 AC-28). Migration 0030 (schema v1.30, UC-509); deploy 2026-10-08 làm mọi máy đăng nhập lại một lần.
 > Hợp nhất change [`261008-mcp-oauth`](changes/archive/261008-mcp-oauth/proposal.md) ngày 2026-10-08 (code commit `e5ecf41`): **nối Claude bằng OAuth thay cho đường dẫn chứa khoá** (ADR-97, thay ADR-30) — endpoint `https://<host>/mcp`, OAuth 2.1 chuẩn MCP (`@cloudflare/workers-oauth-provider`, KV `OAUTH_KV`), chỉ Client ID Metadata Document, PKCE; đăng nhập ở trang uỷ quyền bằng mật khẩu của app; quyền Xem + Ghi, Ghi bỏ tick được (ADR-98); `MCP_SECRET` bỏ, `/mcp/<bất kỳ>` → 404 (mcp UC-601 AC-8…AC-11, AC-1/2/3/5 DEPRECATED). Tool nhìn và ghi như người đã uỷ quyền, nhật ký `via = mcp` (UC-602…UC-605); Cài đặt › Claude và ứng dụng AI liệt kê / gỡ kết nối (access UC-508, pwa UC-709); đổi / gỡ mật khẩu riêng, tắt người, Đăng xuất mọi máy, đổi mật khẩu chung gỡ kết nối AI (UC-501, UC-507); `/oauth/*`, `/.well-known/*`, `/mcp` vào Worker trước `requireAuth`, service worker không đụng tới (UC-503, UC-710). Kết nối Claude cũ đứt — thêm lại connector một lần.
 > Hợp nhất change [`261008-huong-dan-trong-app`](changes/archive/261008-huong-dan-trong-app/proposal.md) ngày 2026-10-08 (code commit `934f30f`): **Hướng dẫn ngay trong app** — màn phụ `#guide` nhúng GitBook, khung chiếm hết chiều cao còn lại, nút Mở ở tab mới, mất mạng thì báo "Hướng dẫn cần mạng" (pwa UC-711 AC-13, AC-14; AC-3, AC-6 sửa); thanh bên và Cài đặt › Máy này đi `#guide` thay vì mở tab mới (UC-709); CSP thêm `frame-src https://mzavn.gitbook.io`, `frame-ancestors 'none'` giữ nguyên (access UC-503). Không ADR, không migration.
+> Hợp nhất change [`261008-bang-can-doi`](changes/archive/261008-bang-can-doi/proposal.md) ngày 2026-10-08 (code commit `8cd48b8`, `31e3505`, `d4f0ab3` — ba lát, migration 0031…0033): **bảng cân đối, tháp tài sản, lãi vay hằng tháng, lưu chuyển tiền, kết quả thu chi, Mốc tự do, kế hoạch thu nhập, Thử số** — context mới [balance](balance/README.md) UC-1101…UC-1107, BR-15, ADR-99…ADR-107; màn `#net-worth` Tài sản & tự do (pwa UC-717 mới; UC-707, UC-711, UC-712); lãi vay tách lãi / gốc, ví hệ thống "Lãi vay" (debt UC-901…UC-903, ledger UC-101, UC-103, UC-104, allocation UC-201); phân loại lại báo cáo (ledger UC-102); `deactivated_at`, chặn lùi ngày mở sổ, khoá `fi_*` (access UC-506, UC-507); kỳ hạn phải thu, `balanceItems` (receivable UC-1001, UC-1005 — đóng [OPEN] thiếu tool MCP); MCP `get_balance_sheet`, `get_reports`, `record_asset_value` (mcp UC-601, UC-602, UC-603, UC-606 mới).
+> Hợp nhất change [`261012-tu-chia`](changes/archive/261012-tu-chia/proposal.md) ngày 2026-10-13 (code commit `a8b43f7`): **Tự chia một khoản thu** (ADR-108) — `POST /v1/allocate` và `/allocate/preview` nhận `amounts` (số tay từng ví, bỏ luật nạp và phần khóa; tổng lệch → `amounts_mismatch`, ví sai → `invalid_amounts`) (allocation UC-203 AC-11, AC-12); sheet Chia thử có nút Tự chia ở nhập thu nhập, màn Gán (chỉ dòng thu nhập đầu), chi tiết khoản thu; Tích sản đứng đầu, Tích sản 0 chỉ nhắc (allocation UC-202 AC-6, AC-7; pwa UC-705, UC-706, UC-715). Không migration.
+> Hợp nhất change [`261013-cap-nhat-tu-app`](changes/archive/261013-cap-nhat-tu-app/proposal.md) ngày 2026-10-13 (code commit `ae0f0b5`): **Cập nhật Ví nhà từ trong app** (ADR-109) — Cài đặt › Nâng cao › Cập nhật Ví nhà hỏi GitHub bản mới khi bấm, chỉ cách cập nhật theo cách cài (pwa UC-709 AC-30, AC-31); CSP `connect-src` thêm `https://api.github.com` (access UC-503); bản công khai có workflow `update.yml` + `scripts/update-from-upstream.mjs` (chép đè bản phát hành mới nhất, giữ cấu hình Cloudflare của nhà), phát hành tạo GitHub Release. Không migration.
 > Từ nay **spec đứng trước code**: mọi thay đổi hành vi bắt đầu bằng sửa spec, rồi test, rồi code.
 
 ## 1. Spec là gì ở repo này
@@ -27,12 +27,12 @@ Code lệch spec = bug **hoặc** spec chưa cập nhật — không có trườ
 
 | Tầng | Trả lời | Ở đâu |
 |---|---|---|
-| Business Requirement | Vì sao làm? | [business-requirements.md](business-requirements.md) — BR-01…BR-13 |
+| Business Requirement | Vì sao làm? | [business-requirements.md](business-requirements.md) — BR-01…BR-15 |
 | Use Case | Ai làm gì với hệ thống? | `specs/<context>/UC-XXX-*.md` |
 | Entity Model | Hệ thống nói về những danh từ nào? | `specs/<context>/entities.md` |
 | Acceptance Criteria | Làm sao biết đúng? | Mục `## Acceptance Criteria` trong từng UC, mỗi AC trỏ tới test |
 
-Quyết định (vì sao chọn cách này, không chọn cách kia): [decisions.md](decisions.md) — ADR-01…ADR-98, theo thứ tự thời gian.
+Quyết định (vì sao chọn cách này, không chọn cách kia): [decisions.md](decisions.md) — ADR-01…ADR-109, theo thứ tự thời gian.
 
 ## 3. Bounded context và dải ID
 
@@ -50,13 +50,14 @@ Cùng một từ có thể mang nghĩa khác ở context khác (ví dụ "gán" 
 | Cho thuê lại | [rental/](rental/README.md) | UC-801… | `src/domain/rental.ts`, `src/services/rental.ts`, `src/routes/rental.ts`, `migrations/0007_income_streams_rental.sql` |
 | Sổ nợ | [debt/](debt/README.md) | UC-901… | `src/services/debts.ts` (trên `src/services/memo-books.ts`), `src/routes/books.ts`, `migrations/0013_debts.sql`; `debt_id` trong `src/domain/entry.ts` |
 | Sổ phải thu | [receivable/](receivable/README.md) | UC-1001… | `src/services/receivables.ts` (trên `src/services/memo-books.ts`), `src/routes/books.ts`, `migrations/0014_receivables.sql`; `collect`, `receivable_id` trong `src/domain/entry.ts`; `src/services/ledger.ts` › `netWorth` |
+| Bảng cân đối, mốc tự do & báo cáo | [balance/](balance/README.md) | UC-1101… | `src/domain/{balance,reports,interest,freedom}.ts`, `src/services/{balance,reports,freedom,income-plans}.ts`, `src/routes/{balance,reports,freedom}.ts`, `migrations/0031_balance_sheet.sql`…`0033_income_plans.sql`; `web/src/screens/net-worth*.tsx`, `web/src/lib/{net-worth,reports,interest,freedom,income-plan,projection}.ts` |
 
 ID là vĩnh viễn: không đánh số lại, không dùng lại ID đã xoá. AC bỏ đi thì đánh dấu `(deprecated vN: lý do)` thay vì xoá.
 
 ## 4. Chỉ mục Use Case
 
-82 UC · 908 AC · 697 AC có test · **211 AC chưa có test** (chi tiết: [traceability.md](traceability.md)).
-Chỉ số: AC Coverage 76,8% · Spec Coverage 97,5% (79/81 UC) · Trace Ratio 90,0% (27/30 commit từ 2026-10-07) — định nghĩa ở `.claude/skills/mk-specs/references/traceability.md` §4.
+91 UC · 987 AC · 776 AC có test · **211 AC chưa có test** (chi tiết: [traceability.md](traceability.md)).
+Chỉ số: AC Coverage 78,6% · Spec Coverage 97,8% (88/90 UC) · Trace Ratio 90,0% (45/50 commit từ 2026-10-07) — định nghĩa ở `.claude/skills/mk-specs/references/traceability.md` §4.
 
 ### [Sổ cái (ledger)](ledger/README.md)
 
@@ -200,7 +201,7 @@ Spec context trích `D#` theo `plans/260921-2228-profit-first-pwa/context.md`; b
 
 ## 6. Hàng đợi quyết định cho chủ nhà
 
-Toàn bộ 74 divergence và 276 câu hỏi mở nằm ở [open-issues.md](open-issues.md). Dưới đây là những mục **ảnh hưởng tới tiền, tới lời hứa trong BR, hoặc tới bảo mật** — cần chủ nhà chọn bên đúng rồi sửa spec/code theo quy trình ở §7.
+Toàn bộ 80 divergence và 283 câu hỏi mở nằm ở [open-issues.md](open-issues.md). Dưới đây là những mục **ảnh hưởng tới tiền, tới lời hứa trong BR, hoặc tới bảo mật** — cần chủ nhà chọn bên đúng rồi sửa spec/code theo quy trình ở §7.
 
 **Tiền và sổ**
 1. **Nhập tay khoản thu không tự chia ở server** — `docs` §4 nói "chạy ngay khi income được xác nhận"; REST/MCP chỉ ghi, PWA tự gọi `/v1/allocate` tiếp theo, còn Claude phải tự gọi. → [UC-203](allocation/UC-203-chia-mot-khoan-thu-nhap.md), [UC-605](mcp/UC-605-chia-thu-nhap-qua-mcp.md)
@@ -209,7 +210,7 @@ Toàn bộ 74 divergence và 276 câu hỏi mở nằm ở [open-issues.md](open
 4. **`matchLog` UPDATE `log_id_2` trên dòng đã ghi** — lệch luật 1 "sổ chỉ ghi thêm". → [decisions.md ADR-02](decisions.md)
 5. **"Chuyển sang Tích sản" trên thẻ "Thu cho thuê" chỉ đổi ví, không chuyển tiền thật** (proposal: chuyển MB → BIDV kèm ví); khi Tích sản ở BIDV, tiền vẫn nằm ở MB và không có lệnh chuyển nào. Heo đất nay vào thẳng Tích sản lúc bỏ heo (ADR-82) — tiền Tích sản nằm ở tài khoản heo khóa, cùng kiểu "ví một nơi, tiền một nơi". → [UC-805](rental/UC-805-nhan-tien-nguoi-thue-tra.md), [UC-712](pwa/UC-712-chuyen-ngan-sach-va-bu.md), [UC-707](pwa/UC-707-xem-vi-va-quy.md)
 6. **Khoản thu gắn nguồn không bị trích Thuế** dù `taxable` (engine bỏ luật thuế chung khi có nguồn). → [UC-201](allocation/UC-201-tinh-phuong-an-chia.md)
-7. **Trả nợ gốc đang là khoản chi** ("đã tiêu" của ví trả nợ), trong khi VAS 24 §11(d) xếp nó vào hoạt động tài chính và tiền cho vay về đã thôi là "thu" (`collect`, ADR-72). Đề xuất meaning `repay` đối xứng — chủ nhà chưa quyết. → [debt UC-902](debt/UC-902-tra-no.md)
+7. **Trả nợ gốc đang là khoản chi** ("đã tiêu" của ví trả nợ), trong khi VAS 24 §11(d) xếp nó vào hoạt động tài chính và tiền cho vay về đã thôi là "thu" (`collect`, ADR-72). Đề xuất meaning `repay` đối xứng — chủ nhà chưa quyết. Từ ADR-104 / ADR-106 (2026-10-08): báo cáo Lưu chuyển tiền và Kết quả thu chi xếp gốc vào Tài chính, bỏ khỏi Chi tiêu / E; phần lãi tách thành chi phí — còn ví / ngân sách của phần gốc giữ nguyên, nên mục này vẫn mở. → [debt UC-902](debt/UC-902-tra-no.md)
 
 **Lời hứa trong BR/plan chưa giữ**
 8. **"đã bù X" không hiện ở bảng Ví & Quỹ** (chỉ ở bảng chia thử); `/v1/budget` không trả `deficitCovered` (nay có `balance` + nút "Bù" tay, nhưng vẫn không phải "đã bù X"). Đây là một mục "Định nghĩa xong" của plan. → [UC-707](pwa/UC-707-xem-vi-va-quy.md) (partial)

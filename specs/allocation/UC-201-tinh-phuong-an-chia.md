@@ -1,7 +1,7 @@
 # UC-201: Tính phương án chia một khoản thu (engine)
 - Status: implemented
 - BR: BR-02, BR-07, BR-10
-- Decisions: D1 (thứ tự ưu tiên), D2 (khoản thu thứ hai chỉ nạp phần thiếu), D3 (bù ví âm), D7 (tuần × số thứ Hai); commit `323e159`; ADR-59 (phần khóa theo nguồn thu), ADR-63 (nguồn cho thuê khóa 100% vào "Thu cho thuê"); ADR-92 (giá trị phe tiếng Anh `wealth_building`); ADR-94 (mã hệ thống tiếng Anh)
+- Decisions: D1 (thứ tự ưu tiên), D2 (khoản thu thứ hai chỉ nạp phần thiếu), D3 (bù ví âm), D7 (tuần × số thứ Hai); commit `323e159`; ADR-59 (phần khóa theo nguồn thu), ADR-63 (nguồn cho thuê khóa 100% vào "Thu cho thuê"); ADR-92 (giá trị phe tiếng Anh `wealth_building`); ADR-94 (mã hệ thống tiếng Anh); ADR-106 (lãi vay là chi phí Must: ví "Lãi vay" nhận luật `flat` tháng dựng sẵn, rót ở bước sàn Must)
 - Actor: hệ thống — hàm thuần `allocate`, được gọi bởi UC-202 và UC-203
 - Trigger: lời gọi hàm `allocate(input)`; không có I/O, không đọc DB, không sinh số ngẫu nhiên
 
@@ -10,9 +10,10 @@
 - v2 (2026-10-01, commit `034b7ff`): `input.stream` — có nguồn thu thì phần khóa lấy theo `locks` của nguồn (không trích Thuế), khóa trọn 100% thì dừng ngay không chạy dòng thác; không có nguồn giữ nguyên hành vi cũ; `WalletRule.splitWeekly` không đổi nhu cầu tháng (change `261001-cho-thue-lai`).
 - v3 (2026-10-07, commit `7424f26`): phe Tích sản trong engine (`Tier`, `WalletRule.tier`) đổi giá trị `tichsan` → `wealth_building` (ADR-92, migration 0028); thứ tự và số chia không đổi. Sửa bước 2, 2b, [OPEN] luật không rơi vào bước nào (change [261007-doi-ten-tieng-anh](../changes/archive/261007-doi-ten-tieng-anh/proposal.md))
 - v4 (2026-10-08, commit `21b9db0`): không đổi hành vi — Traceability ghi nguồn cho thuê là mã hệ thống `rental` (migration 0029, ADR-94) và nguồn của hộ mẫu (`salary-husband`, `salary-wife`, `rental`). (change [261007-ma-tieng-anh-an-danh](../changes/archive/261007-ma-tieng-anh-an-danh/proposal.md))
+- v5 (2026-10-08, commit `8cd48b8`): engine không đổi; đầu vào thêm **luật dựng sẵn cho ví "Lãi vay"** (`loan-interest`, phe Must, nhóm Must) khi ví không có luật nạp tay đang bật — `flat` tháng, số tiền = sàn = Σ lãi dự kiến tháng của khoản thu (ledger UC-103 "Dự kiến tháng"), priority 100 — nên lãi vay được rót ở bước sàn Must (3b). Migration 0031, ADR-106. Thêm AC-21; thêm [DIVERGENCE] priority 100 (change [261008-bang-can-doi](../changes/archive/261008-bang-can-doi/proposal.md))
 
 ## Preconditions
-- `input.income = { amount, taxable, at }`; `input.rules` = các `WalletRule` đang active (UC-202 nạp từ `loadRefs`); `input.stream` (tuỳ chọn) = `{ locks: [{walletId, percent}] }` của nguồn thu gắn trên khoản thu (UC-202), `undefined`/`null` = không có nguồn.
+- `input.income = { amount, taxable, at }`; `input.rules` = các `WalletRule` đang active (UC-202 nạp từ `loadRefs`) **cộng** luật dựng sẵn của ví "Lãi vay" khi có (3b); `input.stream` (tuỳ chọn) = `{ locks: [{walletId, percent}] }` của nguồn thu gắn trên khoản thu (UC-202), `undefined`/`null` = không có nguồn.
 - `fundedThisMonth[w]` = tổng fund `active` vào ví `w` có `month_key` = tháng (giờ VN) của `income.at`.
 - `balances[w]` = số dư hiện tại; `openingBalances[w]` = số dư trước tháng của `income.at` (UC-202 › `allocationContext`).
 
@@ -57,6 +58,7 @@ Nếu tổng nhu cầu nhóm ≤ pool → mỗi ví nhận đủ, pool giảm t�
   - Tổng `percent` của các lock = 1 (sai số ±1e-9; ví dụ `rental` = `{rental-income: 100%}`) → đồng lẻ do làm tròn cộng về **ví khóa đầu tiên**, trả ngay `{ funds, underfunded: [], deficitCovered: {} }`: không chạy dòng thác, không cờ thiếu sàn, không bù hố (kể cả khi phong bì đang âm); `fundedThisMonth` của các ví chi tiêu không đổi vì không có fund nào vào chúng.
   - Tổng < 1 → phần còn lại chạy dòng thác như cũ (bước 3–11).
 - 3a/4a/5a. Nhóm cùng priority không đủ tiền → chia tỷ lệ như mô tả `pour`; các bước sau nhận 0 (pool = 0).
+- 3b. **Ví "Lãi vay"** (`loan-interest`, phe Must, nhóm Must, kiểu `bill` — ADR-106): ví không có luật nạp tay đang bật thì trước khi gọi `allocate` server (`withInterest` → `withInterestRule`) thêm vào `input.rules` một luật `flat` theo tháng với `amount` = `floor_amount` = Σ lãi dự kiến tháng (tháng của `income.at`, giờ VN) của các khoản nợ đang bật có lãi suất > 0 (ledger [UC-103](../ledger/UC-103-xem-con-bao-nhieu-de-chi.md) "Dự kiến tháng", debt [UC-901](../debt/UC-901-them-va-xem-khoan-no.md)), `priority` 100. Engine đối xử như mọi luật `flat` tháng của nhóm Must: nhu cầu và sàn bằng nhau nên ví nhận ở **bước 3 (sàn Must)** — lãi là nghĩa vụ, chỉ bị bóp sau Have / Hưởng thụ / Must đủ; trong bước 3 nó đứng sau các ví Must có priority nhỏ hơn 100 (mọi ví Must của hộ mẫu: 40–44), thiếu dưới sàn thì có trong `underfunded`. Đã nạp trong tháng thì khoản thu sau chỉ nạp phần thiếu (D2). Không khoản nào có lãi (hay ví đã tắt) → không thêm luật, ví không nhận gì. Có luật nạp tay đang bật → dùng luật tay, không dựng luật.
 - 5b. Ví `goal` đã đủ đích (`missing = 0`) → nhu cầu 0, không nhận gì; phần đó chảy xuống Have.
 - 9a. Ví `accrual`/`bill`/`holding` có số dư đầu tháng âm → hố = 0, không được bù, không có trong `deficitCovered`.
 
@@ -193,6 +195,12 @@ Must dự kiến 13.000.000 (Nhà 8tr + Ăn 625k×4 + Đi lại 300k×4 + Điệ
 - Then `rental-income` 3, `wealth-building` 4
 - Tests: `test/allocation.test.ts` › "chia theo nguồn thu › khóa trọn 100% chia nhiều ví: đồng lẻ làm tròn về ví khóa đầu tiên"
 
+### AC-21: Ví "Lãi vay" nhận lãi dự kiến tháng ở bước sàn Must; luật nạp tay thắng
+- Given ví "Lãi vay" không có luật nạp; "Vay tiêu dùng" 18% dư nợ đầu tháng 11 là 20.000.000; "Vay người nhà" 0%
+- When xem trước chia (`POST /v1/allocate/preview`) một khoản thu 30.000.000 ngày 15/11/2026; một khoản 5.000.000; rồi thêm luật nạp tay `flat` tháng 500.000 cho ví "Lãi vay" và xem trước lại 30.000.000
+- Then khoản 30.000.000: ví "Lãi vay" nhận 300.000 (nhu cầu = sàn = 300.000; khoản 0% không thêm gì); khoản 5.000.000: nếu "Lãi vay" nhận dưới 300.000 thì nó có trong `underfunded` và Hưởng thụ / Có thì tốt nhận 0 (bị bóp trước); có luật tay → ví nhận 500.000
+- Tests: [`test/balance.test.ts`](../../test/balance.test.ts) › "debt, ledger, allocation: lãi vay hằng tháng (ADR nháp H) › UC-201 AC-21: chia thử 30.000.000 → ví Lãi vay nhận 300.000 ở bước sàn Must; khoản 0% không thêm gì; thiếu tiền thì bóp Have / Hưởng thụ trước; có luật tay thì theo luật tay"
+
 ## Bảng 7 case phase-02 → test
 | Case (`phase-02-allocation-core.md`) | Test | Khớp số trong plan |
 |---|---|---|
@@ -207,8 +215,8 @@ Các ca "thêm cho đủ ~20" của plan: goal đã đạt ✅, goal quá hạn 
 **nhiều goal tranh tiền** ⚠ chưa có test; **ví không active** chỉ phủ gián tiếp (AC-12 loại luật khỏi input, không kiểm lọc `active` ở SQL); **percent làm tròn** chỉ phủ qua AC-9/AC-10.
 
 ## Traceability
-- Code: `src/domain/allocation.ts` › `allocate`, `pour`, `AllocationConfigError`, `WalletRule` (gồm `splitWeekly`), `AllocationInput` (gồm `stream`), `AllocationResult`; `src/domain/period.ts` › `mondaysInMonth`, `monthKey`, `monthsLeft`
-- Migrations/DB: `allocations` (`migrations/0001_schema.sql` mục 4), seed `migrations/0002_seed.sql`; `income_streams`, `income_stream_locks`, `allocations.split_weekly`, nguồn thu (`migrations/0007_income_streams_rental.sql` tạo `luong-chong`/`luong-vo`/`cho-thue`; 0029 đổi nguồn cho thuê thành mã hệ thống `rental`, ADR-94; hộ mẫu `docs/seed.sql`: `salary-husband`/`salary-wife`/`rental`)
+- Code: `src/domain/allocation.ts` › `allocate`, `pour`, `AllocationConfigError`, `WalletRule` (gồm `splitWeekly`), `AllocationInput` (gồm `stream`), `AllocationResult`; `src/domain/period.ts` › `mondaysInMonth`, `monthKey`, `monthsLeft`; luật dựng sẵn ví "Lãi vay": `src/domain/interest.ts` › `withInterestRule`, `src/services/ledger.ts` › `withInterest` (gọi trước `allocate` khi xem trước / chia), `src/services/debts.ts` › `debtInterest`, `expectedInterestTotal`
+- Migrations/DB: `allocations` (`migrations/0001_schema.sql` mục 4), seed `migrations/0002_seed.sql`; `income_streams`, `income_stream_locks`, `allocations.split_weekly`, nguồn thu (`migrations/0007_income_streams_rental.sql` tạo `luong-chong`/`luong-vo`/`cho-thue`; 0029 đổi nguồn cho thuê thành mã hệ thống `rental`, ADR-94; hộ mẫu `docs/seed.sql`: `salary-husband`/`salary-wife`/`rental`); ví hệ thống `loan-interest` "Lãi vay" (`migrations/0031_balance_sheet.sql`, không có luật nạp trong bảng `allocations`)
 
 ## Divergences & Open Questions
 - [DIVERGENCE] `docs/core_design_rules.md` §4 bước 5 và `phase-02-allocation-core.md` bước 5: "ví goal → ví nice flat/percent, theo priority", nhưng code rót phe `nice` **chỉ theo `priority`** (`src/domain/allocation.ts:157`), không phân biệt `mode`. Hành vi hiện tại khớp docs chỉ vì seed đặt Du lịch priority 30 < Chơi 31.
@@ -223,3 +231,4 @@ Các ca "thêm cho đủ ~20" của plan: goal đã đạt ✅, goal quá hạn 
 - [OPEN] Có nguồn thu thì bỏ hẳn bước Thuế: khoản `taxable=true` gắn nguồn không trích Thuế trừ khi nguồn tự khóa ví Thuế; không có cảnh báo nào.
 - [OPEN] Lock trỏ tới ví đã tắt sau khi lưu nguồn: Cài đặt chỉ kiểm ví active lúc lưu phần khóa, tắt ví không kiểm phần khóa, và engine/`loadRefs` không lọc → vẫn nạp fund vào ví đã tắt (và không sinh lệnh chuyển tiền vì `walletAccounts` chỉ có ví active).
 - [OPEN] Khóa 100% dừng sớm nên ví phong bì đang âm không được bù và không được báo `underfunded` trong lần chia đó — đúng ý ADR-63 nhưng người dùng không thấy cảnh báo nào.
+- [DIVERGENCE] Proposal [261008-bang-can-doi](../changes/archive/261008-bang-can-doi/proposal.md) (allocation — Main Flow) nói luật dựng sẵn của ví "Lãi vay" mang "ưu tiên mặc định của ví Must"; code đặt `priority` 100 (`withInterestRule`, `src/domain/interest.ts`) — cao hơn các ví Must của hộ mẫu — nên khi thiếu tiền dưới tổng sàn Must, "Lãi vay" là ví Must được rót **sau cùng** ở bước 3 và hụt sàn trước các ví Must khác. Có luật nạp tay thì priority theo luật tay. → chủ nhà quyết lãi vay đứng ở đâu trong thứ tự sàn Must.

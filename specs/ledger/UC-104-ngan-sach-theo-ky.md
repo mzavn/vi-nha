@@ -1,7 +1,7 @@
 # UC-104: Ngân sách theo kỳ (dự kiến / thực tế / còn lại)
 - Status: implemented
 - BR: BR-01, BR-05
-- Decisions: D7 (nhu cầu tháng = tiền tuần × số thứ Hai); `plans/260921-2228-profit-first-pwa/phase-01-worker-d1.md` S1, S2 (bỏ view ngân sách mù kỳ)
+- Decisions: D7 (nhu cầu tháng = tiền tuần × số thứ Hai); `plans/260921-2228-profit-first-pwa/phase-01-worker-d1.md` S1, S2 (bỏ view ngân sách mù kỳ); ADR-106 (lãi vay là chi phí Must: ví "Lãi vay" có dự kiến tháng tự tính từ sổ nợ, từng khoản một dòng)
 - Actor: thành viên (màn Ví), Claude (MCP `get_budget`), cron thứ Hai (notify UC-406)
 - Trigger: `GET /v1/budget?period=YYYY-MM|YYYY-Www` (hoặc `?kind=week` = tuần hiện tại; không gửi = tháng hiện tại)
 
@@ -10,6 +10,7 @@
 - v2 (2026-09-22, commit `b92fc0f`): `getBudget` trong `src/services/ledger.ts`.
 - v3 (2026-10-01, commit `034b7ff`): mỗi dòng có thêm `balance` (số dư hiện tại); ví đang âm luôn hiện để còn bù; mục tiêu kỳ tuần qua `weekTarget` (gồm phong bì tháng chia theo tuần, tháng = tháng chứa thứ Hai đầu tuần); ví giữ riêng (`tier='holding'`) không vào bảng (change `261001-cho-thue-lai`).
 - v4 (2026-10-01, commit `e5bae84`): đổi tên "Ngân sách theo kỳ (dự kiến / thực tế / còn lại)" — `target` của mỗi dòng gọi là **dự kiến** (số định chi của ví), không gọi "mục tiêu" (ADR-74); mô tả MCP `get_budget` đổi theo ("Bảng dự kiến / thực tế / còn lại…"). Không đổi trường hay cách tính.
+- v5 (2026-10-08, commit `8cd48b8`): ví hệ thống **"Lãi vay"** (`loan-interest`, phe Must, nhóm Must, kiểu `bill`) — không có luật nạp tay đang bật thì dự kiến tháng = Σ lãi dự kiến tháng của các khoản nợ đang bật có lãi suất > 0 (ledger UC-103 "Dự kiến tháng"); kỳ tháng trả thêm `interestLines` từng khoản `{ debtId, name, expected, paid, dueDay }`. Migration 0031, schema v1.31, ADR-106. Thêm AC-8 (change [261008-bang-can-doi](../changes/archive/261008-bang-can-doi/proposal.md))
 
 ## Preconditions
 - `period` đúng dạng `^\d{4}-(0[1-9]|1[0-2])$` (tháng) hoặc `^\d{4}-W\d{2}$` (tuần).
@@ -20,10 +21,10 @@
 3. Với mọi ví active **trừ** phe `holding` (ví Thu nhập **và** ví giữ riêng như "Thu cho thuê"), tính dự kiến:
    - Kỳ tuần: `weekTarget(luật, tháng chứa thứ Hai của tuần)` (`weekStart`, UC-103 "Dự kiến tuần"): `amount` nếu luật `flat` + `period='week'`; `floor(monthTarget ÷ mondaysInMonth)` nếu phong bì `flat`/`lump` bật `split_weekly`; ngược lại `null`.
    - Kỳ tháng, ví luật `remainder` (Có thì tốt): dự kiến = **phần đã được chia vào ví trong tháng** (Σ `fund`).
-   - Kỳ tháng, ví khác: `monthTarget` (UC-103): `flat` tuần × `mondaysInMonth`, `flat` tháng, `lump`; `percent`/`goal` → `null`.
+   - Kỳ tháng, ví khác: `monthTarget` (UC-103): `flat` tuần × `mondaysInMonth`, `flat` tháng, `lump`; `percent`/`goal` → `null`. Ví hệ thống **"Lãi vay"** (`loan-interest`, nhóm Must) không có luật nạp tay đang bật: dự kiến = Σ lãi dự kiến tháng đó của các khoản nợ đang bật có lãi suất > 0 (luật `flat` tháng dựng sẵn, UC-103 "Dự kiến tháng"; debt [UC-901](../debt/UC-901-them-va-xem-khoan-no.md)); không khoản nào có lãi → không có dự kiến.
 4. Bỏ các ví có dự kiến `null` **và** đã tiêu = 0 **và** số dư ≥ 0 — ví đang âm luôn được giữ để còn bù từ ví khác (pwa [UC-712](../pwa/UC-712-chuyen-ngan-sach-va-bu.md)).
 5. Mỗi dòng: `target` (dự kiến), `spent`, `remaining = target − spent` (`null` nếu dự kiến `null`), `balance` = số dư hiện tại của ví (không phụ thuộc kỳ); ví `private` của người khác → cả bốn `null`. Không có trường "đã bù" (`deficitCovered`) trong bảng.
-6. Trả `{period, kind: "week"|"month", weeks: 1 | mondaysInMonth(tháng), lines}`.
+6. Trả `{period, kind: "week"|"month", weeks: 1 | mondaysInMonth(tháng), lines}`; kỳ tháng thêm `interestLines` — mỗi khoản nợ đang bật có lãi suất > 0 một phần tử `{ debtId, name, expected, paid, dueDay }`: `expected` = lãi dự kiến tháng đó (dư nợ đầu tháng × lãi suất ÷ 12, cắt về đồng), `paid` = Σ khoản chi `interest_debt_id` của khoản đó có `month_key` của tháng (ledger [UC-101](UC-101-nhap-tay-khoan-tien.md) 4k), `dueDay` = ngày trả (hoặc `null`). Khoản 0% không có phần tử. PWA hiện mỗi phần tử thành một dòng phụ dưới ví "Lãi vay" (pwa [UC-707](../pwa/UC-707-xem-vi-va-quy.md)).
 
 ## Alternative Flows
 - 1a. MCP `get_budget` không truyền kỳ → tháng hiện tại.
@@ -74,9 +75,16 @@
 - Then có dòng của ví đó với `target = null`, `spent = 0`, `balance = −300.000`
 - Tests: ⚠ Chưa có test
 
+### AC-8: Ví "Lãi vay" dự kiến theo sổ nợ, có dòng từng khoản; luật nạp tay thắng
+- Given "Vay tiêu dùng" 18% (dư nợ đầu tháng 11 là 20.000.000, ngày trả 5) và "Vay người nhà" 0%; ví "Lãi vay" không có luật nạp tay
+- When `GET /v1/budget?period=2026-11`; rồi trả như debt [UC-902](../debt/UC-902-tra-no.md) AC-10 (lãi 300.000, gốc 2.000.000) và hỏi lại; hỏi `period=2026-12`; rồi thêm luật nạp tay `flat` tháng 500.000 cho ví "Lãi vay" và hỏi lại tháng 11
+- Then dòng `loan-interest` (phe Must, nhóm Must) dự kiến 300.000, đã chi 0, còn lại 300.000; `interestLines = [{ debtId: "vay-tieu-dung", name: "Vay tiêu dùng", expected: 300000, paid: 0, dueDay: 5 }]` — không có phần tử cho khoản 0%; sau khi trả: đã chi 300.000, còn lại 0, `paid = 300.000`; tháng 12 dự kiến 270.000; có luật tay thì dự kiến tháng 11 = 500.000
+- Tests: [`test/balance.test.ts`](../../test/balance.test.ts) › "debt, ledger, allocation: lãi vay hằng tháng (ADR nháp H) › UC-104 AC-8: ví Lãi vay dự kiến 300.000 và interestLines từng khoản; trả xong còn lại 0; tháng 12 dự kiến 270.000; luật nạp tay thắng" · "… › UC-901 AC-10: khoản 0% → interestThisMonth 0, không có dòng lãi ở ngân sách"
+
 ## Traceability
-- Code: `src/routes/v1.ts` › `GET /budget`; `src/services/ledger.ts` › `getBudget`; `src/domain/snapshot.ts` › `monthTarget`, `weekTarget`; `src/domain/period.ts` › `mondaysInMonth`, `weekKey`, `monthKey`, `weekStart`
-- Migrations/DB: `v_spent_week`, `v_spent_month`, `v_wallet_balance` (`migrations/0001_schema.sql`); `allocations.split_weekly` (`migrations/0007_income_streams_rental.sql`)
+- Code: `src/routes/v1.ts` › `GET /budget`; `src/services/ledger.ts` › `getBudget` (`interestLines`), `withInterest`; `src/services/debts.ts` › `debtInterest`, `expectedInterestTotal`; `src/domain/interest.ts` › `withInterestRule`, `monthlyInterest`; `src/domain/snapshot.ts` › `monthTarget`, `weekTarget`; `src/domain/period.ts` › `mondaysInMonth`, `weekKey`, `monthKey`, `weekStart`
+- Migrations/DB: `v_spent_week`, `v_spent_month`, `v_wallet_balance` (`migrations/0001_schema.sql`); `allocations.split_weekly` (`migrations/0007_income_streams_rental.sql`); ví hệ thống `loan-interest` "Lãi vay", `transactions.interest_debt_id`, cột lãi của `debts` (`migrations/0031_balance_sheet.sql`, schema v1.31)
+- PWA: dòng phụ dưới ví "Lãi vay" ở Ví & quỹ › Ngân sách — `web/src/lib/interest.ts` › `interestLineText`; `web/src/screens/wallets.tsx` (pwa [UC-707](../pwa/UC-707-xem-vi-va-quy.md))
 
 ## Divergences & Open Questions
 - [DIVERGENCE] `migrations/0001_schema.sql` dòng 268–270 và `docs/core_design_rules.md` §10: query ngân sách "nằm ở `src/db/queries.ts`" — thư mục `src/db/` rỗng; query nằm trong `src/services/ledger.ts` › `getBudget`.

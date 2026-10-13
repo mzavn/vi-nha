@@ -1,5 +1,5 @@
 -- ============================================================
---  PROFIT FIRST — HỘ GIA ĐÌNH · SCHEMA (D1 / SQLite)  v1.29
+--  PROFIT FIRST — HỘ GIA ĐÌNH · SCHEMA (D1 / SQLite)  v1.33
 --  v1.2 (20/9/2026): danh mục · tiền mặt · đa TK · thuế taxable ·
 --  lệnh chuyển tiền · thông báo
 --  v1.3 (21/9/2026): ngân sách theo kỳ chuyển sang query có tham số ·
@@ -54,6 +54,13 @@
 --                     icon danh mục nằm ở categories.icon (cũ: bảng trong code); không đổi cấu trúc bảng
 --  v1.30 (8/10/2026): thiết lập nhà lần đầu + mật khẩu riêng tuỳ chọn — members.password_hash (NULL = mật khẩu
 --                     chung), members.session_gen; config 'setup_done', 'secret:session_key' (UC-510, UC-501)
+--  v1.31 (8/10/2026): bảng cân đối — balance_items · balance_lots · balance_values (chỉ ghi thêm); debts lãi suất /
+--                     kỳ hạn / số trả tháng / ngày trả; receivables.term; deactivated_at ở accounts / debts /
+--                     receivables; transactions.interest_debt_id; ví + danh mục 'loan-interest'; khoá fi_* (BR-15)
+--  v1.32 (8/10/2026): lưu chuyển tiền / kết quả thu chi — transaction_report_classes (phân loại lại một giao dịch cho báo
+--                     cáo; không đổi ví, số dư, chia tiền) (BR-15)
+--  v1.33 (8/10/2026): Mốc tự do — income_plans · income_plan_lines (kế hoạch thu nhập năm, mỗi lần lưu một bản mới,
+--                     chỉ ghi thêm) (BR-15)
 -- ============================================================
 --  NGUYÊN TẮC ENCODE:
 --   1. Hai lớp: bank_logs (thô, BẤT BIẾN) vs transactions (đã diễn giải)
@@ -146,7 +153,8 @@ CREATE TABLE accounts (
   spendable       INTEGER NOT NULL DEFAULT 1      -- 1 -> số dư sổ tính vào "Tiền chi được"; locked = 1 thì không bao giờ (ADR-85)
                   CHECK (spendable IN (0,1)),
   role            TEXT                            -- tài khoản Tích sản (ADR-88): NULL thường · piggy_bank (heo đất) · buffer (phao dự phòng) · term_deposit (sổ tiết kiệm)
-                  CHECK (role IS NULL OR (role IN ('piggy_bank','term_deposit') AND locked = 1) OR (role = 'buffer' AND locked = 0))
+                  CHECK (role IS NULL OR (role IN ('piggy_bank','term_deposit') AND locked = 1) OR (role = 'buffer' AND locked = 0)),
+  deactivated_at  TEXT                            -- 'YYYY-MM-DD' giờ VN lúc tắt; bật lại -> NULL; tắt từ trước v1.31 -> NULL
 );
 CREATE UNIQUE INDEX idx_acct_no ON accounts(account_no) WHERE account_no IS NOT NULL;
 
@@ -258,6 +266,7 @@ CREATE TABLE transactions (
   tenant_id    TEXT REFERENCES tenants(id),           -- income: tiền người thuê trả (trừ vào sổ người thuê)
   debt_id      TEXT REFERENCES debts(id),             -- spend: khoản trả nợ (trừ vào sổ nợ)
   receivable_id TEXT REFERENCES receivables(id),      -- lend: cho vay thêm · collect: nhận lại (sổ phải thu)
+  interest_debt_id TEXT REFERENCES debts(id),         -- spend: trả LÃI cho khoản nợ (chi phí, không giảm nợ)
   CHECK (meaning <> 'refund' OR wallet_id IS NOT NULL),
   CHECK (meaning <> 'spend'  OR counter_wallet_id IS NOT NULL),
   CHECK (meaning <> 'spend'  OR category_id IS NOT NULL),
@@ -275,6 +284,7 @@ CREATE INDEX idx_tx_batch        ON transactions(batch_id) WHERE batch_id IS NOT
 CREATE INDEX idx_tx_tenant       ON transactions(tenant_id) WHERE tenant_id IS NOT NULL;
 CREATE INDEX idx_tx_debt         ON transactions(debt_id) WHERE debt_id IS NOT NULL;
 CREATE INDEX idx_tx_receivable   ON transactions(receivable_id) WHERE receivable_id IS NOT NULL;
+CREATE INDEX idx_tx_interest_debt ON transactions(interest_debt_id, month_key) WHERE interest_debt_id IS NOT NULL AND status='active';
 
 -- 7b. MỖI KHOẢN THU CHỈ ĐƯỢC CHIA MỘT LẦN — ghi cùng batch với các fund,
 --     trùng khoá chính thì cả batch huỷ (webhook gửi lại, cron vá, bấm hai lần...)
@@ -453,7 +463,12 @@ CREATE TABLE debts (
   name       TEXT NOT NULL,
   note       TEXT,
   active     INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  interest_rate_bps INTEGER NOT NULL DEFAULT 0 CHECK (interest_rate_bps BETWEEN 0 AND 10000), -- lãi %/năm × 100
+  term       TEXT NOT NULL DEFAULT 'short' CHECK (term IN ('short','long')),
+  monthly_payment INTEGER CHECK (monthly_payment IS NULL OR monthly_payment > 0),           -- gốc + lãi, tuỳ chọn
+  due_day    INTEGER CHECK (due_day IS NULL OR due_day BETWEEN 1 AND 28),
+  deactivated_at TEXT                                                                        -- ngày tắt (giờ VN)
 );
 CREATE TABLE debt_lines (
   id         INTEGER PRIMARY KEY,
@@ -476,7 +491,9 @@ CREATE TABLE receivables (
   name       TEXT NOT NULL,
   note       TEXT,
   active     INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  term       TEXT NOT NULL DEFAULT 'short' CHECK (term IN ('short','long')),
+  deactivated_at TEXT
 );
 CREATE TABLE receivable_lines (
   id            INTEGER PRIMARY KEY,
@@ -770,5 +787,152 @@ CREATE VIEW v_receivable_balance AS
     FROM receivables r
   );
 
+-- 22. BẢNG CÂN ĐỐI — tài sản ngoài sổ thu chi (vàng, chứng khoán, đất…), không bao giờ sinh giao dịch (BR-15) ------------
+--  Mục theo giá trị (định giá ghi value) hoặc theo lô (định giá ghi unit_price, áp cho mọi lô của mục).
+--  Định giá chỉ ghi thêm; số hiện tại = dòng active mới nhất (as_of lớn nhất, cùng ngày id lớn nhất).
+CREATE TABLE balance_items (
+  id                TEXT PRIMARY KEY,
+  name              TEXT NOT NULL,
+  section           TEXT NOT NULL CHECK (section IN ('A1','A2','A4','A5','B1','B2','B3','B4','B5','B6')),
+  pyramid           TEXT NOT NULL CHECK (pyramid IN ('speculative','growth','income','protective','fixed')),
+  measure           TEXT NOT NULL CHECK (measure IN ('value','units')),
+  unit              TEXT,
+  liquid            INTEGER NOT NULL DEFAULT 0 CHECK (liquid IN (0,1)),
+  investable        INTEGER NOT NULL DEFAULT 1 CHECK (investable IN (0,1)),
+  asset_kind        TEXT CHECK (asset_kind IS NULL OR asset_kind IN ('gold','stock','fund','re')),
+  cost_basis        INTEGER CHECK (cost_basis IS NULL OR cost_basis >= 0),
+  acquired_on       TEXT,
+  take_profit_value INTEGER CHECK (take_profit_value IS NULL OR take_profit_value > 0),
+  stop_loss_value   INTEGER CHECK (stop_loss_value IS NULL OR stop_loss_value > 0),
+  note              TEXT,
+  sort              INTEGER NOT NULL DEFAULT 100,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK (measure <> 'units' OR unit IS NOT NULL),
+  CHECK (take_profit_value IS NULL OR stop_loss_value IS NULL OR stop_loss_value < take_profit_value)
+);
+
+CREATE TABLE balance_lots (
+  id                INTEGER PRIMARY KEY,
+  item_id           TEXT NOT NULL REFERENCES balance_items(id),
+  bought_on         TEXT NOT NULL,
+  quantity_milli    INTEGER NOT NULL CHECK (quantity_milli > 0),   -- phần nghìn đơn vị: 1 chỉ = 1000
+  unit_cost         INTEGER NOT NULL CHECK (unit_cost >= 0),
+  sold_on           TEXT,
+  sold_unit_price   INTEGER CHECK (sold_unit_price IS NULL OR sold_unit_price >= 0),
+  take_profit_price INTEGER CHECK (take_profit_price IS NULL OR take_profit_price > 0),
+  stop_loss_price   INTEGER CHECK (stop_loss_price IS NULL OR stop_loss_price > 0),
+  note              TEXT,
+  status            TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  by_member_id      TEXT REFERENCES members(id),
+  CHECK ((sold_on IS NULL) = (sold_unit_price IS NULL)),
+  CHECK (sold_on IS NULL OR sold_on >= bought_on),
+  CHECK (take_profit_price IS NULL OR stop_loss_price IS NULL OR stop_loss_price < take_profit_price)
+);
+CREATE INDEX idx_balance_lots ON balance_lots(item_id) WHERE status='active';
+
+CREATE TABLE balance_values (
+  id                  INTEGER PRIMARY KEY,
+  item_id             TEXT NOT NULL REFERENCES balance_items(id),
+  as_of               TEXT NOT NULL,                 -- 'YYYY-MM-DD' giờ VN, ≤ hôm nay
+  value               INTEGER CHECK (value IS NULL OR value >= 0),
+  unit_price          INTEGER CHECK (unit_price IS NULL OR unit_price >= 0),
+  cashflow            INTEGER NOT NULL DEFAULT 0 CHECK (cashflow >= 0),   -- dòng tiền thật sau thuế
+  cashflow_period     TEXT CHECK (cashflow_period IS NULL OR cashflow_period IN ('month','year')),
+  expected_return_bps INTEGER CHECK (expected_return_bps IS NULL OR expected_return_bps BETWEEN -10000 AND 100000),
+  status              TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
+  created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+  by_member_id        TEXT REFERENCES members(id),
+  CHECK ((value IS NULL) <> (unit_price IS NULL)),
+  CHECK (cashflow = 0 OR cashflow_period IS NOT NULL)
+);
+CREATE INDEX idx_balance_values ON balance_values(item_id, as_of) WHERE status='active';
+
+-- Lô: số mua không sửa; bán chỉ từ chưa bán sang đã bán; huỷ chỉ active -> void; giá chốt lời / cắt lỗ sửa tự do.
+CREATE TRIGGER trg_balance_lots_guard BEFORE UPDATE ON balance_lots
+WHEN NEW.id IS NOT OLD.id OR NEW.item_id IS NOT OLD.item_id OR NEW.bought_on IS NOT OLD.bought_on
+  OR NEW.quantity_milli IS NOT OLD.quantity_milli OR NEW.unit_cost IS NOT OLD.unit_cost OR NEW.note IS NOT OLD.note
+  OR NEW.created_at IS NOT OLD.created_at OR NEW.by_member_id IS NOT OLD.by_member_id
+  OR (OLD.sold_on IS NOT NULL AND (NEW.sold_on IS NOT OLD.sold_on OR NEW.sold_unit_price IS NOT OLD.sold_unit_price))
+  OR OLD.status = 'void'
+BEGIN
+  SELECT RAISE(ABORT, 'balance_lot_append_only');
+END;
+CREATE TRIGGER trg_balance_lots_no_delete BEFORE DELETE ON balance_lots
+BEGIN
+  SELECT RAISE(ABORT, 'balance_lot_append_only');
+END;
+
+-- Định giá chỉ được đổi status active -> void; không sửa, không xoá.
+CREATE TRIGGER trg_balance_values_append_only BEFORE UPDATE ON balance_values
+WHEN NEW.id IS NOT OLD.id OR NEW.item_id IS NOT OLD.item_id OR NEW.as_of IS NOT OLD.as_of OR NEW.value IS NOT OLD.value
+  OR NEW.unit_price IS NOT OLD.unit_price OR NEW.cashflow IS NOT OLD.cashflow OR NEW.cashflow_period IS NOT OLD.cashflow_period
+  OR NEW.expected_return_bps IS NOT OLD.expected_return_bps OR NEW.created_at IS NOT OLD.created_at
+  OR NEW.by_member_id IS NOT OLD.by_member_id
+  OR NOT (OLD.status = 'active' AND NEW.status = 'void')
+BEGIN
+  SELECT RAISE(ABORT, 'balance_value_append_only');
+END;
+CREATE TRIGGER trg_balance_values_no_delete BEFORE DELETE ON balance_values
+BEGIN
+  SELECT RAISE(ABORT, 'balance_value_append_only');
+END;
+
+-- Dữ liệu hệ thống (ADR-94): ví + danh mục "Lãi vay" — dự kiến tháng của ví = Σ lãi dự kiến các khoản nợ có lãi.
+INSERT INTO wallets (id, name, tier, must_group, kind, sort) VALUES ('loan-interest', 'Lãi vay', 'must', 'must', 'bill', 49);
+INSERT INTO categories (id, name, default_wallet_id, icon, sort) VALUES ('loan-interest', 'Lãi vay', 'loan-interest', 'percent', 100);
+
+-- Tham số bảng cân đối / Mốc tự do — mặc định, mỗi nhà đổi trong app (PUT /v1/settings/config).
+INSERT INTO config (k,v) VALUES
+  ('fi_swr_bps','350'), ('fi_inflation_bps','350'), ('fi_fat_bps','11000'),
+  ('fi_legacy_rate_bps','300'), ('fi_high_interest_bps','1500'), ('fi_safety_months','6,12,24');
+
+-- 23. PHÂN LOẠI LẠI CHO BÁO CÁO — chỉ đổi nhóm của giao dịch ở Lưu chuyển tiền / Kết quả thu chi (BR-15) ------------
+--  Không phải dòng sổ: đặt / đổi / xoá được. Sửa giao dịch thì chép sang dòng mới; giao dịch đã huỷ thì báo cáo bỏ qua.
+CREATE TABLE transaction_report_classes (
+  transaction_id INTEGER PRIMARY KEY REFERENCES transactions(id),
+  report_class   TEXT NOT NULL CHECK (report_class IN ('operating','passive_income','investing','financing')),
+  updated_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  by_member_id   TEXT REFERENCES members(id)
+);
+
+-- 24. KẾ HOẠCH THU NHẬP THEO NĂM — mỗi lần lưu một bản mới, chỉ ghi thêm (BR-15) ------------
+--  Bản id nhỏ nhất của năm = mục tiêu đầu năm, id lớn nhất = hiện tại. Dòng chia theo người (member_id NULL = Chung).
+CREATE TABLE income_plans (
+  id                INTEGER PRIMARY KEY,
+  year              INTEGER NOT NULL CHECK (year BETWEEN 2000 AND 2200),
+  household_monthly INTEGER NOT NULL CHECK (household_monthly > 0),   -- mục tiêu cả nhà, thu nhập ròng mỗi tháng
+  created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  by_member_id      TEXT REFERENCES members(id)
+);
+CREATE INDEX idx_income_plans_year ON income_plans(year, id);
+
+CREATE TABLE income_plan_lines (
+  id             INTEGER PRIMARY KEY,
+  plan_id        INTEGER NOT NULL REFERENCES income_plans(id),
+  member_id      TEXT REFERENCES members(id),
+  name           TEXT NOT NULL,
+  monthly_amount INTEGER NOT NULL CHECK (monthly_amount >= 0),
+  sort           INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_income_plan_lines ON income_plan_lines(plan_id);
+
+CREATE TRIGGER trg_income_plans_no_update BEFORE UPDATE ON income_plans
+BEGIN
+  SELECT RAISE(ABORT, 'income_plan_append_only');
+END;
+CREATE TRIGGER trg_income_plans_no_delete BEFORE DELETE ON income_plans
+BEGIN
+  SELECT RAISE(ABORT, 'income_plan_append_only');
+END;
+CREATE TRIGGER trg_income_plan_lines_no_update BEFORE UPDATE ON income_plan_lines
+BEGIN
+  SELECT RAISE(ABORT, 'income_plan_append_only');
+END;
+CREATE TRIGGER trg_income_plan_lines_no_delete BEFORE DELETE ON income_plan_lines
+BEGIN
+  SELECT RAISE(ABORT, 'income_plan_append_only');
+END;
+
 -- Phiên bản schema — /v1/health đọc từ đây
-INSERT INTO config (k,v) VALUES ('schema_version','1.30');
+INSERT INTO config (k,v) VALUES ('schema_version','1.33');

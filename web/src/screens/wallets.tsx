@@ -3,15 +3,17 @@
 
 import { Fragment } from "preact";
 import { useState } from "preact/hooks";
+import { LOAN_INTEREST_ID } from "../../../src/domain/system-ids";
 import { api, errorText } from "../lib/api";
 import { budgetTotals, coverPrefill, type MoveDraft } from "../lib/budget";
 import { DRIFT_LABEL, driftOf } from "../lib/drift";
 import { formatVnd, groupDigits } from "../lib/money";
+import { interestLineText } from "../lib/interest";
 import { applyQueueToBudget } from "../lib/pending";
 import { monthKey, monthLabel, previousMonth, shortDate, weekLabel, weekRange } from "../lib/period";
 import { safetyFundCashText, safetyFundMonthsText, wealthBuildingKinds, wealthBuildingPlaces, wealthBuildingSources, type AssetLabels, type WealthBuildingLine } from "../lib/wealth-building";
 import { defaultFilter } from "../lib/tx-filter";
-import type { AccountRow, Budget, BudgetLine, Reserve, SpendByCategory, WealthBuildingBreakdown, TransferOrder, TxRow } from "../lib/types";
+import type { AccountRow, Budget, BudgetLine, InterestLine, Reserve, SpendByCategory, WealthBuildingBreakdown, TransferOrder, TxRow } from "../lib/types";
 import { useResource } from "../state/resource";
 import { go, openTx, refresh, setState, setWalletsTab, toast, useApp, viewSnapshot, type WalletsTab } from "../state/store";
 import { copyText } from "../ui/clipboard";
@@ -140,7 +142,7 @@ function BudgetTab() {
                         <span>còn lại</span>
                       </div>
                       {lines.map((l) => (
-                        <BudgetItem key={l.walletId} l={l} onCover={cover} onOpen={openBook} />
+                        <BudgetItem key={l.walletId} l={l} onCover={cover} onOpen={openBook} interest={l.walletId === LOAN_INTEREST_ID ? b.interestLines : undefined} />
                       ))}
                     </Fragment>
                   ))}
@@ -181,7 +183,14 @@ function BudgetTab() {
                         <td colSpan={7}>{g.label}</td>
                       </tr>,
                       ...lines.map((l) => (
-                        <BudgetRow key={l.walletId} l={l} onCover={cover} onOpen={openBook} prev={prev.data ? (prev.data.lines.find((x) => x.walletId === l.walletId)?.spent ?? 0) : null} />
+                        <BudgetRow
+                          key={l.walletId}
+                          l={l}
+                          onCover={cover}
+                          onOpen={openBook}
+                          interest={l.walletId === LOAN_INTEREST_ID ? b.interestLines : undefined}
+                          prev={prev.data ? (prev.data.lines.find((x) => x.walletId === l.walletId)?.spent ?? 0) : null}
+                        />
                       )),
                     ])}
                     {total && (
@@ -244,7 +253,7 @@ function BudgetTab() {
 }
 
 /** Điện thoại: một ví một hàng theo kiểu hàng tầng — tên, còn lại, "đã chi / dự kiến", thanh; ví âm có dòng Bù riêng. */
-function BudgetItem({ l, onCover, onOpen }: { l: BudgetLine; onCover: (l: BudgetLine, balance: number) => void; onOpen: (walletId: string) => void }) {
+function BudgetItem({ l, onCover, onOpen, interest }: { l: BudgetLine; onCover: (l: BudgetLine, balance: number) => void; onOpen: (walletId: string) => void; interest?: InterestLine[] }) {
   const over = l.remaining !== null && l.remaining < 0;
   const used = l.target && l.spent !== null ? Math.round((100 * l.spent) / l.target) : null;
   const negative = typeof l.balance === "number" && l.balance < 0 ? l.balance : null;
@@ -264,8 +273,21 @@ function BudgetItem({ l, onCover, onOpen }: { l: BudgetLine; onCover: (l: Budget
         <span>{!over && used !== null ? `${used}% đã dùng` : ""}</span>
       </div>
       {used !== null && <Bar pct={used} tone={over ? "bad" : undefined} />}
+      <InterestLines lines={interest} />
       {negative !== null && <NegativeLine amount={negative} onCover={() => onCover(l, negative)} />}
     </div>
+  );
+}
+
+/** Ví "Lãi vay" (pwa UC-707 AC-25): mỗi khoản nợ có lãi một dòng phụ — ngày trả, lãi dự kiến tháng, đã trả. */
+function InterestLines({ lines }: { lines?: InterestLine[] }) {
+  if (!lines?.length) return null;
+  return (
+    <ul class="interest-lines">
+      {lines.map((x) => (
+        <li key={x.debtId}>{interestLineText(x)}</li>
+      ))}
+    </ul>
   );
 }
 
@@ -296,7 +318,7 @@ function WalletLink({ l, onOpen }: { l: BudgetLine; onOpen: (walletId: string) =
 }
 
 /** Máy tính: một hàng của bảng ngân sách đủ cột — dự kiến, thực tế, còn lại, % đã dùng, kỳ trước. */
-function BudgetRow({ l, prev, onCover, onOpen }: { l: BudgetLine; prev: number | null; onCover: (l: BudgetLine, balance: number) => void; onOpen: (walletId: string) => void }) {
+function BudgetRow({ l, prev, onCover, onOpen, interest }: { l: BudgetLine; prev: number | null; onCover: (l: BudgetLine, balance: number) => void; onOpen: (walletId: string) => void; interest?: InterestLine[] }) {
   const over = l.remaining !== null && l.remaining < 0;
   const used = l.target && l.spent !== null ? Math.round((100 * l.spent) / l.target) : null;
   const secret = l.spent === null;
@@ -306,6 +328,7 @@ function BudgetRow({ l, prev, onCover, onOpen }: { l: BudgetLine; prev: number |
       <td>
         <WalletLink l={l} onOpen={onOpen} />
         {negative !== null && <NegativeLine amount={negative} onCover={() => onCover(l, negative)} />}
+        <InterestLines lines={interest} />
       </td>
       <td class="num">
         <Money value={l.target} unit={false} mono />

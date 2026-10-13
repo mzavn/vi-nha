@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { ApiError } from "./api";
 import {
   accountPayload,
+  accountSubmitError,
   accountToForm,
   appVersionLabel,
   auditView,
@@ -250,6 +252,7 @@ describe("tài khoản", () => {
     spendable: true,
     role: null,
     book_balance: 0,
+    deactivated_at: null,
     ...over,
   });
 
@@ -317,6 +320,12 @@ describe("tài khoản", () => {
     const soExisting = existing({ sepay_enabled: false, locked: true, spendable: false, role: "term_deposit" });
     const edit = accountPayload({ ...accountToForm(soExisting), name: "Sổ 6 tháng (đã tất toán)", active: false }, soExisting);
     expect(edit.ok && "role" in edit.value).toBe(false);
+  });
+
+  it("UC-506 AC-24: đổi ngày mở sổ về sau giao dịch sớm nhất → 409 `opening_after_entries` hiện nguyên câu server dưới ô ngày; lỗi khác hiện trên nút", () => {
+    const msg = "Tài khoản đã có giao dịch từ 15/9/2026 — huỷ hoặc sửa các giao dịch trước 1/10/2026 trước, hoặc chọn ngày mở sổ từ 15/9/2026 trở về trước.";
+    expect(accountSubmitError(new ApiError(409, "opening_after_entries", msg))).toEqual({ field: "opened_at", message: msg });
+    expect(accountSubmitError(new ApiError(400, "invalid_input", "Tên trống."))).toEqual({ field: null, message: "Tên trống." });
   });
 });
 

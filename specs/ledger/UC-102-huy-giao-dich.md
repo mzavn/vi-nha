@@ -1,7 +1,7 @@
 # UC-102: Huỷ / sửa giao dịch ghi tay
 - Status: implemented
 - BR: BR-04, BR-02, BR-03
-- Decisions: `docs/core_design_rules.md` §1.1 (sổ chỉ ghi thêm), §9 "Huỷ khoản thu đã chia"; [ADR-02](../decisions.md) luật 1; [ADR-73](../decisions.md) (sửa = huỷ + ghi mới trong một batch; giao dịch ngân hàng chỉ gỡ gán); commit `099e54f` (gỡ lần chia khi huỷ khoản thu), `eb7846e` (trigger 0006, `runUndo`)
+- Decisions: `docs/core_design_rules.md` §1.1 (sổ chỉ ghi thêm), §9 "Huỷ khoản thu đã chia"; [ADR-02](../decisions.md) luật 1; [ADR-73](../decisions.md) (sửa = huỷ + ghi mới trong một batch; giao dịch ngân hàng chỉ gỡ gán); commit `099e54f` (gỡ lần chia khi huỷ khoản thu), `eb7846e` (trigger 0006, `runUndo`); [ADR-104](../decisions.md) (phân loại lại cho báo cáo nằm ở bảng riêng — sửa giao dịch chép sang dòng mới); [ADR-106](../decisions.md) (khoản trả lãi mang `interest_debt_id`)
 - Actor: thành viên trong hộ (PWA — pwa [UC-715](../pwa/UC-715-xem-sua-xoa-giao-dich.md)) / script (bearer)
 - Trigger: `POST /v1/transactions/:id/void` (huỷ — PWA gọi là "Xoá"); `POST /v1/transactions/:id/replace` (sửa)
 
@@ -12,6 +12,8 @@
 - v4 (2026-10-01, commit `49f8bce`): đổi tên "Huỷ / sửa giao dịch ghi tay" (ADR-73). Luật theo nguồn: giao dịch ngân hàng (`source='sepay'` hoặc có `log_id`) bị từ chối `bank_tx` — đường duy nhất là gỡ gán (ingest [UC-306](../ingest/UC-306-ghep-cap-tay-va-go-gan.md)); thêm **sửa** `POST /v1/transactions/:id/replace` = kiểm khoản mới trước, rồi huỷ khoản cũ + ghi khoản mới trong một batch. PWA gọi cả hai từ sheet chi tiết giao dịch (pwa UC-715). Lý do: chủ nhà — "nhập nhầm phải cho sửa / xoá; đồng bộ SePay thì không cho xoá, ghi tay thì có".
 - v5 (2026-10-05, commit `d7992d1`): change [`261005-lien-ket-khoan-goc`](../changes/archive/261005-lien-ket-khoan-goc/proposal.md) — sửa một **khoản gốc** (khoản chi / cho vay) đang có khoản hoàn tiền / nhận lại còn hiệu lực trỏ về (`link_id`): trong cùng batch các khoản đó trỏ sang khoản mới (bước 6); khoản mới đổi meaning, hay khoản cho vay đổi sang người khác người của khoản nhận lại → `invalid_link` "Khoản này đang có khoản trả lại trỏ về — gỡ liên kết trước." (bước 4). Huỷ khoản gốc giữ nguyên liên kết (chi tiết khoản trả về hiện "… · khoản gốc đã xoá" — pwa UC-715). Kiểm `link_id` của khoản mới dùng `resolveLink` (refund → spend, collect → lend). Đóng nửa "sửa" của [OPEN] cũ về `refund` trỏ dòng đã huỷ.
 - v6 (2026-10-06, commit `d059eaa`): change [`261006-bao-mat-kenh-bao-tin`](../changes/archive/261006-bao-mat-kenh-bao-tin/proposal.md) (ADR-90, red-team INSIDER-04) — huỷ thành công ghi nhật ký `tx.void`, sửa thành công (không trùng `client_id`) ghi `tx.replace` (`target = tx:<id khoản cũ>`, người gọi + `via`); lỗi (409, 400…) không ghi. Thêm AC-18; [OPEN] "sửa không ghi ai sửa" thu hẹp.
+- v7 (2026-10-08, commit `8cd48b8`): khoản trả lãi (`interest_debt_id`, ledger UC-101 4k) cũng giữ chỗ gắn khi sửa — khoản nợ đang gắn với khoản cũ qua `interest_debt_id` được coi là đang bật khi kiểm, như `debt_id` (bước 3; ADR-106) (change [261008-bang-can-doi](../changes/archive/261008-bang-can-doi/proposal.md))
+- v8 (2026-10-08, commit `31e3505`): sửa giao dịch **chép phân loại lại** (`transaction_report_classes`, balance [UC-1105](../balance/UC-1105-luu-chuyen-tien.md)) sang dòng mới trong cùng batch (bước 6); huỷ hẳn thì phân loại nằm lại với dòng đã huỷ (báo cáo bỏ qua dòng huỷ). Migration 0032, schema v1.32, ADR-104. Thêm AC-19 (change [261008-bang-can-doi](../changes/archive/261008-bang-can-doi/proposal.md))
 
 ## Preconditions
 - `:id` là số nguyên dương (route `idParam`, sai → `invalid_input` 400).
@@ -21,15 +23,15 @@
 1. Đọc giao dịch theo `id` và kiểm (`manualTxOrThrow`): tồn tại; đang `active`; không phải bút toán hệ thống (`source='system'` hoặc `meaning='fund'`); không phải giao dịch ngân hàng (`source='sepay'` hoặc `log_id` khác NULL).
 2. Nếu `meaning='income'`: lấy các lệnh gỡ lần chia (allocation UC-206 "Gỡ lần chia khi huỷ khoản thu", `undoAllocationStatements`): huỷ mọi `fund` `active` cùng `batch_id`, đổi lệnh chuyển `pending` cùng `batch_id` sang `skipped`. `allocation_runs` **giữ nguyên** → khoản thu đã huỷ không bao giờ được chia lại.
 3. Chạy trong **một batch** (`runUndo`): các lệnh gỡ (nếu có) + `UPDATE transactions SET status='void' WHERE id=? AND status='active'`.
-4. Trả dòng giao dịch sau khi huỷ (`status: "void"`), HTTP 200. Dòng vẫn còn trong bảng.
+4. Trả dòng giao dịch sau khi huỷ (`status: "void"`), HTTP 200. Dòng vẫn còn trong bảng. Phân loại lại cho báo cáo của dòng (nếu có — balance [UC-1105](../balance/UC-1105-luu-chuyen-tien.md)) nằm lại với dòng đã huỷ; báo cáo chỉ đọc dòng `active` nên bỏ qua nó.
 
 ## Main Flow — sửa (`replaceTransaction`)
 1. Thân có `client_id` mà đã có dòng mang `client_id` đó → trả ngay dòng đó (dạng dòng sổ, UC-111), `duplicate: true`, HTTP 200 — không kiểm gì thêm.
 2. Kiểm khoản cũ như bước 1 của huỷ; thêm: meaning phải là meaning nhập tay (`MANUAL_MEANINGS`) — `adjust` (đếm ví) → `not_editable`.
-3. Dựng khoản mới bằng `buildEntry` với **người ghi của khoản cũ** (`by_member_id` giữ nguyên; ví cá nhân đổi theo người đó). Khoản nợ / khoản phải thu / người thuê **đang gắn với khoản cũ** được coi là đang bật khi kiểm, nên sửa vẫn giữ được chỗ gắn dù đối tác đã tắt; gắn mới vào đối tác đã tắt vẫn bị chặn như khi nhập.
+3. Dựng khoản mới bằng `buildEntry` với **người ghi của khoản cũ** (`by_member_id` giữ nguyên; ví cá nhân đổi theo người đó). Khoản nợ (cả `debt_id` lẫn `interest_debt_id` trả lãi) / khoản phải thu / người thuê **đang gắn với khoản cũ** được coi là đang bật khi kiểm, nên sửa vẫn giữ được chỗ gắn dù đối tác đã tắt; gắn mới vào đối tác đã tắt vẫn bị chặn như khi nhập.
 4. Áp các luật của nhập tay trước khi ghi: chiều tiền SePay báo về (D14, `fed_account`); `buy_asset` không vượt tiền mặt Tích sản (tính cả số tiền khoản cũ trả lại nếu khoản cũ cũng là `buy_asset`, `insufficient_cash`); `refund` / `collect` có `link_id` phải trỏ về một `spend` / `lend` còn hiệu lực khác chính khoản đang sửa (`resolveLink`, `invalid_link`). Khoản cũ đang có khoản hoàn tiền / nhận lại còn hiệu lực trỏ về: khoản mới phải cùng meaning, và (khoản cho vay) có người thì không khác người của các khoản nhận lại đó — không thì `invalid_link` "Khoản này đang có khoản trả lại trỏ về — gỡ liên kết trước.". Sai ở bất kỳ bước nào → lỗi, **không ghi gì**.
 5. Khoản cũ là `income` → lấy lệnh gỡ lần chia như bước 2 của huỷ (có thể ném `allocation_settled`).
-6. **Một batch** (`runUndo`): các lệnh gỡ (nếu có) → `INSERT` khoản mới **chỉ khi** khoản cũ còn `active` ngay trong batch → các khoản hoàn tiền / nhận lại còn hiệu lực đang trỏ về khoản cũ đổi `link_id` sang khoản mới (`last_insert_rowid()`, cùng điều kiện khoản cũ còn `active`) → huỷ khoản cũ. Huỷ (không sửa) thì không đổi liên kết.
+6. **Một batch** (`runUndo`): các lệnh gỡ (nếu có) → `INSERT` khoản mới **chỉ khi** khoản cũ còn `active` ngay trong batch → các khoản hoàn tiền / nhận lại còn hiệu lực đang trỏ về khoản cũ đổi `link_id` sang khoản mới (`last_insert_rowid()`, cùng điều kiện khoản cũ còn `active`) → khoản cũ có **phân loại lại** cho báo cáo (balance [UC-1105](../balance/UC-1105-luu-chuyen-tien.md), [UC-1106](../balance/UC-1106-ket-qua-thu-chi.md)) thì chép đúng nhóm đó (và người đặt) sang khoản mới, khi khoản mới vẫn xếp được — đúng một phía tài khoản (không phải chuyển giữa hai tài khoản của hộ, không phải chuyển ngân sách), và nhóm "thu nhập thụ động" (`passive_income`) chỉ khi khoản mới vẫn là `income` → huỷ khoản cũ (phân loại của khoản cũ ở lại với nó). Huỷ (không sửa) thì không đổi liên kết, không chép phân loại.
 7. Trả HTTP 201 `{ tx, replaced, duplicate: false, wallet }`: `tx` là khoản mới ở dạng dòng sổ (kèm `category_name`… — UC-111), `replaced` = id khoản cũ, `wallet` = ví còn bao nhiêu như khi nhập (UC-101).
 
 ## Alternative Flows
@@ -157,9 +159,15 @@
 - Then `audit_log` đúng hai dòng: `{ member_id: "wife", via: "token", action: "tx.replace", target: "tx:<X>" }`, `{ member_id: "husband", via: "token", action: "tx.void", target: "tx:<Y>" }`
 - Tests: `test/audit.test.ts` › "nhật ký thay đổi › huỷ, sửa, gỡ gán giao dịch đều ghi một dòng: ai, qua đâu, giao dịch nào"
 
+### AC-19: Sửa giao dịch đã phân loại lại thì dòng mới mang cùng phân loại
+- Given khoản `income` 50.000.000 tháng 10 đã phân loại lại Tài chính (`financing`)
+- When sửa số tiền thành 45.000.000 (`POST /v1/transactions/:id/replace`)
+- Then 201; bảng phân loại có hai dòng — khoản cũ (đã huỷ) và khoản mới, đều `financing`; báo cáo lưu chuyển tiền tháng 10 có Tài chính "Vay, nhận tiền" +45.000.000, không còn +50.000.000
+- Tests: [`test/reports.test.ts`](../../test/reports.test.ts) › "ledger UC-102, access UC-506: phân loại lại theo khoản sửa; ngày mở sổ không lùi qua giao dịch › UC-102 AC-19: sửa khoản income 50.000.000 đã xếp Tài chính thành 45.000.000 → dòng mới mang phân loại, Tài chính Vay, nhận tiền +45.000.000"
+
 ## Traceability
 - Code: `src/routes/v1.ts` › `POST /transactions/:id/void`, `POST /transactions/:id/replace`, `entryInput`, `idParam`; `src/services/audit.ts` › `recordChange`; `src/services/ledger.ts` › `manualTxOrThrow`, `voidTransaction`, `replaceTransaction` (`LINKED_RETURNS`, `relink`), `resolveLink`, `transactionView`, `getTransaction`, `walletStatus`, `undoAllocationStatements`, `runUndo` (hai hàm sau thuộc allocation); `src/domain/entry.ts` › `buildEntry`, `MANUAL_MEANINGS`
-- Migrations/DB: `status` CHECK (`migrations/0001_schema.sql`); `trg_fund_void_needs_unsettled_batch` (`migrations/0006_allocation_undo_guard.sql`); `allocation_runs` (`migrations/0003_offline_entry_and_allocation_runs.sql`); `idx_tx_client` (0003, dựng lại ở 0014)
+- Migrations/DB: `status` CHECK (`migrations/0001_schema.sql`); `trg_fund_void_needs_unsettled_batch` (`migrations/0006_allocation_undo_guard.sql`); `allocation_runs` (`migrations/0003_offline_entry_and_allocation_runs.sql`); `idx_tx_client` (0003, dựng lại ở 0014); `transaction_report_classes` (`migrations/0032_report_classes.sql`, schema v1.32 — chép sang khoản mới ở `replaceTransaction`)
 - PWA: pwa [UC-715](../pwa/UC-715-xem-sua-xoa-giao-dich.md) (`web/src/screens/tx-sheet.tsx`, `web/src/state/store.ts` › `voidEntry`, `replaceEntry`). MCP không có công cụ huỷ / sửa.
 
 ## Divergences & Open Questions

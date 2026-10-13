@@ -5,6 +5,7 @@
 // Đọc ngược lại chính là thứ tự bóp khi thiếu tiền; Tích sản không bao giờ bị chạm.
 
 import { mondaysInMonth, monthKey, monthsLeft } from "./period";
+import { DomainError } from "./types";
 
 export type Tier = "wealth_building" | "tax" | "nice" | "must";
 export type AllocationMode = "flat" | "percent" | "goal" | "lump" | "remainder";
@@ -201,4 +202,44 @@ export function allocate(input: AllocationInput): AllocationResult {
   const total = funds.reduce((sum, f) => sum + f.amount, 0);
   if (total !== income.amount) throw new Error(`Bất biến vỡ: chia ${total} ≠ thu nhập ${income.amount}.`);
   return { funds, underfunded, deficitCovered };
+}
+
+/** Một số tay của Tự chia (UC-203): bao nhiêu vào ví nào. */
+export interface ManualAmount {
+  walletId: string;
+  amount: number;
+}
+
+const invalidAmounts = (detail: string) => new DomainError("invalid_amounts", `Số tự chia không hợp lệ: ${detail}`);
+
+/** Đọc `amounts` từ body: mảng `{ wallet_id, amount }`, số nguyên ≥ 0. Sai hình dạng → `invalid_amounts`. */
+export function parseManualAmounts(raw: unknown): ManualAmount[] {
+  if (!Array.isArray(raw)) throw invalidAmounts("amounts phải là danh sách.");
+  return raw.map((item: unknown) => {
+    if (!item || typeof item !== "object" || !("wallet_id" in item) || !("amount" in item)) throw invalidAmounts("mỗi dòng cần wallet_id và amount.");
+    const { wallet_id: walletId, amount } = item;
+    if (typeof walletId !== "string") throw invalidAmounts("wallet_id phải là chuỗi.");
+    if (typeof amount !== "number" || !Number.isInteger(amount) || amount < 0) throw invalidAmounts(`số của ví "${walletId}" phải là số nguyên không âm.`);
+    return { walletId, amount };
+  });
+}
+
+/**
+ * Tự chia (UC-203, ADR-108 nháp): số tay thắng luật nạp, phần khóa của nguồn thu và sàn / bù thiếu cho lần chia này.
+ * Ví phải đang dùng, không phải ví giữ tiền, không trùng; Σ phải bằng khoản thu. Số 0 bỏ qua. Cùng hình dạng `allocate` trả.
+ */
+export function manualFunds(amounts: ManualAmount[], incomeAmount: number, wallets: { id: string; tier: string }[]): AllocationResult {
+  const seen = new Set<string>();
+  for (const { walletId } of amounts) {
+    const wallet = wallets.find((w) => w.id === walletId);
+    if (!wallet) throw invalidAmounts(`không có ví đang dùng "${walletId}".`);
+    if (wallet.tier === "holding") throw invalidAmounts(`ví "${walletId}" là ví giữ tiền, không chia vào được.`);
+    if (seen.has(walletId)) throw invalidAmounts(`ví "${walletId}" có hai dòng.`);
+    seen.add(walletId);
+  }
+  const total = amounts.reduce((sum, a) => sum + a.amount, 0);
+  if (total !== incomeAmount) {
+    throw new DomainError("amounts_mismatch", `Tổng tự chia ${total} khác số tiền khoản thu ${incomeAmount}.`);
+  }
+  return { funds: amounts.filter((a) => a.amount > 0).map(({ walletId, amount }) => ({ walletId, amount })), underfunded: [], deficitCovered: {} };
 }

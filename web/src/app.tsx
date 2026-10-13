@@ -1,5 +1,5 @@
-// Khung app: 4 tab cố định (không router), FAB "+" ở mọi màn trừ Nhập, Cài đặt, Sổ giao dịch và Hướng dẫn, toast đáy màn.
-// Cài đặt (#settings), Sổ giao dịch (#ledger) và Hướng dẫn (#guide) là màn phụ mở từ màn khác, không chiếm tab thứ năm.
+// Khung app: 4 tab cố định (không router), FAB "+" ở mọi màn trừ Nhập, Cài đặt, Sổ giao dịch, Hướng dẫn và Tài sản & tự do, toast đáy màn.
+// Cài đặt (#settings), Sổ giao dịch (#ledger), Hướng dẫn (#guide) và Tài sản & tự do (#net-worth) là màn phụ mở từ màn khác, không chiếm tab thứ năm.
 // Máy tính (≥1024px): thanh bên thay thanh dưới và FAB, phím N mở màn Nhập, Hôm nay thành bảng điều khiển.
 
 import { useEffect, useRef } from "preact/hooks";
@@ -8,6 +8,7 @@ import { Entry } from "./screens/entry";
 import { GuideSlot } from "./screens/guide";
 import { LedgerBook } from "./screens/ledger-book";
 import { Login } from "./screens/login";
+import { NetWorth } from "./screens/net-worth";
 import { Settings } from "./screens/settings";
 import { Setup } from "./screens/setup";
 import { Today } from "./screens/today";
@@ -75,17 +76,18 @@ export function App() {
   return (
     <>
       <UpdateBar />
-      <main class={app.tab === "settings" ? "app app-wide" : app.tab === "guide" ? "app app-guide" : app.tab === "entry" || app.tab === "ledger" ? "app" : "app has-fab"} id="main">
+      <main class={app.tab === "settings" ? "app app-wide" : app.tab === "guide" ? "app app-guide" : app.tab === "entry" || app.tab === "ledger" || app.tab === "net-worth" ? "app" : "app has-fab"} id="main">
         {app.tab === "today" && <Today />}
         {app.tab === "entry" && <Entry />}
         {app.tab === "assign" && <Assign />}
         {app.tab === "wallets" && <Wallets />}
         {app.tab === "settings" && <Settings />}
         {app.tab === "ledger" && <LedgerBook />}
+        {app.tab === "net-worth" && <NetWorth />}
         <GuideSlot />
       </main>
 
-      {app.tab !== "entry" && app.tab !== "settings" && app.tab !== "ledger" && app.tab !== "guide" && (
+      {app.tab !== "entry" && app.tab !== "settings" && app.tab !== "ledger" && app.tab !== "guide" && app.tab !== "net-worth" && (
         <button type="button" class="fab" aria-label="Nhập khoản chi" onClick={() => go("entry")}>
           <Icon name="plus" size={26} />
         </button>
@@ -132,6 +134,7 @@ function DesktopApp() {
         {app.tab === "wallets" && <Wallets />}
         {app.tab === "settings" && <Settings />}
         {app.tab === "ledger" && <LedgerBook />}
+        {app.tab === "net-worth" && <NetWorth />}
         <GuideSlot />
       </main>
       <TxSheet />

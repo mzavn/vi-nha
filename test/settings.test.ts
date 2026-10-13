@@ -37,7 +37,7 @@ describe("đọc cài đặt", () => {
     const { json } = await call("GET", "/v1/settings");
     expect(Object.keys(json.data).sort()).toEqual(["accounts", "categories", "config", "incomeStreams", "integrations", "members", "notifySchedule", "rules", "wallets"]);
     expect(json.data.integrations.webhook_url).toBe("https://app.example.com/webhooks/sepay");
-    expect(json.data.config).toEqual({ salary_min_amount: 1_000_000, safety_fund_months: 6 });
+    expect(json.data.config).toMatchObject({ salary_min_amount: 1_000_000, safety_fund_months: 6, fi_swr_bps: 350, fi_safety_months: "6,12,24", fi_birth_year: null });
     expect(json.data.notifySchedule).toEqual({
       dailyTime: "07:00",
       weeklyDay: 1,
@@ -295,11 +295,11 @@ describe("thành viên, mã chuyển khoản, tham số", () => {
 
   it("ngưỡng lương và số tháng phao", async () => {
     const res = await call("PUT", "/v1/settings/config", { salary_min_amount: 0, safety_fund_months: 3 });
-    expect(res.json.data).toEqual({ salary_min_amount: 0, safety_fund_months: 3 });
+    expect(res.json.data).toMatchObject({ salary_min_amount: 0, safety_fund_months: 3 });
     expect((await call("PUT", "/v1/settings/config", { safety_fund_months: 0 })).status).toBe(400);
     // Khoá cũ emergency_months bị bỏ qua như trường lạ (0028 đổi tên).
-    expect((await call("PUT", "/v1/settings/config", { emergency_months: 12 })).json.data).toEqual({ salary_min_amount: 0, safety_fund_months: 3 });
-    expect((await call("GET", "/v1/settings")).json.data.config).toEqual({ salary_min_amount: 0, safety_fund_months: 3 });
+    expect((await call("PUT", "/v1/settings/config", { emergency_months: 12 })).json.data).toMatchObject({ salary_min_amount: 0, safety_fund_months: 3 });
+    expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ salary_min_amount: 0, safety_fund_months: 3 });
   });
 });
 

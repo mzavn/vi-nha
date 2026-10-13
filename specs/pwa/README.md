@@ -1,8 +1,8 @@
 # Context `pwa` — Ứng dụng web cài được lên điện thoại (Ví nhà)
 
 Giao diện người dùng duy nhất của hộ: một PWA viết bằng Preact, **mobile-first (D13)**, build từ `web/` ra `public/` và được Worker phục vụ như static assets.
-Nó trả lời "còn bao nhiêu để chi tuần này", cho nhập khoản chi trong 3 chạm **kể cả khi mất mạng (D12)**, gán giao dịch ngân hàng, xem ví/quỹ/tài khoản/sổ nợ/sổ phải thu và sửa cấu hình.
-PWA không tự tính luật tiền: mọi con số lấy từ `/v1/*`. Ngoại lệ duy nhất là *trừ tạm* các khoản còn trong hàng đợi, theo đúng công thức của `buildSnapshot` phía server.
+Nó trả lời "còn bao nhiêu để chi tuần này", cho nhập khoản chi trong 3 chạm **kể cả khi mất mạng (D12)**, gán giao dịch ngân hàng, xem ví/quỹ/tài khoản/sổ nợ/sổ phải thu, xem bảng cân đối, báo cáo và Mốc tự do (màn Tài sản & tự do), và sửa cấu hình.
+PWA không tự tính luật tiền: mọi con số thật lấy từ `/v1/*`. Ngoại lệ: *trừ tạm* các khoản còn trong hàng đợi, theo đúng công thức của `buildSnapshot` phía server; và bảng **Thử số / Dự phóng** (UC-717, balance UC-1107) tính ở máy từ điểm xuất phát server trả, không lưu, không phải số thật (ADR-105).
 Luật giao diện lấy từ `docs/DESIGN.md` (thắng `pf-wireframe.html`), gồm cả luật màn rộng ≥ 1024px (§7b, commit `a68c9d6`).
 
 ## Ngôn ngữ chung (ubiquitous language)
@@ -22,7 +22,9 @@ Luật giao diện lấy từ `docs/DESIGN.md` (thắng `pf-wireframe.html`), g�
 | **Sheet** | Hộp thoại trượt từ đáy (≥ 1024px: hộp thoại giữa màn); "nơi mọi edge case được giải" (DESIGN.md §4) | |
 | **Màn rộng** / `wide` | Khung nhìn `(min-width: 1024px)` (`WIDE` trong `web/src/ui/shell.tsx`) | |
 | **Còn để chi tuần này** | `snapshot.spendableThisWeek` sau khi trừ tạm hàng đợi | Định nghĩa gốc thuộc ledger (snapshot) |
-| **Tab** | Một trong `today` · `entry` · `assign` · `wallets` (+ hai màn phụ không có tab: `settings`, `ledger`), lưu trong `location.hash` | |
+| **Tab** | Một trong `today` · `entry` · `assign` · `wallets` (+ bốn màn phụ không có tab: `settings`, `ledger`, `guide`, `net-worth`), lưu trong `location.hash` | |
+| **Tài sản & tự do** | Màn phụ `#net-worth/<phần>` (UC-717) với sáu phần Cân đối · Tháp · Lưu chuyển tiền · Thu chi · Mốc tự do · Thử số; mở từ tab Nợ "Xem bảng cân đối ›" và thanh bên. Tiền, nợ, phải thu ở đây luôn từ sổ (chip "từ sổ", chạm → sổ nguồn); chỉ tài sản ngoài app (vàng, đất, chứng khoán) nhập tay. Không đổi ví hay "còn để chi" | Định nghĩa gốc ở balance (bảng cân đối, mốc tự do & báo cáo — UC-1101…UC-1107, ADR-102) |
+| **Thử số** | Phần cuối của Tài sản & tự do: gõ giả định trên nền số thật, bảng dự phóng theo năm tới F1 / F2; tính ở máy, số gõ chỉ giữ trong bộ nhớ trang, luôn có dải "Số thử — không lưu, không phải số thật" | Không phải số thật; MCP không đọc được (balance UC-1107, ADR-105) |
 | **Sổ giao dịch** | Màn phụ `#ledger` (UC-716): toàn bộ sổ theo tháng, lọc / tìm, dòng tổng theo nghĩa tiền thật, chạm dòng mở sheet chi tiết (UC-715), **+ Ghi khoản** với ngày trong tháng đang xem | Khác card **Giao dịch gần đây** (liếc nhanh, chia trang theo thời gian). Server: sổ giao dịch ledger UC-111 |
 | **Chuyển ngân sách** | Khoản `transfer` chỉ có hai ví (`from_wallet_id` → `wallet_id`), không tài khoản: đổi số giữa hai ví trong app, tiền không rời tài khoản nào; đi qua hàng đợi như khoản chi (UC-712) | Ledger gọi cùng tên (UC-101 alt 4e); khác **Chuyển nội bộ** (tiền đi thật giữa hai tài khoản, có thể kèm chuyển ví) |
 | **Bù** | Nút ở dòng ví đang âm trong bảng Ngân sách: mở Chuyển ngân sách điền sẵn phần âm, nguồn ưu tiên Có thì tốt còn dư (UC-712) | Khác **"đã bù X"** (bù hố tháng trước, allocation tự làm khi chia — D3) |
@@ -54,6 +56,7 @@ Luật giao diện lấy từ `docs/DESIGN.md` (thắng `pf-wireframe.html`), g�
 | [UC-714](UC-714-bat-thong-bao-tren-may-nay.md) | Bật thông báo trên máy này | implemented | BR-06, BR-09 |
 | [UC-715](UC-715-xem-sua-xoa-giao-dich.md) | Xem, sửa, xoá một giao dịch | implemented | BR-03, BR-04, BR-01 |
 | [UC-716](UC-716-so-giao-dich.md) | Sổ giao dịch | implemented | BR-01, BR-03, BR-05 |
+| [UC-717](UC-717-man-tai-san-va-tu-do.md) | Màn Tài sản & tự do | implemented | BR-15, BR-12, BR-13, BR-07 |
 
 Entity model: [entities.md](entities.md).
 
@@ -69,6 +72,7 @@ Entity model: [entities.md](entities.md).
 - **allocation**: UC-202 Xem trước phương án chia · UC-203 Chia một khoản thu nhập (ghi sổ) · UC-205 Theo dõi & đánh dấu lệnh chuyển tiền.
 - **ingest**: UC-305 Gán log chưa gán (danh sách, gán, bỏ qua, `create_rule`) · UC-302 Ghi log ngân hàng chống trùng (cờ nghi trùng webhook/rà soát).
 - **rental**: UC-801 Thiết lập người thuê, phí cố định & chi chung · UC-802 Ghi người thuê chi hộ & dòng sổ tay · UC-803 Xem tạm tính tháng & bảng kê · UC-804 Chốt tháng với người thuê · UC-805 Nhận tiền người thuê trả & dùng tiền "Thu cho thuê" (`/v1/rental/*`).
-- **debt**: UC-901 Thêm và xem khoản nợ · UC-902 Trả nợ (sheet Trả nợ, `bootstrap.debts`) · UC-903 Gán giao dịch ngân hàng là trả nợ · UC-904 Vay thêm, chỉnh tay, huỷ dòng nợ (`/v1/debts`, `/v1/debt-lines/:id/void`).
+- **debt**: UC-901 Thêm và xem khoản nợ (lãi suất, kỳ hạn, số trả mỗi tháng, ngày trả) · UC-902 Trả nợ (sheet Trả nợ tách Tiền lãi / Tiền gốc, `bootstrap.debts`) · UC-903 Gán giao dịch ngân hàng là trả nợ · UC-904 Vay thêm, chỉnh tay, huỷ dòng nợ (`/v1/debts`, `/v1/debt-lines/:id/void`).
 - **receivable**: UC-1001 Thêm và xem khoản phải thu · UC-1002 Cho vay / trả hộ · UC-1003 Nhận lại tiền (`collect`, `bootstrap.receivables`) · UC-1004 Chỉnh / huỷ dòng phải thu (`/v1/receivables`, `/v1/receivable-lines/:id/void`) · UC-1005 Xem bức tranh tiền thật (`/v1/networth`).
+- **balance**: UC-1101 Thêm mục tài sản, lô, cập nhật giá theo ngày, theo dõi chốt lời / cắt lỗ · UC-1102 Xem bảng cân đối, tháp tài sản và lịch sử theo tháng (`/v1/balance-sheet`, `/v1/balance-items`, `/v1/balance-lots`, `/v1/balance-values`) · UC-1103 Mốc tự do (`/v1/freedom`) · UC-1104 Kế hoạch thu nhập theo năm (`/v1/income-plans`) · UC-1105 Lưu chuyển tiền · UC-1106 Kết quả thu chi (`/v1/reports/*`, `/v1/transactions/:id/report-class`) · UC-1107 Thử số / Dự phóng (công thức ở `web/src/lib/projection.ts`) — [README](../balance/README.md).
 - **notify**: UC-410 Gửi thông báo đẩy tới máy đã bật (`/v1/push`, khoá công khai VAPID, danh sách máy, gửi thử) · UC-408 Gửi tin Telegram chống gửi trùng (cửa gửi chung `notifyMembers`) · UC-411 Gửi tin qua Zalo Bot (nối bằng mã — mã nối, webhook `/webhooks/zalo`).

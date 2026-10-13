@@ -2,11 +2,12 @@
 // Cả hai đi qua hàng đợi như khoản chi: chuyển ngân sách chỉ đổi số giữa hai ví, không đụng tài khoản nào.
 
 import { useMemo, useState } from "preact/hooks";
-import { DEBT_CATEGORY_ID } from "../../../src/domain/system-ids";
+import { DEBT_CATEGORY_ID, LOAN_INTEREST_ID } from "../../../src/domain/system-ids";
 import { errorText } from "../lib/api";
 import { moveProblem, moveWallets, type MoveDraft } from "../lib/budget";
 import { defaultAccountFor, defaultWalletFor, manualAccounts } from "../lib/categories";
 import { defaultDebtId, payableDebts, paymentToast } from "../lib/debts";
+import { debtPaymentEntries, hasInterest, prefillSplit, splitOf, splitPaymentToast, withAmount, withInterest, withPrincipal, type SplitDraft } from "../lib/interest";
 import { formatVnd } from "../lib/money";
 import { atForDay, dayKey } from "../lib/period";
 import { withChosen } from "../lib/transactions";
@@ -112,6 +113,7 @@ export function MoveBudgetSheet({ initial, title = "Chuyển ngân sách", edit,
 /**
  * Trả nợ: khoản chi danh mục "Trả nợ" từ ví giữ riêng (Thu cho thuê), gắn vào một khoản trong sổ nợ nếu nhà đã ghi sổ nợ.
  * Mở từ thẻ ví giữ riêng thì có `reserve`; mở từ tab Nợ thì lấy ví mặc định của danh mục Trả nợ.
+ * Khoản có lãi (debt UC-902, pwa UC-712): thêm hai ô Tiền lãi / Tiền gốc; lưu thành hai khoản chi — lãi vào ví "Lãi vay", gốc giảm nợ.
  * Trả từ tài khoản SePay báo cả tiền ra thì gán ở màn Gán.
  */
 export function DebtSheet({ reserve, debtId, onClose }: { reserve?: Reserve; debtId?: string; onClose: () => void }) {
@@ -127,7 +129,12 @@ export function DebtSheet({ reserve, debtId, onClose }: { reserve?: Reserve; deb
   const debts = payableDebts(boot?.debts);
   const [debt, setDebt] = useState<string | null>(() => defaultDebtId(boot?.debts, debtId));
   const chosen = debts.find((d) => d.id === debt) ?? null;
-  const [amount, setAmount] = useState(0);
+  const [draft, setDraft] = useState<SplitDraft>(() => (chosen ? prefillSplit(chosen) : { amount: 0, interest: 0 }));
+  const amount = draft.amount;
+  const withSplit = !!chosen && hasInterest(chosen);
+  const split = splitOf(withSplit ? draft : { amount, interest: 0 });
+  const interestCategory = boot?.categories.find((c) => c.id === LOAN_INTEREST_ID);
+  const interestWalletId = (boot && interestCategory ? defaultWalletFor(boot, interestCategory, memberId)?.id : null) ?? LOAN_INTEREST_ID;
   const [accountId, setAccountId] = useState<string | null>(() => (boot ? defaultAccountFor(boot, memberId, "out") : null));
   const [note, setNote] = useState("");
   const [day, setDay] = useState(() => dayKey(new Date()));
@@ -148,23 +155,29 @@ export function DebtSheet({ reserve, debtId, onClose }: { reserve?: Reserve; deb
   async function submit() {
     if (problem) return;
     setBusy(true);
-    const saved = await saveEntry(
-      {
-        meaning: "spend",
-        amount,
-        at: atForDay(day, new Date()),
-        client_id: newClientId(),
-        category_id: DEBT_CATEGORY_ID,
-        wallet_id: walletId!,
-        account_id: accountId!,
-        ...(chosen ? { debt_id: chosen.id } : {}),
-        ...(note.trim() ? { note: note.trim() } : {}),
-      },
-      chosen ? paymentToast(amount, chosen) : undefined,
-    );
+    const entries = debtPaymentEntries({
+      split,
+      debtId: chosen?.id ?? null,
+      at: atForDay(day, new Date()),
+      accountId: accountId!,
+      principalWalletId: walletId!,
+      interestWalletId,
+      note,
+      newId: newClientId,
+    });
+    // Mỗi khoản một lần ghi qua hàng đợi; toast của khoản cuối nói cả lần trả.
+    const text = chosen ? (withSplit ? splitPaymentToast(split, chosen) : paymentToast(amount, chosen)) : undefined;
+    let saved = true;
+    for (const [i, body] of entries.entries()) saved = (await saveEntry(body, i === entries.length - 1 ? text : undefined)) && saved;
     if (saved) onClose();
     else setBusy(false);
   }
+
+  const pickDebt = (id: string | null) => {
+    setDebt(id);
+    const next = debts.find((d) => d.id === id);
+    setDraft(next && hasInterest(next) ? prefillSplit(next) : { amount, interest: 0 });
+  };
 
   return (
     <Sheet open title={`Trả nợ từ ${walletName}`} onClose={onClose}>
@@ -172,7 +185,7 @@ export function DebtSheet({ reserve, debtId, onClose }: { reserve?: Reserve; deb
         <>
           <div class="field" style={{ borderTop: 0 }}>
             <label for="d-debt">Trả cho khoản nợ</label>
-            <select id="d-debt" class="ctl" value={debt ?? ""} onChange={(e) => setDebt(e.currentTarget.value || null)}>
+            <select id="d-debt" class="ctl" value={debt ?? ""} onChange={(e) => pickDebt(e.currentTarget.value || null)}>
               {!chosen && <option value="">Chọn khoản nợ</option>}
               {debts.map((d) => (
                 <option key={d.id} value={d.id}>
@@ -190,8 +203,21 @@ export function DebtSheet({ reserve, debtId, onClose }: { reserve?: Reserve; deb
       )}
       <div class="field" style={debts.length > 0 ? undefined : { borderTop: 0 }}>
         <label for="d-amount">Số tiền</label>
-        <AmountInput id="d-amount" value={amount} onChange={setAmount} autoFocus />
+        <AmountInput id="d-amount" value={amount} onChange={(n) => setDraft((d) => withAmount(d, n))} autoFocus />
       </div>
+      {withSplit && (
+        <>
+          <div class="field">
+            <label for="d-interest">Tiền lãi</label>
+            <AmountInput id="d-interest" value={split.interest} onChange={(n) => setDraft((d) => withInterest(d, n))} />
+          </div>
+          <div class="field">
+            <label for="d-principal">Tiền gốc</label>
+            <AmountInput id="d-principal" value={split.principal} onChange={(n) => setDraft((d) => withPrincipal(d, n))} />
+          </div>
+          <p class="fhint">Lãi là chi phí tháng (ví Lãi vay), gốc làm giảm nợ.</p>
+        </>
+      )}
       {walletBalance !== null && (
         <p class="fhint">
           {walletName} còn {formatVnd(walletBalance)}.

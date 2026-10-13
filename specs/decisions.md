@@ -107,6 +107,17 @@ Status: `accepted` (đang có hiệu lực) · `superseded by ADR-xx` · `propos
 | ADR-96 | 2026-10-08 | Tối đa 6 người ngang quyền; tắt người không xoá dữ liệu | accepted | access (+ pwa) |
 | ADR-97 | 2026-10-08 | MCP dùng OAuth 2.1 của chuẩn MCP, bỏ đường dẫn chứa khoá; tool nhìn và ghi như người đã uỷ quyền | accepted | mcp (+ access, pwa) |
 | ADR-98 | 2026-10-08 | Quyền mặc định: Xem + Ghi, Ghi bỏ tick được; Đăng xuất mọi máy và đổi mật khẩu chung gỡ cả kết nối AI | accepted | mcp (+ access) |
+| ADR-99 | 2026-10-08 | Bảng cân đối là số thật: tiền, phải thu, nợ luôn từ sổ; chỉ tài sản ngoài app mới nhập tay; tài sản mua qua app đổi sang định giá khi có mục cùng loại | accepted | balance (+ receivable) |
+| ADR-100 | 2026-10-08 | Định giá là dòng chỉ ghi thêm có ngày; mọi tổng, lịch sử, báo cáo tính theo trạng thái tại từng ngày bằng ít câu SQL gộp theo tháng; `deactivated_at` cho khoản đã tắt | accepted | balance (+ ledger, debt, receivable, access) |
+| ADR-101 | 2026-10-08 | Dòng tiền thật tách lợi suất kỳ vọng; số nhập luôn kèm kỳ | accepted | balance |
+| ADR-102 | 2026-10-08 | Tài sản & tự do là màn phụ riêng, không lên Hôm nay, không thêm tab con thứ tám | accepted | pwa (+ balance) |
+| ADR-103 | 2026-10-08 | Tài sản có số lượng theo dõi theo lô; giá theo ngày thuộc mục; giá chốt lời / cắt lỗ thuộc lô hoặc mục theo giá trị | accepted | balance |
+| ADR-104 | 2026-10-08 | Lưu chuyển tiền và Kết quả thu chi suy nhóm từ dữ liệu có sẵn; phần không suy được thì phân loại lại từng giao dịch trong bảng riêng | accepted | balance (+ ledger) |
+| ADR-105 | 2026-10-08 | Thử số / Dự phóng tính ở máy, không lưu | accepted | balance (+ pwa) |
+| ADR-106 | 2026-10-08 | Lãi vay là chi phí Must hằng tháng: ví hệ thống "Lãi vay" có dự kiến tự tính từ sổ nợ; mỗi lần trả tách khoản chi lãi và khoản chi gốc | accepted | debt (+ ledger, allocation, pwa, mcp) |
+| ADR-107 | 2026-10-08 | Thẻ tín dụng còn nợ là nợ ngắn hạn ở bảng cân đối; tiền và lưu chuyển tiền vẫn theo Σ sổ | accepted | balance |
+| ADR-108 | 2026-10-12 | Tự chia: số tay của người thắng luật nạp và phần khóa cho một lần chia; Tích sản 0 chỉ nhắc, không chặn | accepted | allocation (+ pwa) |
+| ADR-109 | 2026-10-13 | Cập nhật bản cài bằng nút Deploy qua workflow GitHub của chính repo nhà; app chỉ báo bản mới và dẫn đường | accepted | pwa (+ access, bản công khai) |
 
 ---
 
@@ -1757,3 +1768,187 @@ Phương án bị loại: **mặc định chỉ Xem** — thêm một bước ch
 Bấm Đăng xuất mọi máy thì mọi người phải thêm / đăng nhập lại connector Claude. Người bỏ tick Ghi mà muốn ghi thì Claude xin thêm quyền, phải đồng ý lại.
 ### Verified in code
 `src/oauth/routes.ts` (`consentPage` — ô `mcp:write` tick sẵn; `decide`) · `src/routes/mcp.ts` › `mcpHandler` · `src/routes/session.ts` › `session.post("/revoke-all")` (`revokeAllGrants`) · `src/routes/settings.ts` (`revokeMemberGrants` khi đổi / gỡ mật khẩu riêng, tắt người) · `src/oauth/server.ts` › `grantStillValid` (dấu mật khẩu chung) · test `test/mcp-oauth.test.ts` › "UC-601 AC-10: gỡ kết nối khi quyền vào đổi"; "UC-601 AC-6, AC-11: quyền xem / ghi" (commit `e5ecf41`).
+
+## ADR-99: Bảng cân đối là số thật: tiền, phải thu, nợ luôn từ sổ; chỉ tài sản ngoài app mới nhập tay; tài sản mua qua app đổi sang định giá khi có mục cùng loại
+- Date: 2026-10-08 · Status: accepted
+- Plan ID: — · Context: balance (UC-1101, UC-1102) + receivable (UC-1005)
+- Source: chủ nhà 2026-10-08, chat qua agent chính (change [`261008-bang-can-doi`](changes/archive/261008-bang-can-doi/proposal.md)); báo cáo riêng `plans/reports/researcher-261008-tu-do-tai-chinh.md` (repo private, có số thật)
+### Context
+Tiền tài khoản, phải thu, nợ đã có sổ đối soát được (BR-04, BR-12, BR-13). Tài sản lớn của nhà (vàng, chứng khoán, đất) nằm ngoài sổ thu chi. Sổ nợ và sổ phải thu chạy độc lập với sổ cái (mở sổ bằng một dòng), nên nhà chưa ghi thu chi vẫn có nợ / phải thu đúng.
+### Decision
+- Bảng cân đối lấy tiền (Σ sổ tài khoản), phải thu, người thuê, nợ **luôn từ sổ**; số gõ thử để ở Thử số (ADR-105).
+- Chỉ tài sản ngoài app là **mục nhập tay** (`balance_items`); mục không có A3 (phải thu ngắn hạn — dùng sổ phải thu, lỗi `use_receivable_book`); sheet nhắc không thêm tiền ngân hàng / tiền mặt.
+- `buy_asset` (giá mua) hiện là "tài sản mua qua app" cho tới khi có mục gắn cùng `asset_kind` (`gold` · `stock` · `fund` · `re`) — từ đó thôi hiện, cả ở bảng cân đối lẫn `assets` của `/v1/networth`; tab Tích sản vẫn theo giá mua.
+
+Phương án bị loại: công tắc "Tiền nhập tay" (chủ nhà bỏ — hai nguồn cho một số); mọi thứ từ sổ (không biểu diễn được đất, cổ phiếu theo giá thị trường); gắn từng lần `buy_asset` vào lô (để sau).
+### Consequences
+Tiền ngân hàng ngoài app phải thêm làm tài khoản nhập tay (Cài đặt › Tài khoản). `/v1/networth` có thêm `balanceItems`; `netWorth` = vốn chủ của bảng cân đối.
+### Verified in code
+`src/domain/balance.ts` › `sheetAt`, `itemAt`, `SECTIONS`, `ITEM_SECTIONS` · `src/services/balance.ts` › `loadSources`, `getBalanceSheet`, `createItem` · `src/services/ledger.ts` (`/networth`: `balanceItems`, `assets` chưa gắn mục) · test `test/balance.test.ts` › "UC-1102 bảng cân đối, tháp, lịch sử", "receivable, access: kỳ hạn và ngày tắt" (commit `8cd48b8` (lát 1)).
+
+## ADR-100: Định giá là dòng chỉ ghi thêm có ngày; mọi tổng, lịch sử, báo cáo tính theo trạng thái tại từng ngày bằng ít câu SQL gộp theo tháng; `deactivated_at` cho khoản đã tắt
+- Date: 2026-10-08 · Status: accepted
+- Plan ID: — · Context: balance (UC-1101, UC-1102, UC-1105) + ledger / access (`accounts.deactivated_at`, UC-506) + debt / receivable (`deactivated_at`)
+- Source: chủ nhà 2026-10-08, chat qua agent chính (change [`261008-bang-can-doi`](changes/archive/261008-bang-can-doi/proposal.md)); báo cáo riêng `plans/reports/researcher-261008-tu-do-tai-chinh.md` (repo private, có số thật)
+### Context
+Luật schema: mọi con số tổng hợp đều tính ra, không lưu. Chủ nhà cần lịch sử theo tháng. Trần CPU Workers Free 10 ms (ADR-12, ADR-54). Tắt một tài khoản / khoản nợ / phải thu trước đây làm nó biến khỏi mọi tháng.
+### Decision
+- Định giá (`balance_values`) và lô (`balance_lots`) là dòng **chỉ ghi thêm** (trigger chặn sửa số / xoá; chỉ đổi `status`); số hiện tại = dòng `active` mới nhất ≤ ngày D.
+- Bảng tại ngày D, lịch sử cuối tháng và hai báo cáo tính từ sổ theo trạng thái tại từng ngày, không lưu ảnh chụp: **một câu SQL mỗi nguồn** `GROUP BY` tháng rồi cộng dồn ở JS; không câu nào lặp theo tháng hay theo mục (lịch sử 24 tháng: 11 câu = 9 nguồn + tham số + xác thực).
+- Cột `deactivated_at` (ngày giờ VN) ở `accounts`, `debts`, `receivables`: ghi khi tắt, xoá khi bật lại; khoản đã tắt vẫn có ở các tháng trước ngày tắt với đúng số lúc đó; lưu chuyển tiền có dòng "Tài khoản tắt trong kỳ".
+- Đổi `opened_at` không được lùi qua giao dịch đã có (409 `opening_after_entries`, UC-506) — giữ bất biến lưu chuyển tiền.
+
+Phương án bị loại: ghi đè giá trị (mất lịch sử); cron cuối tháng lưu ảnh bảng (sửa dòng sai trong quá khứ không tự đúng); một câu cho mỗi tháng (60 câu, vượt trần); bỏ hẳn khoản đã tắt khỏi mọi tháng (lịch sử đổi ngược — sai kế toán); suy ngày tắt từ nhật ký (chỉ có từ ADR-90, sổ nợ / phải thu không ghi).
+### Consequences
+Đổi phân loại mục áp cho cả quá khứ. Dòng tắt từ trước migration 0031 không có ngày tắt nên vẫn vắng ở mọi tháng. CPU đo trên prod sau lát 1 (7 request đầu): P50 11,0 ms, max 14,8 ms — xem [OPEN] ở balance UC-1102.
+### Verified in code
+`migrations/0031_balance_sheet.sql` (trigger chỉ ghi thêm, `deactivated_at`) · `src/domain/balance.ts` › `sheetAt`, `monthEnd`, `firstDataMonth`, `monthsBack` · `src/services/balance.ts` › `loadSources`, `getBalanceHistory` · `src/services/memo-books.ts` (`deactivated_at`) · `src/services/settings.ts` (`deactivated_at`, `opening_after_entries`) · test `test/balance.test.ts` › "UC-1102 bảng cân đối, tháp, lịch sử", "receivable, access: kỳ hạn và ngày tắt"; `test/reports.test.ts` › "UC-1105 lưu chuyển tiền", "ledger UC-102, access UC-506: phân loại lại theo khoản sửa; ngày mở sổ không lùi qua giao dịch" (commit `8cd48b8` (lát 1), commit `31e3505` (lát 2)).
+
+## ADR-101: Dòng tiền thật tách lợi suất kỳ vọng; số nhập luôn kèm kỳ
+- Date: 2026-10-08 · Status: accepted
+- Plan ID: — · Context: balance (UC-1101, UC-1102, UC-1103)
+- Source: chủ nhà 2026-10-08, chat qua agent chính (change [`261008-bang-can-doi`](changes/archive/261008-bang-can-doi/proposal.md)); báo cáo riêng `plans/reports/researcher-261008-tu-do-tai-chinh.md` (repo private, có số thật)
+### Context
+Bảng tính của chủ nhà ghi "thu nhập từ tài sản/tháng" của chứng khoán nhưng thật ra là số/năm và là lợi suất kỳ vọng gồm cả tăng giá.
+### Decision
+Mỗi lần định giá tách **dòng tiền thật** (`cashflow` ≥ 0, số sau thuế, kèm kỳ `month | year` — bắt buộc khi > 0, lỗi `missing_period`) với **lợi suất kỳ vọng** (`expected_return_bps`, chỉ để xem và làm mặc định cho Thử số). Chỉ dòng tiền thật vào P / P_ròng (sau bù lạm phát của chính tài sản) và mốc Tự do theo dòng tiền.
+
+Phương án bị loại: một cột "thu nhập từ tài sản" như bảng tính — đã gây nhầm tháng / năm và nhầm tăng giá là thu nhập.
+### Consequences
+Lợi suất kỳ vọng không bao giờ là thu nhập; CAGR thực so được với kỳ vọng.
+### Verified in code
+`migrations/0031_balance_sheet.sql` (`balance_values.cashflow`, `cashflow_period`, `expected_return_bps`) · `src/domain/balance.ts` · `src/services/balance.ts` › `addValue` · test `test/balance.test.ts` › "UC-1101 thêm mục tài sản, lô, giá theo ngày, chốt lời / cắt lỗ" (commit `8cd48b8` (lát 1)).
+
+## ADR-102: Tài sản & tự do là màn phụ riêng, không lên Hôm nay, không thêm tab con thứ tám
+- Date: 2026-10-08 · Status: accepted
+- Plan ID: — · Context: pwa (UC-711, UC-717, UC-707)
+- Source: chủ nhà 2026-10-08, chat qua agent chính (change [`261008-bang-can-doi`](changes/archive/261008-bang-can-doi/proposal.md)); báo cáo riêng `plans/reports/researcher-261008-tu-do-tai-chinh.md` (repo private, có số thật)
+### Context
+DESIGN §4: số hero là số ra quyết định, không bao giờ là tổng tài sản. Ví & quỹ đã có bảy tab con phải vừa 390px (UC-707 AC-9). Chủ nhà chốt không có dòng ở Hôm nay ở v1.
+### Decision
+Màn phụ `#net-worth` "Tài sản & tự do" với sáu phần (Cân đối · Tháp · Lưu chuyển tiền · Thu chi · Mốc tự do · Thử số), không có tab ở thanh dưới, không FAB; lối vào từ tab Nợ ("Xem bảng cân đối ›") và thanh bên máy tính.
+
+Phương án bị loại: tab con "Cân đối" trong Ví & quỹ (tab con thứ tám không vừa 390px); dòng tổng tài sản ở Hôm nay.
+### Consequences
+Thêm một màn phụ thứ tư; Hôm nay không đổi.
+### Verified in code
+`web/src/lib/hash-route.ts` (`net-worth`) · `web/src/screens/net-worth.tsx`, `net-worth-freedom.tsx` · `web/src/ui/shell.tsx` (mục thanh bên) · test `web/src/lib/hash-route.test.ts` › "màn trong hash" (commit `8cd48b8` (lát 1), commit `31e3505` (lát 2), commit `d4f0ab3` (lát 3)).
+
+## ADR-103: Tài sản có số lượng theo dõi theo lô; giá theo ngày thuộc mục; giá chốt lời / cắt lỗ thuộc lô hoặc mục theo giá trị
+- Date: 2026-10-08 · Status: accepted
+- Plan ID: — · Context: balance (UC-1101)
+- Source: chủ nhà 2026-10-08, chat qua agent chính (change [`261008-bang-can-doi`](changes/archive/261008-bang-can-doi/proposal.md)); báo cáo riêng `plans/reports/researcher-261008-tu-do-tai-chinh.md` (repo private, có số thật)
+### Context
+Vàng, cổ phiếu mua nhiều lần với giá khác nhau; chủ nhà muốn thấy lãi / lỗ từng lần mua và đặt giá chốt lời / cắt lỗ.
+### Decision
+- Mục **theo lô** có đơn vị; lô = ngày mua, số lượng (phần nghìn đơn vị, nửa chỉ = 500), giá mua một đơn vị; bán ghi ngày và giá bán một lần, cả lô.
+- **Giá theo ngày thuộc mục**, áp cho mọi lô của mục; mỗi loại khác giá (vàng nhẫn / vàng miếng, từng mã cổ phiếu) là một mục riêng; vàng định giá theo giá tiệm mua vào.
+- **Giá chốt lời / cắt lỗ** thuộc lô (mỗi đơn vị) hoặc mục theo giá trị (cả mục, kèm giá mua và ngày mua); tuỳ chọn, sửa tự do, không lịch sử (nhật ký ghi lần đổi); trạng thái Đã chạm chốt lời / Đã chạm cắt lỗ / Đang giữ; CAGR khi giữ ≥ 365 ngày.
+
+Phương án bị loại: một giá trị cho cả mục (không thấy lãi / lỗ từng lần mua); giá riêng từng lô (nhập lại nhiều lần cùng một giá thị trường); bán một phần lô (v1 huỷ và ghi lại); nhắc khi chạm giá (để sau — cần cron và kênh nhắc).
+### Consequences
+Không có giao dịch nào sinh ra từ lô / định giá; tiền bán về ghi ở sổ như mọi khoản khác.
+### Verified in code
+`migrations/0031_balance_sheet.sql` (`balance_lots`, CHECK giá mục tiêu) · `src/domain/balance.ts` › `position`, `LotView`, `ItemView` · `src/services/balance.ts` › `addLot`, `sellLot`, `voidLot`, `updateLotTargets` · test `test/balance.test.ts` › "UC-1101 thêm mục tài sản, lô, giá theo ngày, chốt lời / cắt lỗ" (commit `8cd48b8` (lát 1)).
+
+## ADR-104: Lưu chuyển tiền và Kết quả thu chi suy nhóm từ dữ liệu có sẵn; phần không suy được thì phân loại lại từng giao dịch trong bảng riêng
+- Date: 2026-10-08 · Status: accepted
+- Plan ID: — · Context: balance (UC-1105, UC-1106) + ledger (UC-102)
+- Source: chủ nhà 2026-10-08, chat qua agent chính (change [`261008-bang-can-doi`](changes/archive/261008-bang-can-doi/proposal.md)); báo cáo riêng `plans/reports/researcher-261008-tu-do-tai-chinh.md` (repo private, có số thật)
+### Context
+Chủ nhà cần báo cáo tiền vào ra kiểu doanh nghiệp. VAS 24 (đã dùng ở UC-1005): trả nợ gốc là hoạt động tài chính, không phải chi phí.
+### Decision
+- Nhóm Sinh hoạt / Đầu tư / Tài chính suy từ `meaning` + khoản nợ (`debt_id`), trả lãi (`interest_debt_id`), người thuê, vai trò tài khoản (`buffer`, `term_deposit`), phe ví — bảng phân loại mặc định chạy trong SQL (`CASE`, dòng khớp đầu tiên thắng).
+- Trả nợ gốc vào Tài chính và ra khỏi Chi tiêu / E; lãi vay là chi phí (ADR-106). Cho vay / thu hồi xếp Tài chính theo ý chủ nhà (VAS xếp cho vay vào đầu tư — ghi để biết).
+- Phần không suy được: **phân loại lại** từng giao dịch trong bảng riêng `transaction_report_classes` (`operating | passive_income | investing | financing`) — chỉ đổi báo cáo, không đổi ví, số dư, chia tiền; sửa giao dịch thì phân loại đi theo dòng mới.
+
+Phương án bị loại: thêm `meaning` mới (`repay`, `borrow`, `sell_asset`) — đụng chia tiền, gán log, tin nhắn; phân loại theo danh mục — khoản thu không có danh mục; sửa thẳng `transactions` — sổ chỉ ghi thêm.
+### Consequences
+Khoản tiền vay về đang ghi `income` vẫn đã được chia theo Profit First như hiện nay; phân loại lại không chia lại. `specs/README.md` §6 mục 7 (trả nợ gốc đang là khoản chi) chỉ được chạm: báo cáo xếp gốc vào Tài chính, ví / ngân sách của phần gốc giữ nguyên.
+### Verified in code
+`migrations/0032_report_classes.sql` · `src/domain/reports.ts` › `buildCashFlow`, `buildIncomeStatement`, `LINE_GROUP`, `REPORT_CLASSES` · `src/services/reports.ts` › `getCashFlow`, `getIncomeStatement`, `setReportClass`, `clearReportClass` · `src/routes/reports.ts` · test `test/reports.test.ts` › "UC-1105 lưu chuyển tiền", "UC-1106 kết quả thu chi" (commit `31e3505` (lát 2)).
+
+## ADR-105: Thử số / Dự phóng tính ở máy, không lưu
+- Date: 2026-10-08 · Status: accepted
+- Plan ID: — · Context: balance (UC-1107) + pwa (UC-717)
+- Source: chủ nhà 2026-10-08, chat qua agent chính (change [`261008-bang-can-doi`](changes/archive/261008-bang-can-doi/proposal.md)); báo cáo riêng `plans/reports/researcher-261008-tu-do-tai-chinh.md` (repo private, có số thật)
+### Context
+Chủ nhà: "Phần nhập tay giống dạng dự phóng để tôi biết nhiều hơn — vẫn có nhập tay, nhưng cơ bản không lưu số đó, chủ yếu xem dự phóng."
+### Decision
+Hàm thuần `web/src/lib/projection.ts`; điểm xuất phát lấy từ `GET /v1/freedom` › `projectionStart` (số thật); số gõ chỉ trong bộ nhớ trang (giữ khi rời màn, mất khi tải lại app); không request ghi nào; màn luôn ghi "Số thử — không lưu, không phải số thật".
+
+Phương án bị loại: lưu kịch bản ở server (chủ nhà không cần; dễ lẫn với số thật); tính ở server (thêm API cho số không lưu).
+### Consequences
+MCP không đọc được số thử; công thức dự phóng chỉ có một bản ở web, test bằng vitest.
+### Verified in code
+`web/src/lib/projection.ts` › `project`, `reachText`, `startToForm`, `formToInput`, `keepDraft`, `keptDraft` · `src/services/freedom.ts` › `getFreedom` (`projectionStart`) · test `web/src/lib/projection.test.ts` › "Thử số / Dự phóng (tính ở máy, không lưu)", "Thử số: ô giả định" (commit `d4f0ab3` (lát 3)).
+
+## ADR-106: Lãi vay là chi phí Must hằng tháng: ví hệ thống "Lãi vay" có dự kiến tự tính từ sổ nợ; mỗi lần trả tách khoản chi lãi và khoản chi gốc
+- Date: 2026-10-08 · Status: accepted
+- Plan ID: — · Context: debt (UC-901, UC-902, UC-903) + ledger (UC-101, UC-103, UC-104) + allocation (UC-201) + pwa (UC-707, UC-712) + mcp (UC-603)
+- Source: chủ nhà 2026-10-08, chat qua agent chính (change [`261008-bang-can-doi`](changes/archive/261008-bang-can-doi/proposal.md)); báo cáo riêng `plans/reports/researcher-261008-tu-do-tai-chinh.md` (repo private, có số thật)
+### Context
+Chủ nhà: "khoản này xuất hiện thì phải có mục trả lãi cho khoản này trong chi tiêu tháng". Trước đây sổ nợ không có lãi suất; trả nợ là một khoản chi `debt_id` gộp cả lãi lẫn gốc.
+### Decision
+- Sổ nợ có lãi suất %/năm (`interest_rate_bps`), kỳ hạn, số trả mỗi tháng, ngày trả. Lãi dự kiến tháng M = `floor(max(0, dư nợ đầu tháng M) × lãi suất ÷ 12)`.
+- Ví hệ thống `loan-interest` "Lãi vay" (Must, `bill`) và danh mục `loan-interest` do migration 0031 tạo (mã hệ thống — ADR-94, hằng `LOAN_INTEREST_ID`). Không có luật nạp tay đang bật thì server dựng luật `flat` tháng = sàn = Σ lãi dự kiến (ưu tiên 100) → engine rót ở bước sàn Must; Ngân sách hiện `interestLines` từng khoản.
+- Mỗi lần trả khoản có lãi tách **hai khoản chi**: lãi (`interest_debt_id`, danh mục / ví "Lãi vay" — chi phí, không giảm nợ) và gốc (`debt_id`, `debt-payment` — giảm nợ). `interest_debt_id` chỉ đi với `spend`, không cùng `debt_id`. Khoản 0% không đổi gì.
+
+Phương án bị loại: người dùng tự tạo luật `flat` cho ví lãi (sửa tay mỗi tháng khi dư nợ giảm); cộng lãi vào nợ rồi trả gộp (E và lưu chuyển sai); `debt_id` + danh mục để nhận ra phần lãi (dễ vỡ); thêm `meaning` `interest` (đụng chia tiền, gán log, tin nhắn).
+### Consequences
+`transactions` thêm cột `interest_debt_id`; sheet Trả nợ và màn Gán tách hai dòng; lãi vào E, E_must và Quỹ an tâm (ví Must). Lãi / phí thẻ tín dụng ghi như khoản chi thường (để sau).
+### Verified in code
+`migrations/0031_balance_sheet.sql` · `src/domain/interest.ts` › `monthlyInterest`, `yearlyInterest`, `interestPart`, `withInterestRule` · `src/domain/system-ids.ts` › `LOAN_INTEREST_ID` · `src/domain/entry.ts` (`interest_debt_id`) · `src/services/debts.ts` · `src/services/ledger.ts` (`withInterestRule`, `interestLines`) · `web/src/lib/interest.ts` · test `test/balance.test.ts` › "debt, ledger, allocation: lãi vay hằng tháng (ADR nháp H)"; `web/src/lib/interest.test.ts` › "lãi vay: sheet Trả nợ tách lãi / gốc" (commit `8cd48b8` (lát 1)).
+
+## ADR-107: Thẻ tín dụng còn nợ là nợ ngắn hạn ở bảng cân đối; tiền và lưu chuyển tiền vẫn theo Σ sổ
+- Date: 2026-10-08 · Status: accepted
+- Plan ID: — · Context: balance (UC-1102, UC-1105)
+- Source: chủ nhà 2026-10-08, chat qua agent chính (change [`261008-bang-can-doi`](changes/archive/261008-bang-can-doi/proposal.md)); báo cáo riêng `plans/reports/researcher-261008-tu-do-tai-chinh.md` (repo private, có số thật)
+### Context
+ADR-85 đã coi số dư thẻ tín dụng là nợ phải trả. Để thẻ âm trong A1 làm A1 âm, khuôn A/C sai.
+### Decision
+Bảng cân đối: số dư âm của tài khoản `credit` → C › Ngắn hạn › Không lãi ("Thẻ tín dụng · {tên}"); A1 "Tiền trong app" chỉ cộng phần ≥ 0; vốn chủ không đổi. Lưu chuyển tiền giữ bất biến trên Σ sổ (gồm thẻ âm) và ghi chú "Gồm −X ₫ thẻ tín dụng — ở bảng cân đối nằm ở Nợ ngắn hạn".
+
+Phương án bị loại: để thẻ trong A1 (A1 âm); đưa chi bằng thẻ sang nhóm Tài chính (phải tách từng giao dịch thẻ — nặng, khó hiểu).
+### Consequences
+Lãi suất thẻ để sau.
+### Verified in code
+`src/domain/balance.ts` › `sheetAt` · `src/domain/reports.ts` › `buildCashFlow` · test `test/balance.test.ts` › "UC-1102 bảng cân đối, tháp, lịch sử"; `test/reports.test.ts` › "UC-1105 lưu chuyển tiền" (commit `8cd48b8` (lát 1), commit `31e3505` (lát 2)).
+
+## ADR-108: Tự chia — số tay của người thắng luật nạp và phần khóa cho một lần chia
+- Date: 2026-10-12 · Status: accepted · Bổ sung ADR-13 (thứ tự ưu tiên engine), ADR-59 (phần khóa theo nguồn thu): hai luật đó vẫn là số điền sẵn và là cách chia mặc định
+- Plan ID: — · Context: allocation (UC-202, UC-203) + pwa (UC-705, UC-706, UC-715)
+- Source: chủ nhà 2026-10-12, chat — về sheet Chia thử trước khi ghi: "khoản này buồn cười ở chỗ là tôi muốn tự chia được không? k cần template"; về Tích sản: "nên cho custom tích sản là bao nhiêu theo triết lý profit-first, cho nhập 1 số tiền nhỏ nhỏ cũng được" (change [`261012-tu-chia`](changes/archive/261012-tu-chia/proposal.md))
+### Context
+Lõi Profit First là Tích sản trích trước theo % (`docs/core_design_rules.md` §4, ADR-59). Nhà chia lương mỗi tháng một khác (tiền nhà, tập, ăn, điện nước, trả nợ, bảo dưỡng xe), không khớp bảng chia sẵn theo luật nạp; trước đây muốn khác phải chia rồi chuyển ngân sách từng ví.
+### Decision
+- Một lần chia có thể nhận **số tay cho từng ví** (`amounts`): ghi đúng các số đó, bỏ qua luật nạp, phần khóa của nguồn thu và sàn / bù thiếu cho lần chia này; Σ phải bằng khoản thu; không chia vào ví giữ tiền. Lệnh chuyển, `allocation_runs`, batch `A<id>` như chia theo luật.
+- Luật nạp vẫn là số điền sẵn khi bật Tự chia; Tích sản đứng đầu kèm câu "Profit First: để dành trước — nhỏ cũng được". **Tích sản 0 chỉ nhắc** ("Tháng này chưa để dành Tích sản"), không chặn.
+- Chỉ khoản thu chưa chia; lương đã tự chia theo rule thì huỷ lần chia (UC-206) rồi chia lại.
+
+Phương án bị loại: **ép Tích sản tối thiểu theo %** — chủ nhà không chọn; **sửa luật nạp mỗi tháng** — nặng, và làm sai lịch sử các lần chia trước.
+### Consequences
+Phần khóa theo nguồn thu (ví dụ lương vợ khóa % vào Tích sản) không còn là bảo đảm cứng khi người chia gõ số khác. MCP `allocate_income` / `preview_allocation` chưa nhận `amounts`. Lệnh chuyển xem trước của Tự chia ở PWA tính ở máy; màn Gán nhiều dòng thu nhập chỉ Tự chia được dòng đầu.
+### Verified in code
+`src/domain/allocation.ts` › `ManualAmount`, `parseManualAmounts`, `manualFunds` · `src/services/ledger.ts` › `previewAllocation`, `allocateIncome` (`amounts`) · `src/routes/v1.ts` › `POST /allocate`, `POST /allocate/preview` · `web/src/lib/manual-split.ts` · `web/src/screens/other-entry-sheet.tsx` › `AllocationPreview` · test `test/api.test.ts` › "tự chia một khoản thu (change 261012-tu-chia)"; `web/src/lib/manual-split.test.ts` › "tự chia một khoản thu (change 261012-tu-chia)" (commit `a8b43f7`).
+
+## ADR-109: Cập nhật bản cài bằng nút Deploy qua workflow GitHub của chính repo nhà; app chỉ báo bản mới và dẫn đường
+- Date: 2026-10-13 · Status: accepted · Nới ADR-89 (CSP `connect-src` thêm `https://api.github.com`)
+- Plan ID: — · Context: pwa (UC-709 AC-30, AC-31) + access (UC-503 bước 0) + bản công khai (workflow `update.yml`, `scripts/update-from-upstream.mjs`, `scripts/publish-public.mjs`)
+- Source: chủ nhà 2026-10-13, chat — "goal mong muốn của tôi là trong app họ deploy rồi -> click update là tự kéo code mới về cho case này"; chọn cách A trong ba cách (A: app báo + workflow GitHub; B: token GitHub trong Worker; C: Worker tự deploy qua API Cloudflare) — "làm theo cách A đi" (change [`261013-cap-nhat-tu-app`](changes/archive/261013-cap-nhat-tu-app/proposal.md))
+### Context
+Nút Deploy to Cloudflare chép `mzavn/vi-nha` thành một repo **mới** (không phải fork, lịch sử riêng) trong GitHub của người cài và ghi cấu hình Cloudflare (tên Worker, id D1 / KV) vào `wrangler.jsonc` của repo đó; Workers Builds build + nâng database + deploy mỗi khi repo có commit. Không có Sync fork; `git pull` từ repo gốc xung đột. Worker không có git, không có quyền ghi repo của nhà.
+### Decision
+- **App chỉ báo và dẫn đường**: Cài đặt › Nâng cao › Cập nhật Ví nhà hỏi `releases/latest` của `mzavn/vi-nha` **chỉ khi bấm**; bản build trên Cloudflare (`WORKERS_CI=1`) mang `chủ/tên` repo GitHub đọc từ remote lúc build (chỉ hai phần đã lọc, không bao giờ cả URL — có thể chứa token) → nút mở `actions/workflows/update.yml` của repo nhà; build trên máy → lệnh `git pull --autostash && npm ci && npm run deploy`.
+- **Workflow `update.yml` cố định** (repo nhà giữ mãi bản đầu tiên): chỉ `workflow_dispatch`, `permissions: contents: write`, chỉ bước `run:` (không action ngoài), token `GITHUB_TOKEN` chỉ trong lệnh clone và push; chạy `scripts/update-from-upstream.mjs` lấy từ `main` của `mzavn/vi-nha` — mọi logic nằm ở script của bản mới.
+- **Script chép đè** cây của tag `vX.Y.Z` cao nhất (`git restore --source`, no-overlay — xoá file bản mới không còn) trừ `.github/` (token Actions không được sửa workflow) và `wrangler.jsonc` (bản mới + `name`, `account_id`, `routes`, `route`, `workers_dev`, tên / id D1, id KV của nhà theo `binding`); `wrangler.jsonc` của nhà không đọc được → dừng, không commit; bản trên GitHub bằng / cũ hơn → không commit.
+- **Phát hành tạo GitHub Release** (`publish-public.mjs --push`, nội dung = mục CHANGELOG) — app chỉ thấy bản đã có Release.
+
+Phương án bị loại: **token GitHub lưu trong Worker** (một chạm trong app, nhưng lộ token hay chiếm phiên chủ hộ là đẩy được code lên Worker giữ sổ tiền); **Worker tự deploy qua API Cloudflare** (token quyền rộng, code chạy lệch repo); **`git merge` bản mới** (repo chép không chung lịch sử → xung đột ở mọi file đã đổi); **kéo `main`** thay vì tag phát hành (app và workflow lệch nguồn); **app tự hỏi GitHub nền** (lộ IP mỗi lần mở app); **tự chạy theo lịch** (chủ nhà chưa chọn — thêm `schedule` là đủ).
+### Consequences
+- Sửa riêng trong code của repo nhà bị ghi đè khi cập nhật (trừ `.github/` và các khoá cấu hình kể trên). Workflow của bản sau không tự tới repo nhà; repo cài trước v1.1.0 thêm `update.yml` một lần bằng tay.
+- Tên `chủ/repo` GitHub nằm trong JS tĩnh của app (ai biết địa chỉ app đều đọc được); lúc bấm Kiểm tra, GitHub thấy IP và `Origin` (địa chỉ app). Chủ nhà giữ mặc định; bỏ được bằng cách cho `installInfo` không đọc remote — app chỉ còn câu chỉ đường.
+- Chỉ hỗ trợ repo GitHub (nút Deploy cho chọn GitLab thì cập nhật tay). Giới hạn 60 lần / giờ / IP của API GitHub đủ vì chỉ hỏi khi bấm; workflow dùng `git ls-remote --tags`, không gọi API.
+- Chưa thử thật trên một bản cài bằng nút Deploy (push của `GITHUB_TOKEN` có kích hoạt Workers Builds — GitHub chỉ chặn push đó tạo lượt chạy workflow; Workers Builds có `.git` để đọc remote).
+### Verified in code
+`web/src/screens/settings.tsx` › `SECTIONS` (`app-update`), `AppUpdate` · `web/src/lib/app-update.ts` › `compareVersions`, `releaseTag`, `updateView` · `web/src/lib/install-info.ts` › `githubRepo`, `installInfo` · `web/vite.config.ts` › `gitRemote`, `__INSTALL__` · `src/security-headers.ts` › `SECURITY_HEADERS` · `publish/.github/workflows/update.yml` · `scripts/update-from-upstream.mjs` › `parseJsonc`, `mergeWranglerConfig`, `applyRelease` · `scripts/publish-public.mjs` › `createRelease` · test `test/update-from-upstream.test.ts`, `web/src/lib/app-update.test.ts`, `web/src/lib/install-info.test.ts` (commit `ae0f0b5`).

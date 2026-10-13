@@ -2,11 +2,51 @@
 
 import type { AllocationResult } from "../../../src/domain/allocation";
 import type { ManualMeaning } from "../../../src/domain/entry";
+import type {
+  CashFlow,
+  CashFlowGroup,
+  CashFlowLine,
+  CashFlowLineKey,
+  CashFlowMonth,
+  IncomeStatement,
+  IncomeStatementMonth,
+  ReportClass,
+  StatementLine,
+} from "../../../src/domain/reports";
+import type {
+  Freedom,
+  FreedomMilestone,
+  FreedomParams,
+  IncomeMilestone,
+  IncomePlanLine,
+  IncomePlanMember,
+  IncomePlanSummary,
+  IncomePlanVersion,
+  IncomePlanYear,
+  ProjectionIncomeLine,
+  ProjectionStart,
+  SafetyMilestone,
+} from "../../../src/domain/freedom";
 import type { Snapshot } from "../../../src/domain/snapshot";
 import type { TransferOrderDraft } from "../../../src/domain/transfer-orders";
 import type { AccountRef, AccountRole, CategoryRef, MemberRef, WalletRef } from "../../../src/domain/types";
 
 export type { AccountRef, AccountRole, CategoryRef, ManualMeaning, MemberRef, Snapshot };
+export type { CashFlow, CashFlowGroup, CashFlowLine, CashFlowLineKey, CashFlowMonth, IncomeStatement, IncomeStatementMonth, ReportClass, StatementLine };
+export type {
+  Freedom,
+  FreedomMilestone,
+  FreedomParams,
+  IncomeMilestone,
+  IncomePlanLine,
+  IncomePlanMember,
+  IncomePlanSummary,
+  IncomePlanVersion,
+  IncomePlanYear,
+  ProjectionIncomeLine,
+  ProjectionStart,
+  SafetyMilestone,
+};
 
 export type Wallet = WalletRef & { hidden: boolean };
 
@@ -44,6 +84,8 @@ export interface EntryBody {
   debt_id?: string;
   /** Cho vay / nhận lại tiền cho vay gắn vào một khoản trong sổ phải thu. */
   receivable_id?: string;
+  /** Khoản chi trả LÃI cho một khoản nợ (chỉ spend, không cùng debt_id); thiếu category_id thì server lấy "loan-interest". */
+  interest_debt_id?: string;
 }
 
 /** `wallet` trong phản hồi POST /v1/transactions (ledger.walletStatus). */
@@ -202,6 +244,17 @@ export interface Budget {
   kind: "week" | "month";
   weeks: number;
   lines: BudgetLine[];
+  /** Kỳ tháng: dòng lãi dự kiến từng khoản nợ có lãi (ví "Lãi vay"); kỳ tuần / bản cache cũ: thiếu. */
+  interestLines?: InterestLine[];
+}
+
+/** Lãi dự kiến tháng của một khoản nợ (Công thức 18) và số đã trả lãi trong tháng. */
+export interface InterestLine {
+  debtId: string;
+  name: string;
+  expected: number;
+  paid: number;
+  dueDay: number | null;
 }
 
 /** Ví giữ riêng (tier holding, kind khác holding), ví dụ "Thu cho thuê". */
@@ -298,6 +351,8 @@ export interface SettingsAccount {
   opening_balance: number;
   opened_at: string | null;
   active: boolean;
+  /** Ngày tắt (YYYY-MM-DD giờ VN); null khi đang dùng hoặc tắt từ trước v1.31. */
+  deactivated_at: string | null;
   /** Heo đất, sổ tiết kiệm (ADR-77, ADR-88): không bao giờ tính vào "Tiền chi được". */
   locked: boolean;
   /** "Tính vào tiền chi được" (ADR-85). */
@@ -385,6 +440,21 @@ export interface Secret {
 export interface SettingsConfig {
   salary_min_amount: number;
   safety_fund_months: number;
+  /** Tham số bảng cân đối / Mốc tự do (phần vạn: 350 = 3,5%). */
+  fi_swr_bps: number;
+  fi_inflation_bps: number;
+  fi_fat_bps: number;
+  fi_legacy_rate_bps: number;
+  fi_high_interest_bps: number;
+  /** Ba số tháng Mốc an tâm, tăng dần: "6,12,24". */
+  fi_safety_months: string;
+  /** null = theo sổ. */
+  fi_expense_monthly: number | null;
+  fi_expense_must_monthly: number | null;
+  fi_birth_year: number | null;
+  fi_target_age_f1: number | null;
+  fi_target_age_f2: number | null;
+  fi_target_age_f3: number | null;
 }
 
 /** Giờ nhắc của cả nhà (GET /v1/settings › notifySchedule). Giờ "HH:MM" giờ VN; weeklyDay 1 = thứ Hai .. 7 = Chủ nhật. */
@@ -620,7 +690,15 @@ export interface DebtRef {
   name: string;
   /** Số còn nợ = đã vay − đã trả; ≤ 0 là trả xong. */
   balance: number;
+  /** Lãi suất %/năm (0 = không lãi). Bản bootstrap cũ trong cache thiếu các trường lãi: coi như 0 / null. */
+  interestRate?: number;
+  monthlyPayment?: number | null;
+  dueDay?: number | null;
+  interestThisMonth?: number;
+  interestPaidThisMonth?: number;
 }
+
+export type Term = "short" | "long";
 
 export type DebtLineKind = "opening" | "borrow" | "adjust";
 
@@ -659,6 +737,17 @@ export interface Debt {
   lines: DebtLine[];
   /** Khoản chi trả nợ, mới nhất trước. */
   payments: DebtPayment[];
+  /** Lãi suất %/năm. */
+  interestRate: number;
+  term: Term;
+  monthlyPayment: number | null;
+  dueDay: number | null;
+  /** floor(còn nợ × lãi suất). */
+  interestPerYear: number;
+  /** Lãi dự kiến tháng này theo dư nợ đầu tháng (Công thức 18). */
+  interestThisMonth: number;
+  interestPaidThisMonth: number;
+  deactivatedAt: string | null;
 }
 
 export interface DebtsData {
@@ -712,6 +801,8 @@ export interface Receivable {
   lines: ReceivableLine[];
   /** Lần cho vay / nhận lại (giao dịch còn hiệu lực), mới nhất trước. */
   movements: ReceivableMovement[];
+  term: Term;
+  deactivatedAt: string | null;
 }
 
 export interface ReceivablesData {
@@ -734,5 +825,197 @@ export interface NetWorth {
   tenants: number;
   tenantsPrepaid: number;
   debts: number;
+  /** Σ giá trị hiện tại của tài sản ngoài app (mục nhập tay ở bảng cân đối). */
+  balanceItems: number;
   netWorth: number;
+}
+
+// ── Bảng cân đối (/v1/balance-sheet, /v1/balance-items…) ───────────
+
+export type BalanceSection = "A1" | "A2" | "A3" | "A4" | "A5" | "B1" | "B2" | "B3" | "B4" | "B5" | "B6";
+export type PyramidTier = "speculative" | "growth" | "income" | "protective" | "fixed";
+export type AssetKind = "gold" | "stock" | "fund" | "re";
+export type InterestGroup = "none" | "normal" | "high";
+
+/** Phần trăm: một chữ số lẻ, cắt về 0 (15.5); null = "—". */
+export interface BalanceRow {
+  /** "cash" | "receivables:short" | "receivables:long" | "tenants" | "app:<asset_kind>" | "item:<id>" */
+  key: string;
+  source: "ledger" | "item";
+  itemId: string | null;
+  name: string;
+  section: BalanceSection;
+  pyramid: PyramidTier;
+  liquid: boolean;
+  investable: boolean;
+  value: number;
+  pctOfTotal: number | null;
+  pctOfEquity: number | null;
+  cashflowMonthly: number | null;
+  expectedReturnBps: number | null;
+  valuedOn: string | null;
+}
+
+export interface LiabilityRow {
+  /** "debt:<id>" | "card:<accountId>" | "tenants-prepaid" */
+  key: string;
+  kind: "debt" | "credit_card" | "tenant_prepaid";
+  refId: string | null;
+  /** Thẻ tín dụng: tên tài khoản (màn tự thêm "Thẻ tín dụng · "). */
+  name: string;
+  term: Term;
+  group: InterestGroup;
+  value: number;
+  interestRateBps: number;
+  interestPerYear: number;
+  interestThisMonth: number;
+  dueDay: number | null;
+  pctOfTotal: number | null;
+  pctOfEquity: number | null;
+}
+
+/** Lãi / lỗ, khoảng cách tới chốt lời / cắt lỗ, trạng thái, CAGR (Công thức 17). */
+export interface BalancePosition {
+  pnl: number;
+  pnlPct: number | null;
+  toTakeProfitPct: number | null;
+  /** Âm khi giá đã xuống dưới giá cắt lỗ. */
+  toStopLossPct: number | null;
+  status: "take_profit" | "stop_loss" | "holding";
+  heldDays: number | null;
+  /** null khi giữ < 365 ngày, chưa có ngày mua, hoặc giá mua / giá hiện tại 0. */
+  cagrPct: number | null;
+  cagrVsExpected: number | null;
+}
+
+export interface BalanceLot {
+  id: number;
+  itemId: string;
+  boughtOn: string;
+  /** Phần nghìn đơn vị: 20 chỉ = 20000. */
+  quantityMilli: number;
+  unitCost: number;
+  soldOn: string | null;
+  soldUnitPrice: number | null;
+  takeProfitPrice: number | null;
+  stopLossPrice: number | null;
+  note: string | null;
+  createdAt: string;
+  held: boolean;
+  /** Giá trị tại ngày xem (lô đang giữ); 0 khi đã bán. */
+  value: number;
+  cost: number;
+  /** Lãi / lỗ đã chốt (lô đã bán). */
+  realized: number | null;
+  position: BalancePosition | null;
+}
+
+export interface BalanceValue {
+  id: number;
+  itemId: string;
+  asOf: string;
+  value: number | null;
+  unitPrice: number | null;
+  cashflow: number;
+  cashflowPeriod: "month" | "year" | null;
+  expectedReturnBps: number | null;
+  createdAt: string;
+}
+
+export interface BalanceItem {
+  id: string;
+  name: string;
+  section: Exclude<BalanceSection, "A3">;
+  pyramid: PyramidTier;
+  measure: "value" | "units";
+  unit: string | null;
+  liquid: boolean;
+  investable: boolean;
+  assetKind: AssetKind | null;
+  costBasis: number | null;
+  acquiredOn: string | null;
+  takeProfitValue: number | null;
+  stopLossValue: number | null;
+  note: string | null;
+  sort: number;
+  createdAt: string;
+  /** Có mặt ở bảng tại ngày xem (có định giá / lô đang giữ). */
+  present: boolean;
+  value: number | null;
+  /** Mục theo lô: giá một đơn vị hiện tại; null = chưa có giá (mỗi lô tính theo giá mua). */
+  unitPrice: number | null;
+  priceOn: string | null;
+  cashflow: number;
+  cashflowPeriod: "month" | "year" | null;
+  cashflowMonthly: number | null;
+  expectedReturnBps: number | null;
+  heldQuantityMilli: number;
+  cost: number;
+  /** Mục theo giá trị có giá mua; null với mục theo lô (xem từng lô). */
+  position: BalancePosition | null;
+  unrealized: number | null;
+  unrealizedPct: number | null;
+  hitTakeProfit: number;
+  hitStopLoss: number;
+  /** Lô còn hiệu lực: đang giữ trước, đã bán sau. */
+  lots: BalanceLot[];
+  /** Định giá còn hiệu lực, mới nhất trước. */
+  values: BalanceValue[];
+}
+
+export interface BalanceSheet {
+  date: string;
+  today: string;
+  totalAssets: number;
+  totalLiabilities: number;
+  equity: number;
+  interestPerYear: number;
+  /** P: Σ dòng tiền thật/tháng. */
+  cashflowMonthly: number;
+  /** P_ròng: sau bù lạm phát của chính tài sản sinh ra dòng tiền. */
+  netCashflowMonthly: number;
+  assets: { section: BalanceSection; total: number; rows: BalanceRow[] }[];
+  liabilities: { term: Term; group: InterestGroup; total: number; rows: LiabilityRow[] }[];
+  /** Luôn năm tầng, từ trên xuống: mạo hiểm → cố định. */
+  pyramid: { tier: PyramidTier; total: number; pct: number | null }[];
+  items: BalanceItem[];
+}
+
+export interface BalanceHistoryPoint {
+  month: string;
+  date: string;
+  totalAssets: number;
+  totalLiabilities: number;
+  equity: number;
+  /** Chênh vốn chủ so với điểm trước; null ở điểm đầu. */
+  change: number | null;
+  pyramid: Record<PyramidTier, number>;
+}
+
+export interface BalanceHistory {
+  points: BalanceHistoryPoint[];
+}
+
+// ── Lưu chuyển tiền, Kết quả thu chi (/v1/reports/…) ───────────────
+
+/** Một giao dịch của một dòng Lưu chuyển tiền (GET /v1/reports/transactions). */
+export interface ReportTx {
+  id: number;
+  at: string;
+  /** Có dấu: + tiền vào tài khoản, − tiền ra. */
+  amount: number;
+  meaning: string;
+  note: string | null;
+  categoryName: string | null;
+  walletName: string | null;
+  accountName: string | null;
+  reportClass: ReportClass | null;
+  defaultLine: CashFlowLineKey;
+}
+
+export interface ReportTransactions {
+  period: string;
+  line: CashFlowLineKey;
+  group: CashFlowGroup;
+  transactions: ReportTx[];
 }

@@ -25,6 +25,8 @@ contexts:
     title: "Sổ nợ (debt)"
   - id: receivable
     title: "Sổ phải thu (receivable)"
+  - id: balance
+    title: "Bảng cân đối, mốc tự do & báo cáo (balance)"
 
 ids:
   uc: 'UC-\d{3,4}'

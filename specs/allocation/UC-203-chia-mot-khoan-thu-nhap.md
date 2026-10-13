@@ -1,9 +1,9 @@
 # UC-203: Chia một khoản thu nhập (ghi sổ)
 - Status: implemented
 - BR: BR-02, BR-04
-- Decisions: D2 (chia ngay từng income đã xác nhận; 10/25 chỉ là lời nhắc), D4 (lệnh chuyển xuất phát từ TK nhận lương); commits `b92fc0f`, `099e54f`, `eb7846e`; `plans/reports/redteam-260922-0100-money-correctness.md` (PoC 4: chia đua chỉ ghi một lần); `plans/reports/code-reviewer-260922-0330-redteam-fixes-review.md` #3, #4; ADR-59 (phần khóa theo nguồn thu), ADR-60 (tiền người thuê chỉ gợi ý, không tự gán), ADR-63 (tiền cho thuê vào ví giữ riêng); ADR-92 (tên tool MCP tiếng Anh `allocate_income`)
+- Decisions: D2 (chia ngay từng income đã xác nhận; 10/25 chỉ là lời nhắc), D4 (lệnh chuyển xuất phát từ TK nhận lương); commits `b92fc0f`, `099e54f`, `eb7846e`; `plans/reports/redteam-260922-0100-money-correctness.md` (PoC 4: chia đua chỉ ghi một lần); `plans/reports/code-reviewer-260922-0330-redteam-fixes-review.md` #3, #4; ADR-59 (phần khóa theo nguồn thu), ADR-60 (tiền người thuê chỉ gợi ý, không tự gán), ADR-63 (tiền cho thuê vào ví giữ riêng); ADR-92 (tên tool MCP tiếng Anh `allocate_income`); ADR-108 (Tự chia: số tay thắng luật nạp và phần khóa cho một lần chia)
 - Actor: thành viên hộ (PWA: sau khi ghi thu nhập tay hoặc gán log thành thu nhập); Claude (MCP `allocate_income`, UC-605); hệ thống (ingest tự chia lương khớp mẫu)
-- Trigger: `POST /v1/allocate { income_tx_id }`; MCP tool `allocate_income`; ingest `matchLog` khi log tiền vào khớp rule lương và đủ ngưỡng `salary_min_amount`
+- Trigger: `POST /v1/allocate { income_tx_id, amounts? }`; MCP tool `allocate_income`; ingest `matchLog` khi log tiền vào khớp rule lương và đủ ngưỡng `salary_min_amount`
 
 ## History
 - v1 (2026-09-22, commit `b92fc0f`): `allocateIncome` ghi nguyên tử `allocation_runs` + fund + `transfer_orders` trong một `db.batch`; một khoản thu chia tối đa một lần (schema v1.4, migration 0003).
@@ -12,16 +12,17 @@
 - v4 (2026-09-22, commit `eb7846e`): `salary_min_amount = 0` bỏ ngưỡng (trước đó 0 rơi về mặc định — reviewer #4); lỗi chia sau khi lương đã ghi được ghi lại cho tin sáng thay vì trả 503 (reviewer #3).
 - v5 (2026-10-01, commit `034b7ff`): lần chia dùng nguồn thu gắn trên khoản thu (`income.income_stream_id`); tiền người thuê (nguồn `cho-thue` khóa 100%) vào trọn "Thu cho thuê", không `underfunded`/`deficitCovered`, `fundedThisMonth` của ví chi tiêu không đổi; rule lương mang `income_stream_id` → khoản thu tự ghi gắn nguồn đó (change `261001-cho-thue-lai`).
 - v6 (2026-10-07, commit `7424f26`): tool MCP `allocate` đổi tên `allocate_income` (ADR-92, mcp UC-601); tham số `income_tx_id` và kết quả không đổi; route `POST /v1/allocate` và hàm `allocateIncome` giữ tên (change [261007-doi-ten-tieng-anh](../changes/archive/261007-doi-ten-tieng-anh/proposal.md))
+- v7 (2026-10-12, commit `a8b43f7`): **Tự chia** (ADR-108): `POST /v1/allocate` nhận `amounts: [{ wallet_id, amount }]` — ghi đúng các số, bỏ luật nạp, phần khóa nguồn thu, sàn / bù thiếu; hợp đồng `amounts` (E6 `invalid_amounts`, E7 `amounts_mismatch`); chỉ khoản thu chưa chia (lương đã tự chia thì huỷ lần chia theo UC-206 rồi chia lại). Thêm 4b, E6, E7, AC-11, AC-12 (change [261012-tu-chia](../changes/archive/261012-tu-chia/proposal.md))
 
 ## Preconditions
 - `income_tx_id` là một `transactions` có `meaning='income'`, `status='active'`.
 - Chưa có dòng `allocation_runs` cho khoản thu này.
 
 ## Main Flow
-1. Route kiểm `income_tx_id` là số nguyên.
+1. Route kiểm `income_tx_id` là số nguyên; có `amounts` thì đọc hình dạng (`parseManualAmounts`: mảng `{ wallet_id, amount }`, số nguyên ≥ 0 — sai → E6).
 2. `allocateIncome` đọc khoản thu; không phải income active → E2.
 3. Có `allocation_runs.income_tx_id` = id → E3 (kèm mã đợt cũ).
-4. Tính phương án qua UC-202 (`previewAllocation`) với `amount`, `taxable` (của khoản thu), `at` = `income.at`, `accountId = income.counter_account_id` (TK tiền vào), `incomeStreamId = income.income_stream_id` (nguồn thu; NULL = luật % chung).
+4. Tính phương án qua UC-202 (`previewAllocation`) với `amount`, `taxable` (của khoản thu), `at` = `income.at`, `accountId = income.counter_account_id` (TK tiền vào), `incomeStreamId = income.income_stream_id` (nguồn thu; NULL = luật % chung). Có `amounts` (**Tự chia**, ADR-108) → phương án là đúng các số đó (`manualFunds`): bỏ qua luật nạp, phần khóa của nguồn thu (ADR-59) và sàn / bù thiếu — `underfunded = []`, `deficitCovered = {}`; mỗi số > 0 một fund, số 0 bỏ qua; lệnh chuyển sinh như chia theo luật. Khoản thu tính thuế mà ví Thuế nhận ít hơn luật vẫn được — số đã trích thuế là Σ fund vào ví Thuế như hiện nay.
 5. `batchId = "A" + income_tx_id`. Trong **một** `db.batch` (nguyên tử):
    1. `INSERT allocation_runs (income_tx_id, batch_id)`;
    2. mỗi fund → một `transactions` `meaning='fund'`: `wallet_id` = ví đích, `counter_wallet_id` = `income.wallet_id` (ví Thu nhập), `at`/`week_key`/`month_key`/`by_member_id` chép từ khoản thu, `link_id = income_tx_id`, `batch_id`, `source='system'`, `taxable=0`, không tài khoản;
@@ -38,6 +39,7 @@ Kết quả: ví Thu nhập về đúng số dư trước khoản thu (Σ fund =
 - 0b. **Gán tay / nhập tay:** PWA gọi `/v1/allocate` ngay sau `POST /v1/logs/:id/assign` (với mỗi giao dịch income vừa tạo) hoặc sau khi ghi thu nhập tay; coi `already_allocated` là thành công (`web/src/screens/assign.tsx`, `web/src/screens/other-entry-sheet.tsx`).
 - 0c. Khoản thu chưa được chia (không có luồng nào gọi) → vẫn `active`, không có `allocation_runs`; notify nhắc ngày 10 & 25, **không tự chia** (UC-405 "Nhắc khoản thu chưa chia ngày 10 & 25").
 - 4a. **Khoản thu gắn nguồn khóa 100%** (ví dụ tiền người thuê, nguồn `rental` → `rental-income`; ledger UC-101 4f, rental [UC-805](../rental/UC-805-nhan-tien-nguoi-thue-tra.md)): đúng một fund vào ví giữ riêng, `underfunded = []`, `deficitCovered = {}`; không fund nào vào ví chi tiêu nên `fundedThisMonth` của chúng và "còn để chi" không đổi (UC-201 2b). Ví giữ riêng trú cùng TK với ví Thu nhập (seed) → không có lệnh chuyển tiền.
+- 4b. **Tự chia dùng được khi nào**: khoản thu **chưa chia** (chưa có `allocation_runs`). Lương đã tự chia theo rule (0a) → 409 `already_allocated`; muốn tự chia thì huỷ lần chia (UC-206) rồi chia lại với `amounts`. Không gửi `amounts` → như hiện nay. PWA gửi `amounts` từ sheet Chia thử (UC-202 5b); màn Gán nhiều dòng thu nhập chỉ gửi cho dòng đầu tiên. MCP `allocate_income` không nhận `amounts`.
 - 5a. `income.counter_account_id` NULL hoặc mọi ví đích trú cùng TK đó → không có lệnh chuyển tiền.
 - 5b. Hai request chia cùng một khoản đua nhau: cả hai qua bước 3, batch thứ hai vi phạm PRIMARY KEY `allocation_runs.income_tx_id` → **toàn bộ** batch thứ hai huỷ (không fund, không lệnh) → E4.
 
@@ -46,6 +48,8 @@ Kết quả: ví Thu nhập về đúng số dư trước khoản thu (Σ fund =
 - E2. Không có / không phải income / đã `void` → 404 `not_income` "Không có khoản thu nhập còn hiệu lực với id này.".
 - E3. Đã chia → 409 `already_allocated` "Khoản thu này đã được chia (đợt <batch_id>).".
 - E4. Batch lỗi có chữ `UNIQUE`/`PRIMARY KEY` → 409 `already_allocated` "Khoản thu này vừa được chia ở nơi khác.".
+- E6. `amounts` sai: không phải danh sách, dòng thiếu `wallet_id` / `amount`, số âm / lẻ / không phải số nguyên, ví không có hoặc đã tắt, ví giữ tiền (`holding` — Thu nhập, Thu cho thuê), trùng `wallet_id` → 400 `invalid_amounts` "Số tự chia không hợp lệ: …"; không ghi gì.
+- E7. Σ `amounts` ≠ số tiền khoản thu → 400 `amounts_mismatch` "Tổng tự chia X khác số tiền khoản thu Y."; không ghi gì.
 - E5. Engine lỗi cấu hình → 500 `internal` (xem UC-202 E5). Trong luồng tự chia (0a), lỗi khác `already_allocated` làm ingest ghi `notifications` `kind='ingest_error'` với thông điệp "Đã ghi giao dịch nhưng xử lý tiếp bị lỗi: <lý do>" để tin sáng báo; khoản thu vẫn `active`, chưa chia.
 
 ## Acceptance Criteria
@@ -110,8 +114,20 @@ Kết quả: ví Thu nhập về đúng số dư trước khoản thu (Σ fund =
 - Then log `pending`, không có giao dịch, không có lần chia; gợi ý "Thu từ An"
 - Tests: `test/ingest.test.ts` › "nguồn thu & người thuê (change 261001) › rule người thuê chỉ gợi ý 'Thu từ <tên>', không tự gán"
 
+### AC-11: Tự chia ghi đúng các số gửi lên
+- Given khoản thu 19.000.000 chưa chia
+- When `POST /v1/allocate` với `amounts` như UC-202 AC-6; rồi tổng 18.999.000; rồi có ví Thu nhập; rồi gọi lại
+- Then 201, đúng 7 dòng `fund` có số như gửi, Tích sản +200.000, lệnh chuyển gộp theo tài khoản của ví, luật nạp không được dùng; 400 `amounts_mismatch`; 400 `invalid_amounts`; 409 `already_allocated`. Trùng ví, ví không có, ví đã tắt, số âm / lẻ / chuỗi → `invalid_amounts`; preview nhận `amounts` và bỏ qua nguồn thu
+- Tests: [`test/api.test.ts`](../../test/api.test.ts) › "tự chia một khoản thu (change 261012-tu-chia) › UC-203 AC-11: ghi đúng các số gửi lên, bỏ luật nạp; lệnh chuyển gộp theo tài khoản của ví; tổng lệch → amounts_mismatch; ví Thu nhập → invalid_amounts; gọi lại → 409" · "… › UC-203 AC-11: hợp đồng amounts — trùng ví, ví không có, ví đã tắt, số âm / lẻ / chuỗi → invalid_amounts; preview nhận amounts và bỏ qua nguồn thu"
+
+### AC-12: Số tay thắng phần khóa của nguồn thu
+- Given nguồn thu khóa 30% Tích sản
+- When tự chia Tích sản 100.000
+- Then ghi đúng 100.000 vào Tích sản (không phải 30%)
+- Tests: [`test/api.test.ts`](../../test/api.test.ts) › "tự chia một khoản thu (change 261012-tu-chia) › UC-203 AC-12: nguồn thu khóa 30% Tích sản, tự chia Tích sản 100.000 → ghi đúng 100.000 (số tay thắng phần khóa)"
+
 ## Traceability
-- Code: `src/routes/v1.ts` › `v1.post("/allocate")`; `src/services/ledger.ts` › `allocateIncome`, `previewAllocation`, `insertTx`, `getTransaction`, `salaryMinAmount`; `src/services/ingest.ts` › `matchLog` (nhánh rule lương, `incomeStreamId`), `loadRuleRows`, `recordIngestError`; `src/mcp/tools.ts` › tool `allocate_income`; `src/domain/transfer-orders.ts` › `newTransferMemo`
+- Code: `src/routes/v1.ts` › `v1.post("/allocate")` (`amounts`); `src/domain/allocation.ts` › `ManualAmount`, `parseManualAmounts`, `manualFunds`; `src/services/ledger.ts` › `allocateIncome`, `previewAllocation`, `insertTx`, `getTransaction`, `salaryMinAmount`; `src/services/ingest.ts` › `matchLog` (nhánh rule lương, `incomeStreamId`), `loadRuleRows`, `recordIngestError`; `src/mcp/tools.ts` › tool `allocate_income`; `src/domain/transfer-orders.ts` › `newTransferMemo`
 - Migrations/DB: `migrations/0003_offline_entry_and_allocation_runs.sql` (`allocation_runs`, `idx_tx_batch`); CHECK fund ở `migrations/0001_schema.sql`; `transactions.income_stream_id`, `rules.income_stream_id`, `rules.tenant_id` (`migrations/0007_income_streams_rental.sql`)
 
 ## Divergences & Open Questions

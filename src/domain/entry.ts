@@ -4,7 +4,7 @@
 // Hàm thuần: mọi dữ liệu tham chiếu được truyền vào.
 
 import { dayKey, monthKey, weekKey } from "./period";
-import { DEBT_CATEGORY_ID, LEND_CATEGORY_ID } from "./system-ids";
+import { DEBT_CATEGORY_ID, LEND_CATEGORY_ID, LOAN_INTEREST_ID } from "./system-ids";
 import { DomainError, isIncomeHolding, type BookRef, type Refs, type WalletRef } from "./types";
 
 export const MANUAL_MEANINGS = ["spend", "income", "refund", "transfer", "buy_asset", "lend", "collect"] as const;
@@ -38,6 +38,8 @@ export interface EntryInput {
   debt_id?: string | null;
   /** Chỉ dùng cho `lend` (cho vay thêm) và `collect` (nhận lại): khoản phải thu ở sổ phải thu. */
   receivable_id?: string | null;
+  /** Chỉ dùng cho `spend`, không cùng `debt_id`: trả LÃI cho khoản nợ (chi phí, không giảm nợ). Không chọn danh mục thì lấy "Lãi vay". */
+  interest_debt_id?: string | null;
 }
 
 export interface TxRow {
@@ -63,6 +65,7 @@ export interface TxRow {
   tenant_id?: string | null;
   debt_id?: string | null;
   receivable_id?: string | null;
+  interest_debt_id?: string | null;
 }
 
 const fail = (code: string, message: string): never => {
@@ -178,12 +181,17 @@ export function buildEntry(input: EntryInput, refs: Refs, memberId: string | nul
     client_id: input.client_id?.trim().slice(0, 64) || null,
   };
   if (input.debt_id && input.meaning !== "spend") fail("debt_spend_only", "Khoản nợ chỉ gắn được với khoản chi (trả nợ).");
+  if (input.interest_debt_id && input.meaning !== "spend") fail("interest_spend_only", "Trả lãi chỉ gắn được với khoản chi.");
+  if (input.interest_debt_id && input.debt_id) {
+    fail("debt_and_interest", "Một khoản chi không vừa trả gốc vừa trả lãi — ghi hai khoản: lãi (interest_debt_id) và gốc (debt_id).");
+  }
   if (input.receivable_id && input.meaning !== "lend" && input.meaning !== "collect") {
     fail("receivable_only", "Khoản phải thu chỉ gắn được với cho vay hoặc nhận lại tiền cho vay.");
   }
   const debt = bookOf(refs.debts, input.debt_id, "debt", "khoản nợ");
+  const interestDebt = bookOf(refs.debts, input.interest_debt_id, "debt", "khoản nợ");
   const receivable = bookOf(refs.receivables, input.receivable_id, "receivable", "khoản phải thu");
-  const defaultCategoryId = debt ? DEBT_CATEGORY_ID : input.meaning === "lend" ? LEND_CATEGORY_ID : null;
+  const defaultCategoryId = debt ? DEBT_CATEGORY_ID : interestDebt ? LOAN_INTEREST_ID : input.meaning === "lend" ? LEND_CATEGORY_ID : null;
   const categoryId = input.category_id || (defaultCategoryId && refs.categories.some((c) => c.id === defaultCategoryId) ? defaultCategoryId : null);
   const category = categoryId
     ? refs.categories.find((c) => c.id === categoryId) ?? fail("unknown_category", `Không có danh mục "${categoryId}".`)
@@ -209,6 +217,7 @@ export function buildEntry(input: EntryInput, refs: Refs, memberId: string | nul
       row.category_id = category!.id;
       row.account_id = account(refs, defaultAccount(), "tài khoản chi").id;
       row.debt_id = debt?.id ?? null;
+      row.interest_debt_id = interestDebt?.id ?? null;
       break;
     }
     case "income": {

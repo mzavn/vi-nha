@@ -4,6 +4,7 @@
 // cầu cùng lúc thì yêu cầu sau vấp khoá chính `config.k` → cả batch huỷ → 409 already_setup.
 
 import { DomainError } from "../domain/types";
+import { LOAN_INTEREST_ID } from "../domain/system-ids";
 import { hashPassword } from "./passwords";
 import { ACCOUNT_KINDS, bankOk, MAX_ACTIVE_MEMBERS, memberName, memberPassword, nameKey, slug } from "./settings";
 
@@ -148,6 +149,8 @@ export async function createHousehold(db: D1Database, input: SetupInput): Promis
     }),
     wallet.bind("nice-to-have", "Có thì tốt", "must", "have", "envelope", home, 50),
     allocation.bind("nice-to-have", "remainder", null, 99),
+    // Ví hệ thống "Lãi vay" có sẵn từ schema (chưa trú ở tài khoản nào): trú ở tài khoản chính như các ví Must.
+    db.prepare("UPDATE wallets SET account_id = ? WHERE id = ? AND account_id IS NULL").bind(home, LOAN_INTEREST_ID),
     ...ALWAYS_CATEGORIES.map((c) => category.bind(c.id, c.name, "nice-to-have", c.icon, c.sort)),
     db
       .prepare("INSERT INTO audit_log (member_id, via, action, target, detail) VALUES (?, 'session', 'setup.done', NULL, ?)")

@@ -820,6 +820,176 @@
   .bneg.calm {
     color: var(--fg-2);
   }
+  /* Ví "Lãi vay" ở Ngân sách: mỗi khoản nợ có lãi một dòng phụ (pwa UC-707 AC-25). */
+  .interest-lines {
+    grid-column: 1 / -1;
+    list-style: none;
+    margin: 2px 0 0;
+    padding: 0;
+    font-size: 12px;
+    color: var(--fg-2);
+    overflow-wrap: anywhere;
+  }
+
+  /* ── Tài sản & tự do (pwa UC-717) ── */
+  /* Dòng phụ dài (%, dòng tiền, ngày giá) xuống dòng, không tràn ngang ở 390px. */
+  .tier .nw-sub span {
+    overflow-wrap: anywhere;
+  }
+  .nw-equity .srow-t {
+    font-weight: 600;
+  }
+  .nw-equity > span:last-child {
+    font-size: 28px;
+    font-weight: 650;
+    line-height: 1.15;
+  }
+  .nw-group {
+    padding: 8px 14px 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg-2);
+  }
+  .nw-pct {
+    display: inline-block;
+    min-width: 3.6em;
+    text-align: right;
+    font-weight: 400;
+    color: var(--fg-2);
+  }
+  /* Tháp: thanh căn giữa, rộng theo % tổng tài sản. */
+  .nw-bar {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: center;
+    height: 10px;
+    border-radius: 99px;
+    background: var(--surface-2);
+  }
+  .nw-bar i {
+    display: block;
+    height: 100%;
+    border-radius: 99px;
+    background: var(--primary);
+  }
+  .nw-lot {
+    align-items: flex-start;
+  }
+  .nw-lot .srow-amt,
+  .nw-lot > span:last-child {
+    white-space: nowrap;
+    font-weight: 600;
+  }
+  .nw-act {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin-top: 2px;
+  }
+  .nw-act .link,
+  .nw-act .btn {
+    min-height: 36px;
+    font-size: 12.5px;
+  }
+  .nw-total {
+    padding-top: 8px;
+    font-weight: 500;
+    color: var(--fg);
+  }
+  /* Lưu chuyển tiền, Thu chi: hàng chọn kỳ xuống dòng khi chật; ‹ › đủ 44px. */
+  .nw-period {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 12px;
+    margin: 0 2px 12px;
+  }
+  .nw-step {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .nw-step .btn {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+  }
+  .nw-step strong {
+    min-width: 7.5em;
+    text-align: center;
+  }
+  .nw-step-gap {
+    display: inline-block;
+    width: 44px;
+  }
+  .nw-closing .srow-t,
+  .nw-closing > span:last-child {
+    font-weight: 650;
+  }
+  .nw-savings {
+    font-size: 28px;
+    font-weight: 650;
+    line-height: 1.15;
+  }
+  .nw-child {
+    padding-left: 28px;
+  }
+  .nw-tx {
+    align-items: flex-start;
+  }
+  .nw-tx .srow-amt {
+    white-space: nowrap;
+  }
+  /* Mốc tự do, Thử số. */
+  .nw-line {
+    margin: 0 0 4px;
+    overflow-wrap: anywhere;
+  }
+  .nw-plan-line {
+    border-top: 1px solid var(--border);
+  }
+  .nw-plan-line .field {
+    gap: 8px;
+    border-top: 0;
+  }
+  .nw-plan-line .field > .ctl,
+  .nw-plan-line .field > .amt-in {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .nw-growth {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: none;
+    font-size: 13px;
+    color: var(--fg-2);
+  }
+  .nw-growth .ctl {
+    width: 4.5em;
+  }
+  /* Dải "Số thử" luôn thấy khi cuộn bảng dự phóng (UC-717 AC-4). */
+  .nw-sticky-warn {
+    position: sticky;
+    top: var(--topbar-h, 56px);
+    z-index: 5;
+    margin-bottom: 12px;
+    background: var(--bg);
+  }
+  .nw-mini {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 2px 8px;
+    font-size: 12px;
+    color: var(--fg-2);
+  }
+  .nw-mini .bar {
+    grid-column: auto;
+    height: 3px;
+  }
   .bar {
     grid-column: 1 / -1;
     height: 5px;

@@ -7,3 +7,5 @@ export const DEFAULT_SEPAY_CONNECTION_ID = "default";
 export const DEBT_CATEGORY_ID = "debt-payment";
 /** Danh mục mặc định của khoản cho vay / trả hộ. Chỉ là nhãn: cho vay không vào chi theo danh mục. */
 export const LEND_CATEGORY_ID = "lending";
+/** Ví + danh mục hệ thống "Lãi vay" (migration 0031): chi trả lãi cho khoản nợ, dự kiến tháng tự tính từ sổ nợ. */
+export const LOAN_INTEREST_ID = "loan-interest";

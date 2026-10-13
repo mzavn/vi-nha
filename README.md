@@ -97,20 +97,29 @@ Trên điện thoại: mở bằng trình duyệt → "Thêm vào màn hình ch�
 ## Cập nhật bản mới
 
 Xem có gì mới ở [`CHANGELOG.md`](CHANGELOG.md) — mục nào ghi "có migration" thì database được nâng cấp tự động khi deploy.
-Nên sao lưu database trước (thay `<ngày>` bằng ngày hôm nay, ví dụ `261008`). Bản sao lưu chứa khoá kết nối và mọi giao
-dịch — để trong `.wrangler/` (thư mục không lên git), đừng commit, đừng gửi ai:
+App tự biết có bản mới: **Cài đặt › Nâng cao › Cập nhật Ví nhà › Kiểm tra bản mới** (app chỉ hỏi GitHub khi bạn bấm).
+Hướng dẫn từng bước kèm ảnh: [Cập nhật Ví nhà](https://mzavn.gitbook.io/vi-nha/bat-dau/cap-nhat-vi-nha).
 
-```bash
-mkdir -p .wrangler/backups
-npx wrangler d1 export vi-nha --remote --output .wrangler/backups/vi-nha-<ngày>.sql
-```
+- **Cài bằng nút Deploy:** bấm **Cập nhật** trong app (mở trang workflow **Cập nhật Ví nhà** trong repo GitHub của bạn), rồi
+  **Run workflow**. Workflow kéo bản phát hành mới nhất vào repo của bạn, giữ tên Worker, tên miền riêng và id database / KV
+  trong `wrangler.jsonc`; Cloudflare thấy commit mới thì tự build, nâng database và deploy. Sửa riêng trong code của repo sẽ bị
+  ghi đè (trừ thư mục `.github/`). Repo cài trước khi có workflow này: thêm file
+  [`.github/workflows/update.yml`](.github/workflows/update.yml) vào repo của bạn **một lần** (GitHub › Add file › Create new
+  file, dán nội dung). Chỉ hỗ trợ repo trên GitHub. Sao lưu: D1 tự giữ lịch sử 7 ngày (Time Travel, gói Free); khôi phục cần
+  `npx wrangler d1 time-travel restore`.
+- **Cài bằng `npm run setup` / AI:** sao lưu rồi cập nhật trong thư mục `vi-nha`. Bản sao lưu chứa khoá kết nối và mọi giao
+  dịch — để trong `.wrangler/` (thư mục không lên git), đừng commit, đừng gửi ai (thay `<ngày>` bằng ngày hôm nay, ví dụ `261013`):
 
-- **Cài bằng nút Deploy:** repo GitHub của bạn kéo bản mới từ `mzavn/vi-nha` (nút **Sync fork** nếu repo là fork, hoặc
-  `git pull https://github.com/mzavn/vi-nha.git main` rồi `git push`) — Cloudflare tự build và deploy lại khi repo có commit mới.
-- **Cài bằng `npm run setup` / AI:** `git pull && npm install && npm run deploy`.
+  ```bash
+  mkdir -p .wrangler/backups
+  npx wrangler d1 export vi-nha --remote --output .wrangler/backups/vi-nha-<ngày>.sql
+  git pull --autostash && npm ci && npm run deploy
+  ```
+
+  `--autostash`: `npm run setup` ghi `account_id` vào `wrangler.jsonc`, `git pull` trần sẽ từ chối.
 
 `npm run deploy` = build → nâng cấp database (`wrangler d1 migrations apply DB --remote`) → deploy. Chỉ dùng để cập nhật;
-lần đầu cài dùng nút Deploy hoặc `npm run setup`.
+lần đầu cài dùng nút Deploy hoặc `npm run setup`. Cập nhật xong, mở lại app (hay bấm **Tải bản mới** khi app báo) để chạy bản mới.
 
 ## Phát triển
 

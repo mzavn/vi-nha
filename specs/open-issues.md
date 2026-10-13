@@ -29,7 +29,7 @@
 - [OPEN] Sửa không ghi ai sửa **trong sổ**: khoản mới mang người ghi của khoản cũ, không có cột "người sửa", và liên hệ cũ → mới chỉ có trong phản hồi (`replaced`), không lưu trong sổ. Từ v6 ai sửa / huỷ, lúc nào, qua đâu nằm ở `audit_log` (`tx.replace`, `tx.void` — ADR-90), không gắn vào dòng giao dịch.
 
 ### [ledger/UC-103-xem-con-bao-nhieu-de-chi.md](ledger/UC-103-xem-con-bao-nhieu-de-chi.md)
-- [DIVERGENCE] `phase-03-api.md` dòng 49: "`GET /snapshot` dùng ≤ 3 query D1" — `getSnapshot` gọi `loadRefs` (một batch 9 truy vấn, từ change `261001-cho-thue-lai` thêm nguồn thu, phần khóa, người thuê, config cho thuê) + một batch 12 truy vấn (từ change `261004-gan-chua-chia` thêm khoản thu chưa chia, change `261006-tien-chi-duoc` thêm số dư sổ từng tài khoản).
+- [DIVERGENCE] `phase-03-api.md` dòng 49: "`GET /snapshot` dùng ≤ 3 query D1" — `getSnapshot` gọi `loadRefs` (một batch 9 truy vấn, từ change `261001-cho-thue-lai` thêm nguồn thu, phần khóa, người thuê, config cho thuê) + một câu lãi vay dự kiến (`debtInterest`, từ change `261008-bang-can-doi`) + một batch 12 truy vấn (từ change `261004-gan-chua-chia` thêm khoản thu chưa chia, change `261006-tien-chi-duoc` thêm số dư sổ từng tài khoản).
 - [OPEN] Cron gọi với `viewerId = null` nên mọi ví `private` bị ẩn khỏi tin Telegram; nếu một phong bì Must được đặt `private`, con số Telegram khác con số của chủ ví trên app (BR-01 "cùng một con số"). Seed hiện không có ví `private`.
 - [OPEN] Quỹ an tâm ước lượng dùng tổng `monthTarget` của các dòng **không bị ẩn**; ví Must `private` của người khác không được tính.
 - [OPEN] `transferOrdersOverdue` so `created_at` (UTC `datetime('now')`) với `datetime('now','-3 days')` — là khoảng thời gian, không theo ngày VN.
@@ -87,7 +87,7 @@
 - [OPEN] `q` khớp chữ đã lưu và dạng bỏ dấu của **chữ tìm**, chưa có dạng bỏ dấu của **chữ đã lưu**: "thuoc" không ra ghi chú / tên danh mục "Thuốc …", "THUỐC" không ra "Thuốc" (LIKE không bỏ qua hoa thường với chữ có dấu). Chiều này cần cột chuẩn hoá (migration) — chưa ai cần.
 - [OPEN] Sổ gồm cả `transfer` hệ thống (chốt tháng `S…`, quyết toán `T…`) và `adjust` — chỉ `fund` bị lọc.
 
-## Chia tiền (allocation) — 8 divergence, 26 open
+## Chia tiền (allocation) — 9 divergence, 27 open
 
 ### [allocation/UC-201-tinh-phuong-an-chia.md](allocation/UC-201-tinh-phuong-an-chia.md)
 - [DIVERGENCE] `docs/core_design_rules.md` §4 bước 5 và `phase-02-allocation-core.md` bước 5: "ví goal → ví nice flat/percent, theo priority", nhưng code rót phe `nice` **chỉ theo `priority`** (`src/domain/allocation.ts:157`), không phân biệt `mode`. Hành vi hiện tại khớp docs chỉ vì seed đặt Du lịch priority 30 < Chơi 31.
@@ -102,11 +102,13 @@
 - [OPEN] Có nguồn thu thì bỏ hẳn bước Thuế: khoản `taxable=true` gắn nguồn không trích Thuế trừ khi nguồn tự khóa ví Thuế; không có cảnh báo nào.
 - [OPEN] Lock trỏ tới ví đã tắt sau khi lưu nguồn: Cài đặt chỉ kiểm ví active lúc lưu phần khóa, tắt ví không kiểm phần khóa, và engine/`loadRefs` không lọc → vẫn nạp fund vào ví đã tắt (và không sinh lệnh chuyển tiền vì `walletAccounts` chỉ có ví active).
 - [OPEN] Khóa 100% dừng sớm nên ví phong bì đang âm không được bù và không được báo `underfunded` trong lần chia đó — đúng ý ADR-63 nhưng người dùng không thấy cảnh báo nào.
+- [DIVERGENCE] Proposal [261008-bang-can-doi](changes/archive/261008-bang-can-doi/proposal.md) (allocation — Main Flow) nói luật dựng sẵn của ví "Lãi vay" mang "ưu tiên mặc định của ví Must"; code đặt `priority` 100 (`withInterestRule`, `src/domain/interest.ts`) — cao hơn các ví Must của hộ mẫu — nên khi thiếu tiền dưới tổng sàn Must, "Lãi vay" là ví Must được rót **sau cùng** ở bước 3 và hụt sàn trước các ví Must khác. Có luật nạp tay thì priority theo luật tay. → chủ nhà quyết lãi vay đứng ở đâu trong thứ tự sàn Must.
 
 ### [allocation/UC-202-xem-truoc-phuong-an-chia.md](allocation/UC-202-xem-truoc-phuong-an-chia.md)
 - [OPEN] Lỗi cấu hình chia (`AllocationConfigError`) ra 500 "Lỗi hệ thống" thay vì một mã 4xx có thông điệp tiếng Việt của engine (`src/index.ts:27-35`); người dùng không biết phải sửa gì. Chưa rõ đây là quyết định hay sót.
 - [OPEN] Route không chặn `amount ≤ 0` (chỉ kiểm số nguyên) nên 0/âm rơi vào E5 (500), trong khi MCP chặn bằng zod `.positive()`.
 - [OPEN] Nguồn thu đã tắt vẫn xem trước được (`loadRefs` nạp cả nguồn `active=0`), trong khi ghi khoản thu với nguồn đó bị từ chối `inactive_income_stream` (ledger UC-101) — preview có thể cho phương án mà không ghi được.
+- [OPEN] MCP `preview_allocation` / `allocate_income` không nhận `amounts` (Tự chia chỉ có ở REST / PWA — ngoài phạm vi change 261012-tu-chia).
 - [OPEN] MCP `preview_allocation` không nhận nguồn thu, nên Claude xem trước tiền người thuê / lương vợ sẽ ra phương án theo luật % chung, khác với lần chia thật (UC-203 dùng nguồn trên khoản thu).
 
 ### [allocation/UC-203-chia-mot-khoan-thu-nhap.md](allocation/UC-203-chia-mot-khoan-thu-nhap.md)
@@ -320,7 +322,7 @@
 - [OPEN] Ví Must lúc thiết lập chưa có số nạp; người dùng phải tự vào Cài đặt › Ví & số tiền nạp đặt số (access UC-506). Chưa quyết có cần nhắc ở Hôm nay sau khi thiết lập không.
 - [OPEN] Tài khoản tạo lúc thiết lập không nhận số dư đầu (`opening_balance` = 0, `opened_at` = hôm nay); màn Thiết lập dặn "Số dư, số tài khoản, nối SePay thêm sau ở Cài đặt" (access UC-506).
 
-## MCP cho Claude — 3 divergence, 8 open
+## MCP cho Claude — 3 divergence, 10 open
 
 ### [mcp/UC-601-noi-claude-bang-oauth.md](mcp/UC-601-noi-claude-bang-oauth.md)
 - [OPEN] phase-06 Todo "đo CPU time … so với ngưỡng 10 ms của gói Free": chỉ có số đo wall time trên Node (báo cáo MCP ghi trung bình 1.62 ms); CPU time thật trên Workers chưa đo.
@@ -343,7 +345,11 @@
 - [OPEN] `preview_allocation` không nhận `account_id` hay `at` như REST `POST /v1/allocate/preview` (`src/routes/v1.ts`), nên Claude không xem trước được lệnh chuyển tiền và luôn tính theo thời điểm hiện tại (ảnh hưởng phần "đã nạp trong tháng" của D2).
 - [OPEN] MCP không có tool huỷ giao dịch: `allocate_income` chạy ngay không có bước xác nhận (phụ thuộc Claude hỏi người dùng), còn gỡ một lần chia (huỷ khoản thu → `ledger.voidTransaction` gỡ các `fund` nếu chưa có lệnh chuyển nào `done`) chỉ làm được qua REST `POST /v1/transactions/:id/void` / PWA. Red-team `plans/reports/redteam-260922-0100-auth-exposure.md` #1 từng ghi "không có cách nào hoàn tác qua API" — code hiện tại đã có đường gỡ (`undoAllocationStatements`, migration `0006_allocation_undo_guard.sql`).
 
-## PWA — 15 divergence, 50 open
+### [mcp/UC-606-cap-nhat-gia-tai-san-qua-mcp.md](mcp/UC-606-cap-nhat-gia-tai-san-qua-mcp.md)
+- [OPEN] Trang đồng ý ở UC-601 mô tả quyền Ghi là "Ghi giao dịch, gán, chia tiền" (`src/oauth/routes.ts`) — chưa nói quyền này cũng cho cập nhật giá tài sản. Chưa quyết có đổi chữ không.
+- [OPEN] Lỗi E2–E6 qua MCP chưa có test riêng (luật nằm ở `balance.addValue`, test REST ở balance UC-1101).
+
+## PWA — 17 divergence, 50 open
 
 ### [pwa/UC-701-dang-nhap-dang-xuat-doi-nguoi.md](pwa/UC-701-dang-nhap-dang-xuat-doi-nguoi.md)
 - [OPEN] `toLogin()` (store.ts:238) không xoá cache số liệu/cache API khi phiên bị vô hiệu ngoài luồng đăng xuất (báo cáo `redteam-260922-0100-auth-exposure.md` §3, viết trên HEAD cũ). Hiện `enter()` → `forgetOtherMember` xoá cache khi người vào khác `vi-nha:last-member` (commit `80875be`, `4b6d298`), nên số của người trước không được nạp cho người sau; nhưng dữ liệu vẫn nằm trên máy trong lúc ở màn đăng nhập. Chưa có quyết định chốt là đã đóng mục §3 hay chưa.
@@ -406,7 +412,7 @@
 - [OPEN] Sau khi clone phải chạy `npm run build` trước `npm run dev` vì Worker cần thư mục `public/` (cùng báo cáo, câu hỏi mở 1).
 
 ### [pwa/UC-711-khung-dieu-huong-va-luat-hien-thi.md](pwa/UC-711-khung-dieu-huong-va-luat-hien-thi.md)
-- [DIVERGENCE] `docs/wireframe.md` §2: "Nút `+` nổi ở mọi màn"; code ẩn FAB ở Nhập, Cài đặt, Sổ giao dịch và Hướng dẫn (`web/src/app.tsx` › `App`), khớp `docs/DESIGN.md` §4 ("ẩn ở màn Nhập, Cài đặt và Sổ giao dịch" — chưa nhắc Hướng dẫn) — DESIGN.md thắng wireframe theo `context.md`.
+- [DIVERGENCE] `docs/wireframe.md` §2: "Nút `+` nổi ở mọi màn"; code ẩn FAB ở Nhập, Cài đặt, Sổ giao dịch, Hướng dẫn và Tài sản & tự do (`web/src/app.tsx` › `App`), khớp `docs/DESIGN.md` §4 ("ẩn ở màn Nhập, Cài đặt và Sổ giao dịch" — chưa nhắc Hướng dẫn, Tài sản & tự do) — DESIGN.md thắng wireframe theo `context.md`.
 - [DIVERGENCE] `docs/DESIGN.md` §9 hướng dẫn ánh xạ token qua `tailwind.config`; code dùng Tailwind v4 với `@theme inline` trong `web/src/styles.css` (báo cáo `ui-ux-designer-260922-0020-pwa-mobile-offline.md`). Cùng token, khác cơ chế.
 - [OPEN] Sheet có thanh nắm nhưng không vuốt xuống để đóng được; chạm nền đóng ngay kể cả khi form đã sửa (vd Chốt tháng) — audit 261001 F18, bỏ qua ở commit `11c52a0` vì công lớn (M). Chưa có quyết định làm.
 - [OPEN] App mở vào Hôm nay hay Nhập (cùng báo cáo, câu hỏi mở 4); hiện mặc định Hôm nay.
@@ -441,6 +447,10 @@
 - [OPEN] Tìm khớp chữ đã lưu (`LIKE`) và dạng bỏ dấu của **chữ tìm**, nên "thuốc" ra cả "Thuốc ho" lẫn nội dung ngân hàng "THUOC"; chiều ngược chưa có: "thuoc" không ra ghi chú / tên danh mục "Thuốc …", "THUỐC" không ra "Thuốc" (LIKE chỉ bỏ qua hoa thường với chữ không dấu). Cần cột chuẩn hoá chữ đã lưu (migration) — chưa ai cần.
 - [OPEN] Tiêu đề ngày cộng chi của **các dòng đã tải**: ngày nằm vắt qua cuối một lượt tải thì số chi của ngày đó thiếu cho tới khi tải thêm (tự tải khi cuộn tới).
 - [OPEN] Mất mạng: danh sách và tổng có thể là bản service worker lưu của đúng đường dẫn đó (dòng tổng nói "số lúc HH:mm"); tải thêm hay bộ lọc chưa từng xem thì báo "Không có mạng." — không có sổ offline đầy đủ.
+
+### [pwa/UC-717-man-tai-san-va-tu-do.md](pwa/UC-717-man-tai-san-va-tu-do.md)
+- [DIVERGENCE] Proposal `261008-bang-can-doi` (Thiết kế, máy tính ≥ 1024px): cột phải tóm tắt "vốn chủ, Mốc tự do"; bảng lô, lịch sử, Thử số dùng nhiều cột số. Code: cột phải chỉ có card tóm tắt bảng cân đối ở mọi phần, danh sách giữ dạng hàng tầng như điện thoại (`NetWorth`, `web/src/screens/net-worth.tsx`). → chủ nhà quyết có cần bảng nhiều cột trên máy tính không.
+- [DIVERGENCE] Proposal (Thiết kế, Cân đối): dòng phụ "15,5% tổng · 25,6% vốn chủ"; code bỏ số 0 lẻ cuối nên phần trăm tròn hiện "1%" thay vì "1,0%" (`pctText`); lãi / lỗ luôn có một chữ số lẻ như AC. Lệch chữ, không lệch số.
 
 ## Cho thuê lại (rental) — 2 divergence, 18 open
 
@@ -482,7 +492,7 @@
 ### [debt/UC-902-tra-no.md](debt/UC-902-tra-no.md)
 - [OPEN] Toast tính còn nợ từ `bootstrap.debts` trên máy, không từ phản hồi server: offline hoặc khi người kia vừa trả cùng khoản thì "Còn nợ Y" có thể lệch với số thật cho tới lần tải lại.
 - [OPEN] Không chặn trả quá số còn nợ: còn nợ âm (trả dư) chỉ hiện "Hết nợ."/nhóm "Đã trả xong", không có cảnh báo hay đường hoàn lại.
-- [DIVERGENCE] [VAS 24](https://docs.kreston.vn/vbpl/ke-toan/chuan-muc-ke-toan/vas-24) §11(c)(d) xếp "Tiền thu từ các khoản đi vay" và "Tiền chi trả các khoản nợ gốc đã vay" vào **hoạt động tài chính** — không phải chi phí; app ghi trả nợ gốc là `spend` danh mục `debt-payment`: trừ ví, vào "đã tiêu" (`v_spent_*`), chi theo danh mục và trung bình chi nếu ví thuộc nhóm Must, trong khi tiền cho vay quay về đã thôi là "thu" (`collect`, ADR-72, VAS 24 §10(d)). Đề xuất (chưa làm, chủ nhà chưa quyết): thêm meaning `repay` đối xứng với `collect` — tiền **ra** khỏi tài khoản, gắn `debt_id`, không là "đã tiêu", không vào chi theo danh mục; còn việc ngân sách nào chịu khoản trả (hiện là ví giữ riêng "Thu cho thuê", ADR-63) thì đi kèm một bút toán chuyển ngân sách rõ ràng thay vì ẩn trong một khoản chi. Cho tới khi quyết, giữ `spend`: số còn nợ vẫn đúng (`v_debt_balance` chỉ đọc `amount`), chỉ có "đã tiêu" của ví trả nợ là tính cả tiền gốc.
+- [DIVERGENCE] [VAS 24](https://docs.kreston.vn/vbpl/ke-toan/chuan-muc-ke-toan/vas-24) §11(c)(d) xếp "Tiền thu từ các khoản đi vay" và "Tiền chi trả các khoản nợ gốc đã vay" vào **hoạt động tài chính** — không phải chi phí; app ghi trả nợ gốc là `spend` danh mục `debt-payment`: trừ ví, vào "đã tiêu" (`v_spent_*`), chi theo danh mục và trung bình chi nếu ví thuộc nhóm Must, trong khi tiền cho vay quay về đã thôi là "thu" (`collect`, ADR-72, VAS 24 §10(d)). Đề xuất (chưa làm, chủ nhà chưa quyết): thêm meaning `repay` đối xứng với `collect` — tiền **ra** khỏi tài khoản, gắn `debt_id`, không là "đã tiêu", không vào chi theo danh mục; còn việc ngân sách nào chịu khoản trả (hiện là ví giữ riêng "Thu cho thuê", ADR-63) thì đi kèm một bút toán chuyển ngân sách rõ ràng thay vì ẩn trong một khoản chi. Cho tới khi quyết, giữ `spend`: số còn nợ vẫn đúng (`v_debt_balance` chỉ đọc `amount`), chỉ có "đã tiêu" của ví trả nợ là tính cả tiền gốc. Từ change [261008-bang-can-doi](changes/archive/261008-bang-can-doi/proposal.md) (chạm tới, **không** đóng): hai báo cáo lưu chuyển tiền / kết quả thu chi xếp khoản `spend` mang `debt_id` vào nhóm Tài chính và bỏ khỏi Chi tiêu / E (balance [UC-1105](balance/UC-1105-luu-chuyen-tien.md), [UC-1106](balance/UC-1106-ket-qua-thu-chi.md), ADR-104), phần **lãi** tách thành chi phí riêng (`interest_debt_id`, ADR-106); ví, "đã tiêu" và ngân sách của phần gốc giữ nguyên như trên.
 
 ### [debt/UC-903-gan-giao-dich-ngan-hang-la-tra-no.md](debt/UC-903-gan-giao-dich-ngan-hang-la-tra-no.md)
 - [OPEN] `create_rule` vẫn chỉ lưu ví/danh mục (bảng `rules` không có `debt_id`): rule rút từ một lần gán trả nợ không mang khoản nợ, nên log cùng nội dung lần sau tự gán thành chi `debt-payment` **không** giảm còn nợ — người phải tránh tạo rule cho khoản trả nợ.
@@ -505,6 +515,25 @@
 - [OPEN] `cash` gồm `accounts.opening_balance` và mọi tài khoản đang dùng, kể cả tài khoản nối SePay còn log chưa gán: tiền đã về/đi ở ngân hàng mà chưa gán thì chưa có trong `cash` (ledger UC-106 `pending_net`). Khối không nhắc phần chưa gán.
 - [OPEN] Không có tool MCP cho bức tranh này: Claude trả lời "nhà có bao nhiêu tiền" phải tự cộng tool `get_reconciliation` (`bookBalance`) — dễ cộng nhầm sổ ghi nhớ vào.
 - [OPEN] Heo đất là tiền gửi có kỳ hạn (sổ tích lũy); VAS 24 §04 chỉ coi là tương đương tiền khi kỳ hạn ≤ 3 tháng. App vẫn để nó trong `cash` theo cách nhìn của chủ nhà (gốc chắc chắn, của nhà) và chỉ gắn nhãn "đã khóa" (ADR-77); từ ADR-82 nó còn là Tích sản tiền mặt (`wealthBuildingCash`, phao). Lãi chưa về tài khoản thì không có trong `cash`.
+
+## Bảng cân đối, mốc tự do & báo cáo (balance) — 3 divergence, 4 open
+
+### [balance/UC-1102-xem-bang-can-doi.md](balance/UC-1102-xem-bang-can-doi.md)
+- [DIVERGENCE] ADR-12 đặt trần 10 ms CPU mỗi request (Workers Free) và UC-1102 AC-9 đòi đo CPU khi apply; đo trên prod lát 1 (7 request đầu của `/v1/balance-sheet`, `/v1/balance-sheet/history?months=12`, `/v1/debts`, `/v1/networth`) ra P50 11,0 ms, max 14,8 ms — vượt trần dù số câu SQL đã gom đúng (≤ 11). Request vượt trần có thể bị chặn nếu tài khoản còn ở gói Free; ADR-54 (lên Workers Paid) vẫn chờ chủ nhà. → Chủ nhà: xác nhận gói / lên Workers Paid (ADR-54), hoặc giao việc giảm CPU của bảng cân đối và lịch sử.
+- [OPEN] Sổ người thuê không có ngày tắt: bảng và lịch sử chỉ tính người thuê **đang bật** (`tenants.active = 1`), nên tắt một người thuê làm số "Người thuê còn nợ / trả trước" của họ biến mất khỏi mọi tháng trước — khác cách tính theo trạng thái tại từng tháng của tài khoản, khoản nợ, khoản phải thu (quyết định 14 của change chỉ nêu ba loại này). Có cần `deactivated_at` cho người thuê không? → chủ nhà.
+
+### [balance/UC-1103-moc-tu-do.md](balance/UC-1103-moc-tu-do.md)
+- [DIVERGENCE] Mốc F3: báo cáo frontend lát 3 nói màn hiện "F3" kèm câu "sống bằng lãi thực, không đụng vốn"; code chỉ hiện "F3" — câu đó nằm trong `MILESTONE_LABEL[…].hint` nhưng `FreedomRow` không dùng `hint` (cả M2 / M2′ / M3, F1, F2 cũng không hiện câu gợi ý). Tên M2 / M2′ / M3 do frontend đặt (proposal chỉ đặt tên F1, F2). → chủ nhà chọn: hiện câu gợi ý hay bỏ khỏi code.
+
+### [balance/UC-1105-luu-chuyen-tien.md](balance/UC-1105-luu-chuyen-tien.md)
+- [OPEN] CPU của báo cáo năm chưa đo trên Workers: AC-7 mới đếm câu SQL (4 câu) và đo 12,1 ms chạy trên Node với DB mẫu 24 tháng × 300 giao dịch; lát 2 lên prod (2026-10-08 17:02) chỉ ghi hai báo cáo trả 200 và bất biến đúng trên số thật tháng 10. Trần Workers Free 10 ms (ADR-12; lịch sử bảng cân đối lát 1 đo trên prod P50 11,0 ms, max 14,8 ms) — cần đo `wrangler dev` / prod rồi quyết theo ADR-54.
+- [OPEN] Kỳ đang xem không giữ khi tải lại (F5 về tháng hiện tại; chỉ phần `#net-worth/cash-flow` được giữ). Có cần ghi kỳ vào hash không — chủ nhà.
+
+### [balance/UC-1106-ket-qua-thu-chi.md](balance/UC-1106-ket-qua-thu-chi.md)
+- [OPEN] Phần Thu chi không có lối phân loại lại: muốn đưa một khoản ra khỏi thu nhập / chi tiêu phải sang Lưu chuyển tiền, chạm dòng rồi Xếp vào nhóm… ([UC-1105](balance/UC-1105-luu-chuyen-tien.md)). Có cần chạm dòng ở Thu chi không — chủ nhà.
+
+### [balance/UC-1107-thu-so-du-phong.md](balance/UC-1107-thu-so-du-phong.md)
+- [DIVERGENCE] Độ dài bảng: proposal ghi "mỗi năm từ năm sau tới năm đạt tuổi mục tiêu lớn nhất (tối đa 40 năm)"; code dài tới năm muộn nhất trong năm đạt F1, F2 và năm tuổi mục tiêu F1, F2 (tối đa 40), và đủ 40 năm khi có mốc chưa tới. Ô lợi suất để trống tính 0% (proposal: "không có thì trống"). Hệ số F2 không có ô (proposal không liệt kê, cũng không nói lấy đâu). → chủ nhà duyệt.
 
 ## Quyết định (ADR) — 9 divergence, 21 open
 

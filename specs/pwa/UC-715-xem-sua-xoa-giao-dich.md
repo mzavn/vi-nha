@@ -14,6 +14,7 @@
 - v6 (2026-10-05, commit `d7992d1`): change [`261005-lien-ket-khoan-goc`](../changes/archive/261005-lien-ket-khoan-goc/proposal.md) — xem liên kết hai chiều (bước 2b): khoản hoàn tiền / nhận lại có khoản gốc có dòng **Trả cho** ("khoản chi d/m · X ₫" / "khoản cho vay d/m · X ₫", chạm mở khoản gốc; khoản gốc đã xoá thì thêm " · khoản gốc đã xoá"); khoản chi / cho vay đã được trả về có mục **Đã nhận lại** (tổng · "trả dư Z" / "còn thiếu Z" / "đủ", rồi từng khoản "d/m · {loại}  Y ₫" chạm mở). Dữ liệu đi kèm `GET /v1/transactions/:id` (`link`, `linked_from` — ledger UC-111 bước 3), không thêm request. Sửa khoản gốc thì khoản trả về theo sang khoản mới (ledger UC-102 bước 6). Chủ nhà: "kiểu bill này nhận về, thế bill chi đi là bill nào?"
 - v7 (2026-10-06, commit `43e4699`): change [`261006-so-giao-dich`](../changes/archive/261006-so-giao-dich/proposal.md) — sheet này cũng mở từ màn **Sổ giao dịch** (pwa [UC-716](UC-716-so-giao-dich.md)); không đổi gì trong sheet. Sửa khoản chi từ sổ về lại sổ với bộ lọc cũ (`editTx.back = "so"`); xoá / sửa thì danh sách và tổng của sổ tải lại, vị trí cuộn giữ khi sheet đóng.
 - v8 (2026-10-07, commit `7424f26`): định danh `WealthBuildingTab` (thay `TichsanTab`) — ADR-92 (change [261007-doi-ten-tieng-anh](../changes/archive/261007-doi-ten-tieng-anh/proposal.md))
+- v9 (2026-10-12, commit `a8b43f7`): chi tiết khoản thu chưa chia có nút **Tự chia** ở bảng Chia thử (allocation UC-202 5b, UC-203; ADR-108) (change [261012-tu-chia](../changes/archive/261012-tu-chia/proposal.md))
 
 ## Preconditions
 - Đã có `bootstrap`. Xem được khi mất mạng nếu dòng đã có trong danh sách; Sửa / Xoá / Gán lại / Chia cần mạng.
@@ -43,6 +44,7 @@
    - Toast "Đã sửa thành 120.000 ₫ Xăng xe. Đi lại còn 830.000 ₫ tuần này." (khoản thu: "Đã sửa thành X và chia lại.").
 6. **Gán lại**: `POST /v1/logs/transactions/:txId/void` (ingest UC-306) → toast "Đã gỡ gán X. Chọn lại cách gán cho giao dịch này." → màn Gán với log đó chọn sẵn (điện thoại: mở thẳng sheet gán — UC-706 3b).
 7. **Chia** (khoản thu chưa chia): `POST /v1/allocate/preview { amount, taxable, at, account_id: counter_account_id, income_stream_id? }` lấy từ chính khoản đó (đúng các trường server dùng khi chia — allocation UC-203) → bảng **Chia thử trước khi ghi** (`AllocationPreview`, như UC-705 bước 4) và hai nút **Thôi** (đóng bảng) / **Chia và ghi sổ** → `POST /v1/allocate { income_tx_id }` (`already_allocated` không coi là lỗi) → tải lại số → toast "Đã chia X." + " Còn N lệnh chuyển tiền cần làm." (`ordersLeft`, như UC-705 bước 6); sheet đóng.
+   - Bảng có nút **Tự chia** (allocation UC-202 5b, ADR-108); đang Tự chia thì **Chia và ghi sổ** gửi `POST /v1/allocate { income_tx_id, amounts }`, nút tắt khi tổng lệch hay có ô sai.
 
 ## Alternative Flows
 - 1a. Mở từ chi tiết một khoản ở tab Nợ: sheet giao dịch nằm trên sheet chi tiết khoản; sửa khoản chi thì chuyển sang màn Nhập.

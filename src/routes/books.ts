@@ -21,7 +21,7 @@ type Input = Record<string, unknown>;
 interface BookService {
   list(db: D1Database): Promise<unknown>;
   create(db: D1Database, b: Input, now: Date): Promise<unknown>;
-  update(db: D1Database, id: string, b: Input): Promise<unknown>;
+  update(db: D1Database, id: string, b: Input, now: Date): Promise<unknown>;
   addLine(db: D1Database, id: string, b: Input, now: Date): Promise<unknown>;
   voidLine(db: D1Database, id: number): Promise<unknown>;
 }
@@ -30,7 +30,7 @@ interface BookService {
 function mount(path: string, linePath: string, svc: BookService) {
   bookRoutes.get(`/${path}`, async (c) => ok(c, await svc.list(c.env.DB)));
   bookRoutes.post(`/${path}`, async (c) => ok(c, await svc.create(c.env.DB, await body(c), new Date()), 201));
-  bookRoutes.patch(`/${path}/:id`, async (c) => ok(c, await svc.update(c.env.DB, c.req.param("id"), await body(c))));
+  bookRoutes.patch(`/${path}/:id`, async (c) => ok(c, await svc.update(c.env.DB, c.req.param("id"), await body(c), new Date())));
   bookRoutes.post(`/${path}/:id/lines`, async (c) => ok(c, await svc.addLine(c.env.DB, c.req.param("id"), await body(c), new Date()), 201));
   bookRoutes.post(`/${linePath}/:id/void`, async (c) => {
     const id = Number(c.req.param("id"));

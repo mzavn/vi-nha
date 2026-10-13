@@ -6,7 +6,7 @@ import { wealthBuildingAccountLabel } from "./wealth-building-accounts";
 import type { NetWorth } from "./types";
 
 export interface NetWorthLine {
-  key: "cash" | "assets" | "owedToUs" | "receivables" | "tenants" | "weOwe" | "debts" | "tenantsPrepaid" | "netWorth";
+  key: "cash" | "assets" | "balanceItems" | "owedToUs" | "receivables" | "tenants" | "weOwe" | "debts" | "tenantsPrepaid" | "netWorth";
   /** hero: số to nhất · row: một nhóm · part: chi tiết của nhóm ngay trên · total: tài sản ròng, nhỏ hơn hero. */
   level: "hero" | "row" | "part" | "total";
   label: string;
@@ -35,7 +35,9 @@ export function netWorthLines(nw: NetWorth): NetWorthLine[] {
     .join(" · ");
   const lines: (NetWorthLine | false)[] = [
     { key: "cash", level: "hero", label: "Tiền thật đang có", hint: "tiền mặt và tiền trong tài khoản", note: cashNote, value: nw.cash },
-    nw.assets !== 0 && { key: "assets", level: "row", label: "Tài sản (vàng, chứng khoán…)", note: "không phải tiền mặt — bán mới thành tiền", value: nw.assets },
+    // Mua qua app chưa gắn mục (giá mua) và tài sản ngoài app (định giá ở màn Tài sản & tự do — receivable UC-1005).
+    nw.assets !== 0 && { key: "assets", level: "row", label: "Tài sản mua qua app", note: "giá mua — không phải tiền mặt, bán mới thành tiền", value: nw.assets },
+    !!nw.balanceItems && { key: "balanceItems", level: "row", label: "Tài sản ngoài app (vàng, đất…)", note: "giá mới nhất bạn nhập — không phải tiền mặt", value: nw.balanceItems },
     owedToUs !== 0 && { key: "owedToUs", level: "row", label: "Người khác nợ mình", note: "chưa phải tiền", value: owedToUs },
     // Chi tiết nói khoản phải thu đến từ đâu; nguồn nào bằng 0 thì ẩn.
     nw.receivables !== 0 && { key: "receivables", level: "part", label: "Cho vay / trả hộ", note: null, value: nw.receivables },
@@ -47,8 +49,8 @@ export function netWorthLines(nw: NetWorth): NetWorthLine[] {
     {
       key: "netWorth",
       level: "total",
-      label: "Tài sản ròng",
-      note: "Cộng hết lại rồi trừ nợ. Con số quan trọng hằng ngày vẫn là tiền thật đang có ở trên.",
+      label: "Vốn chủ sở hữu (tài sản ròng)",
+      note: "Cộng hết lại rồi trừ nợ — khớp vốn chủ ở bảng cân đối. Con số quan trọng hằng ngày vẫn là tiền thật đang có ở trên.",
       value: nw.netWorth,
     },
   ];

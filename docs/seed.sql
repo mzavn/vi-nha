@@ -28,6 +28,8 @@ INSERT INTO wallets (id,name,tier,must_group,kind,scope,member_id,account_id,sor
  ('utilities','Điện nước mạng','must','must','bill','shared',NULL,'vcb-husband',43),
  ('hometown','Về quê','must','must','accrual','shared',NULL,'vcb-husband',44),
  ('nice-to-have','Có thì tốt','must','have','envelope','shared',NULL,'vcb-husband',50);
+-- Ví hệ thống "Lãi vay" có sẵn từ schema.sql: trú ở tài khoản chính như các ví Must.
+UPDATE wallets SET account_id = 'vcb-husband' WHERE id = 'loan-interest';
 
 -- LUẬT NẠP: Tích sản 30% · Thuế 10% (chỉ khi taxable; thuế suất CHỈ nằm ở đây) · Have = remainder
 INSERT INTO allocations (wallet_id,mode,period,amount,percent,target_amount,target_date,floor_amount,priority) VALUES

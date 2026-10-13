@@ -1,4 +1,4 @@
-// 16 tool MCP cho Claude: mỗi tool chỉ gọi lại đúng hàm domain/service dùng chung với REST
+// 19 tool MCP cho Claude: mỗi tool chỉ gọi lại đúng hàm domain/service dùng chung với REST
 // (src/services/ledger.ts, src/services/ingest.ts, src/services/rental.ts, src/services/debts.ts, src/services/receivables.ts)
 // — không viết SQL nghiệp vụ ở tầng này.
 // Mỗi kết nối Claude mang người đã uỷ quyền (OAuth, UC-601): tool đọc nhìn số liệu như người đó trên app (ví private của
@@ -10,15 +10,18 @@ import { z } from "zod";
 import { MANUAL_MEANINGS, type EntryInput } from "../domain/entry";
 import { monthKey } from "../domain/period";
 import { DomainError } from "../domain/types";
+import * as balance from "../services/balance";
 import * as debts from "../services/debts";
+import { getFreedom } from "../services/freedom";
 import * as ingest from "../services/ingest";
 import * as ledger from "../services/ledger";
 import * as receivables from "../services/receivables";
+import * as reports from "../services/reports";
 import * as rental from "../services/rental";
 import { audit, type Actor } from "../services/audit";
 
 /** Tool ghi: cần quyền `mcp:write` — routes/mcp.ts kiểm ở tầng HTTP trước khi tới đây (UC-601 AC-11). */
-export const WRITE_TOOLS: readonly string[] = ["add_transaction", "assign_log", "allocate_income", "add_tenant_shared_expense"];
+export const WRITE_TOOLS: readonly string[] = ["add_transaction", "assign_log", "allocate_income", "add_tenant_shared_expense", "record_asset_value"];
 
 type Row = Record<string, unknown>;
 const rows = <T = Row>(r: D1Result) => (r.results ?? []) as T[];
@@ -37,7 +40,7 @@ function fail(err: unknown): CallToolResult {
   return { content: [{ type: "text", text: "Lỗi hệ thống. Thử lại sau." }], isError: true };
 }
 
-/** Đăng ký cả 16 tool lên một McpServer mới dựng riêng cho request hiện tại; `memberId` = người đã uỷ quyền kết nối. */
+/** Đăng ký cả 19 tool lên một McpServer mới dựng riêng cho request hiện tại; `memberId` = người đã uỷ quyền kết nối. */
 export async function registerTools(server: McpServer, db: D1Database, memberId: string, now: () => Date): Promise<void> {
   const members = rows<{ id: string; name: string; role: string }>(
     await db.prepare("SELECT id, name, role FROM members WHERE active = 1 ORDER BY role = 'owner' DESC, name").all(),
@@ -119,7 +122,8 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
     {
       description:
         "Assign one pending bank log (log_id from list_pending_logs) to 1..N transactions (splits); " +
-        "the split amounts must add up to exactly the log amount.",
+        "the split amounts must add up to exactly the log amount. A payment on an interest-bearing debt is two splits: " +
+        "interest (spend, interest_debt_id) and principal (spend, debt_id).",
       inputSchema: {
         log_id: z.string().min(1),
         splits: z
@@ -134,6 +138,7 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
               income_stream_id: z.string().optional(),
               tenant_id: z.string().optional(),
               debt_id: z.string().optional(),
+              interest_debt_id: z.string().optional(),
               receivable_id: z.string().optional(),
               link_id: z.number().int().positive().optional(),
               taxable: z.boolean().optional(),
@@ -156,6 +161,7 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
           income_stream_id: s.income_stream_id ?? null,
           tenant_id: s.tenant_id ?? null,
           debt_id: s.debt_id ?? null,
+          interest_debt_id: s.interest_debt_id ?? null,
           receivable_id: s.receivable_id ?? null,
           link_id: s.link_id ?? null,
           taxable: s.taxable,
@@ -185,7 +191,10 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
         "transfer WITHOUT accounts but with from_wallet_id + wallet_id moves budget between two wallets (the money stays in its account). " +
         "income: income_stream_id = income stream (allocated by the stream's locked shares), tenant_id = rent paid by a tenant (id from list_tenants; " +
         "without a stream the rental stream is used). " +
-        "spend: debt_id = a debt repayment (id from get_debts; without category_id the debt-repayment category is used). " +
+        "spend: debt_id = a debt repayment of PRINCIPAL (id from get_debts; without category_id the debt-repayment category is used); " +
+        "interest_debt_id = INTEREST paid on that debt (spend only, never together with debt_id; without category_id the 'loan-interest' category). " +
+        "When paying a debt with interestRate > 0, record TWO transactions: interest = min(amount, interestThisMonth − interestPaidThisMonth from get_debts) " +
+        "with interest_debt_id, and the rest as principal with debt_id. " +
         "lend / collect: receivable_id = the receivable (id from get_receivables); account_id = account money leaves (lend) / arrives in (collect). " +
         "buy_asset needs asset_kind (stock|gold|re|fund). Get category_id/wallet_id/account_id from list_categories or get_snapshot.",
       inputSchema: {
@@ -205,6 +214,7 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
         income_stream_id: z.string().optional(),
         tenant_id: z.string().optional(),
         debt_id: z.string().optional(),
+        interest_debt_id: z.string().optional(),
         receivable_id: z.string().optional(),
       },
     },
@@ -230,6 +240,7 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
           income_stream_id: args.income_stream_id ?? null,
           tenant_id: args.tenant_id ?? null,
           debt_id: args.debt_id ?? null,
+          interest_debt_id: args.interest_debt_id ?? null,
           receivable_id: args.receivable_id ?? null,
         };
         const result = await ledger.createEntry(db, input, by, now());
@@ -362,11 +373,13 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
     {
       description:
         "Debts the household owes others: owed, paid, balance (≤ 0 = fully paid, done=true), " +
-        "the debt lines and the payments; totalBalance = total still owed. No parameters.",
+        "the debt lines and the payments; totalBalance = total still owed. Interest: interestRate (%/year), term (short|long), " +
+        "monthlyPayment, dueDay, interestPerYear, interestThisMonth (expected interest this month on the balance at the start of the month), " +
+        "interestPaidThisMonth. No parameters.",
     },
     async () => {
       try {
-        const data = await debts.getDebts(db);
+        const data = await debts.getDebts(db, now());
         return ok(data, `Còn nợ: ${vnd(data.totalBalance)}`);
       } catch (err) {
         return fail(err);
@@ -411,6 +424,86 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
         const { line, duplicate } = await rental.addLine(db, args.tenant_id, { kind: "paid_for_us", amount: args.amount, category_id: args.category_id, name: args.note }, now());
         if (!duplicate) await audit(db, actor, "tenant.paid_for_us", `tenant:${args.tenant_id}`, { category_id: args.category_id });
         return ok(line, `Đã ghi người thuê chi hộ ${vnd(args.amount)}.`);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "get_balance_sheet",
+    {
+      description:
+        "Household balance sheet (same numbers as the app's 'Tài sản & tự do' screen): A short-term / B long-term assets by section, " +
+        "C liabilities by term (short|long) × interest group (none|normal|high, with interestPerYear and interestThisMonth), equity = assets − liabilities, " +
+        "% of total and % of equity per row, the asset pyramid, real cash flow per month (cashflowMonthly) and after inflation (netCashflowMonthly), " +
+        "and every manually tracked item with its lots, profit/loss, take-profit / stop-loss distance, status and CAGR. " +
+        "Cash, receivables and debts always come from the books. date 'YYYY-MM-DD' optional (default today). Amounts are integer VND; pct fields have one decimal. " +
+        "freedom (always as of today): safety milestones A1–A3 (liquid assets vs 6/12/24 months of expenses), income milestones M2/M2p/M3, " +
+        "financial-freedom milestones F1–F3 on investable assets minus debts (with target age, year and inflation-adjusted amount), " +
+        "the parameters used (expenses manual or from the books, SWR, inflation) and this year's income plan vs actual.",
+      inputSchema: { date: z.string().optional() },
+    },
+    async (args) => {
+      try {
+        const [sheet, freedom] = await Promise.all([balance.getBalanceSheet(db, args.date, now()), getFreedom(db, now())]);
+        return ok({ ...sheet, freedom }, `Vốn chủ: ${vnd(sheet.equity)} (tài sản ${vnd(sheet.totalAssets)}, nợ ${vnd(sheet.totalLiabilities)})`);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "get_reports",
+    {
+      description:
+        "Household financial reports for a month 'YYYY-MM' or a year 'YYYY' (same numbers as the app). kind=cash_flow: opening cash, " +
+        "accounts opened / closed in the period, operating / investing / financing groups with lines (signed VND), closing cash = " +
+        "sum of account books, card debt included; year adds a per-month list. kind=income_statement: income (salary and other, " +
+        "rental, passive), expenses by wallet tier (Must with loan interest sub-line, nice-to-have, fun, tax paid, from wealth " +
+        "building, other), savings and savings rate (%), plus amounts left out (principal repaid, assets bought, reclassified, " +
+        "count adjustments). Reports never change wallets or balances. Projections are not available here (not real numbers).",
+      inputSchema: { kind: z.enum(["cash_flow", "income_statement"]), period: z.string() },
+    },
+    async (args) => {
+      try {
+        if (args.kind === "cash_flow") {
+          const cf = await reports.getCashFlow(db, args.period, now());
+          return ok(cf, `Tiền đầu kỳ ${vnd(cf.opening)} → cuối kỳ ${vnd(cf.closing)}.`);
+        }
+        const is = await reports.getIncomeStatement(db, args.period, now());
+        return ok(is, `Thu nhập ${vnd(is.income.total)}, chi tiêu ${vnd(is.expense.total)}, để dành ${vnd(is.savings)}.`);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+  server.registerTool(
+    "record_asset_value",
+    {
+      description:
+        "Record today's (or as_of 'YYYY-MM-DD') price of a manually tracked asset (item_id from get_balance_sheet items, e.g. 'vang'). " +
+        "Items measured by value take value (whole item, VND); items measured in units (gold in chỉ, shares) take unit_price (VND per unit — " +
+        "for gold: the shop's buying price). Optional cashflow (real after-tax income from the asset, VND) with cashflow_period month|year, " +
+        "and expected_return (%/year, e.g. 12). Append-only; never creates a transaction. Cannot create / delete items or lots.",
+      inputSchema: {
+        item_id: z.string().min(1),
+        value: z.number().int().nonnegative().optional(),
+        unit_price: z.number().int().nonnegative().optional(),
+        as_of: z.string().optional(),
+        cashflow: z.number().int().nonnegative().optional(),
+        cashflow_period: z.enum(["month", "year"]).optional(),
+        expected_return: z.number().optional(),
+      },
+    },
+    async (args) => {
+      try {
+        const { item_id, ...b } = args;
+        const item = await balance.addValue(db, item_id, b, memberId, now());
+        await audit(db, actor, "balance.value.add", `balance_item:${item.id}`, null);
+        const price = item.measure === "units" ? `${vnd(item.unitPrice ?? 0)}/${item.unit}` : vnd(item.value ?? 0);
+        return ok(item, `Đã cập nhật giá ${item.name}: ${price}.`);
       } catch (err) {
         return fail(err);
       }

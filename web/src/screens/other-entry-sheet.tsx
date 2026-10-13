@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { ApiError, api, errorText } from "../lib/api";
 import { defaultAccountFor, defaultBankFor, defaultWalletFor, manualAccounts, spendableWallets, walletOfMember } from "../lib/categories";
+import { checkSplit, prefillSplit, setSplitAmount, splitOrders, splitPayload, splitWallets, type ManualSplit } from "../lib/manual-split";
 import { formatVnd } from "../lib/money";
 import { ordersLeft } from "../lib/pending";
 import { atForDay, dayKey } from "../lib/period";
@@ -88,41 +89,97 @@ const tierNote = (w: Wallet | undefined): string => {
   return w.mustGroup === "have" ? "phần còn lại" : "Must";
 };
 
-/** Bảng "chia thử" — dùng chung cho thu nhập nhập tay và khoản tiền vào ở màn Gán. */
-export function AllocationPreview({ plan, boot, amount }: { plan: AllocationPlan; boot: Bootstrap; amount: number }) {
+/**
+ * Bảng "chia thử" — dùng chung cho thu nhập nhập tay, khoản tiền vào ở màn Gán và chi tiết khoản thu chưa chia.
+ * `split` khác null: đang Tự chia (UC-202) — mỗi ví một ô số; chỗ gọi gửi `splitPayload(split)` khi ghi.
+ */
+export function AllocationPreview({
+  plan,
+  boot,
+  amount,
+  split,
+  onSplit,
+  fromAccountId,
+}: {
+  plan: AllocationPlan;
+  boot: Bootstrap;
+  amount: number;
+  split: ManualSplit | null;
+  onSplit: (split: ManualSplit | null) => void;
+  /** Tài khoản tiền về — lệnh chuyển xem trước của Tự chia tính từ đây. */
+  fromAccountId: string | null;
+}) {
   const wallet = (id: string) => boot.wallets.find((w) => w.id === id);
   const account = (id: string) => boot.accounts.find((a) => a.id === id)?.name ?? id;
   const total = plan.funds.reduce((s, f) => s + f.amount, 0);
+  const orders = split ? splitOrders(split, boot.wallets, fromAccountId) : plan.transferOrders;
+  const check = split ? checkSplit(split, boot.wallets, amount) : null;
   return (
     <>
       <div class="card-h" style={{ paddingBottom: "2px" }}>
         <h2>Chia thử trước khi ghi</h2>
+        <Seg
+          label="Cách chia"
+          value={split ? "manual" : "rules"}
+          options={[
+            { value: "rules", label: "Theo luật" },
+            { value: "manual", label: "Tự chia" },
+          ]}
+          onChange={(v) => onSplit(v === "manual" ? prefillSplit(plan, boot.wallets) : null)}
+        />
       </div>
-      <div class="wf">
-        {plan.funds.map((f) => {
-          const w = wallet(f.walletId);
-          const covered = plan.deficitCovered[f.walletId];
-          return (
-            <div class="r" key={f.walletId}>
-              <span>
-                {w?.name ?? f.walletId} <span class="sub-line">{tierNote(w)}</span>
-                {covered ? <span class="sub-line" style={{ display: "block" }}>đã bù {formatVnd(covered)} cho tháng trước</span> : null}
-              </span>
-              <Money value={f.amount} mono unit={false} />
+      {split && check ? (
+        <>
+          {splitWallets(boot.wallets).map((w) => (
+            <div class="field" key={w.id}>
+              <label for={`split-${w.id}`}>
+                {w.name} <span class="sub-line">{tierNote(w)}</span>
+                {w.tier === "wealth_building" && <span class="sub-line" style={{ display: "block" }}>Profit First: để dành trước — nhỏ cũng được</span>}
+              </label>
+              <AmountInput id={`split-${w.id}`} value={split.amounts[w.id] ?? 0} onChange={(n, valid) => onSplit(setSplitAmount(split, w.id, n, valid))} />
             </div>
-          );
-        })}
-        <div class="r total">
-          <span>Tổng</span>
-          <Money value={total} mono unit={false} />
+          ))}
+          <div class="wf">
+            <div class="r total" aria-live="polite">
+              <span>{check.done}</span>
+              {check.rest && <span class={check.over ? "err" : undefined}>{check.rest}</span>}
+            </div>
+          </div>
+          {check.reminder && (
+            <div style={{ padding: "10px 16px 0" }}>
+              <Banner tone="warn" mark="!">
+                {check.reminder}. Vẫn ghi được.
+              </Banner>
+            </div>
+          )}
+        </>
+      ) : (
+        <div class="wf">
+          {plan.funds.map((f) => {
+            const w = wallet(f.walletId);
+            const covered = plan.deficitCovered[f.walletId];
+            return (
+              <div class="r" key={f.walletId}>
+                <span>
+                  {w?.name ?? f.walletId} <span class="sub-line">{tierNote(w)}</span>
+                  {covered ? <span class="sub-line" style={{ display: "block" }}>đã bù {formatVnd(covered)} cho tháng trước</span> : null}
+                </span>
+                <Money value={f.amount} mono unit={false} />
+              </div>
+            );
+          })}
+          <div class="r total">
+            <span>Tổng</span>
+            <Money value={total} mono unit={false} />
+          </div>
+          {total !== amount && (
+            <p class="err" style={{ margin: "4px 0 0" }}>
+              Tổng chia khác số tiền nhận {formatVnd(amount)}.
+            </p>
+          )}
         </div>
-        {total !== amount && (
-          <p class="err" style={{ margin: "4px 0 0" }}>
-            Tổng chia khác số tiền nhận {formatVnd(amount)}.
-          </p>
-        )}
-      </div>
-      {plan.underfunded.length > 0 && (
+      )}
+      {!split && plan.underfunded.length > 0 && (
         <div style={{ padding: "10px 16px 0" }}>
           <Banner tone="warn" mark="!">
             <strong>Chưa tới sàn:</strong> {plan.underfunded.map((id) => wallet(id)?.name ?? id).join(", ")}. Ghi đúng như vậy, không vay phần đã khóa.
@@ -130,10 +187,10 @@ export function AllocationPreview({ plan, boot, amount }: { plan: AllocationPlan
         </div>
       )}
       <div class="note">
-        {plan.transferOrders.length === 0
+        {orders.length === 0
           ? "Không sinh lệnh chuyển tiền: các ví nhận tiền nằm cùng tài khoản."
-          : `Sau khi ghi sẽ sinh ${plan.transferOrders.length} lệnh chuyển tiền: ` +
-            plan.transferOrders.map((o) => `${account(o.fromAccountId)} → ${account(o.toAccountId)} ${formatVnd(o.amount)}`).join("; ") +
+          : `Sau khi ghi sẽ sinh ${orders.length} lệnh chuyển tiền: ` +
+            orders.map((o) => `${account(o.fromAccountId)} → ${account(o.toAccountId)} ${formatVnd(o.amount)}`).join("; ") +
             ". Phân bổ trong app chỉ là ảo cho tới khi tiền đi thật."}
       </div>
     </>
@@ -151,6 +208,8 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
   const [streamId, setStreamId] = useState(d?.income_stream_id ?? "");
   const [tenantId, setTenantId] = useState(d?.tenant_id ?? "");
   const [plan, setPlan] = useState<AllocationPlan | null>(null);
+  const [split, setSplit] = useState<ManualSplit | null>(null);
+  const splitBlocked = split !== null && !checkSplit(split, boot.wallets, amount).ok;
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -225,7 +284,10 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
       }
       let orders = 0;
       try {
-        const done = await api.post<AllocationPlan & { batchId: string }>("/v1/allocate", { income_tx_id: id });
+        const done = await api.post<AllocationPlan & { batchId: string }>("/v1/allocate", {
+          income_tx_id: id,
+          ...(split ? { amounts: splitPayload(split) } : {}),
+        });
         orders = done.transferOrders.length;
       } catch (err) {
         if (!(err instanceof ApiError && err.code === "already_allocated")) throw err;
@@ -298,7 +360,7 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
         <label for="i-day">Ngày</label>
         <input id="i-day" class="ctl" type="date" max={today} value={day} onInput={(e) => setDay(e.currentTarget.value || today)} />
       </div>
-      {plan && <AllocationPreview plan={plan} boot={boot} amount={amount} />}
+      {plan && <AllocationPreview plan={plan} boot={boot} amount={amount} split={split} onSplit={setSplit} fromAccountId={accountId} />}
       {previewError && <p class="err" style={{ padding: "8px 16px 0", margin: 0 }}>{previewError}</p>}
       <div class="pad">
         {error && (
@@ -306,7 +368,7 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
             {error}
           </p>
         )}
-        <button type="button" class="btn btn-primary btn-wide" disabled={!online || busy || !plan || !accountId} onClick={() => void submit()}>
+        <button type="button" class="btn btn-primary btn-wide" disabled={!online || busy || !plan || !accountId || splitBlocked} onClick={() => void submit()}>
           {busy ? "Đang chia…" : txId !== null ? "Chia lại" : edit ? "Sửa và chia lại" : "Chia và ghi sổ"}
         </button>
         {!edit && txId === null && (

@@ -147,6 +147,7 @@ export function Sidebar() {
       <nav class="side-nav" aria-label="Màn chính">
         {NAV.map((n) => item(n.tab, n.label, n.icon))}
         {item("ledger", "Sổ giao dịch", "book")}
+        {item("net-worth", "Tài sản & tự do", "trending-up")}
         <div class="side-sep" />
         {item("settings", "Cài đặt", "settings")}
         {item("guide", "Hướng dẫn", "help")}

@@ -9,6 +9,7 @@
 - v1 (2026-10-01, commit `2438ac0`): thêm khoản phải thu (dòng `opening`), danh sách với đã cho vay / đã nhận lại / còn phải thu / đã nhận đủ, sửa tên-ghi chú, bật/tắt; `bootstrap.receivables`; tool MCP `get_receivables` (ADR-72, schema v1.14).
 - v2 (2026-10-04, commit `c9c6acb`): change [`261004-gan-tham-chieu`](../changes/archive/261004-gan-tham-chieu/proposal.md) — `POST /v1/receivables` nhận `amount: 0` (thêm người chưa nợ gì: không dòng `opening`, số dư 0) để màn Gán / Loại khác thêm người ngay tại ô **Ai trả** / **Cho ai vay** ("+ Người mới…", pwa UC-705, UC-706). Số âm, số lẻ vẫn `invalid_amount`; sheet **Thêm khoản phải thu** ở tab Nợ vẫn đòi số > 0. AC-2 sửa, AC-8 mới.
 - v3 (2026-10-05, commit `6f5e77a`): sheet **Thêm khoản phải thu** ở tab Nợ thêm được người chưa nợ gì: tên có mà Còn nợ mình để 0 thì nút là **Thêm người, chưa nợ gì** → `POST /v1/receivables { name, amount: 0 }` (như "+ Người mới…" ở màn Gán), toast "Đã thêm khoản phải thu {tên}." (không kèm "Đã trả đủ."); số âm, số lẻ vẫn bị chặn; sheet Thêm khoản nợ vẫn đòi số > 0. Lý do: chủ nhà gặp lỗi gán nhận lại cho người chưa có trong sổ (pwa UC-706 v25) — thêm người trước ở tab Nợ trước đây không làm được vì sheet đòi số > 0. AC-2 sửa, AC-9 mới.
+- v4 (2026-10-08, commit `8cd48b8`): change [`261008-bang-can-doi`](../changes/archive/261008-bang-can-doi/proposal.md) — khoản phải thu có **Kỳ hạn** Ngắn / Dài (mặc định Ngắn, bảng cân đối xếp A3 / B1); tắt ghi `deactivated_at`, bật lại xoá. Thêm AC-10, AC-11.
 
 ## Preconditions
 - Đã đăng nhập (access UC-501/UC-502). Cần mạng (luật chung S7, [README](README.md)).
@@ -16,7 +17,8 @@
 ## Main Flow — thêm khoản phải thu
 1. Người nhập **tên** người đang nợ (bắt buộc), **số tiền người ta đang nợ** lúc bắt đầu theo dõi (≥ 0; 0 = người chưa nợ gì — AC-8, AC-9), ghi chú (tuỳ chọn). PWA chặn trước khi gửi (thiếu tên, số tiền âm hay lẻ).
 2. `POST /v1/receivables` → luật chung S1 ([README](README.md)): kiểm tên, số tiền, mã; một batch ghi `receivables` + một dòng `receivable_lines` `kind = 'opening'` → 201 `Receivable` với `lent` = `balance` = số tiền, `collected = 0`, `done = false`.
-3. **Không** ví, không tài khoản nào đổi: số tiền mở sổ là ghi nhớ "người ta nợ mình", không phải tiền ra hôm nay. Tiền cho vay hôm nay thì ghi `lend` ([UC-1002](UC-1002-cho-vay-tra-ho.md)) — không thêm dòng mở sổ cho cùng số tiền đó.
+3. Kỳ hạn (`term`): **Ngắn hạn** (mặc định) hoặc **Dài hạn**, sửa qua `PATCH /v1/receivables/:id` — bảng cân đối (balance [UC-1102](../balance/UC-1102-xem-bang-can-doi.md)) xếp khoản vào A3 "Phải thu ngắn hạn" hoặc B1 "Phải thu dài hạn". Tắt khoản (`active: false`) ghi `deactivated_at` = hôm nay giờ VN; bật lại xoá — lịch sử theo tháng của bảng cân đối dùng mốc này.
+4. **Không** ví, không tài khoản nào đổi: số tiền mở sổ là ghi nhớ "người ta nợ mình", không phải tiền ra hôm nay. Tiền cho vay hôm nay thì ghi `lend` ([UC-1002](UC-1002-cho-vay-tra-ho.md)) — không thêm dòng mở sổ cho cùng số tiền đó.
 
 ## Main Flow — xem
 4. `GET /v1/receivables` → `{ totalBalance, receivables }`: mỗi khoản có `lent`, `collected`, `balance`, `done`, các dòng sổ `active` và các lần tiền đi/về (`movements`: `lend`/`collect`, `accountId`, `source`), mới nhất trước. Thứ tự và tổng theo luật chung S4.
@@ -89,6 +91,18 @@
 - When **Thêm khoản phải thu**, Ai nợ mình " Dì Bảy ", Còn nợ mình để 0; rồi mở **Thêm khoản nợ**, Nợ ai "Cô Lan", Còn nợ để 0
 - Then sheet phải thu: nút **Thêm người, chưa nợ gì** bật → thân `{ name: "Dì Bảy", amount: 0 }`; 201, `di-bay` số 0, không dòng nào; toast "Đã thêm khoản phải thu Dì Bảy."; Dì Bảy nằm ở nhóm Đã trả đủ và có trong ô Ai trả / Cho ai vay. Sheet nợ: nút "Nhập số tiền" tắt (`debtPayload` vẫn chặn số 0)
 - Tests: [`web/src/lib/receivables.test.ts`](../../web/src/lib/receivables.test.ts) › "sổ phải thu › kiểm tra khoản phải thu mới và dòng chỉnh: thiếu tên, số tiền âm hay lẻ; số 0 được (thêm người chưa nợ gì); chỉnh mang dấu"; [`web/src/lib/debts.test.ts`](../../web/src/lib/debts.test.ts) › "sổ nợ › kiểm tra khoản nợ mới và dòng nợ: thiếu tên, số tiền"; [`test/receivables.test.ts`](../../test/receivables.test.ts) › "sổ phải thu › thêm người với số 0 (+ Người mới… ở màn Gán): không dòng opening, còn phải thu 0; nhận lại thì thành trả dư" (server); nút, toast: ⚠ Chưa có test (repo chưa có test giao diện; đã xem tận mắt ở 390px, `wrangler dev` cục bộ)
+
+### AC-10: Đổi kỳ hạn sang dài hạn thì bảng cân đối xếp vào B1
+- Given khoản phải thu 5.000.000
+- When `PATCH { term: "long" }`
+- Then bảng cân đối hiện nó ở B1 "Phải thu dài hạn", không còn ở A3
+- Tests: [`test/balance.test.ts`](../../test/balance.test.ts) › "receivable, access: kỳ hạn và ngày tắt › UC-1001 AC-10: phải thu đổi sang dài hạn → B1 Phải thu dài hạn, không còn ở A3"
+
+### AC-11: Tắt khoản phải thu ghi ngày tắt, bật lại xoá
+- Given khoản phải thu đang bật
+- When `PATCH { active: false }` ngày 2026-11-10 rồi bật lại
+- Then `deactivated_at = "2026-11-10"` rồi NULL (như debt UC-901 AC-11)
+- Tests: [`test/balance.test.ts`](../../test/balance.test.ts) › "receivable, access: kỳ hạn và ngày tắt › UC-1001 AC-11: tắt khoản phải thu ngày 10/11 → deactivated_at 2026-11-10, bật lại → null"
 
 ## Traceability
 - Code: `src/routes/books.ts` › `bookRoutes`, `mount("receivables", …)`; `src/services/receivables.ts` › `RECEIVABLES` (`zeroOpening`), `createReceivable`, `getReceivables`, `updateReceivable`; `src/services/memo-books.ts` › `createBook`, `listBooks`, `updateBook`; `src/routes/v1.ts` › `GET /bootstrap` (`receivables`); `src/services/ledger.ts` › `loadRefs` (`receivables`); `src/mcp/tools.ts` › tool `get_receivables`

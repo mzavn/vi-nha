@@ -1,0 +1,49 @@
+# Cập nhật Ví nhà lên bản phát hành mới nhất của github.com/mzavn/vi-nha. Cách bấm: Actions › Cập nhật Ví nhà › Run workflow.
+# Workflow kéo bản mới vào repo này (giữ tên Worker, tên miền riêng, id database / KV của bạn trong wrangler.jsonc, giữ nguyên
+# thư mục .github/), commit rồi push; Cloudflare thấy commit mới thì tự build, nâng database và deploy.
+#
+# File này cố định — repo của mỗi nhà giữ mãi bản đầu tiên. Mọi logic nằm trong scripts/update-from-upstream.mjs của bản mới
+# (hợp đồng ghi ở đầu file đó). Chỉ có lệnh `run`, không dùng action của bên ngoài; token chỉ có trong lệnh clone và push.
+name: Cập nhật Ví nhà
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cap-nhat-vi-nha
+
+jobs:
+  update:
+    # Không chạy ở repo gốc; chỉ cập nhật nhánh mặc định (nhánh Cloudflare deploy).
+    if: github.repository != 'mzavn/vi-nha' && github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Lấy repo của bạn
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          AUTH="$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          git -c "http.extraheader=AUTHORIZATION: basic $AUTH" clone -q --depth=1 --branch "$GITHUB_REF_NAME" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" repo
+
+      - name: Lấy script cập nhật của bản mới
+        working-directory: repo
+        run: |
+          git fetch -q --depth=1 --no-tags https://github.com/mzavn/vi-nha.git main
+          git show FETCH_HEAD:scripts/update-from-upstream.mjs > "$RUNNER_TEMP/update.mjs"
+
+      - name: Áp bản mới (giữ cấu hình Cloudflare của bạn)
+        working-directory: repo
+        run: node "$RUNNER_TEMP/update.mjs"
+
+      - name: Đẩy lên GitHub
+        working-directory: repo
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          if [ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$GITHUB_REF_NAME")" ]; then exit 0; fi
+          AUTH="$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          git -c "http.extraheader=AUTHORIZATION: basic $AUTH" push -q origin "HEAD:$GITHUB_REF_NAME"
+          echo "Đã đẩy bản mới. Cloudflare đang build và deploy — xem ở trang Cloudflare › Workers › Deployments."

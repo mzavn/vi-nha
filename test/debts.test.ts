@@ -167,7 +167,7 @@ describe("sổ nợ", () => {
     await call("POST", "/v1/debts", { id: "cu", name: "Nợ cũ", amount: 1 });
     await call("PATCH", "/v1/debts/cu", { active: false });
     await pay(250_000);
-    expect((await call<{ debts: unknown }>("GET", "/v1/bootstrap")).json.data.debts).toEqual([
+    expect((await call<{ debts: unknown }>("GET", "/v1/bootstrap")).json.data.debts).toMatchObject([
       { id: "chu-tu", name: "Chú Tư", balance: 3_000_000 },
       { id: "co-lan", name: "Cô Lan", balance: 750_000 },
     ]);

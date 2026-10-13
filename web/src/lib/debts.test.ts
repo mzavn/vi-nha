@@ -16,6 +16,14 @@ const debt = (id: string, balance: number, extra: Partial<Debt> = {}): Debt => (
   createdAt: "2026-09-01T00:00:00Z",
   lines: [],
   payments: [],
+  interestRate: 0,
+  term: "short",
+  monthlyPayment: null,
+  dueDay: null,
+  interestPerYear: 0,
+  interestThisMonth: 0,
+  interestPaidThisMonth: 0,
+  deactivatedAt: null,
   ...extra,
 });
 

@@ -54,7 +54,7 @@ const count = (table: string) => Number(raw.prepare(`SELECT COUNT(*) AS n FROM $
 const nothingCreated = () => {
   expect(count("members")).toBe(0);
   expect(count("accounts")).toBe(0);
-  expect(count("wallets")).toBe(0);
+  expect(count("wallets WHERE id <> 'loan-interest'")).toBe(0); // ví hệ thống "Lãi vay" có sẵn từ schema
   expect(raw.prepare("SELECT v FROM config WHERE k = 'setup_done'").get()).toBeUndefined();
 };
 const loginFailures = () => raw.prepare("SELECT failures FROM auth_failures WHERE scope = 'login' AND ip = ?").get(IP);
@@ -199,6 +199,7 @@ describe("UC-510 thiết lập nhà lần đầu", () => {
         { id: "food", name: "Ăn uống", tier: "must", must_group: "must", kind: "envelope", scope: "shared", account_id: "vcb-cua-bo", private: 0 },
         { id: "transport", name: "Đi lại", tier: "must", must_group: "must", kind: "envelope", scope: "shared", account_id: "vcb-cua-bo", private: 0 },
         { id: "utilities", name: "Điện nước", tier: "must", must_group: "must", kind: "bill", scope: "shared", account_id: "vcb-cua-bo", private: 0 },
+        { id: "loan-interest", name: "Lãi vay", tier: "must", must_group: "must", kind: "bill", scope: "shared", account_id: "vcb-cua-bo", private: 0 },
         { id: "nice-to-have", name: "Có thì tốt", tier: "must", must_group: "have", kind: "envelope", scope: "shared", account_id: "vcb-cua-bo", private: 0 },
       ]);
       expect(raw.prepare("SELECT wallet_id, mode, period, percent, amount FROM allocations WHERE active = 1 ORDER BY priority").all()).toEqual([
@@ -218,6 +219,7 @@ describe("UC-510 thiết lập nhà lần đầu", () => {
         { id: "lending", name: "Cho vay / trả hộ", default_wallet_id: "nice-to-have", icon: "swap" },
         { id: "debt-payment", name: "Trả nợ", default_wallet_id: "nice-to-have", icon: "credit-card" },
         { id: "shopping", name: "Mua sắm", default_wallet_id: "nice-to-have", icon: "bag" },
+        { id: "loan-interest", name: "Lãi vay", default_wallet_id: "loan-interest", icon: "percent" },
       ]);
       expect(categories.every((c) => isIconName(String(c.icon)))).toBe(true);
     });
@@ -228,9 +230,10 @@ describe("UC-510 thiết lập nhà lần đầu", () => {
       expect(raw.prepare("SELECT id, account_id FROM wallets ORDER BY sort").all()).toEqual([
         { id: "income", account_id: "tien-mat" },
         { id: "wealth-building", account_id: "tien-mat" },
+        { id: "loan-interest", account_id: "tien-mat" },
         { id: "nice-to-have", account_id: "tien-mat" },
       ]);
-      expect(raw.prepare("SELECT id FROM categories ORDER BY sort").all().map((c) => c.id)).toEqual(["health", "lending", "debt-payment", "shopping"]);
+      expect(raw.prepare("SELECT id FROM categories ORDER BY sort").all().map((c) => c.id)).toEqual(["health", "lending", "debt-payment", "shopping", "loan-interest"]);
     });
 
     it("sau thiết lập ghi được khoản chi ngay; chia thử 10.000.000: Tích sản 1.000.000, Thuế 1.000.000, Có thì tốt nhận phần còn lại", async () => {

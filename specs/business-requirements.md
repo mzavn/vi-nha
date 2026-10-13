@@ -133,3 +133,15 @@ Hai luật gốc (hiến pháp, `docs/profit_first_phuong_phap.md` §0):
 - **Out of scope:** tính lãi cho vay, lịch thu nợ, nhắc người nợ, ghi nhận doanh thu dồn tích (một khoản phải thu không bao giờ là thu nhập — ADR-72), tool MCP cho bức tranh tiền thật.
 - **Use cases:** `specs/receivable/` — [UC-1001](receivable/UC-1001-them-va-xem-khoan-phai-thu.md), [UC-1002](receivable/UC-1002-cho-vay-tra-ho.md), [UC-1003](receivable/UC-1003-nhan-lai-tien.md), [UC-1004](receivable/UC-1004-chinh-huy-dong-phai-thu.md), [UC-1005](receivable/UC-1005-xem-buc-tranh-tien-that.md); liên quan `specs/ledger/` UC-101 (`collect`, `receivable_id`), `specs/ingest/` UC-305 (gán log), `specs/pwa/` UC-705/UC-706/UC-707 (Loại khác, Gán, tab Nợ), `specs/notify/` UC-402 (tin sáng), `specs/mcp/` UC-603/UC-604 (`get_receivables`, `add_transaction`, `assign_log`).
 - **Nguồn:** yêu cầu chủ nhà 2026-10-01 ("có nợ rồi, còn khoản phải thu thì sao?"; "Kế toán dễ lãi giả lỗ thật, Profit First cho thấy tiền tươi thóc thật." — `docs/profit_first_phuong_phap.md` §8, ADR-72).
+
+## BR-15: Biết nhà mình có gì, nợ gì, tiền vào ra thế nào và còn cách tự do tài chính bao xa
+- **Goal:** một màn trả lời "tổng tài sản, nợ, vốn chủ hôm nay và từng tháng", "tài sản nằm ở tầng nào của tháp, lô vàng nào đang lãi / lỗ, khoản nào đã chạm cắt lỗ", "tháng / năm này tiền vào ra theo sinh hoạt, đầu tư, tài chính ra sao, trả lãi vay bao nhiêu, để dành được bao nhiêu", "đã tới Mốc an tâm / Tự do nào, còn bao nhiêu năm tới tuổi mục tiêu, và nếu thu nhập tăng X% thì khi nào tới" — số thật tách khỏi số gõ thử, tách khỏi sổ thu chi hằng ngày.
+- **Success metric:**
+  - Chủ nhà nhập tài sản ngoài app (vàng, chứng khoán, đất) trong một lần ngồi (≤ 15 phút), vốn chủ khớp bảng tính của mình; cập nhật giá vàng ≤ 3 chạm sau khi mở mục.
+  - Mỗi khoản vay có lãi có dòng "Lãi vay" dự kiến trong ngân sách tháng và lần trả tách đúng lãi / gốc.
+  - Lưu chuyển tiền một tháng: tiền đầu kỳ + ba nhóm = tiền cuối kỳ đúng từng đồng (= Σ sổ tài khoản).
+  - Đổi giả định ở Thử số thấy bảng dự phóng đổi ngay, không số nào bị lưu; không số tổng hợp nào cứng trong code (thông số ở Cài đặt › Tham số).
+  - Thêm tài sản, định giá, lô không đổi ví, số dư tài khoản, còn để chi, Tiền chi được hay Tích sản nào.
+- **Out of scope:** sổ kế toán luật định, giá thị trường tự động, tư vấn đầu tư; biểu đồ lịch sử, nhắc định giá / chạm giá / ngày trả nợ, lãi thẻ tín dụng (để sau).
+- **Use cases:** `specs/balance/` — [UC-1101](balance/UC-1101-quan-ly-tai-san-lo-gia.md) … [UC-1107](balance/UC-1107-thu-so-du-phong.md); lãi vay: `specs/debt/` UC-901…UC-903, `specs/ledger/` UC-101, UC-103, UC-104, `specs/allocation/` UC-201; màn: `specs/pwa/` [UC-717](pwa/UC-717-man-tai-san-va-tu-do.md); MCP: `specs/mcp/` UC-602, [UC-606](mcp/UC-606-cap-nhat-gia-tai-san-qua-mcp.md).
+- **Nguồn:** chủ nhà 2026-10-08 (change [`261008-bang-can-doi`](changes/archive/261008-bang-can-doi/proposal.md)) — "tôi muốn nó sẽ linh động thay đổi được theo thời gian — bạn làm, tôi cung cấp các số liệu thực trên Ví nhà"; "khoản này xuất hiện thì phải có mục trả lãi cho khoản này trong chi tiêu tháng". ADR-99…ADR-107.

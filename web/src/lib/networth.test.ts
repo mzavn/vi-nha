@@ -15,6 +15,7 @@ const nw = (extra: Partial<NetWorth> = {}): NetWorth => ({
   tenantsPrepaid: 0,
   debts: 0,
   netWorth: 0,
+  balanceItems: 0,
   ...extra,
 });
 
@@ -38,7 +39,7 @@ describe("khối tiền thật trước (tab Nợ)", () => {
     expect(lines[0]!.note).toBe(`trong đó Tích sản 30.000.000${NBSP}₫ đã khóa · còn để chi tuần này 1.200.000${NBSP}₫`);
     expect(lines.find((l) => l.key === "owedToUs")).toMatchObject({ value: 8_000_000, note: "chưa phải tiền" });
     expect(lines.find((l) => l.key === "weOwe")!.value).toBe(-16_000_000);
-    expect(lines.at(-1)).toMatchObject({ label: "Tài sản ròng", value: 62_000_000 });
+    expect(lines.at(-1)).toMatchObject({ label: "Vốn chủ sở hữu (tài sản ròng)", value: 62_000_000 });
   });
 
   it("ẩn dòng bằng 0: không tài sản, không ai nợ, không người thuê trả trước — vẫn giữ tiền thật và tài sản ròng", () => {
@@ -77,5 +78,20 @@ describe("khối tiền thật trước (tab Nợ)", () => {
     );
     expect(netWorthLines(nw({ wealthBuildingAccounts, spendableThisWeek: 0 }))[0]!.note).toBe(`trong đó Tài khoản Tích sản 1.012.000${NBSP}₫ (${by}) · còn để chi tuần này 0${NBSP}₫`);
     expect(netWorthLines(nw({ wealthBuildingAccounts: { total: 0, accounts: wealthBuildingAccounts.accounts.map((a) => ({ ...a, balance: 0 })) } }))[0]!.note).toBe(`còn để chi tuần này 0${NBSP}₫`);
+  });
+
+  it("UC-1005 AC-7, AC-8: dòng \"Tài sản mua qua app\" (= assets) rồi \"Tài sản ngoài app (vàng, đất…)\" (= balanceItems, ẩn khi 0); các dòng cộng lại đúng vốn chủ", () => {
+    // buy_asset vàng 2.000.000 đã có mục "Vàng" gắn `gold` 126.000.000 → assets về 0, balanceItems 126.000.000.
+    const lines = netWorthLines(nw({ cash: 30_000_000, assets: 0, balanceItems: 126_000_000, debts: 20_000_000, netWorth: 136_000_000 }));
+    expect(lines.map((l) => l.key)).toEqual(["cash", "balanceItems", "weOwe", "netWorth"]);
+    expect(lines.find((l) => l.key === "balanceItems")).toMatchObject({ level: "row", label: "Tài sản ngoài app (vàng, đất…)", value: 126_000_000 });
+    const both = netWorthLines(nw({ cash: 1_000_000, assets: 1_000_000, balanceItems: 600_000_000, netWorth: 602_000_000 }));
+    expect(both.map((l) => l.key)).toEqual(["cash", "assets", "balanceItems", "netWorth"]);
+    expect(both.find((l) => l.key === "assets")!.label).toBe("Tài sản mua qua app");
+    const sum = (ls: typeof lines) => ls.filter((l) => l.level === "hero" || l.level === "row").reduce((s, l) => s + l.value, 0);
+    expect(sum(lines)).toBe(136_000_000);
+    expect(sum(both)).toBe(602_000_000);
+    // Bản cache cũ chưa có `balanceItems`: coi như 0, không hiện dòng.
+    expect(netWorthLines({ ...nw({ cash: 5 }), balanceItems: undefined as unknown as number }).map((l) => l.key)).toEqual(["cash", "netWorth"]);
   });
 });

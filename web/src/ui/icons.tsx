@@ -227,6 +227,19 @@ const P: Record<IconName, JSX.Element> = {
       <path d="M17 12h.01M12 12h.01M7 12h.01" />
     </>
   ),
+  percent: (
+    <>
+      <path d="M19 5 5 19" />
+      <circle cx="6.5" cy="6.5" r="2.5" />
+      <circle cx="17.5" cy="17.5" r="2.5" />
+    </>
+  ),
+  "trending-up": (
+    <>
+      <path d="M22 7 13.5 15.5 8.5 10.5 2 17" />
+      <path d="M16 7h6v6" />
+    </>
+  ),
 };
 
 export function Icon({ name, size = 20, label }: { name: string; size?: number; label?: string }) {

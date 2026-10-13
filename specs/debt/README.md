@@ -16,12 +16,15 @@ chỉnh tay); tiền trả nợ là một khoản `spend` thật của sổ cái
 | Mở sổ (`opening`) | Dòng đầu tiên, ghi khi thêm khoản nợ: số còn nợ lúc bắt đầu theo dõi. Luôn > 0 |
 | Vay thêm (`borrow`) | Nợ thêm cùng người đó. Luôn > 0 |
 | Chỉnh tay (`adjust`) | Sửa số còn nợ (bớt lãi, cộng lãi, sai số lúc mở sổ). ≠ 0, có dấu: dương = nợ thêm, âm = bớt nợ |
+| Lãi suất, kỳ hạn, số trả, ngày trả | Thuộc tính của khoản nợ (từ v1.31): lãi suất %/năm (0 = không lãi), Ngắn / Dài hạn (bảng cân đối), số trả mỗi tháng (gốc + lãi), ngày trả 1–28. Không tự cộng lãi vào số còn nợ — lãi nhập gốc vẫn là Chỉnh tay |
+| Lãi dự kiến tháng | Với khoản đang bật có lãi suất > 0: dư nợ đầu tháng × lãi suất ÷ 12 (cắt về đồng). Là dự kiến tháng của ví Must "Lãi vay" (ledger) — ADR-106 |
+| Trả lãi / trả gốc | Một lần trả khoản có lãi là **hai** khoản chi: **lãi** (`interest_debt_id`, danh mục / ví "Lãi vay" — chi phí, không giảm nợ) và **gốc** (`debt_id` — giảm nợ) ([UC-902](UC-902-tra-no.md), [UC-903](UC-903-gan-giao-dich-ngan-hang-la-tra-no.md)) |
 | Trả nợ | Một khoản chi (`spend`) của sổ cái có `transactions.debt_id`; tiền ra thật từ một tài khoản và một ví (thường danh mục `debt-payment`, ví giữ riêng "Thu cho thuê"). Ghi tay ([UC-902](UC-902-tra-no.md)) hoặc gán giao dịch ngân hàng ([UC-903](UC-903-gan-giao-dich-ngan-hang-la-tra-no.md)) |
 | Đã vay (`owed`) | Σ dòng nợ `active` |
 | Đã trả (`paid`) | Σ khoản `spend` `active` mang `debt_id` của khoản nợ |
 | Còn nợ (`balance`) | `owed − paid` (view `v_debt_balance`). Tổng còn nợ của hộ = Σ `max(balance, 0)` các khoản đang bật |
 | Đã trả xong (`done`) | `balance ≤ 0`. Âm = trả dư; khoản vẫn còn trong danh sách (nhóm "Đã trả xong") cho tới khi tắt |
-| Tắt khoản nợ (`active = false`) | Không trả, không vay thêm được nữa (`inactive_debt`); không vào tổng còn nợ, tin sáng, `bootstrap`. Không có xoá |
+| Tắt khoản nợ (`active = false`) | Không trả, không vay thêm được nữa (`inactive_debt`); không vào tổng còn nợ, tin sáng, `bootstrap`, lãi dự kiến. Ghi ngày tắt (`deactivated_at`) để bảng cân đối vẫn tính khoản ở các ngày trước đó (ADR-100). Không có xoá |
 
 ## Use cases
 
@@ -35,11 +38,12 @@ chỉnh tay); tiền trả nợ là một khoản `spend` thật của sổ cái
 Entity model: [entities.md](entities.md). Màn PWA: tab **Nợ** ở Ví & quỹ ([pwa/UC-707](../pwa/UC-707-xem-vi-va-quy.md)), sheet **Trả nợ** ([pwa/UC-712](../pwa/UC-712-chuyen-ngan-sach-va-bu.md)). Tin sáng: dòng 💳 ([notify/UC-402](../notify/UC-402-tin-sang-0700.md)).
 
 ## Code thuộc context này
-- `src/services/debts.ts`: `getDebts`, `createDebt`, `updateDebt`, `addDebtLine`, `voidDebtLine` — mỏng, gọi service sổ đối ứng dùng chung `src/services/memo-books.ts` (spec `DEBTS`; dùng chung với sổ phải thu)
+- `src/services/debts.ts`: `getDebts`, `createDebt`, `updateDebt`, `addDebtLine`, `voidDebtLine` — mỏng, gọi service sổ đối ứng dùng chung `src/services/memo-books.ts` (spec `DEBTS`, cột riêng `debtCols`; dùng chung với sổ phải thu); `debtInterest`, `expectedInterestTotal` (lãi dự kiến / đã trả tháng — dùng bởi ledger, allocation, balance)
+- `src/domain/interest.ts`: `monthlyInterest`, `yearlyInterest`, `interestGroup`, `interestPart`, `percentToBps`, `withInterestRule` (hàm thuần, ADR-106)
 - `src/routes/books.ts` › `bookRoutes` (`mount("debts", "debt-lines", …)` — mount `/v1`: `/debts`, `/debts/:id`, `/debts/:id/lines`, `/debt-lines/:id/void`; cùng một `mount` với sổ phải thu)
-- `migrations/0013_debts.sql`: bảng `debts`, `debt_lines`; cột `transactions.debt_id`; view `v_debt_balance`; trigger `trg_debt_lines_append_only`, `trg_debt_lines_no_delete`; `schema_version` `1.13`
-- MCP: `get_debts`; `debt_id` ở `add_transaction` và split của `assign_log` (`src/mcp/tools.ts`); tin sáng: `src/cron/daily.ts` + `src/notify/format.ts` › `dailyMessage` (`debts`)
-- PWA: `web/src/lib/debts.ts` (bọc `web/src/lib/memo-books.ts` dùng chung với sổ phải thu); tab Nợ `web/src/screens/debts.tsx` (`DebtsTab` — card "Mình nợ", vẽ bằng `BookCard`/`BookDetailSheet`/`BookAddSheet`/`BookLineSheet` của `web/src/screens/memo-book.tsx`; mount ở `web/src/screens/wallets.tsx`); sheet Trả nợ `web/src/screens/budget-sheets.tsx` › `DebtSheet`; ô "Trả nợ cho" ở `web/src/screens/assign.tsx`
-- Test: `test/debts.test.ts`, `web/src/lib/debts.test.ts`; khối sổ nợ trong `test/{logs,mcp,format,schema}.test.ts`
+- `migrations/0013_debts.sql`: bảng `debts`, `debt_lines`; cột `transactions.debt_id`; view `v_debt_balance`; trigger `trg_debt_lines_append_only`, `trg_debt_lines_no_delete`; `schema_version` `1.13`. `migrations/0031_balance_sheet.sql` (phần debt): `debts.interest_rate_bps`, `term`, `monthly_payment`, `due_day`, `deactivated_at`; `transactions.interest_debt_id`
+- MCP: `get_debts` (kèm trường lãi); `debt_id`, `interest_debt_id` ở `add_transaction` và split của `assign_log` (`src/mcp/tools.ts`); tin sáng: `src/cron/daily.ts` + `src/notify/format.ts` › `dailyMessage` (`debts`)
+- PWA: `web/src/lib/debts.ts` (bọc `web/src/lib/memo-books.ts` dùng chung với sổ phải thu); `web/src/lib/interest.ts` (tách lãi / gốc, hai khoản chi, tách sẵn ở màn Gán, ô lãi suất / kỳ hạn, câu chữ dòng lãi); tab Nợ `web/src/screens/debts.tsx` (`DebtsTab` — card "Mình nợ", vẽ bằng `BookCard`/`BookDetailSheet`/`BookAddSheet`/`BookLineSheet` của `web/src/screens/memo-book.tsx`; mount ở `web/src/screens/wallets.tsx`); sheet Trả nợ `web/src/screens/budget-sheets.tsx` › `DebtSheet`; ô "Trả nợ cho" ở `web/src/screens/assign.tsx`
+- Test: `test/debts.test.ts`, `web/src/lib/debts.test.ts`, `web/src/lib/interest.test.ts`; khối "debt, ledger, allocation: lãi vay hằng tháng" trong `test/balance.test.ts`; khối sổ nợ trong `test/{logs,mcp,format,schema}.test.ts`
 
-Dùng chung, không sở hữu: `Transaction(spend)` + `buildEntry` (ledger, [UC-101](../ledger/UC-101-nhap-tay-khoan-tien.md)), danh mục `debt-payment` và ví giữ riêng "Thu cho thuê" (ledger/rental, ADR-63), gán log (ingest, [UC-305](../ingest/UC-305-gan-log-chua-gan.md)), hàng đợi offline (pwa, UC-704), tin sáng (notify, UC-402).
+Dùng chung, không sở hữu: `Transaction(spend)` + `buildEntry` (ledger, [UC-101](../ledger/UC-101-nhap-tay-khoan-tien.md)), danh mục `debt-payment` và ví giữ riêng "Thu cho thuê" (ledger/rental, ADR-63), ví và danh mục hệ thống `loan-interest` "Lãi vay" (ledger, ADR-106), gán log (ingest, [UC-305](../ingest/UC-305-gan-log-chua-gan.md)), hàng đợi offline (pwa, UC-704), tin sáng (notify, UC-402). Bảng cân đối đọc sổ nợ (nhóm lãi, tiền lãi/năm, ngắn / dài hạn — balance [UC-1102](../balance/UC-1102-xem-bang-can-doi.md)).

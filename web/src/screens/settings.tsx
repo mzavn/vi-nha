@@ -1,7 +1,7 @@
 // Cài đặt (#settings): mở từ nút bánh răng ở Hôm nay, không phải tab thứ năm.
-// Mười một phần, mỗi phần một card (Thông báo có hai: giờ nhắc của cả nhà và thông báo trên máy này);
+// Mười hai phần, mỗi phần một card (Thông báo có hai: giờ nhắc của cả nhà và thông báo trên máy này);
 // mọi chỗ sửa nằm trong sheet (DESIGN.md §4: sheet là nơi mọi edge case được giải).
-// Thứ tự theo mức hay sửa của nhà (audit 261001 F05): ví & số nạp trước, khoá kết nối, Claude, tham số và nhật ký thay đổi gom vào "Nâng cao".
+// Thứ tự theo mức hay sửa của nhà (audit 261001 F05): ví & số nạp trước, khoá kết nối, Claude, tham số, nhật ký thay đổi và cập nhật bản mới gom vào "Nâng cao".
 // Điện thoại: các card xếp dọc, hàng chip dính dưới thanh tiêu đề để nhảy tới phần cần sửa; "Nâng cao" gập sẵn;
 // cuối trang là "Máy này" (giao diện sáng/tối, đăng xuất).
 // Máy tính (≥1024px): hai cột — danh sách phần bên trái, nội dung phần đang chọn bên phải; tài khoản, ví, mã là bảng.
@@ -10,11 +10,12 @@
 import { Fragment, type ComponentChildren } from "preact";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { api, ApiError, errorText } from "../lib/api";
+import { LATEST_RELEASE_API, releaseTag, UPDATE_COMMAND, UPDATE_GUIDE_URL, updateView, type UpdateView } from "../lib/app-update";
 import { connectionRows } from "../lib/ai-connections";
 import { canAddMember, passwordLine } from "../lib/members";
 import { formatVnd } from "../lib/money";
 import { dayKey, previousDay, shortDate } from "../lib/period";
-import { ACCOUNT_KIND_LABEL, allocationSummary, appVersionLabel, auditView, bankName, formatPercent, groupWallets, MATCH_LABEL, MEANING_LABEL, scheduleRows, secretLabel, sepayLabel, streamSummary, syncRangeError } from "../lib/settings";
+import { ACCOUNT_KIND_LABEL, allocationSummary, appVersionLabel, auditView, bankName, fiConfigSummary, formatPercent, groupWallets, MATCH_LABEL, MEANING_LABEL, scheduleRows, secretLabel, sepayLabel, streamSummary, syncRangeError } from "../lib/settings";
 import { deviceLabel, isIos, lastOkText, seriesView, sqliteUtcToIso, type PushState } from "../lib/push";
 import { balanceText } from "../lib/rental";
 import { SEPAY_REGISTER_URL, SOURCE_URL } from "../lib/splits";
@@ -52,6 +53,7 @@ import { signOutEverywhereNote, useLogout, useTheme, useWide } from "../ui/shell
 import {
   AccountSheet,
   ConfigSheet,
+  FiConfigSheet,
   FeeSheet,
   MemberNewSheet,
   MemberPasswordSheet,
@@ -81,6 +83,8 @@ const SECTIONS = [
   { id: "parameters", label: "Tham số", advanced: true },
   // Ai đổi gì, lúc nào (ADR-90): xem khi nghi có người lạ đụng vào.
   { id: "audit-log", label: "Nhật ký thay đổi", advanced: true },
+  // Hỏi GitHub bản mới khi bấm, chỉ cách cập nhật (UC-709 AC-30).
+  { id: "app-update", label: "Cập nhật Ví nhà", advanced: true },
 ] as const;
 type SectionId = (typeof SECTIONS)[number]["id"];
 const MAIN = SECTIONS.filter((x) => !x.advanced);
@@ -99,6 +103,7 @@ export type Edit =
   | { kind: "sepay"; item: SepayConnection | null }
   | { kind: "sepay-secret"; connection: SepayConnection; key: SepaySecretKey }
   | { kind: "config" }
+  | { kind: "fi-config" }
   | { kind: "notify" }
   | { kind: "stream"; item: IncomeStream | null }
   | { kind: "tenant"; item: Tenant | null }
@@ -186,6 +191,8 @@ export function Settings() {
             <Skeleton rows={5} />
           </Card>
         )}
+        {/* Bản lỗi không tải được cài đặt vẫn cập nhật được. */}
+        {s.error && <AppUpdate />}
       </>
     );
   }
@@ -214,6 +221,7 @@ export function Settings() {
       "members": <Members {...props} />,
       "parameters": <Params {...props} />,
       "audit-log": <AuditLog />,
+      "app-update": <AppUpdate />,
     })[id];
 
   return (
@@ -254,7 +262,7 @@ export function Settings() {
             <button type="button" class="srow" aria-expanded={advanced} onClick={() => setAdvanced((v) => !v)}>
               <span class="srow-main">
                 <span class="srow-t">Nâng cao</span>
-                <span class="srow-s">{ADVANCED.map((x) => x.label).join(" · ")}: khoá SePay, Telegram, Zalo, nối Claude, ngưỡng tự chia, Quỹ an tâm, ai đổi gì lúc nào</span>
+                <span class="srow-s">{ADVANCED.map((x) => x.label).join(" · ")}: khoá SePay, Telegram, Zalo, nối Claude, ngưỡng tự chia, Quỹ an tâm, ai đổi gì lúc nào, bản mới</span>
               </span>
               <span class="srow-r">
                 <Icon name={advanced ? "chevron-up" : "chevron-down"} size={16} />
@@ -290,6 +298,7 @@ export function Settings() {
         <SecretSheet secretKey={edit.key} secret={edit.connection[edit.key]} connection={edit.connection} onClose={() => setEdit(null)} onSaved={saved} />
       )}
       {edit?.kind === "config" && <ConfigSheet config={s.data.config} onClose={() => setEdit(null)} onSaved={saved} />}
+      {edit?.kind === "fi-config" && <FiConfigSheet config={s.data.config} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "notify" && s.data.notifySchedule && <NotifyScheduleSheet schedule={s.data.notifySchedule} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "stream" && <StreamSheet d={s.data} item={edit.item} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "tenant" && <TenantSheet item={edit.item} onClose={() => setEdit(null)} onSaved={saved} />}
@@ -1472,6 +1481,10 @@ function Params({ d, ro, open }: SectionProps) {
         right={<span class="srow-v">{c.safety_fund_months} tháng</span>}
         onClick={edit}
       />
+      {/* Bản cài đặt lưu offline từ trước 0031 thiếu các khoá fi_* thì chưa hiện hàng này. */}
+      {c.fi_safety_months !== undefined && (
+        <Row title="Tài sản & tự do" sub={fiConfigSummary(c)} right={<Icon name="chevron-right" size={16} />} onClick={ro ? undefined : () => open({ kind: "fi-config" })} />
+      )}
     </Card>
   );
 }
@@ -1501,6 +1514,82 @@ function AuditLog() {
           const v = auditView(e);
           return <Row key={e.id} title={v.title} sub={v.sub} sub2={v.fields ?? undefined} />;
         })
+      )}
+    </Card>
+  );
+}
+
+/**
+ * Cập nhật Ví nhà (UC-709 AC-30): hỏi GitHub bản phát hành mới nhất **chỉ khi bấm**, rồi chỉ cách cập nhật theo cách đã cài —
+ * nút Deploy: mở workflow "Cập nhật Ví nhà" trong repo của nhà; cài bằng lệnh: lệnh để chạy trên máy. Không cần cài đặt đã tải.
+ */
+function AppUpdate() {
+  const { online } = useApp();
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<UpdateView | "error" | null>(null);
+
+  async function check() {
+    setBusy(true);
+    try {
+      const res = await fetch(LATEST_RELEASE_API, { headers: { Accept: "application/vnd.github+json" } });
+      const latest = res.ok ? releaseTag(await res.json()) : null;
+      setResult((latest && updateView(__APP_VERSION__, latest, __INSTALL__)) || "error");
+    } catch {
+      setResult("error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card id="app-update" title="Cập nhật Ví nhà" flush note="Ví nhà chỉ hỏi GitHub bản mới nhất khi bạn bấm Kiểm tra. Cập nhật không đụng tới số liệu của nhà.">
+      {__APP_VERSION__ ? (
+        <div class="field" style={{ borderTop: 0 }}>
+          <span class="k">Đang chạy bản {__APP_VERSION__}</span>
+          <button type="button" class="btn" disabled={!online || busy} onClick={() => void check()}>
+            {busy ? "Đang kiểm tra…" : "Kiểm tra bản mới"}
+          </button>
+        </div>
+      ) : (
+        <Row title="Bản phát triển — cập nhật bằng git." />
+      )}
+      {result === "error" && (
+        <div class="srow">
+          <span class="srow-s err">Chưa kiểm tra được. Thử lại sau.</span>
+        </div>
+      )}
+      {result && result !== "error" && result.state === "latest" && <Row title={result.text} />}
+      {result && result !== "error" && result.state === "newer" && (
+        <div class="srow srow-stack">
+          <span class="srow-t">{result.text}</span>
+          {result.action.kind === "workflow" && <span class="srow-s">Trên GitHub bấm Run workflow, rồi bấm Run workflow lần nữa. Vài phút sau Cloudflare cài xong bản mới.</span>}
+          {result.action.kind === "actions-hint" && <span class="srow-s">Mở repo Ví nhà của bạn trên GitHub › Actions › Cập nhật Ví nhà › Run workflow.</span>}
+          {result.action.kind === "command" && (
+            <>
+              <span class="srow-s">Trong thư mục vi-nha trên máy, chạy:</span>
+              <span class="copyrow">
+                <code class="num">{result.action.command}</code>
+                <button type="button" class="btn" onClick={() => void copyText(UPDATE_COMMAND, "lệnh cập nhật")} aria-label="Chép lệnh cập nhật">
+                  <Icon name="copy" size={16} />
+                  Chép
+                </button>
+              </span>
+            </>
+          )}
+          <span class="copyrow" style={{ justifyContent: "flex-start", flexWrap: "wrap" }}>
+            {result.action.kind === "workflow" && (
+              <a class="btn btn-primary" href={result.action.url} target="_blank" rel="noopener">
+                Cập nhật
+              </a>
+            )}
+            <a class="btn" href={result.notesUrl} target="_blank" rel="noopener">
+              Xem có gì mới
+            </a>
+            <a class="btn" href={UPDATE_GUIDE_URL} target="_blank" rel="noopener">
+              Hướng dẫn cập nhật
+            </a>
+          </span>
+        </div>
       )}
     </Card>
   );

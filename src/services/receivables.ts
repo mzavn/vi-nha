@@ -20,6 +20,7 @@ const RECEIVABLES: books.MemoBookSpec = {
   lineNoun: "dòng phải thu",
   inactiveCode: "inactive_receivable",
   zeroOpening: true,
+  extra: { select: "d.term", parse: books.termCols },
 };
 
 export interface ReceivableLine {
@@ -54,13 +55,17 @@ export interface Receivable {
   /** Còn phải thu ≤ 0: người ta đã trả đủ. */
   done: boolean;
   createdAt: string;
+  deactivatedAt: string | null;
+  /** Kỳ hạn: ngắn → bảng cân đối A3, dài → B1. */
+  term: "short" | "long";
   lines: ReceivableLine[];
   movements: ReceivableMovement[];
 }
 
-function toReceivable({ in: lent, out: collected, movements, ...b }: books.MemoBook<ReceivableLine>): Receivable {
+function toReceivable({ in: lent, out: collected, movements, extra, ...b }: books.MemoBook<ReceivableLine>): Receivable {
   return {
     ...b,
+    term: extra.term as Receivable["term"],
     lent,
     collected,
     movements: movements.map((t) => ({
@@ -86,8 +91,8 @@ export async function createReceivable(db: D1Database, b: books.Input, now: Date
   return toReceivable(await books.getBook<ReceivableLine>(db, RECEIVABLES, await books.createBook(db, RECEIVABLES, b, now)));
 }
 
-export async function updateReceivable(db: D1Database, id: string, b: books.Input): Promise<Receivable> {
-  await books.updateBook(db, RECEIVABLES, id, b);
+export async function updateReceivable(db: D1Database, id: string, b: books.Input, now: Date): Promise<Receivable> {
+  await books.updateBook(db, RECEIVABLES, id, b, now);
   return toReceivable(await books.getBook<ReceivableLine>(db, RECEIVABLES, id));
 }
 
