@@ -4,19 +4,22 @@
 // Ba việc đó đi qua hàng đợi như mọi khoản nhập (ghi được khi không có mạng). Thêm khoản, thêm dòng, huỷ dòng ghi thẳng lên server nên cần mạng.
 
 import { useState } from "preact/hooks";
+import { api, errorText } from "../lib/api";
 import { defaultAccountFor, manualAccounts } from "../lib/categories";
 import { debtLinePayload, debtPayload, owedText } from "../lib/debts";
 import { groupBook } from "../lib/memo-books";
+import { debtInterestText, debtTermsPayload, debtTermsToForm, type DebtTermsForm } from "../lib/interest";
 import { formatVnd } from "../lib/money";
+import { TERM_LABEL } from "../lib/net-worth";
 import { netWorthLines } from "../lib/networth";
 import { atForDay, dayKey } from "../lib/period";
 import { collectToast, defaultReceivableId, lendToast, moneyMoveBody, receivableLinePayload, receivablePayload, unpaidText } from "../lib/receivables";
 import type { Debt, DebtsData, NetWorth, Receivable, ReceivableRef, ReceivablesData } from "../lib/types";
 import { useResource } from "../state/resource";
-import { refresh, saveEntry, toast, useApp } from "../state/store";
+import { go, refresh, saveEntry, toast, useApp } from "../state/store";
 import { AccountSelect, AmountInput, newClientId } from "../ui/fields";
 import { Money } from "../ui/money";
-import { Loadable, Sheet } from "../ui/parts";
+import { Loadable, NeedsNetwork, Seg, Sheet } from "../ui/parts";
 import { DebtSheet } from "./budget-sheets";
 import { type BookItem, type BookLabels, BookAddSheet, BookCard, BookDetailSheet, BookLineSheet } from "./memo-book";
 import { LinkSourcePicker } from "./ref-pickers";
@@ -110,6 +113,7 @@ type Open =
   | { kind: "pay"; id?: string }
   | { kind: "line"; book: Book; id: string; line: "borrow" | "adjust" }
   | { kind: "move"; meaning: "lend" | "collect"; id?: string }
+  | { kind: "terms"; id: string }
   | null;
 
 export function DebtsTab() {
@@ -183,7 +187,7 @@ export function DebtsTab() {
 
       {open?.kind === "add" &&
         (open.book === "debt" ? (
-          <BookAddSheet labels={DEBT} path="/v1/debts" payload={debtPayload} onClose={() => setOpen(null)} onSaved={changed} />
+          <AddDebtSheet onClose={() => setOpen(null)} onSaved={changed} />
         ) : (
           <BookAddSheet labels={RECEIVABLE} path="/v1/receivables" payload={receivablePayload} onClose={() => setOpen(null)} onSaved={changed} />
         ))}
@@ -208,6 +212,7 @@ export function DebtsTab() {
           voidPath={(id) => `/v1/debt-lines/${id}/void`}
           onClose={() => setOpen(null)}
           onVoided={changed}
+          extra={<DebtTermsLine debt={detailDebt} onEdit={() => setOpen({ kind: "terms", id: detailDebt.id })} />}
         />
       )}
       {detailReceivable && (
@@ -231,6 +236,7 @@ export function DebtsTab() {
           voidPath={(id) => `/v1/receivable-lines/${id}/void`}
           onClose={() => setOpen(null)}
           onVoided={changed}
+          extra={<ReceivableTerm r={detailReceivable} onSaved={changed} />}
         />
       )}
       {open?.kind === "pay" && <DebtSheet debtId={open.id} onClose={() => setOpen(null)} />}
@@ -258,6 +264,7 @@ export function DebtsTab() {
         />
       )}
       {open?.kind === "move" && <MoneyMoveSheet meaning={open.meaning} refs={receivableRefs} receivableId={open.id} onClose={() => setOpen(null)} />}
+      {open?.kind === "terms" && findDebt(open.id) && <DebtTermsSheet debt={findDebt(open.id)!} onClose={() => setOpen({ kind: "detail", book: "debt", id: open.id })} onSaved={changed} />}
     </>
   );
 }
@@ -298,6 +305,10 @@ function CashFirst({ nw }: { nw: NetWorth }) {
         </li>
       </ul>
       <div class="meta">{total.note}</div>
+      {/* pwa UC-707 AC-24: mở thẳng phần Cân đối của màn Tài sản & tự do. */}
+      <button type="button" class="link" style={{ marginTop: "6px", minHeight: "44px" }} onClick={() => go("net-worth", { netWorthSection: "sheet" })}>
+        Xem bảng cân đối ›
+      </button>
     </section>
   );
 }
@@ -385,5 +396,146 @@ function MoneyMoveSheet(props: { meaning: "lend" | "collect"; refs: ReceivableRe
         </button>
       </div>
     </Sheet>
+  );
+}
+
+/** Thêm khoản nợ kèm lãi suất, kỳ hạn, số trả mỗi tháng, ngày trả (debt UC-901). */
+function AddDebtSheet({ onClose, onSaved }: { onClose: () => void; onSaved: (text: string) => void }) {
+  const [terms, setTerms] = useState<DebtTermsForm>(() => debtTermsToForm(null));
+  return (
+    <BookAddSheet
+      labels={DEBT}
+      path="/v1/debts"
+      payload={debtPayload}
+      extra={{ fields: <DebtTermsFields f={terms} onChange={setTerms} />, body: () => debtTermsPayload(terms) }}
+      onClose={onClose}
+      onSaved={onSaved}
+    />
+  );
+}
+
+/** Bốn ô lãi của khoản nợ: lãi suất %/năm, kỳ hạn, số trả mỗi tháng (gốc + lãi), ngày trả. */
+function DebtTermsFields({ f, onChange }: { f: DebtTermsForm; onChange: (f: DebtTermsForm) => void }) {
+  return (
+    <>
+      <div class="field">
+        <label for="n-rate">Lãi suất %/năm</label>
+        <input id="n-rate" class="ctl" inputMode="decimal" placeholder="0 = không lãi" value={f.rate} onInput={(e) => onChange({ ...f, rate: e.currentTarget.value })} />
+      </div>
+      <div class="field">
+        <span class="k">Kỳ hạn</span>
+        <Seg
+          label="Kỳ hạn"
+          value={f.term}
+          onChange={(term) => onChange({ ...f, term })}
+          options={[
+            { value: "short", label: TERM_LABEL.short },
+            { value: "long", label: TERM_LABEL.long },
+          ]}
+        />
+      </div>
+      <div class="field">
+        <label for="n-monthly">Số trả mỗi tháng (gốc + lãi)</label>
+        <AmountInput id="n-monthly" value={f.monthlyPayment} onChange={(n) => onChange({ ...f, monthlyPayment: n })} />
+      </div>
+      <div class="field">
+        <label for="n-due">Ngày trả (1–28)</label>
+        <input id="n-due" class="ctl" inputMode="numeric" placeholder="để trống nếu không cố định" value={f.dueDay} onInput={(e) => onChange({ ...f, dueDay: e.currentTarget.value })} />
+      </div>
+      <p class="fhint">Khoản có lãi: mỗi tháng có dòng "Lãi vay" dự kiến trong ngân sách; trả nợ thì tách lãi (chi phí) và gốc (giảm nợ). Lãi không tự cộng vào số còn nợ.</p>
+    </>
+  );
+}
+
+/** Trong sheet khoản nợ: kỳ hạn và lãi (debt UC-901 AC-9), nút sửa. */
+function DebtTermsLine({ debt, onEdit }: { debt: Debt; onEdit: () => void }) {
+  const { online } = useApp();
+  const interest = debtInterestText(debt);
+  return (
+    <div class="srow">
+      <span class="srow-main">
+        <span class="srow-t">{TERM_LABEL[debt.term ?? "short"]}</span>
+        <span class="srow-s">{interest ?? "Không lãi"}</span>
+      </span>
+      <button type="button" class="btn" disabled={!online} onClick={onEdit}>
+        Sửa lãi & kỳ hạn
+      </button>
+    </div>
+  );
+}
+
+function DebtTermsSheet({ debt, onClose, onSaved }: { debt: Debt; onClose: () => void; onSaved: (text: string) => void }) {
+  const { online } = useApp();
+  const [f, setF] = useState<DebtTermsForm>(() => debtTermsToForm(debt));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function submit() {
+    const r = debtTermsPayload(f);
+    if (!r.ok) return setError(Object.values(r.errors)[0] ?? null);
+    setBusy(true);
+    setError(null);
+    try {
+      await api.patch(`/v1/debts/${encodeURIComponent(debt.id)}`, r.value);
+      onSaved(`Đã lưu lãi & kỳ hạn của ${debt.name}.`);
+      onClose();
+    } catch (err) {
+      setError(errorText(err));
+      setBusy(false);
+    }
+  }
+  return (
+    <Sheet open title={`Lãi & kỳ hạn · ${debt.name}`} onClose={onClose}>
+      <DebtTermsFields f={f} onChange={setF} />
+      <div class="pad">
+        {error && (
+          <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
+            {error}
+          </p>
+        )}
+        <button type="button" class="btn btn-primary btn-wide" disabled={!online || busy} onClick={() => void submit()}>
+          {busy ? "Đang lưu…" : "Lưu"}
+        </button>
+        {!online && <NeedsNetwork what="Sửa lãi & kỳ hạn" />}
+      </div>
+    </Sheet>
+  );
+}
+
+/** Kỳ hạn của khoản phải thu (receivable UC-1001 AC-10): bảng cân đối xếp A3 (ngắn hạn) hoặc B1 (dài hạn). */
+function ReceivableTerm({ r, onSaved }: { r: Receivable; onSaved: (text: string) => void }) {
+  const { online } = useApp();
+  const [busy, setBusy] = useState(false);
+  async function change(term: "short" | "long") {
+    if (term === r.term) return;
+    setBusy(true);
+    try {
+      await api.patch(`/v1/receivables/${encodeURIComponent(r.id)}`, { term });
+      onSaved(`Đã đổi ${r.name} sang phải thu ${TERM_LABEL[term].toLowerCase()}.`);
+    } catch (err) {
+      toast(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div class="srow">
+      <span class="srow-main">
+        <span class="srow-t">Kỳ hạn</span>
+        <span class="srow-s">Bảng cân đối xếp vào phải thu {TERM_LABEL[r.term ?? "short"].toLowerCase()}</span>
+      </span>
+      {online && !busy ? (
+        <Seg
+          label="Kỳ hạn"
+          value={r.term ?? "short"}
+          onChange={(t) => void change(t)}
+          options={[
+            { value: "short", label: "Ngắn" },
+            { value: "long", label: "Dài" },
+          ]}
+        />
+      ) : (
+        <span>{TERM_LABEL[r.term ?? "short"]}</span>
+      )}
+    </div>
   );
 }

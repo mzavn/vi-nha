@@ -76,7 +76,7 @@ async function patchRow(db: D1Database, table: string, id: string | number, cols
 
 // ── Đọc ─────────────────────────────────────────────────────────────
 const ACCOUNT_SQL =
-  "SELECT id, name, kind, bank, account_no, sub_account, sepay_enabled, sepay_out, sepay_connection_id, owner_member_id, opening_balance, opened_at, active, locked, spendable, role, (SELECT b.book_balance FROM v_account_book b WHERE b.account_id = accounts.id) AS book_balance FROM accounts";
+  "SELECT id, name, kind, bank, account_no, sub_account, sepay_enabled, sepay_out, sepay_connection_id, owner_member_id, opening_balance, opened_at, active, deactivated_at, locked, spendable, role, (SELECT b.book_balance FROM v_account_book b WHERE b.account_id = accounts.id) AS book_balance FROM accounts";
 const toAccount = (r: Row) => ({
   ...r,
   id: String(r.id),
@@ -166,10 +166,7 @@ export async function getSettings(env: Env, origin: string) {
     rules: rows(rules!).map(toRule),
     categories: rows(categories!),
     incomeStreams: toStreams(rows(streams!), rows(locks!)),
-    config: {
-      salary_min_amount: await configNumber(db, "salary_min_amount", 1_000_000),
-      safety_fund_months: await configNumber(db, "safety_fund_months", 6),
-    },
+    config: await readConfig(db),
     notifySchedule: await readNotifySchedule(db),
     integrations: { webhook_url: `${origin}/webhooks/sepay`, zalo_webhook_url: `${origin}/webhooks/zalo`, ...secrets, sepay_connections: connections },
   };
@@ -287,6 +284,22 @@ export async function updateAccount(db: D1Database, id: string, b: Input) {
   const current = await db.prepare(`${ACCOUNT_SQL} WHERE id = ?`).bind(id).first<Row>();
   if (!current) fail("not_found", "Không có tài khoản này.", 404);
   const f = await accountFields(db, b, id);
+  if (f.opened_at) {
+    // Không giao dịch nào được nằm trước ngày mở sổ (ADR-76): lưu chuyển tiền giữ bất biến đầu kỳ + ba nhóm = cuối kỳ.
+    const first = await db
+      .prepare("SELECT MIN(date(at, '+7 hours')) AS d FROM transactions WHERE status = 'active' AND (account_id = ?1 OR counter_account_id = ?1)")
+      .bind(id)
+      .first<{ d: string | null }>();
+    if (first?.d && f.opened_at > first.d) {
+      const vi = (d: string) => `${Number(d.slice(8, 10))}/${Number(d.slice(5, 7))}/${d.slice(0, 4)}`;
+      fail(
+        "opening_after_entries",
+        `Tài khoản đã có giao dịch từ ${vi(first.d)} — huỷ hoặc sửa các giao dịch trước ${vi(f.opened_at)} trước, hoặc chọn ngày mở sổ từ ${vi(first.d)} trở về trước.`,
+        409,
+        "opened_at",
+      );
+    }
+  }
   const sepayOn = f.sepay_enabled ?? Boolean(current!.sepay_enabled);
   const accountNo = f.account_no === undefined ? (current!.account_no as string | null) : f.account_no;
   if (sepayOn && !accountNo) fail("missing_account_no", "Bật SePay thì cần số tài khoản để nhận diện giao dịch.");
@@ -314,7 +327,9 @@ export async function updateAccount(db: D1Database, id: string, b: Input) {
   const becomesOutside = roleChanged && f.role !== null && !(spendable ?? Boolean(current!.spendable)) && (f.active ?? Boolean(current!.active));
   const balance = Number(current!.book_balance ?? 0) + (f.opening_balance == null ? 0 : f.opening_balance - Number(current!.opening_balance));
   const opening = becomesOutside ? await wealthBuildingOpeningEntry(db, { id, name: f.name ?? String(current!.name), balance }, new Date()) : null;
-  const patch = patchStatement(db, "accounts", id, { ...f, spendable, sepay_out, sepay_connection_id: connectionId });
+  // Tắt ghi ngày tắt (giờ VN) để bảng cân đối vẫn tính tài khoản ở các tháng trước đó; bật lại xoá ngày tắt.
+  const deactivated_at = f.active === false && current!.active ? dayKey(new Date()) : f.active === true ? null : undefined;
+  const patch = patchStatement(db, "accounts", id, { ...f, spendable, sepay_out, sepay_connection_id: connectionId, deactivated_at });
   const writes = [patch, opening].filter((s): s is D1PreparedStatement => s !== null);
   if (writes.length > 0) await db.batch(writes);
   return toAccount((await db.prepare(`${ACCOUNT_SQL} WHERE id = ?`).bind(id).first<Row>())!);
@@ -678,13 +693,93 @@ export async function updateIncomeStream(db: D1Database, id: string, b: Input) {
 }
 
 // ── Tham số ─────────────────────────────────────────────────────────
-export async function updateConfig(db: D1Database, b: Input) {
+/** Tham số bảng cân đối / Mốc tự do (BR-15): phần vạn, có khoảng; mặc định do migration 0031 ghi. */
+const FI_RANGES = {
+  fi_swr_bps: [100, 1000, 350],
+  fi_inflation_bps: [0, 2000, 350],
+  fi_fat_bps: [10000, 20000, 11000],
+  fi_legacy_rate_bps: [50, 1000, 300],
+  fi_high_interest_bps: [100, 10000, 1500],
+} as const;
+/** Để trống = theo sổ / chưa đặt (xoá dòng config). */
+const FI_OPTIONAL = ["fi_expense_monthly", "fi_expense_must_monthly", "fi_birth_year", "fi_target_age_f1", "fi_target_age_f2", "fi_target_age_f3"] as const;
+const FI_SAFETY_DEFAULT = "6,12,24";
+
+export type FiConfig = { [K in keyof typeof FI_RANGES]: number } & { [K in (typeof FI_OPTIONAL)[number]]: number | null } & { fi_safety_months: string };
+
+/** Mọi tham số fi_* trong một câu; thiếu / hỏng → mặc định (khoá bắt buộc) hoặc null (khoá tuỳ chọn). */
+export async function readFiConfig(db: D1Database): Promise<FiConfig> {
+  const res = await db.prepare("SELECT k, v FROM config WHERE k LIKE 'fi\\_%' ESCAPE '\\'").all<{ k: string; v: string }>();
+  const map = new Map((res.results ?? []).map((r) => [r.k, r.v]));
+  const num = (k: string) => {
+    const n = Number(map.get(k));
+    return map.has(k) && Number.isInteger(n) ? n : null;
+  };
+  const out = { fi_safety_months: map.get("fi_safety_months") ?? FI_SAFETY_DEFAULT } as FiConfig;
+  for (const [k, [, , fallback]] of Object.entries(FI_RANGES)) (out as Record<string, unknown>)[k] = num(k) ?? fallback;
+  for (const k of FI_OPTIONAL) out[k] = num(k);
+  return out;
+}
+
+async function readConfig(db: D1Database) {
+  return {
+    salary_min_amount: await configNumber(db, "salary_min_amount", 1_000_000),
+    safety_fund_months: await configNumber(db, "safety_fund_months", 6),
+    ...(await readFiConfig(db)),
+  };
+}
+
+/** Kiểm các khoá fi_* có trong body (sai → 400 invalid_input kèm tên ô), trả lệnh ghi; khoá tuỳ chọn gửi null / "" → xoá. */
+async function fiConfigWrites(db: D1Database, b: Input, now: Date): Promise<D1PreparedStatement[]> {
+  const bad = (k: string, message: string): never => fail("invalid_input", message, 400, k);
+  const upsert = (k: string, v: string) => db.prepare("INSERT INTO config (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v").bind(k, v);
+  const whole = (k: string, min: number, max: number) => {
+    const v = b[k];
+    if (typeof v !== "number" || !Number.isInteger(v) || v < min || v > max) bad(k, `${k} phải là số nguyên từ ${min} tới ${max}.`);
+    return v as number;
+  };
+  const out: D1PreparedStatement[] = [];
+  for (const [k, [min, max]] of Object.entries(FI_RANGES)) if (has(b, k)) out.push(upsert(k, String(whole(k, min, max))));
+  if (has(b, "fi_safety_months")) {
+    const raw = b.fi_safety_months;
+    const list = Array.isArray(raw) ? raw : typeof raw === "string" ? raw.split(",").map((s) => Number(s.trim())) : [];
+    const ok = list.length === 3 && list.every((n, i) => Number.isInteger(n) && n >= 1 && n <= 60 && (i === 0 || n > list[i - 1]));
+    if (!ok) bad("fi_safety_months", "Mốc an tâm là ba số tháng 1–60, tăng dần (ví dụ 6,12,24).");
+    out.push(upsert("fi_safety_months", list.join(",")));
+  }
+  const year = Number(new Date(now.getTime() + 7 * 3600_000).getUTCFullYear());
+  const stored = await readFiConfig(db);
+  const blank = (k: string) => b[k] === null || b[k] === "";
+  const birth = has(b, "fi_birth_year") ? (blank("fi_birth_year") ? null : whole("fi_birth_year", 1900, year)) : stored.fi_birth_year;
+  for (const k of FI_OPTIONAL) {
+    if (!has(b, k)) continue;
+    if (blank(k)) {
+      out.push(db.prepare("DELETE FROM config WHERE k = ?").bind(k));
+      continue;
+    }
+    if (k === "fi_expense_monthly" || k === "fi_expense_must_monthly") out.push(upsert(k, String(whole(k, 0, 1e12))));
+    else if (k === "fi_birth_year") out.push(upsert(k, String(birth)));
+    else {
+      // Tuổi mục tiêu phải lớn hơn tuổi hiện tại (khi đã có năm sinh), tối đa 100.
+      const age = whole(k, 1, 100);
+      if (birth !== null && age <= year - birth) bad(k, `Tuổi mục tiêu phải lớn hơn tuổi hiện tại (${year - birth}).`);
+      out.push(upsert(k, String(age)));
+    }
+  }
+  return out;
+}
+
+export async function updateConfig(db: D1Database, b: Input, now: Date = new Date()) {
   const salary = integer(b, "salary_min_amount", { min: 0, max: 1e12 });
   const months = integer(b, "safety_fund_months", { min: 1, max: 36 });
   const upsert = (k: string, v: number) => db.prepare("INSERT INTO config (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v").bind(k, String(v));
-  const statements = [...(salary !== null ? [upsert("salary_min_amount", salary)] : []), ...(months !== null ? [upsert("safety_fund_months", months)] : [])];
+  const statements = [
+    ...(salary !== null ? [upsert("salary_min_amount", salary)] : []),
+    ...(months !== null ? [upsert("safety_fund_months", months)] : []),
+    ...(await fiConfigWrites(db, b, now)),
+  ];
   if (statements.length) await db.batch(statements);
-  return { salary_min_amount: await configNumber(db, "salary_min_amount", 1_000_000), safety_fund_months: await configNumber(db, "safety_fund_months", 6) };
+  return readConfig(db);
 }
 
 // ── Giờ nhắc (cả nhà) ───────────────────────────────────────────────

@@ -17,6 +17,8 @@ const receivable = (id: string, balance: number, extra: Partial<Receivable> = {}
   createdAt: "2026-09-01T00:00:00Z",
   lines: [],
   movements: [],
+  term: "short",
+  deactivatedAt: null,
   ...extra,
 });
 

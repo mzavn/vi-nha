@@ -27,6 +27,8 @@ export interface Split {
   tenant_id?: string | null;
   /** spend: khoản trả nợ (giảm số còn nợ ở sổ nợ). */
   debt_id?: string | null;
+  /** spend: trả LÃI cho khoản nợ (không giảm nợ; danh mục mặc định "Lãi vay"). */
+  interest_debt_id?: string | null;
   /** lend: cho vay thêm · collect: tiền cho vay trả về (không phải thu nhập, không chia) — ở sổ phải thu. */
   receivable_id?: string | null;
   /** refund: khoản chi gốc được trả lại · collect: khoản cho vay gốc được trả — kiểm ở `resolveLink` (ledger UC-101 bước 4b). */
@@ -743,6 +745,7 @@ function splitToEntryInput(log: Row, split: Split): EntryInput {
     income_stream_id: split.income_stream_id ?? undefined,
     tenant_id: split.tenant_id ?? undefined,
     debt_id: split.debt_id ?? undefined,
+    interest_debt_id: split.interest_debt_id ?? undefined,
     receivable_id: split.receivable_id ?? undefined,
     link_id: split.link_id ?? undefined,
   };
@@ -806,8 +809,8 @@ export async function assignLog(
           `INSERT INTO transactions
              (log_id, at, amount, meaning, wallet_id, counter_wallet_id, account_id, counter_account_id, category_id,
               by_member_id, link_id, batch_id, asset_kind, taxable, week_key, month_key, source, note, client_id, income_stream_id, tenant_id,
-              debt_id, receivable_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              debt_id, receivable_id, interest_debt_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
           logId,
@@ -833,6 +836,7 @@ export async function assignLog(
           row.tenant_id ?? null,
           row.debt_id ?? null,
           row.receivable_id ?? null,
+          row.interest_debt_id ?? null,
         ),
     ),
     markAssigned(db, logId),

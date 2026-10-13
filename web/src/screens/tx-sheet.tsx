@@ -8,6 +8,7 @@
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import { ApiError, api, errorText } from "../lib/api";
+import { checkSplit, splitPayload, type ManualSplit } from "../lib/manual-split";
 import { formatVnd } from "../lib/money";
 import { ordersLeft } from "../lib/pending";
 import { shortDate, timeHM } from "../lib/period";
@@ -41,6 +42,7 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
   const [error, setError] = useState<string | null>(null);
   /** Bảng chia thử của khoản thu chưa chia: mở khi bấm Chia, rồi Chia và ghi sổ. */
   const [plan, setPlan] = useState<AllocationPlan | null>(null);
+  const [split, setSplit] = useState<ManualSplit | null>(null);
 
   if (!tx) {
     return (
@@ -129,7 +131,8 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
     run(async () => {
       let orders = 0;
       try {
-        orders = (await api.post<AllocationPlan>("/v1/allocate", { income_tx_id: tx.id })).transferOrders.length;
+        const body = { income_tx_id: tx.id, ...(split ? { amounts: splitPayload(split) } : {}) };
+        orders = (await api.post<AllocationPlan>("/v1/allocate", body)).transferOrders.length;
       } catch (err) {
         if (!(err instanceof ApiError && err.code === "already_allocated")) throw err;
       }
@@ -193,7 +196,7 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
         </>
       )}
       {can.note && <p class="note" style={{ borderTop: "1px solid var(--border)" }}>{can.note}</p>}
-      {plan && <AllocationPreview plan={plan} boot={boot} amount={tx.amount} />}
+      {plan && <AllocationPreview plan={plan} boot={boot} amount={tx.amount} split={split} onSplit={setSplit} fromAccountId={tx.counter_account_id} />}
       <div class="pad">
         {error && (
           <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
@@ -202,10 +205,23 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
         )}
         {plan ? (
           <div class="grid grid-cols-2 gap-2">
-            <button type="button" class="btn" disabled={busy} onClick={() => setPlan(null)}>
+            <button
+              type="button"
+              class="btn"
+              disabled={busy}
+              onClick={() => {
+                setPlan(null);
+                setSplit(null);
+              }}
+            >
               Thôi
             </button>
-            <button type="button" class="btn btn-primary" disabled={busy || !app.online} onClick={() => void allocate()}>
+            <button
+              type="button"
+              class="btn btn-primary"
+              disabled={busy || !app.online || (split !== null && !checkSplit(split, boot.wallets, tx.amount).ok)}
+              onClick={() => void allocate()}
+            >
               {busy ? "Đang chia…" : "Chia và ghi sổ"}
             </button>
           </div>

@@ -4,6 +4,7 @@
 import { bankByCode } from "../../../src/domain/banks";
 import { clockMinutes } from "../../../src/domain/notify-schedule";
 import { DEFAULT_SEPAY_CONNECTION_ID } from "../../../src/domain/system-ids";
+import { ApiError, errorText } from "./api";
 import { formatVnd } from "./money";
 import { sqliteUtcToIso } from "./push";
 import { shortDate, timeHM } from "./period";
@@ -370,6 +371,15 @@ export function accountToForm(a: SettingsAccount | null): AccountForm {
 export const spendableDefault = (kind: AccountForm["kind"], role: AccountForm["role"]): boolean => kind !== "credit" && role === null;
 
 /**
+ * Lỗi khi lưu tài khoản thuộc ô nào: đổi ngày mở sổ về sau giao dịch sớm nhất (409 `opening_after_entries`, access UC-506 AC-24)
+ * hiện ngay dưới ô ngày, nguyên câu server nói (ngày giao dịch sớm nhất, việc cần làm). Lỗi khác hiện trên nút như cũ.
+ */
+export function accountSubmitError(err: unknown): { field: string | null; message: string } {
+  if (err instanceof ApiError && err.code === "opening_after_entries") return { field: "opened_at", message: err.message };
+  return { field: null, message: errorText(err) };
+}
+
+/**
  * `existing` = tài khoản đang sửa (null khi thêm). Như server, "SePay chưa hỗ trợ ngân hàng này" chỉ chặn khi bật SePay
  * hoặc đổi ngân hàng/loại — tài khoản cũ đã nối SePay trước khi có danh mục vẫn sửa tên được.
  */
@@ -489,13 +499,114 @@ export function memberPayload(f: { name: string; tg_chat_id: string }, current: 
   }));
 }
 
-export function configPayload(f: { salary_min_amount: number; safety_fund_months: string }): Result<SettingsConfig> {
+export function configPayload(f: { salary_min_amount: number; safety_fund_months: string }): Result<Pick<SettingsConfig, "salary_min_amount" | "safety_fund_months">> {
   const errors: Errors = {};
   const months = parseInteger(f.safety_fund_months, 1, 24);
   if (months === null) errors.safety_fund_months = "Số tháng là số nguyên từ 1 đến 24.";
   if (f.salary_min_amount < 0) errors.salary_min_amount = "Ngưỡng không âm.";
   return done(errors, () => ({ salary_min_amount: f.salary_min_amount, safety_fund_months: months! }));
 }
+
+// ── Tham số Tài sản & tự do (access UC-507 AC-16) ──────────────────
+// Lưu phần vạn (350 = 3,5%); ô gõ theo %. Chi phí tháng, năm sinh, tuổi mục tiêu để trống = theo sổ / chưa đặt.
+
+export type FiConfig = Pick<
+  SettingsConfig,
+  | "fi_swr_bps"
+  | "fi_inflation_bps"
+  | "fi_fat_bps"
+  | "fi_legacy_rate_bps"
+  | "fi_high_interest_bps"
+  | "fi_safety_months"
+  | "fi_expense_monthly"
+  | "fi_expense_must_monthly"
+  | "fi_birth_year"
+  | "fi_target_age_f1"
+  | "fi_target_age_f2"
+  | "fi_target_age_f3"
+>;
+
+export interface FiConfigForm {
+  swr: string;
+  inflation: string;
+  fat: string;
+  legacy: string;
+  highInterest: string;
+  safetyMonths: string;
+  expense: number;
+  expenseMust: number;
+  birthYear: string;
+  f1: string;
+  f2: string;
+  f3: string;
+}
+
+const pctOfBps = (bps: number): string => String(bps / 100).replace(".", ",");
+const intText = (n: number | null): string => (n === null ? "" : String(n));
+
+export const fiConfigToForm = (c: FiConfig): FiConfigForm => ({
+  swr: pctOfBps(c.fi_swr_bps),
+  inflation: pctOfBps(c.fi_inflation_bps),
+  fat: pctOfBps(c.fi_fat_bps),
+  legacy: pctOfBps(c.fi_legacy_rate_bps),
+  highInterest: pctOfBps(c.fi_high_interest_bps),
+  safetyMonths: c.fi_safety_months.replace(/,/g, ", "),
+  expense: c.fi_expense_monthly ?? 0,
+  expenseMust: c.fi_expense_must_monthly ?? 0,
+  birthYear: intText(c.fi_birth_year),
+  f1: intText(c.fi_target_age_f1),
+  f2: intText(c.fi_target_age_f2),
+  f3: intText(c.fi_target_age_f3),
+});
+
+/** Thân PUT /v1/settings/config cho nhóm Tài sản & tự do; khoảng hợp lệ như server (access UC-507). `year`: năm nay. */
+export function fiConfigPayload(f: FiConfigForm, year: number): Result<FiConfig> {
+  const errors: Errors = {};
+  const bps = (key: string, text: string, min: number, max: number, label: string): number => {
+    const p = parsePercent(text);
+    const v = p === null ? null : Math.round(p * 100);
+    if (v === null || v < min || v > max) errors[key] = `${label} từ ${pctOfBps(min)}% đến ${pctOfBps(max)}%.`;
+    return v ?? 0;
+  };
+  const swr = bps("swr", f.swr, 100, 1000, "Tỷ lệ rút an toàn");
+  const inflation = bps("inflation", f.inflation, 0, 2000, "Lạm phát");
+  const fat = bps("fat", f.fat, 10000, 20000, "Hệ số dự phòng");
+  const legacy = bps("legacy", f.legacy, 50, 1000, "Lãi thực");
+  const high = bps("highInterest", f.highInterest, 100, 10000, "Ngưỡng lãi cao");
+  const months = f.safetyMonths.split(/[,\s]+/).filter(Boolean).map((s) => parseInteger(s, 1, 60));
+  if (months.length !== 3 || months.some((m, i) => m === null || (i > 0 && m <= months[i - 1]!))) errors.safetyMonths = "Ba số tháng từ 1 đến 60, tăng dần (vd 6, 12, 24).";
+  const opt = (key: string, text: string, min: number, max: number, message: string): number | null => {
+    if (!text.trim()) return null;
+    const n = parseInteger(text, min, max);
+    if (n === null) errors[key] = message;
+    return n;
+  };
+  const birth = opt("birthYear", f.birthYear, 1900, year, `Năm sinh từ 1900 đến ${year}.`);
+  const age = birth === null ? null : year - birth;
+  const minAge = age === null ? 1 : age + 1;
+  const ageMsg = age === null ? "Tuổi mục tiêu từ 1 đến 100." : `Tuổi mục tiêu lớn hơn tuổi hiện tại (${age}), tối đa 100.`;
+  const f1 = opt("f1", f.f1, minAge, 100, ageMsg);
+  const f2 = opt("f2", f.f2, minAge, 100, ageMsg);
+  const f3 = opt("f3", f.f3, minAge, 100, ageMsg);
+  return done(errors, () => ({
+    fi_swr_bps: swr,
+    fi_inflation_bps: inflation,
+    fi_fat_bps: fat,
+    fi_legacy_rate_bps: legacy,
+    fi_high_interest_bps: high,
+    fi_safety_months: months.join(","),
+    fi_expense_monthly: f.expense > 0 ? f.expense : null,
+    fi_expense_must_monthly: f.expenseMust > 0 ? f.expenseMust : null,
+    fi_birth_year: birth,
+    fi_target_age_f1: f1,
+    fi_target_age_f2: f2,
+    fi_target_age_f3: f3,
+  }));
+}
+
+/** Một dòng tóm tắt ở Cài đặt › Tham số: "SWR 3,5% · lạm phát 3,5% · lãi cao từ 15% · Mốc an tâm 6/12/24 tháng". */
+export const fiConfigSummary = (c: FiConfig): string =>
+  `SWR ${pctOfBps(c.fi_swr_bps)}% · lạm phát ${pctOfBps(c.fi_inflation_bps)}% · lãi cao từ ${pctOfBps(c.fi_high_interest_bps)}% · Mốc an tâm ${c.fi_safety_months.replace(/,/g, "/")} tháng`;
 
 // ── Giờ nhắc (cả nhà) ─────────────────────────────────────────────
 

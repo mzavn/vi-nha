@@ -44,6 +44,7 @@ function parseSplit(raw: unknown, index: number): Split {
     income_stream_id: typeof s.income_stream_id === "string" ? s.income_stream_id : null,
     tenant_id: typeof s.tenant_id === "string" ? s.tenant_id : null,
     debt_id: typeof s.debt_id === "string" ? s.debt_id : null,
+    interest_debt_id: typeof s.interest_debt_id === "string" ? s.interest_debt_id : null,
     receivable_id: typeof s.receivable_id === "string" ? s.receivable_id : null,
     link_id: typeof s.link_id === "number" ? s.link_id : null,
     taxable: s.taxable === true,

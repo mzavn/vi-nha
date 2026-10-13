@@ -57,7 +57,7 @@ describe("giao thức MCP", () => {
     expect(json?.result.protocolVersion).toBeTruthy();
   });
 
-  it("tools/list trả đúng 16 tool (không cần gọi initialize trước — server không giữ phiên)", async () => {
+  it("tools/list trả đúng 19 tool (không cần gọi initialize trước — server không giữ phiên)", async () => {
     const { status, json } = await mcp({ jsonrpc: "2.0", id: 1, method: "tools/list" });
     expect(status).toBe(200);
     const names = (json?.result.tools as { name: string }[]).map((t) => t.name).sort();
@@ -67,9 +67,11 @@ describe("giao thức MCP", () => {
         "add_transaction",
         "allocate_income",
         "assign_log",
+        "get_balance_sheet",
         "get_budget",
         "get_debts",
         "get_goals",
+        "get_reports",
         "get_receivables",
         "get_reconciliation",
         "get_snapshot",
@@ -79,6 +81,7 @@ describe("giao thức MCP", () => {
         "list_tenants",
         "list_transfer_orders",
         "preview_allocation",
+        "record_asset_value",
       ].sort(),
     );
   });
@@ -86,7 +89,7 @@ describe("giao thức MCP", () => {
   it("mô tả tool không còn 'chưa triển khai' / 'phase 04', không nhắc tên tool cũ, tên cũ của Tích sản hay chữ khẩn cấp", async () => {
     const { json } = await mcp({ jsonrpc: "2.0", id: 1, method: "tools/list" });
     const tools = json?.result.tools as { name: string; description: string }[];
-    expect(tools).toHaveLength(16);
+    expect(tools).toHaveLength(19);
     for (const t of tools) {
       expect(t.description, t.name).not.toMatch(/chưa triển khai|chưa làm|phase 04/i);
       expect(t.description, t.name).not.toMatch(/\b(reconcile|spend_by_category|allocate|get_tenants|add_tenant_paid_for_us)\b/);

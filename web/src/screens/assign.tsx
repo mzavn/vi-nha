@@ -2,12 +2,14 @@
 // Tổng các dòng phải bằng đúng số tiền log; app chặn trước khi gửi, server kiểm lại.
 
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { DEBT_CATEGORY_ID } from "../../../src/domain/system-ids";
+import { DEBT_CATEGORY_ID, LOAN_INTEREST_ID } from "../../../src/domain/system-ids";
 import { ApiError, api, errorText } from "../lib/api";
 import { moveWallets } from "../lib/budget";
 import { defaultAccountFor, defaultWalletFor, spendableWallets, walletOfMember } from "../lib/categories";
 import { payableDebts } from "../lib/debts";
+import { assignDebtRows, hasInterest } from "../lib/interest";
 import { bookRefLabel } from "../lib/memo-books";
+import { checkSplit, splitPayload, type ManualSplit } from "../lib/manual-split";
 import { formatVnd, groupDigits } from "../lib/money";
 import { localWalletStatus } from "../lib/pending";
 import { dayKey, shortDate, timeHM } from "../lib/period";
@@ -178,6 +180,8 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
   const [error, setError] = useState<string | null>(null);
   const [confirmIgnore, setConfirmIgnore] = useState(false);
   const [plan, setPlan] = useState<AllocationPlan | null>(null);
+  /** Tự chia (UC-202): số tay cho khoản thu đang chia thử — dòng thu nhập đầu tiên. */
+  const [split, setSplit] = useState<ManualSplit | null>(null);
   const options = isIn ? ASSIGN_CHOICES.in.filter((o) => o.value !== "tenant" || tenants.length > 0 || rows.some((r) => r.tenantMode)) : ASSIGN_CHOICES.out;
   const check = validateSplits(log.amount, rows);
   const noTenant = rows.some((r) => r.tenantMode && !r.tenant_id);
@@ -189,6 +193,7 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
   const income = rows.find((r) => r.meaning === "income");
   // Người thuê trả mà không chọn nguồn: server tự gán nguồn cho thuê — chia thử cũng theo nguồn đó.
   const previewStream = income?.income_stream_id || (income?.tenant_id ? rental?.incomeStreamId : null) || null;
+  const splitBlocked = !!income && split !== null && !checkSplit(split, boot.wallets, income.amount).ok;
 
   useEffect(() => {
     setPlan(null);
@@ -219,6 +224,7 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
         tenant_id: null,
         // Khoản gốc chỉ thuộc dòng Hoàn tiền / Nhận lại, và đi cùng danh mục, ví hay người của nó: đổi loại là bỏ, quay lại thì chọn lại.
         link_id: null,
+        interest_debt_id: null,
         ...(c === "transfer" ? { wallet_id: null, from_wallet_id: null } : {}),
         // Cho vay / nhận lại tiền cho vay không đụng ví, không có danh mục (server tự gắn "Cho vay / trả hộ" cho cho vay).
         ...(c === "collect" || c === "lend" ? { wallet_id: null, category_id: null } : {}),
@@ -236,12 +242,13 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
     setBusy(true);
     setError(null);
     try {
-      const splits = rows.map(({ key: _k, tenantMode: _t, tenant_id, income_stream_id, from_wallet_id, debt_id, receivable_id, link_id, ...s }) => ({
+      const splits = rows.map(({ key: _k, tenantMode: _t, tenant_id, income_stream_id, from_wallet_id, debt_id, interest_debt_id, receivable_id, link_id, ...s }) => ({
         ...s,
         ...(s.meaning === "income" && tenant_id ? { tenant_id } : {}),
         ...(s.meaning === "income" && income_stream_id ? { income_stream_id } : {}),
         ...(s.meaning === "transfer" && from_wallet_id ? { from_wallet_id } : {}),
         ...(s.meaning === "spend" && debt_id ? { debt_id } : {}),
+        ...(s.meaning === "spend" && interest_debt_id ? { interest_debt_id } : {}),
         ...((s.meaning === "lend" || s.meaning === "collect") && receivable_id ? { receivable_id } : {}),
         ...((s.meaning === "refund" || s.meaning === "collect") && link_id ? { link_id } : {}),
       }));
@@ -263,9 +270,12 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
         return;
       }
       let orders = 0;
-      for (const tx of res.transactions.filter((t) => t.meaning === "income")) {
+      const incomeTxs = res.transactions.filter((t) => t.meaning === "income");
+      for (const tx of incomeTxs) {
         try {
-          orders += (await api.post<AllocationPlan>("/v1/allocate", { income_tx_id: tx.id })).transferOrders.length;
+          // Bảng chia thử (và Tự chia) là của dòng thu nhập đầu tiên.
+          const body = { income_tx_id: tx.id, ...(split && tx === incomeTxs[0] ? { amounts: splitPayload(split) } : {}) };
+          orders += (await api.post<AllocationPlan>("/v1/allocate", body)).transferOrders.length;
         } catch (err) {
           if (!(err instanceof ApiError && err.code === "already_allocated")) throw new Error(`Đã gán nhưng chưa chia khoản thu: ${errorText(err)}`);
         }
@@ -379,7 +389,10 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
             <label for={`s-amt-${r.key}`}>Số tiền</label>
             <AmountInput id={`s-amt-${r.key}`} value={r.amount} onChange={(n) => update(r.key, { amount: n })} invalid={!r.amount} />
           </div>
-          {r.meaning === "spend" && debts.length > 0 && (
+          {r.meaning === "spend" && r.interest_debt_id && (
+            <p class="fhint">Trả lãi cho {debts.find((d) => d.id === r.interest_debt_id)?.name ?? r.interest_debt_id} — chi phí tháng ở ví Lãi vay, không giảm nợ.</p>
+          )}
+          {r.meaning === "spend" && !r.interest_debt_id && debts.length > 0 && (
             <div class="field">
               <label for={`s-d-${r.key}`}>Trả nợ cho</label>
               <select
@@ -388,8 +401,18 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
                 value={r.debt_id ?? ""}
                 onChange={(e) => {
                   const id = e.currentTarget.value || null;
+                  const d = debts.find((x) => x.id === id);
+                  const principalWalletId = debtCategory ? (defaultWalletFor(boot, debtCategory, memberId)?.id ?? r.wallet_id ?? null) : (r.wallet_id ?? null);
+                  // Khoản có lãi: tách sẵn dòng lãi và dòng gốc (debt UC-903 AC-4) — sửa được trước khi Gán.
+                  if (d && hasInterest(d) && debtCategory) {
+                    const interestCategory = boot.categories.find((c) => c.id === LOAN_INTEREST_ID);
+                    const interestWalletId = (interestCategory ? defaultWalletFor(boot, interestCategory, memberId)?.id : null) ?? LOAN_INTEREST_ID;
+                    const parts = assignDebtRows(r.amount, d, { debtCategoryId: debtCategory.id, principalWalletId, interestWalletId });
+                    setRows((rs) => rs.flatMap((x) => (x.key === r.key ? parts.map((p) => ({ ...x, ...p, key: ++rowSeq })) : [x])));
+                    return;
+                  }
                   // Trả nợ luôn vào danh mục Trả nợ, ví theo danh mục đó (ví giữ riêng).
-                  update(r.key, id && debtCategory ? { debt_id: id, category_id: debtCategory.id, wallet_id: defaultWalletFor(boot, debtCategory, memberId)?.id ?? r.wallet_id } : { debt_id: id });
+                  update(r.key, id && debtCategory ? { debt_id: id, category_id: debtCategory.id, wallet_id: principalWalletId } : { debt_id: id });
                 }}
               >
                 <option value="">không phải trả nợ</option>
@@ -569,7 +592,7 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
         </div>
       )}
 
-      {plan && income && <AllocationPreview plan={plan} boot={boot} amount={income.amount} />}
+      {plan && income && <AllocationPreview plan={plan} boot={boot} amount={income.amount} split={split} onSplit={setSplit} fromAccountId={log.account_id} />}
 
       <div class="pad">
         {error && (
@@ -577,7 +600,12 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
             {error}
           </p>
         )}
-        <button type="button" class="btn btn-primary btn-wide" disabled={!online || busy || !check.ok || blocked || (!!income && !plan)} onClick={() => void submit()}>
+        <button
+          type="button"
+          class="btn btn-primary btn-wide"
+          disabled={!online || busy || !check.ok || blocked || (!!income && !plan) || splitBlocked}
+          onClick={() => void submit()}
+        >
           {busy ? "Đang gán…" : income ? "Gán, chia và ghi sổ" : "Gán"}
         </button>
         {income && (

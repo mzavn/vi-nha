@@ -261,13 +261,13 @@ describe("UC-601 AC-9: trang uỷ quyền", () => {
 });
 
 describe("UC-601 AC-6, AC-11: quyền xem / ghi", () => {
-  it("token chỉ Xem: initialize, tools/list (16 tool) và tool đọc chạy", async () => {
+  it("token chỉ Xem: initialize, tools/list (19 tool) và tool đọc chạy", async () => {
     const { access, scope } = await connectClaude(env, { memberId: "husband", password: SHARED, write: false });
     expect(scope).toBe("mcp:read");
     const init = await mcpPost(env, access, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } } });
     expect(init.status).toBe(200);
     const list = await json(await listTools(access));
-    expect(list.result.tools).toHaveLength(16);
+    expect(list.result.tools).toHaveLength(19);
     expect((await mcpPost(env, access, toolCall("get_snapshot"))).status).toBe(200);
   });
 
@@ -278,6 +278,7 @@ describe("UC-601 AC-6, AC-11: quyền xem / ghi", () => {
       ["assign_log", { log_id: "L1", splits: [{ meaning: "spend", amount: 1 }] }],
       ["allocate_income", { income_tx_id: 1 }],
       ["add_tenant_shared_expense", { tenant_id: "t", amount: 1, category_id: "groceries" }],
+      ["record_asset_value", { item_id: "vang", unit_price: 5_250_000 }],
     ] as const) {
       const res = await mcpPost(env, access, toolCall(name, args));
       expect(res.status, name).toBe(403);
@@ -347,6 +348,77 @@ describe("UC-602, UC-603: tool nhìn và ghi như người đã uỷ quyền", (
     expect(res.result.isError).toBeFalsy();
     expect(raw.prepare("SELECT by_member_id FROM transactions WHERE log_id = 'L9'").all()).toEqual([{ by_member_id: "wife" }]);
     expect(audits("log.assign")).toMatchObject([{ member_id: "wife", via: "mcp", target: "log:L9" }]);
+  });
+
+  const toolJson = async (access: string, name: string, args: Record<string, unknown> = {}) => {
+    const res = await json(await mcpPost(env, access, toolCall(name, args)));
+    const blocks = res.result.content as { text: string }[];
+    return { isError: Boolean(res.result.isError), data: JSON.parse(blocks[blocks.length - 1]!.text) as Record<string, unknown> };
+  };
+  const rest = async (method: string, path: string, body?: unknown) =>
+    (await (await send(env, path, { method, headers: { Authorization: "Bearer tok", "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) })).json()) as {
+      data: Record<string, unknown>;
+    };
+
+  it("UC-602 AC-7: get_balance_sheet trả cùng số với GET /v1/balance-sheet, kèm lô, lãi / lỗ, trạng thái của từng lô và lãi tháng này của khoản nợ", async () => {
+    await rest("POST", "/v1/balance-items", { name: "Vàng", section: "A1", pyramid: "protective", measure: "units", unit: "chỉ" });
+    await rest("POST", "/v1/balance-items/vang/lots", { bought_on: "2026-01-10", quantity: 2, unit_cost: 5_000_000, stop_loss_price: 4_000_000 });
+    await rest("POST", "/v1/debts", { name: "Vay tiêu dùng", amount: 20_000_000, at: "2026-01-01T03:00:00.000Z", interest_rate: 18 });
+    const { access } = await connectClaude(env, { memberId: "husband", password: SHARED, write: false });
+    const tool = await toolJson(access, "get_balance_sheet");
+    expect(tool.isError).toBe(false);
+    const { freedom, ...sheet } = tool.data;
+    expect(sheet).toEqual((await rest("GET", "/v1/balance-sheet")).data);
+    expect(freedom).toBeTruthy();
+    const items = tool.data.items as { id: string; lots: { position: { status: string; pnl: number } }[] }[];
+    expect(items[0]!.lots[0]!.position).toMatchObject({ status: "holding", pnl: 0 });
+    const liabilities = tool.data.liabilities as { rows: { key: string; interestThisMonth: number }[] }[];
+    expect(liabilities.flatMap((g) => g.rows).find((r) => r.key === "debt:vay-tieu-dung")!.interestThisMonth).toBe(300_000);
+  });
+
+  it("UC-603 AC-11: add_transaction nhận interest_debt_id — ghi khoản trả lãi (danh mục Lãi vay), còn nợ không đổi; cùng luật ledger UC-101 AC-25", async () => {
+    await rest("POST", "/v1/debts", { name: "Vay tiêu dùng", amount: 20_000_000, interest_rate: 18 });
+    const { access } = await connectClaude(env, { memberId: "husband", password: SHARED });
+    const ok = await toolJson(access, "add_transaction", { meaning: "spend", amount: 300_000, interest_debt_id: "vay-tieu-dung" });
+    expect(ok.data.tx).toMatchObject({ category_id: "loan-interest", counter_wallet_id: "loan-interest", interest_debt_id: "vay-tieu-dung" });
+    const both = await json(await mcpPost(env, access, toolCall("add_transaction", { meaning: "spend", amount: 1_000, interest_debt_id: "vay-tieu-dung", debt_id: "vay-tieu-dung" })));
+    expect(both.result.isError).toBe(true);
+    const debts = (await rest("GET", "/v1/debts")).data.debts as { id: string; balance: number; interestPaidThisMonth: number }[];
+    expect(debts.find((d) => d.id === "vay-tieu-dung")).toMatchObject({ balance: 20_000_000 });
+  });
+
+  it("UC-606 AC-1: record_asset_value { item_id: vang, unit_price: 5.250.000 } → giá Vàng hôm nay, nhật ký via=mcp; quyền chỉ Xem → 403", async () => {
+    await rest("POST", "/v1/balance-items", { name: "Vàng", section: "A1", pyramid: "protective", measure: "units", unit: "chỉ" });
+    await rest("POST", "/v1/balance-items/vang/lots", { bought_on: "2026-01-10", quantity: 24, unit_cost: 5_000_000 });
+    const { access } = await connectClaude(env, { memberId: "wife", password: SHARED });
+    const res = await toolJson(access, "record_asset_value", { item_id: "vang", unit_price: 5_250_000 });
+    expect(res.data).toMatchObject({ id: "vang", unitPrice: 5_250_000, value: 126_000_000 });
+    expect(audits("balance.value.add")).toMatchObject([{ member_id: "wife", via: "mcp", target: "balance_item:vang" }]);
+    expect(txCount()).toBe(0);
+    const reader = await connectClaude(env, { memberId: "husband", password: SHARED, write: false });
+    expect((await mcpPost(env, reader.access, toolCall("record_asset_value", { item_id: "vang", unit_price: 1 }))).status).toBe(403);
+  });
+
+  it("UC-602 AC-8: get_reports (cash_flow | income_statement, period) trả cùng số với GET /v1/reports/…", async () => {
+    await rest("POST", "/v1/transactions", { meaning: "spend", amount: 200_000, category_id: "groceries", account_id: "cash-husband" });
+    const period = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 7);
+    const { access } = await connectClaude(env, { memberId: "husband", password: SHARED, write: false });
+    const cash = await toolJson(access, "get_reports", { kind: "cash_flow", period });
+    expect(cash.isError).toBe(false);
+    expect(cash.data).toEqual((await rest("GET", `/v1/reports/cash-flow?period=${period}`)).data);
+    const stmt = await toolJson(access, "get_reports", { kind: "income_statement", period });
+    expect(stmt.data).toEqual((await rest("GET", `/v1/reports/income-statement?period=${period}`)).data);
+    expect((stmt.data.expense as { total: number }).total).toBe(200_000);
+  });
+
+  it("UC-602 AC-9: get_balance_sheet có khối freedom = GET /v1/freedom (mốc, kế hoạch thu nhập năm nay)", async () => {
+    await rest("PUT", "/v1/settings/config", { fi_expense_monthly: 20_000_000, fi_expense_must_monthly: 15_000_000 });
+    await rest("PUT", `/v1/income-plans/${new Date(Date.now() + 7 * 3600_000).getUTCFullYear()}`, { household_monthly: 45_000_000 });
+    const { access } = await connectClaude(env, { memberId: "husband", password: SHARED, write: false });
+    const tool = await toolJson(access, "get_balance_sheet");
+    const freedom = (await rest("GET", "/v1/freedom")).data;
+    expect(tool.data.freedom).toEqual(freedom);
+    expect(freedom.incomePlan).toMatchObject({ current: { householdMonthly: 45_000_000 } });
   });
 });
 

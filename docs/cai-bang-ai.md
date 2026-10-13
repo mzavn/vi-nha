@@ -118,4 +118,5 @@ chặn một lúc).
 - Tự ghi sổ ngân hàng (SePay), nhắc qua Telegram / Zalo, nối Claude: người dùng tự làm trong app, mục **Cài đặt**. Chưa có tài khoản
   SePay: gửi người dùng link đăng ký <https://my.sepay.vn/register?gcid=arqcwdek> (link giới thiệu của Ví nhà, cũng có ở Cài đặt ›
   Kết nối › SePay).
-- Cập nhật bản mới sau này: `git pull && npm install && npm run deploy`.
+- Cập nhật bản mới sau này: `git pull --autostash && npm ci && npm run deploy` (`--autostash` vì setup đã ghi `account_id` vào
+  `wrangler.jsonc`). App báo có bản mới ở Cài đặt › Nâng cao › Cập nhật Ví nhà.

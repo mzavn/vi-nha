@@ -349,6 +349,117 @@ describe("chia lương end-to-end", () => {
   });
 });
 
+// change 261012-tu-chia: tự chia một khoản thu — số tay cho từng ví thay cho luật nạp.
+describe("tự chia một khoản thu (change 261012-tu-chia)", () => {
+  const AT = "2026-09-10T09:00:00+07:00";
+  // Số mẫu: tổng 19.000.000, đúng 7 ví > 0; Thuế và Du lịch 0 (bỏ qua).
+  const AMOUNTS = [
+    { wallet_id: "wealth-building", amount: 200_000 },
+    { wallet_id: "housing", amount: 7_500_000 },
+    { wallet_id: "fun-wife", amount: 1_500_000 },
+    { wallet_id: "food", amount: 5_000_000 },
+    { wallet_id: "utilities", amount: 1_600_000 },
+    { wallet_id: "hometown", amount: 2_700_000 },
+    { wallet_id: "transport", amount: 500_000 },
+    { wallet_id: "tax", amount: 0 },
+    { wallet_id: "travel", amount: 0 },
+  ];
+  const income = async (amount: number, extra: Record<string, unknown> = {}) =>
+    (await call("POST", "/v1/transactions", { meaning: "income", amount, account_id: "vcb-husband", at: AT, ...extra })).json.data.tx.id as number;
+  const funds = () => raw.prepare("SELECT wallet_id, amount, counter_wallet_id FROM transactions WHERE meaning = 'fund' AND status = 'active' ORDER BY wallet_id").all();
+
+  it("UC-203 AC-11: ghi đúng các số gửi lên, bỏ luật nạp; lệnh chuyển gộp theo tài khoản của ví; tổng lệch → amounts_mismatch; ví Thu nhập → invalid_amounts; gọi lại → 409", async () => {
+    // Ví Về quê trú ở TCB như Tích sản: hai ví cùng tài khoản đích gộp một lệnh.
+    raw.prepare("UPDATE wallets SET account_id = 'tcb-husband' WHERE id = 'hometown'").run();
+    // Tắt hết luật nạp: chia theo luật sẽ lỗi cấu hình — tự chia vẫn ghi được, nghĩa là luật không được dùng.
+    raw.prepare("UPDATE allocations SET active = 0").run();
+    const id = await income(19_000_000);
+
+    const mismatch = await call("POST", "/v1/allocate", {
+      income_tx_id: id,
+      amounts: AMOUNTS.map((a) => (a.wallet_id === "transport" ? { ...a, amount: 499_000 } : a)),
+    });
+    expect(mismatch.status).toBe(400);
+    expect(mismatch.json.error?.code).toBe("amounts_mismatch");
+    const holding = await call("POST", "/v1/allocate", { income_tx_id: id, amounts: [...AMOUNTS.slice(1), { wallet_id: "income", amount: 200_000 }] });
+    expect(holding.status).toBe(400);
+    expect(holding.json.error?.code).toBe("invalid_amounts");
+    expect(funds()).toEqual([]);
+
+    const { status, json } = await call("POST", "/v1/allocate", { income_tx_id: id, amounts: AMOUNTS });
+    expect(status).toBe(201);
+    expect(json.data).toMatchObject({ batchId: `A${id}`, underfunded: [], deficitCovered: {} });
+    expect(funds()).toEqual(
+      AMOUNTS.filter((a) => a.amount > 0)
+        .map((a) => ({ wallet_id: a.wallet_id, amount: a.amount, counter_wallet_id: "income" }))
+        .sort((a, b) => a.wallet_id.localeCompare(b.wallet_id)),
+    );
+    expect(raw.prepare("SELECT balance FROM v_wallet_balance WHERE wallet_id = 'wealth-building'").get()).toEqual({ balance: 200_000 });
+    expect(raw.prepare("SELECT to_account_id, amount FROM transfer_orders WHERE batch_id = ? ORDER BY to_account_id").all(`A${id}`)).toEqual([
+      { to_account_id: "tcb-husband", amount: 2_900_000 },
+      { to_account_id: "vcb-wife", amount: 1_500_000 },
+    ]);
+
+    const again = await call("POST", "/v1/allocate", { income_tx_id: id, amounts: AMOUNTS });
+    expect(again.status).toBe(409);
+    expect(again.json.error?.code).toBe("already_allocated");
+  });
+
+  it("UC-203 AC-11: hợp đồng amounts — trùng ví, ví không có, ví đã tắt, số âm / lẻ / chuỗi → invalid_amounts; preview nhận amounts và bỏ qua nguồn thu", async () => {
+    raw.prepare("UPDATE wallets SET active = 0 WHERE id = 'nice-to-have'").run();
+    const id = await income(1_000_000);
+    const bad = [
+      [{ wallet_id: "food", amount: 500_000 }, { wallet_id: "food", amount: 500_000 }],
+      [{ wallet_id: "khong-co", amount: 1_000_000 }],
+      [{ wallet_id: "nice-to-have", amount: 1_000_000 }],
+      [{ wallet_id: "food", amount: 1_500_000 }, { wallet_id: "housing", amount: -500_000 }],
+      [{ wallet_id: "food", amount: 999_999.5 }, { wallet_id: "housing", amount: 0.5 }],
+      [{ wallet_id: "food", amount: "1000000" }],
+      "food",
+    ];
+    for (const amounts of bad) {
+      const res = await call("POST", "/v1/allocate", { income_tx_id: id, amounts });
+      expect(res.status, JSON.stringify(amounts)).toBe(400);
+      expect(res.json.error?.code, JSON.stringify(amounts)).toBe("invalid_amounts");
+    }
+    expect(funds()).toEqual([]);
+
+    const preview = await call("POST", "/v1/allocate/preview", {
+      amount: 19_000_000,
+      at: AT,
+      account_id: "vcb-husband",
+      income_stream_id: "khong-co-nguon-nay",
+      amounts: AMOUNTS,
+    });
+    expect(preview.status).toBe(200);
+    expect(preview.json.data.funds).toEqual(AMOUNTS.filter((a) => a.amount > 0).map((a) => ({ walletId: a.wallet_id, amount: a.amount })));
+    expect(preview.json.data.transferOrders).toEqual([
+      { fromAccountId: "vcb-husband", toAccountId: "tcb-husband", amount: 200_000, walletIds: ["wealth-building"] },
+      { fromAccountId: "vcb-husband", toAccountId: "vcb-wife", amount: 1_500_000, walletIds: ["fun-wife"] },
+    ]);
+    const previewMismatch = await call("POST", "/v1/allocate/preview", { amount: 19_000_001, at: AT, account_id: "vcb-husband", amounts: AMOUNTS });
+    expect(previewMismatch.json.error?.code).toBe("amounts_mismatch");
+    expect(raw.prepare("SELECT COUNT(*) n FROM transfer_orders").get()).toEqual({ n: 0 });
+  });
+
+  it("UC-203 AC-12: nguồn thu khóa 30% Tích sản, tự chia Tích sản 100.000 → ghi đúng 100.000 (số tay thắng phần khóa)", async () => {
+    raw.prepare("UPDATE income_stream_locks SET percent = 0.30 WHERE stream_id = 'salary-wife' AND wallet_id = 'wealth-building'").run();
+    const id = await income(11_000_000, { income_stream_id: "salary-wife" });
+    const res = await call("POST", "/v1/allocate", {
+      income_tx_id: id,
+      amounts: [
+        { wallet_id: "wealth-building", amount: 100_000 },
+        { wallet_id: "housing", amount: 10_900_000 },
+      ],
+    });
+    expect(res.status).toBe(201);
+    expect(funds()).toEqual([
+      { wallet_id: "housing", amount: 10_900_000, counter_wallet_id: "income" },
+      { wallet_id: "wealth-building", amount: 100_000, counter_wallet_id: "income" },
+    ]);
+  });
+});
+
 describe("nguồn thu, ví giữ riêng, chuyển ngân sách", () => {
   const balances = () =>
     Object.fromEntries((raw.prepare("SELECT wallet_id, balance FROM v_wallet_balance").all() as { wallet_id: string; balance: number }[]).map((r) => [r.wallet_id, r.balance]));

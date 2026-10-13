@@ -1,11 +1,22 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import preact from "@preact/preset-vite";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, transformWithOxc, type Plugin } from "vite";
+import { installInfo } from "./src/lib/install-info.ts";
 
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
+
+/** Địa chỉ remote `origin` của repo đang build; không có git / remote → null. Chỉ đưa qua `installInfo`, không vào bundle. */
+function gitRemote(): string | null {
+  try {
+    return execFileSync("git", ["remote", "get-url", "origin"], { cwd: here(".."), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return null;
+  }
+}
 
 // Service worker viết tay (web/sw.js). Lúc build, chèn danh sách file của app shell, một mã phiên bản
 // để trình duyệt thấy sw.js đổi mỗi lần build, và hàm freshFor, bypassWorker (src/lib/sw-fresh.ts, dịch sang JS, bỏ `export`)
@@ -34,7 +45,11 @@ export default defineConfig({
   publicDir: here("./public"),
   plugins: [preact(), tailwindcss(), serviceWorker()],
   // Phiên bản hiện ở Cài đặt › Máy này › Về Ví nhà: bản public do scripts/publish-public.mjs đặt, repo phát triển không có → "".
-  define: { __APP_VERSION__: JSON.stringify(JSON.parse(readFileSync(here("../package.json"), "utf8")).version ?? "") },
+  // Cách cài (UC-709 AC-31): build trên Cloudflare (WORKERS_CI=1 — nút Deploy) mới đọc remote, chỉ giữ `chủ/tên` GitHub.
+  define: {
+    __APP_VERSION__: JSON.stringify(JSON.parse(readFileSync(here("../package.json"), "utf8")).version ?? ""),
+    __INSTALL__: JSON.stringify(installInfo(process.env.WORKERS_CI, gitRemote)),
+  },
   build: {
     outDir: here("../public"),
     emptyOutDir: true,

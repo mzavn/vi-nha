@@ -1,19 +1,31 @@
 // Tầng dịch vụ: đọc/ghi D1 rồi gọi các hàm thuần trong src/domain.
 // REST (/v1), MCP và cron đều đi qua đây — không route nào tự viết SQL nghiệp vụ.
 
-import { allocate, type AllocationResult, type WalletRule } from "../domain/allocation";
+import { allocate, manualFunds, type AllocationResult, type ManualAmount, type WalletRule } from "../domain/allocation";
 import { endOfMonthIso, monthSweep } from "../domain/close";
 import { buildEntry, MANUAL_MEANINGS, type EntryInput, type TxRow } from "../domain/entry";
-import { mondaysInMonth, monthKey, weekKey, weekStart } from "../domain/period";
+import { dayKey, mondaysInMonth, monthKey, weekKey, weekStart } from "../domain/period";
 import { normalizeContent } from "../domain/rules";
 import { buildSnapshot, monthTarget, openingWealthBuildingCredit, weekTarget, type Snapshot, type SnapshotData } from "../domain/snapshot";
 import { newTransferMemo, transferOrders, type TransferOrderDraft } from "../domain/transfer-orders";
+import { withInterestRule } from "../domain/interest";
 import { DomainError, type AccountRole, type Refs, type WalletRef } from "../domain/types";
 import { formatMoney } from "../notify/format";
+import { itemsTotal } from "./balance";
+import { debtInterest, expectedInterestTotal, type DebtInterest } from "./debts";
 
 type Row = Record<string, unknown>;
 const rows = <T = Row>(r: D1Result) => (r.results ?? []) as T[];
 const toMap = (list: { w: string; s: number | null }[]) => Object.fromEntries(list.map((x) => [x.w, Number(x.s ?? 0)]));
+
+/**
+ * Luật dựng sẵn của ví "Lãi vay" cho tháng `month` (ADR nháp H): không có luật tay đang bật thì dự kiến tháng = Σ lãi dự kiến
+ * của các khoản nợ có lãi. Dùng chung cho chia tiền, snapshot và Ngân sách; trả kèm lãi từng khoản.
+ */
+async function withInterest(db: D1Database, refs: Refs, month: string): Promise<{ refs: Refs; interest: DebtInterest[] }> {
+  const interest = await debtInterest(db, month);
+  return { refs: { ...refs, rules: withInterestRule(refs.rules, refs.wallets, expectedInterestTotal(interest)) }, interest };
+}
 
 // ── Dữ liệu tham chiếu ─────────────────────────────────────────────
 
@@ -74,7 +86,7 @@ export async function loadRefs(db: D1Database): Promise<Refs> {
 const TX_COLUMNS = [
   "at", "amount", "meaning", "wallet_id", "counter_wallet_id", "account_id", "counter_account_id", "category_id",
   "by_member_id", "link_id", "batch_id", "asset_kind", "taxable", "week_key", "month_key", "source", "note", "client_id",
-  "income_stream_id", "tenant_id", "debt_id", "receivable_id",
+  "income_stream_id", "tenant_id", "debt_id", "receivable_id", "interest_debt_id",
 ] as const;
 
 export function insertTx(db: D1Database, row: TxRow): D1PreparedStatement {
@@ -229,7 +241,7 @@ export async function replaceTransaction(db: D1Database, id: number, input: Entr
   const loaded = await loadRefs(db);
   const refs: Refs = {
     ...loaded,
-    debts: keep(loaded.debts, old.debt_id),
+    debts: keep(keep(loaded.debts, old.debt_id), old.interest_debt_id),
     receivables: keep(loaded.receivables, old.receivable_id),
     tenants: keep(loaded.tenants, old.tenant_id),
   };
@@ -271,9 +283,24 @@ export async function replaceTransaction(db: D1Database, id: number, input: Entr
        WHERE id IN (SELECT id FROM ${LINKED_RETURNS}) AND EXISTS (SELECT 1 FROM transactions WHERE id = ? AND status = 'active')`,
     )
     .bind(id, id);
+  // Phân loại lại cho báo cáo (BR-15) đi theo khoản mới — khi khoản mới vẫn xếp được: đúng một phía tài khoản, Thu nhập thụ
+  // động chỉ cho khoản thu. Đặt cuối cùng trước khi huỷ khoản cũ: last_insert_rowid() vẫn là khoản mới (UPDATE không đổi nó).
+  const singleSide = (row.account_id === null) !== (row.counter_account_id === null);
+  const copyClass = singleSide
+    ? [
+        db
+          .prepare(
+            `INSERT INTO transaction_report_classes (transaction_id, report_class, by_member_id)
+             SELECT last_insert_rowid(), report_class, by_member_id FROM transaction_report_classes
+             WHERE transaction_id = ?1 AND (report_class <> 'passive_income' OR ?2 = 'income')
+               AND EXISTS (SELECT 1 FROM transactions WHERE id = ?1 AND status = 'active')`,
+          )
+          .bind(id, row.meaning),
+      ]
+    : [];
   let results: D1Result[];
   try {
-    results = await runUndo(db, [...undo, insert, relink, db.prepare("UPDATE transactions SET status = 'void' WHERE id = ? AND status = 'active'").bind(id)]);
+    results = await runUndo(db, [...undo, insert, relink, ...copyClass, db.prepare("UPDATE transactions SET status = 'void' WHERE id = ? AND status = 'active'").bind(id)]);
   } catch (err) {
     // Hai lần gửi cùng client_id chạy song song: lần thua đọc lại bản đã ghi.
     const raced = await existing();
@@ -557,18 +584,25 @@ export interface AllocationPlan extends AllocationResult {
   transferOrders: TransferOrderDraft[];
 }
 
+/** `amounts`: Tự chia (UC-203) — ghi đúng các số đó, bỏ luật nạp và nguồn thu; lệnh chuyển tính như chia theo luật. */
 export async function previewAllocation(
   db: D1Database,
   income: { amount: number; taxable: boolean; at: string; accountId: string | null; incomeStreamId?: string | null },
+  amounts?: ManualAmount[],
 ): Promise<AllocationPlan> {
-  const refs = await loadRefs(db);
+  if (amounts) {
+    const refs = await loadRefs(db);
+    const result = manualFunds(amounts, income.amount, refs.wallets);
+    return { ...result, transferOrders: transferOrders(result.funds, walletAccounts(refs), income.accountId) };
+  }
+  const { refs } = await withInterest(db, await loadRefs(db), monthKey(income.at));
   const stream = income.incomeStreamId ? refs.incomeStreams.find((s) => s.id === income.incomeStreamId) : null;
   if (stream === undefined) throw new DomainError("unknown_income_stream", `Không có nguồn thu "${income.incomeStreamId}".`);
   const result = allocate({ income, rules: refs.rules, stream, ...(await allocationContext(db, income.at)) });
   return { ...result, transferOrders: transferOrders(result.funds, walletAccounts(refs), income.accountId) };
 }
 
-export async function allocateIncome(db: D1Database, incomeTxId: number) {
+export async function allocateIncome(db: D1Database, incomeTxId: number, amounts?: ManualAmount[]) {
   const income = await getTransaction(db, incomeTxId);
   if (!income || income.meaning !== "income" || income.status !== "active") {
     throw new DomainError("not_income", "Không có khoản thu nhập còn hiệu lực với id này.", 404);
@@ -577,13 +611,17 @@ export async function allocateIncome(db: D1Database, incomeTxId: number) {
   if (done) throw new DomainError("already_allocated", `Khoản thu này đã được chia (đợt ${done.batch_id}).`, 409);
 
   const at = String(income.at);
-  const plan = await previewAllocation(db, {
-    amount: Number(income.amount),
-    taxable: Boolean(income.taxable),
-    at,
-    accountId: (income.counter_account_id as string | null) ?? null,
-    incomeStreamId: (income.income_stream_id as string | null) ?? null,
-  });
+  const plan = await previewAllocation(
+    db,
+    {
+      amount: Number(income.amount),
+      taxable: Boolean(income.taxable),
+      at,
+      accountId: (income.counter_account_id as string | null) ?? null,
+      incomeStreamId: (income.income_stream_id as string | null) ?? null,
+    },
+    amounts,
+  );
   const batchId = `A${incomeTxId}`;
   const holding = String(income.wallet_id);
   const statements = [
@@ -752,7 +790,7 @@ export const UNALLOCATED_INCOME_SQL = `WITH u AS (
   SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS amount, (SELECT id FROM u ORDER BY at, id LIMIT 1) AS oldestTxId FROM u`;
 
 export async function getSnapshot(db: D1Database, viewerId: string | null, now: Date): Promise<Snapshot> {
-  const refs = await loadRefs(db);
+  const { refs } = await withInterest(db, await loadRefs(db), monthKey(now));
   const [balances, spentWeek, spentMonth, wealthBuilding, safetyFund, months, goals, pending, drift, orders, unallocated, accounts] = await db.batch([
     db.prepare("SELECT wallet_id AS w, balance AS s FROM v_wallet_balance"),
     db.prepare("SELECT wallet_id AS w, spent AS s FROM v_spent_week WHERE week_key = ?").bind(weekKey(now)),
@@ -810,7 +848,8 @@ type SnapshotGoal = { walletId: string; name: string; target: number; balance: n
  */
 export async function netWorth(db: D1Database, viewerId: string | null, now: Date) {
   const snapshot = await getSnapshot(db, viewerId, now);
-  const [cash, receivables, debts, tenants, places] = await db.batch([
+  const balanceItems = await itemsTotal(db, dayKey(now));
+  const [cash, receivables, debts, tenants, places, assets] = await db.batch([
     db.prepare("SELECT COALESCE(SUM(book_balance), 0) AS n FROM v_account_book"),
     db.prepare("SELECT COALESCE(SUM(balance), 0) AS n FROM v_receivable_balance WHERE active = 1 AND balance > 0"),
     db.prepare("SELECT COALESCE(SUM(balance), 0) AS n FROM v_debt_balance WHERE active = 1 AND balance > 0"),
@@ -823,6 +862,12 @@ export async function netWorth(db: D1Database, viewerId: string | null, now: Dat
        FROM v_account_book b JOIN accounts a ON a.id = b.account_id LEFT JOIN members m ON m.id = a.owner_member_id
        WHERE a.role IS NOT NULL ORDER BY CASE a.role WHEN 'piggy_bank' THEN 0 WHEN 'buffer' THEN 1 ELSE 2 END, a.id`,
     ),
+    // Tài sản mua qua app chưa gắn mục: loại đã có mục nhập tay thì tính theo định giá của mục (ADR nháp A).
+    db.prepare(
+      `SELECT COALESCE(SUM(amount), 0) AS n FROM transactions
+       WHERE status = 'active' AND meaning = 'buy_asset'
+         AND (asset_kind IS NULL OR asset_kind NOT IN (SELECT asset_kind FROM balance_items WHERE asset_kind IS NOT NULL))`,
+    ),
   ]);
   const sum = (r: D1Result) => Number(rows<{ n: number }>(r)[0]?.n ?? 0);
   const tenant = rows<{ owed: number; prepaid: number }>(tenants!)[0];
@@ -832,7 +877,8 @@ export async function netWorth(db: D1Database, viewerId: string | null, now: Dat
     wealthBuildingCash: snapshot.tiers.wealth_building.cash,
     wealthBuildingAccounts: { total: wealthBuildingAccounts.reduce((s, a) => s + a.balance, 0), accounts: wealthBuildingAccounts },
     spendableThisWeek: snapshot.spendableThisWeek,
-    assets: snapshot.tiers.wealth_building.assets,
+    assets: sum(assets!),
+    balanceItems,
     receivables: sum(receivables!),
     tenants: Number(tenant?.owed ?? 0),
     tenantsPrepaid: Number(tenant?.prepaid ?? 0),
@@ -840,7 +886,8 @@ export async function netWorth(db: D1Database, viewerId: string | null, now: Dat
   };
   return {
     ...statement,
-    netWorth: statement.cash + statement.assets + statement.receivables + statement.tenants - statement.debts - statement.tenantsPrepaid,
+    netWorth:
+      statement.cash + statement.assets + statement.balanceItems + statement.receivables + statement.tenants - statement.debts - statement.tenantsPrepaid,
   };
 }
 
@@ -850,7 +897,7 @@ export async function getBudget(db: D1Database, period: string, viewerId: string
   if (!isWeek && !/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) {
     throw new DomainError("invalid_period", "Kỳ phải có dạng 2026-09 hoặc 2026-W39.");
   }
-  const refs = await loadRefs(db);
+  const { refs, interest } = await withInterest(db, await loadRefs(db), isWeek ? weekStart(period).slice(0, 7) : period);
   const [spent, funded, balances] = await db.batch([
     isWeek
       ? db.prepare("SELECT wallet_id AS w, spent AS s FROM v_spent_week WHERE week_key = ?").bind(period)
@@ -880,6 +927,13 @@ export async function getBudget(db: D1Database, period: string, viewerId: string
     period,
     kind: isWeek ? "week" : "month",
     weeks: isWeek ? 1 : mondaysInMonth(period),
+    ...(isWeek
+      ? {}
+      : {
+          interestLines: interest
+            .filter((d) => d.active && d.rateBps > 0)
+            .map((d) => ({ debtId: d.debtId, name: d.name, expected: d.expected, paid: d.paid, dueDay: d.dueDay })),
+        }),
     lines: lines.map(({ w, target }) => {
       const secret = w.private && w.memberId !== viewerId;
       const actual = spentBy[w.id] ?? 0;

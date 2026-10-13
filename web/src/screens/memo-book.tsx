@@ -2,6 +2,7 @@
 // "Mình nợ" (sổ nợ) và "Người khác nợ mình" (sổ phải thu). Mỗi sổ chỉ khác câu chữ (`BookLabels`) và việc làm được.
 // Sổ chỉ ghi thêm: sai thì huỷ dòng, không sửa. Thêm khoản, thêm dòng, huỷ dòng ghi thẳng lên server nên cần mạng.
 
+import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import { api, errorText } from "../lib/api";
 import { type BookLineForm, mergeHistory, progressPct } from "../lib/memo-books";
@@ -193,6 +194,8 @@ export function BookDetailSheet(props: {
   voidPath: (lineId: number) => string;
   onClose: () => void;
   onVoided: (text: string) => void;
+  /** Phần riêng của sổ ngay dưới ba số (vd lãi suất, kỳ hạn của khoản nợ). */
+  extra?: ComponentChildren;
 }) {
   const { online } = useApp();
   const { labels: l, item: d } = props;
@@ -230,6 +233,7 @@ export function BookDetailSheet(props: {
         <Money value={d.balance} tone={false} class="srow-amt" />
       </div>
       {d.note && <p class="fhint">{d.note}</p>}
+      {props.extra}
       <div class="pad grid grid-cols-3 gap-2">
         {props.actions.map((a) => (
           <button key={a.label} type="button" class={a.primary ? "btn btn-primary" : "btn"} disabled={a.disabled} onClick={a.onClick}>
@@ -302,6 +306,8 @@ export function BookAddSheet(props: {
   labels: BookLabels;
   path: string;
   payload: (f: { name: string; amount: number; note: string }) => Result<{ name: string; amount: number; note?: string }>;
+  /** Ô riêng của sổ (vd lãi suất, kỳ hạn) và phần thân request đi kèm; sai thì báo lỗi, không gửi. */
+  extra?: { fields: ComponentChildren; body: () => Result<object> };
   onClose: () => void;
   onSaved: (text: string) => void;
 }) {
@@ -316,10 +322,12 @@ export function BookAddSheet(props: {
   async function submit() {
     const r = props.payload({ name, amount, note });
     if (!r.ok) return setError(Object.values(r.errors)[0] ?? null);
+    const more = props.extra?.body() ?? { ok: true as const, value: {} };
+    if (!more.ok) return setError(Object.values(more.errors)[0] ?? null);
     setBusy(true);
     setError(null);
     try {
-      const d = await api.post<{ name: string; balance: number }>(props.path, r.value);
+      const d = await api.post<{ name: string; balance: number }>(props.path, { ...r.value, ...more.value });
       props.onSaved(`Đã thêm ${l.noun} ${d.name}.${r.value.amount ? ` ${l.remain(d.balance)}` : ""}`);
       props.onClose();
     } catch (err) {
@@ -342,6 +350,7 @@ export function BookAddSheet(props: {
         <label for="n-note">Ghi chú</label>
         <input id="n-note" class="ctl" maxLength={500} placeholder={l.add.notePlaceholder} value={note} onInput={(e) => setNote(e.currentTarget.value)} />
       </div>
+      {props.extra?.fields}
       <div class="note" style={{ borderTop: "1px solid var(--border)" }}>
         {l.add.hint}
       </div>

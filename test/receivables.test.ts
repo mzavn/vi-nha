@@ -271,7 +271,7 @@ describe("GET /v1/networth — tiền thật trước, ghi nhớ ai nợ ai sau"
   const netWorth = async () => (await call<NetWorth>("GET", "/v1/networth")).json.data;
 
   it("chưa có gì: mọi số bằng 0", async () => {
-    expect(await netWorth()).toEqual({ cash: 0, wealthBuildingCash: 0, wealthBuildingAccounts: { total: 0, accounts: [] }, spendableThisWeek: 0, assets: 0, receivables: 0, tenants: 0, tenantsPrepaid: 0, debts: 0, netWorth: 0 });
+    expect(await netWorth()).toEqual({ cash: 0, wealthBuildingCash: 0, wealthBuildingAccounts: { total: 0, accounts: [] }, spendableThisWeek: 0, assets: 0, balanceItems: 0, receivables: 0, tenants: 0, tenantsPrepaid: 0, debts: 0, netWorth: 0 });
   });
 
   it("tiền thật = Σ số dư sổ tài khoản đang dùng; sổ phải thu / nợ / người thuê không bao giờ vào tiền thật", async () => {
@@ -302,6 +302,7 @@ describe("GET /v1/networth — tiền thật trước, ghi nhớ ai nợ ai sau"
       wealthBuildingAccounts: { total: 0, accounts: [] },
       spendableThisWeek: afterCash.spendableThisWeek,
       assets: 1_000_000,
+      balanceItems: 0,
       receivables: 2_200_000,
       tenants: 3_000_000,
       tenantsPrepaid: 200_000,

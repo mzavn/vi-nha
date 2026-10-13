@@ -178,7 +178,12 @@ settingsRoutes.patch("/rules/:id", async (c) => {
   return ok(c, await settings.updateRule(c.env.DB, id, await body(c)));
 });
 
-settingsRoutes.put("/config", async (c) => ok(c, await settings.updateConfig(c.env.DB, await body(c))));
+settingsRoutes.put("/config", async (c) => {
+  const b = await body(c);
+  const config = await settings.updateConfig(c.env.DB, b);
+  await recordChange(c, "config.update", null, { fields: Object.keys(b).filter((k) => /^[a-z0-9_]{1,40}$/.test(k)).sort() });
+  return ok(c, config);
+});
 settingsRoutes.patch("/notify-schedule", async (c) => ok(c, await settings.updateNotifySchedule(c.env.DB, await body(c))));
 
 const SECRET_LABEL: Record<SecretName, string> = {

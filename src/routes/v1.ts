@@ -1,9 +1,11 @@
 import { Hono, type Context } from "hono";
+import { parseManualAmounts } from "../domain/allocation";
 import { MANUAL_MEANINGS, normalizeAt, type EntryInput } from "../domain/entry";
 import { monthKey, weekKey } from "../domain/period";
 import { DomainError } from "../domain/types";
 import type { AppEnv } from "../env";
 import { recordChange } from "../services/audit";
+import { debtInterest } from "../services/debts";
 import * as ledger from "../services/ledger";
 
 export const v1 = new Hono<AppEnv>();
@@ -38,6 +40,7 @@ const now = () => new Date();
 // ── Dữ liệu nền cho PWA: cache lại để nhập được khi mất mạng ─────────
 v1.get("/bootstrap", async (c) => {
   const refs = await ledger.loadRefs(c.env.DB);
+  const interest = new Map((await debtInterest(c.env.DB, monthKey(now()))).map((d) => [d.debtId, d]));
   const memberId = c.get("memberId");
   return ok(c, {
     member: refs.members.find((m) => m.id === memberId) ?? null,
@@ -45,7 +48,22 @@ v1.get("/bootstrap", async (c) => {
     wallets: refs.wallets.map((w) => ({ ...w, hidden: w.private && w.memberId !== memberId })),
     categories: refs.categories,
     accounts: refs.accounts,
-    debts: refs.debts.filter((d) => d.active).map(({ id, name, balance }) => ({ id, name, balance })),
+    // Đủ để sheet Trả nợ tách lãi / gốc khi mất mạng (debt UC-902): lãi suất, số trả tháng, lãi dự kiến và đã trả tháng này.
+    debts: refs.debts
+      .filter((d) => d.active)
+      .map(({ id, name, balance }) => {
+        const i = interest.get(id);
+        return {
+          id,
+          name,
+          balance,
+          interestRate: (i?.rateBps ?? 0) / 100,
+          monthlyPayment: i?.monthlyPayment ?? null,
+          dueDay: i?.dueDay ?? null,
+          interestThisMonth: i?.expected ?? 0,
+          interestPaidThisMonth: i?.paid ?? 0,
+        };
+      }),
     receivables: refs.receivables.filter((r) => r.active).map(({ id, name, balance }) => ({ id, name, balance })),
     categoryUsage: await ledger.categoryUsage(c.env.DB, now()),
   });
@@ -141,6 +159,7 @@ function entryInput(b: Record<string, unknown>): EntryInput {
     tenant_id: str(b.tenant_id, "tenant_id"),
     debt_id: str(b.debt_id, "debt_id"),
     receivable_id: str(b.receivable_id, "receivable_id"),
+    interest_debt_id: str(b.interest_debt_id, "interest_debt_id"),
   };
   if (input.client_id && !/^[A-Za-z0-9_-]{8,64}$/.test(input.client_id)) bad("client_id phải là chuỗi 8–64 ký tự chữ, số, gạch.");
   return input;
@@ -167,23 +186,29 @@ v1.post("/transactions/:id/replace", async (c) => {
 });
 
 // ── Chia tiền ───────────────────────────────────────────────────────
+// `amounts`: Tự chia (UC-203) — số tay cho từng ví thay cho luật nạp.
 v1.post("/allocate/preview", async (c) => {
   const b = await body(c);
   return ok(
     c,
-    await ledger.previewAllocation(c.env.DB, {
-      amount: int(b.amount, "amount"),
-      taxable: b.taxable === true,
-      at: normalizeAt(str(b.at, "at"), now()),
-      accountId: str(b.account_id, "account_id") ?? null,
-      incomeStreamId: str(b.income_stream_id, "income_stream_id") ?? null,
-    }),
+    await ledger.previewAllocation(
+      c.env.DB,
+      {
+        amount: int(b.amount, "amount"),
+        taxable: b.taxable === true,
+        at: normalizeAt(str(b.at, "at"), now()),
+        accountId: str(b.account_id, "account_id") ?? null,
+        incomeStreamId: str(b.income_stream_id, "income_stream_id") ?? null,
+      },
+      b.amounts === undefined ? undefined : parseManualAmounts(b.amounts),
+    ),
   );
 });
 
 v1.post("/allocate", async (c) => {
   const b = await body(c);
-  return ok(c, await ledger.allocateIncome(c.env.DB, int(b.income_tx_id, "income_tx_id")), 201);
+  const amounts = b.amounts === undefined ? undefined : parseManualAmounts(b.amounts);
+  return ok(c, await ledger.allocateIncome(c.env.DB, int(b.income_tx_id, "income_tx_id"), amounts), 201);
 });
 
 // ── Lệnh chuyển tiền ────────────────────────────────────────────────

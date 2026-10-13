@@ -8,12 +8,16 @@ import { api, errorText } from "../lib/api";
 import {
   ACCOUNT_KIND_LABEL,
   accountPayload,
+  accountSubmitError,
   accountToForm,
   bankHint,
   canSplitWeekly,
   clearSecretPayload,
   configPayload,
   connectionPicker,
+  type FiConfigForm,
+  fiConfigPayload,
+  fiConfigToForm,
   type Errors,
   followsCodeConvention,
   MATCH_LABEL,
@@ -42,6 +46,7 @@ import {
 } from "../lib/settings";
 import { isIncomeHolding } from "../lib/budget";
 import { memberSubmitError, newMemberPayload, passwordPayload, proofMode } from "../lib/members";
+import { dateText } from "../lib/net-worth";
 import { feePayload, rentalConfigPayload, tenantPayload } from "../lib/rental";
 import { openingCreditHint, ROLE_LABEL } from "../lib/wealth-building-accounts";
 import type {
@@ -196,7 +201,7 @@ type RoleChoice = "" | "buffer" | "term_deposit";
 export function AccountSheet({ d, item, onClose, onSaved }: { d: SettingsData; item: SettingsAccount | null; onClose: () => void; onSaved: Saved }) {
   const [f, setF] = useState(() => accountToForm(item));
   const set = (patch: Partial<typeof f>) => setF((x) => ({ ...x, ...patch }));
-  const { busy, error, errors, run } = useSubmit(onSaved, onClose);
+  const { busy, error, errors, run } = useSubmit(onSaved, onClose, accountSubmitError);
   const isNew = !item;
   const e = (k: string) => ({ id: `a-${k}`, error: errors[k] });
   // Heo đất và sổ tiết kiệm giữ vai trò từ lúc tạo; sổ tiết kiệm chỉ chọn được khi thêm (ADR-88).
@@ -366,7 +371,7 @@ export function AccountSheet({ d, item, onClose, onSaved }: { d: SettingsData; i
       <Field id="a-opening" label="Số dư đầu">
         <AmountInput id="a-opening" value={f.opening_balance} onChange={(n) => set({ opening_balance: n })} />
       </Field>
-      <Field id="a-opened" label={saving ? "Ngày gửi" : "Số dư đầu tính tới ngày"}>
+      <Field id="a-opened" label={saving ? "Ngày gửi" : "Số dư đầu tính tới ngày"} error={errors.opened_at}>
         <input id="a-opened" class="ctl" type="date" value={f.opened_at} onInput={(ev) => set({ opened_at: ev.currentTarget.value })} />
       </Field>
       <Hint>{saving ? "Chuyển nội bộ vào sổ ghi từ ngày gửi trở đi." : "Giao dịch ngân hàng trước ngày này đã nằm trong số dư đầu, app bỏ qua."}</Hint>
@@ -378,7 +383,12 @@ export function AccountSheet({ d, item, onClose, onSaved }: { d: SettingsData; i
       </Hint>
       {creditHint && <Hint>{creditHint}</Hint>}
       {!isNew && <Check id="a-active" label="Đang dùng" checked={f.active} onChange={(v) => set({ active: v })} />}
-      {!isNew && !f.active && <Hint>Ngừng dùng thì tài khoản không còn hiện ở chỗ chọn; lịch sử vẫn giữ nguyên.</Hint>}
+      {!isNew && !f.active && (
+        <Hint>
+          Ngừng dùng thì tài khoản không còn hiện ở chỗ chọn; lịch sử vẫn giữ nguyên.
+          {item.deactivated_at ? ` Đã tắt từ ${dateText(item.deactivated_at)} — bảng cân đối vẫn tính nó ở các tháng trước ngày đó.` : " Bảng cân đối vẫn tính nó ở các tháng trước ngày tắt."}
+        </Hint>
+      )}
       <Footer busy={busy} error={error} label={isNew ? "Thêm tài khoản" : "Lưu tài khoản"} onSubmit={submit} />
     </Sheet>
   );
@@ -1255,6 +1265,53 @@ export function ConfigSheet({ config, onClose, onSaved }: { config: SettingsConf
         error={error}
         label="Lưu tham số"
         onSubmit={() => void run(configPayload({ salary_min_amount: salary, safety_fund_months: months }), (body) => api.put("/v1/settings/config", body), "Đã lưu tham số. Áp dụng từ khoản thu tới.")}
+      />
+    </Sheet>
+  );
+}
+
+/** Tham số nhóm "Tài sản & tự do" (access UC-507 AC-16): ô % cho tỷ lệ, chi phí tháng để trống = theo sổ, năm sinh, tuổi mục tiêu. */
+export function FiConfigSheet({ config, onClose, onSaved }: { config: SettingsConfig; onClose: () => void; onSaved: Saved }) {
+  const [f, setF] = useState<FiConfigForm>(() => fiConfigToForm(config));
+  const set = (patch: Partial<FiConfigForm>) => setF((x) => ({ ...x, ...patch }));
+  const { busy, error, errors, run } = useSubmit(onSaved, onClose);
+  const pct = (id: string, key: keyof FiConfigForm, label: string, first = false) => (
+    <Field id={id} label={label} error={errors[key]} first={first}>
+      <input id={id} class="ctl money" inputMode="decimal" autocomplete="off" value={String(f[key])} onInput={(ev) => set({ [key]: ev.currentTarget.value })} {...invalid(errors, key, id)} />
+    </Field>
+  );
+  return (
+    <Sheet open title="Tài sản & tự do" onClose={onClose}>
+      {pct("fi-swr", "swr", "Tỷ lệ rút an toàn (SWR) %", true)}
+      {pct("fi-inf", "inflation", "Lạm phát %/năm")}
+      {pct("fi-fat", "fat", "Hệ số dự phòng Tự do 2 %")}
+      {pct("fi-legacy", "legacy", "Lãi thực Tự do 3 %")}
+      {pct("fi-high", "highInterest", "Lãi cao từ %/năm")}
+      <Hint>Khoản nợ có lãi suất từ mức này xếp vào nhóm Lãi cao ở bảng cân đối.</Hint>
+      <Field id="fi-safe" label="Mốc an tâm (tháng)" error={errors.safetyMonths}>
+        <input id="fi-safe" class="ctl money" autocomplete="off" value={f.safetyMonths} onInput={(ev) => set({ safetyMonths: ev.currentTarget.value })} {...invalid(errors, "safetyMonths", "fi-safe")} />
+      </Field>
+      <Hint>Ba số tháng chi phí, tăng dần. Khác Quỹ an tâm ở trên (tiền mặt Tích sản so với chi Must).</Hint>
+      <Field id="fi-exp" label="Chi phí tháng">
+        <AmountInput id="fi-exp" value={f.expense} onChange={(n) => set({ expense: n })} />
+      </Field>
+      <Field id="fi-must" label="Chi Must tháng">
+        <AmountInput id="fi-must" value={f.expenseMust} onChange={(n) => set({ expenseMust: n })} />
+      </Field>
+      <Hint>Để trống là lấy từ sổ (trung bình 3 tháng đã kết thúc).</Hint>
+      <Field id="fi-birth" label="Năm sinh" error={errors.birthYear}>
+        <input id="fi-birth" class="ctl money" inputMode="numeric" autocomplete="off" placeholder="chưa đặt" value={f.birthYear} onInput={(ev) => set({ birthYear: ev.currentTarget.value })} />
+      </Field>
+      {(["f1", "f2", "f3"] as const).map((k, i) => (
+        <Field key={k} id={`fi-${k}`} label={`Tuổi Tự do ${i + 1}`} error={errors[k]}>
+          <input id={`fi-${k}`} class="ctl money" inputMode="numeric" autocomplete="off" placeholder="chưa đặt" value={f[k]} onInput={(ev) => set({ [k]: ev.currentTarget.value })} />
+        </Field>
+      ))}
+      <Footer
+        busy={busy}
+        error={error}
+        label="Lưu tham số"
+        onSubmit={() => void run(fiConfigPayload(f, new Date().getFullYear()), (body) => api.put("/v1/settings/config", body), "Đã lưu tham số Tài sản & tự do.")}
       />
     </Sheet>
   );

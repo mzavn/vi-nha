@@ -1,7 +1,34 @@
 # Nhật ký thay đổi
 
+Số phiên bản theo [SemVer](https://semver.org/lang/vi/) `X.Y.Z`: **Z** tăng khi chỉ sửa lỗi; **Y** tăng khi thêm tính năng mà
+bản cài cũ vẫn lên được bình thường (kể cả nâng database tự động); **X** tăng khi cập nhật cần bạn tự làm thêm một bước.
+
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
-trước: `mkdir -p .wrangler/backups && npx wrangler d1 export vi-nha --remote --output .wrangler/backups/vi-nha.sql`.
+trước (xem README › Cập nhật bản mới).
+
+## v1.1.0 — 13/10/2026
+
+Có nâng cấp database: `0031`, `0032`, `0033` (thêm bảng mới cho tài sản, báo cáo, kế hoạch thu nhập — không đổi số liệu cũ).
+
+**Mới**
+
+- **Cập nhật từ trong app:** **Cài đặt › Nâng cao › Cập nhật Ví nhà › Kiểm tra bản mới**. Cài bằng nút Deploy thì bấm
+  **Cập nhật** rồi **Run workflow** trên GitHub — workflow kéo bản mới vào repo của bạn, Cloudflare tự cài. Repo cài từ bản
+  cũ (lần này): thêm `.github/workflows/update.yml` một lần — xem README › Cập nhật bản mới.
+- **Tài sản & tự do** (màn mới): bảng cân đối của nhà, thêm vàng / chứng khoán / đất theo lô, giá chốt lời và cắt lỗ, tháp
+  tài sản; lưu chuyển tiền, thu chi theo tháng; mốc tự do, kế hoạch thu nhập năm, thử số.
+- **Khoản vay có lãi:** sổ nợ tính lãi hằng tháng; mỗi lần trả tự tách khoản lãi và khoản gốc.
+- **Tự chia** một khoản thu: gõ tay số vào từng ví thay cho cách chia theo luật nạp.
+
+**Sửa**
+
+- Báo cáo giữ đúng kỳ đang xem khi tải lại trang (F5).
+
+**Thay đổi**
+
+- Cài bằng lệnh: lệnh cập nhật đổi thành `git pull --autostash && npm ci && npm run deploy` (`git pull` trần bị chặn vì
+  `npm run setup` đã ghi `account_id` vào `wrangler.jsonc`).
+- Mọi link SePay dùng link giới thiệu của Ví nhà.
 
 ## v1.0.1 — 08/10/2026
 

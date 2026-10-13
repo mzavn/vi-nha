@@ -5,7 +5,8 @@ import type { AppEnv } from "./env";
  * Header bảo mật cho mọi phản hồi (ADR-89). Một nguồn duy nhất: Worker gắn cho /v1, /webhooks, /mcp, /oauth; app shell do
  * Workers Static Assets phục vụ thẳng, đọc bản chép ở `web/public/_headers` (test giữ hai nơi khớp nhau).
  * CSP: chỉ script của chính app; Google Fonts cho CSS/font — service worker tự fetch font để lưu offline nên
- * connect-src cũng cần hai origin đó. Không 'unsafe-inline': style={{}} của Preact đi qua CSSOM, không bị chặn.
+ * connect-src cũng cần hai origin đó; api.github.com cho nút "Kiểm tra bản mới" (UC-709 AC-30, chỉ hỏi khi bấm).
+ * Không 'unsafe-inline': style={{}} của Preact đi qua CSSOM, không bị chặn.
  */
 export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   "Content-Security-Policy": [
@@ -14,7 +15,7 @@ export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
     "style-src 'self' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com",
     "img-src 'self' data:",
-    "connect-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com",
+    "connect-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com https://api.github.com",
     "worker-src 'self'",
     "manifest-src 'self'",
     "frame-src https://mzavn.gitbook.io",

@@ -4,6 +4,7 @@
 // Sổ người thuê không dùng file này: nó còn kỳ tháng, chốt tháng và phí cố định.
 
 import { normalizeAt } from "../domain/entry";
+import { dayKey } from "../domain/period";
 import { DomainError } from "../domain/types";
 
 type Row = Record<string, unknown>;
@@ -40,6 +41,13 @@ const slug = (s: string) =>
     .replace(/^-|-$/g, "")
     .slice(0, 40);
 
+/** Kỳ hạn ngắn / dài (bảng cân đối xếp A3 / B1, hoặc nợ ngắn / dài hạn). Không gửi → không đổi. */
+export function termCols(b: Input): [string, unknown][] {
+  if (!has(b, "term")) return [];
+  if (b.term !== "short" && b.term !== "long") fail("invalid_term", "term phải là short hoặc long.");
+  return [["term", b.term]];
+}
+
 /** Một loại sổ đối ứng: tên bảng, cột id đối tác, view số dư, loại dòng ghi tay và chữ dùng trong lỗi. */
 export interface MemoBookSpec {
   /** Bảng đối tác (debts | receivables) và bảng dòng sổ. */
@@ -66,6 +74,8 @@ export interface MemoBookSpec {
   inactiveCode: string;
   /** Mở sổ được với số 0 (không dòng 'opening') — chỉ sổ phải thu. */
   zeroOpening?: boolean;
+  /** Cột riêng của sổ (lãi suất, kỳ hạn…): SELECT thêm (bí danh bảng `d`) và đọc từ body khi thêm / sửa. */
+  extra?: { select: string; parse: (b: Input) => [string, unknown][] };
 }
 
 /** Phần chung của một dòng sổ; mỗi sổ thêm trường id đối tác riêng (`lineKey`). */
@@ -90,8 +100,12 @@ export interface MemoBook<L extends MemoLine = MemoLine> {
   /** Số dư ≤ 0: đã xong (trả hết / nhận đủ). */
   done: boolean;
   createdAt: string;
+  /** Ngày tắt (YYYY-MM-DD giờ VN); null khi đang theo dõi hoặc tắt từ trước v1.31. */
+  deactivatedAt: string | null;
   lines: L[];
   movements: Row[];
+  /** Các cột riêng của sổ (`extra.select`). */
+  extra: Row;
 }
 
 const lineSql = (s: MemoBookSpec) => `SELECT id, ${s.key} AS ${s.lineKey}, at, kind, amount, note, status FROM ${s.lineTable}`;
@@ -104,7 +118,8 @@ export async function listBooks<L extends MemoLine>(db: D1Database, s: MemoBookS
   const meanings = s.meanings.map((m) => `'${m}'`).join(", ");
   const [bookRes, lineRes, txRes] = await db.batch([
     db.prepare(
-      `SELECT d.id, d.name, d.note, d.active, d.created_at AS createdAt, b.${s.inCol} AS inSum, b.${s.outCol} AS outSum, b.balance
+      `SELECT d.id, d.name, d.note, d.active, d.created_at AS createdAt, d.deactivated_at AS deactivatedAt,
+              b.${s.inCol} AS inSum, b.${s.outCol} AS outSum, b.balance${s.extra ? `, ${s.extra.select}` : ""}
        FROM ${s.table} d JOIN ${s.view} b ON b.${s.key} = d.id
        WHERE ?1 IS NULL OR d.id = ?1
        ORDER BY d.active DESC, (b.balance <= 0), b.balance DESC, d.name`,
@@ -120,18 +135,21 @@ export async function listBooks<L extends MemoLine>(db: D1Database, s: MemoBookS
   const txs = rows(txRes!);
   const books = rows(bookRes!).map((d): MemoBook<L> => {
     const balance = Number(d.balance);
+    const { id, name, note, active, createdAt, deactivatedAt, inSum, outSum, balance: _b, ...extra } = d;
     return {
-      id: String(d.id),
-      name: String(d.name),
-      note: (d.note as string | null) ?? null,
-      active: Boolean(d.active),
-      in: Number(d.inSum),
-      out: Number(d.outSum),
+      id: String(id),
+      name: String(name),
+      note: (note as string | null) ?? null,
+      active: Boolean(active),
+      in: Number(inSum),
+      out: Number(outSum),
       balance,
       done: balance <= 0,
-      createdAt: String(d.createdAt),
-      lines: lines.filter((l) => l[s.lineKey] === d.id) as unknown as L[],
-      movements: txs.filter((t) => t[s.key] === d.id),
+      createdAt: String(createdAt),
+      deactivatedAt: (deactivatedAt as string | null) ?? null,
+      lines: lines.filter((l) => l[s.lineKey] === id) as unknown as L[],
+      movements: txs.filter((t) => t[s.key] === id),
+      extra,
     };
   });
   return { totalBalance: books.reduce((sum, b) => sum + (b.active ? Math.max(b.balance, 0) : 0), 0), books };
@@ -152,21 +170,32 @@ export async function createBook(db: D1Database, s: MemoBookSpec, b: Input, now:
   const amount = s.zeroOpening && b.amount === 0 ? 0 : money(b, "amount", true);
   const note = text(b, "note", false, 500);
   const at = normalizeAt(text(b, "at") ?? undefined, now);
+  const extra = s.extra?.parse(b) ?? [];
   if (await db.prepare(`SELECT 1 FROM ${s.table} WHERE id = ?`).bind(id).first()) fail("duplicate_id", `Đã có ${s.noun} mã "${id}".`, 409);
+  const cols = [["id", id], ["name", name], ["note", note], ...extra] as [string, unknown][];
   await db.batch([
-    db.prepare(`INSERT INTO ${s.table} (id, name, note) VALUES (?, ?, ?)`).bind(id, name, note),
+    db.prepare(`INSERT INTO ${s.table} (${cols.map(([c]) => c).join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`).bind(...cols.map(([, v]) => v)),
     ...(amount > 0 ? [db.prepare(`INSERT INTO ${s.lineTable} (${s.key}, at, kind, amount) VALUES (?, ?, 'opening', ?)`).bind(id, at, amount)] : []),
   ]);
   return id;
 }
 
-/** Đổi tên, ghi chú, bật/tắt theo dõi. */
-export async function updateBook(db: D1Database, s: MemoBookSpec, id: string, b: Input): Promise<void> {
-  await getBook(db, s, id);
+/**
+ * Đổi tên, ghi chú, cột riêng, bật/tắt theo dõi. Tắt ghi `deactivated_at` = hôm nay (giờ VN) để bảng cân đối vẫn tính khoản
+ * này ở các tháng trước ngày tắt; bật lại xoá ngày tắt (như chưa từng tắt).
+ */
+export async function updateBook(db: D1Database, s: MemoBookSpec, id: string, b: Input, now: Date): Promise<void> {
+  const book = await getBook(db, s, id);
   const cols: [string, unknown][] = [];
   if (has(b, "name")) cols.push(["name", text(b, "name", true)]);
   if (has(b, "note")) cols.push(["note", text(b, "note", false, 500)]);
-  if (has(b, "active")) cols.push(["active", typeof b.active === "boolean" ? (b.active ? 1 : 0) : fail("invalid_input", "active phải là true/false.")]);
+  cols.push(...(s.extra?.parse(b) ?? []));
+  if (has(b, "active")) {
+    const active = typeof b.active === "boolean" ? b.active : fail("invalid_input", "active phải là true/false.");
+    cols.push(["active", active ? 1 : 0]);
+    if (!active && book.active) cols.push(["deactivated_at", dayKey(now)]);
+    if (active) cols.push(["deactivated_at", null]);
+  }
   if (cols.length) {
     await db
       .prepare(`UPDATE ${s.table} SET ${cols.map(([c]) => `${c} = ?`).join(", ")} WHERE id = ?`)

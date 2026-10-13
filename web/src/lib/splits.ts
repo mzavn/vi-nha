@@ -23,6 +23,8 @@ export interface Split {
   tenant_id?: string | null;
   /** spend: khoản chi này trả cho khoản nợ nào trong sổ nợ. */
   debt_id?: string | null;
+  /** spend: khoản chi trả lãi cho khoản nợ nào (danh mục / ví "Lãi vay"); không đi cùng `debt_id`. */
+  interest_debt_id?: string | null;
   /** lend / collect: cho vay hay nhận lại tiền gắn vào khoản nào trong sổ phải thu. */
   receivable_id?: string | null;
   /** refund / collect: khoản gốc được trả (ô "Trả lại cho khoản chi" / "Trả cho khoản cho vay"). */
