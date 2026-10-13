@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { errorText } from "../lib/api";
 import { defaultAccountFor, defaultWalletFor, manualAccounts, spendableWallets, topCategories } from "../lib/categories";
-import { addAmount, formatVnd, timesThousand } from "../lib/money";
+import { addAmount, formatTypedVnd, formatVnd, timesThousand } from "../lib/money";
 import { localWalletStatus } from "../lib/pending";
 import { atForDay, dayKey, shortDate, timeHM } from "../lib/period";
 import { draftFromTx, editedAt, withChosen } from "../lib/transactions";
@@ -211,7 +211,7 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
         </label>
         <div class="quick">
           {QUICK.map((q) => (
-            <button type="button" key={q} class="btn" onClick={() => field.set(addAmount(amount, q))} aria-label={`Cộng ${formatVnd(q)}`}>
+            <button type="button" key={q} class="btn" onClick={() => field.set(addAmount(amount, q))} aria-label={`Cộng ${formatTypedVnd(q)}`}>
               +{q / 1000}k
             </button>
           ))}
@@ -330,7 +330,7 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
           </button>
         )}
         <button type="button" class="btn btn-primary btn-wide" disabled={!!missing || saving || (!!edit && !app.online)} onClick={() => void save()}>
-          {saving ? "Đang ghi…" : (missing ?? (edit ? `Lưu thay đổi · ${formatVnd(amount)}` : `Lưu ${formatVnd(amount)}`))}
+          {saving ? "Đang ghi…" : (missing ?? (edit ? `Lưu thay đổi · ${formatTypedVnd(amount)}` : `Lưu ${formatTypedVnd(amount)}`))}
         </button>
         {edit && !app.online && <NeedsNetwork what="Sửa giao dịch" />}
       </div>

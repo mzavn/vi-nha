@@ -8,6 +8,7 @@ import { Entry } from "./screens/entry";
 import { GuideSlot } from "./screens/guide";
 import { LedgerBook } from "./screens/ledger-book";
 import { Login } from "./screens/login";
+import { Lock } from "./screens/lock";
 import { NetWorth } from "./screens/net-worth";
 import { Settings } from "./screens/settings";
 import { Setup } from "./screens/setup";
@@ -66,6 +67,8 @@ export function App() {
         <Login />
       </>
     );
+  // Màn khóa mã PIN thay cả cây (pwa UC-719): sheet là <dialog> top layer, lớp phủ không che được. Chỉ phase "app" mới khóa.
+  if (app.locked) return <Lock />;
   if (wide) return <DesktopApp />;
 
   const badges: Partial<Record<Tab, number>> = {

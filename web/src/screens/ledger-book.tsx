@@ -4,7 +4,7 @@
 
 import { useEffect, useRef, useState } from "preact/hooks";
 import { ApiError, request } from "../lib/api";
-import { formatVnd, groupDigits } from "../lib/money";
+import { formatVnd, groupDigits, maskAmounts, moneyDigits } from "../lib/money";
 import { monthLabel, timeHM } from "../lib/period";
 import { MEANING_LABEL, txLabel, txSign } from "../lib/transactions";
 import {
@@ -350,7 +350,7 @@ function Amount({ r }: { r: TxRow }) {
   return (
     <td class={`num${sign === "+" ? " dk-in" : ""}${r.status !== "active" ? " dk-void" : ""}`}>
       {sign}
-      {groupDigits(r.amount)}
+      {moneyDigits(r.amount)}
     </td>
   );
 }
@@ -365,7 +365,7 @@ const Voided = ({ r }: { r: TxRow }) =>
 
 /** Điện thoại: hai cột — khoản (giờ · ghi chú · ví · tài khoản · người ở dòng phụ) và số tiền. Cả hàng chạm được. */
 function PhoneRow({ r, boot }: { r: TxRow; boot: Bootstrap | null }) {
-  const sub = [timeHM(r.at), r.note, r.wallet_name, accountText(r, boot), who(r, boot)].filter(Boolean).join(" · ");
+  const sub = [timeHM(r.at), r.note && maskAmounts(r.note), r.wallet_name, accountText(r, boot), who(r, boot)].filter(Boolean).join(" · ");
   return (
     <tr class="tx-row" onClick={() => openTx(r.id, r)}>
       <td class="l">
@@ -392,7 +392,7 @@ function WideRow({ r, boot }: { r: TxRow; boot: Bootstrap | null }) {
           {kind}
         </button>
         <Voided r={r} />
-        {r.note && <div class="sub-line">{r.note}</div>}
+        {r.note && <div class="sub-line">{maskAmounts(r.note)}</div>}
       </td>
       <td class="l">
         {r.category_name ?? ""}

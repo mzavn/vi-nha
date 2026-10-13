@@ -6,6 +6,17 @@ bản cài cũ vẫn lên được bình thường (kể cả nâng database t�
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
 trước (xem README › Cập nhật bản mới).
 
+## v1.2.0 — 13/10/2026
+
+Không cần nâng cấp database.
+
+**Mới**
+
+- **Che số tiền:** bấm nút con mắt là mọi số tiền thành ••••, chỉ còn phần trăm, ngày, số lượng. Ô đang gõ vẫn hiện số. Mỗi máy
+  nhớ riêng.
+- **Mã PIN:** Cài đặt › Máy này › Mã PIN. App hỏi PIN khi mở, hoặc khi quay lại sau 1 phút. Quên PIN hay sai 5 lần thì máy đó
+  đăng xuất, đăng nhập lại bằng mật khẩu rồi đặt PIN mới; khoản chưa gửi vẫn giữ.
+
 ## v1.1.0 — 13/10/2026
 
 Có nâng cấp database: `0031`, `0032`, `0033` (thêm bảng mới cho tài sản, báo cáo, kế hoạch thu nhập — không đổi số liệu cũ).

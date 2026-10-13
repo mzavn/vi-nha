@@ -6,7 +6,7 @@ import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import { api, errorText } from "../lib/api";
 import { type BookLineForm, mergeHistory, progressPct } from "../lib/memo-books";
-import { formatVnd, groupDigits } from "../lib/money";
+import { formatTypedVnd, formatVnd, moneyDigits } from "../lib/money";
 import { shortDate } from "../lib/period";
 import type { Result } from "../lib/settings";
 import { openTx, toast, useApp } from "../state/store";
@@ -134,7 +134,7 @@ export function BookCard(props: {
               name={d.name}
               dot={null}
               amount={<Money value={d.balance} tone={false} />}
-              left={`${l.backWord.toLowerCase()} ${groupDigits(d.back)} / ${formatVnd(d.total)}`}
+              left={`${l.backWord.toLowerCase()} ${moneyDigits(d.back)} / ${formatVnd(d.total)}`}
               right={`${progressPct(d.total, d.back)}%`}
               bar={{ pct: progressPct(d.total, d.back) }}
               onClick={() => props.onOpen(d.id)}
@@ -361,7 +361,7 @@ export function BookAddSheet(props: {
           </p>
         )}
         <button type="button" class="btn btn-primary btn-wide" disabled={!online || busy || !name.trim() || (!amount && !l.add.zeroButton)} onClick={() => void submit()}>
-          {busy ? "Đang ghi…" : !name.trim() ? l.add.nameMissing : amount ? `Thêm ${l.noun} ${formatVnd(amount)}` : (l.add.zeroButton ?? "Nhập số tiền")}
+          {busy ? "Đang ghi…" : !name.trim() ? l.add.nameMissing : amount ? `Thêm ${l.noun} ${formatTypedVnd(amount)}` : (l.add.zeroButton ?? "Nhập số tiền")}
         </button>
         {!online && <NeedsNetwork what={`Thêm ${l.noun}`} />}
       </div>
@@ -455,7 +455,7 @@ export function BookLineSheet<K extends string>(props: {
           </p>
         )}
         <button type="button" class="btn btn-primary btn-wide" disabled={!online || busy || !f.amount} onClick={() => void submit()}>
-          {busy ? "Đang ghi…" : f.amount ? (inc ? `Ghi ${inc.verb} ${formatVnd(f.amount)}` : `Ghi ${dir} ${formatVnd(f.amount)}`) : "Nhập số tiền"}
+          {busy ? "Đang ghi…" : f.amount ? (inc ? `Ghi ${inc.verb} ${formatTypedVnd(f.amount)}` : `Ghi ${dir} ${formatTypedVnd(f.amount)}`) : "Nhập số tiền"}
         </button>
         {!online && <NeedsNetwork what={`Ghi ${l.book}`} />}
       </div>

@@ -1,7 +1,7 @@
 // Tự chia một khoản thu (allocation UC-202, UC-203): số tay cho từng ví thay cho bảng chia theo luật.
 
 import { transferOrders, type TransferOrderDraft } from "../../../src/domain/transfer-orders";
-import { groupDigits } from "./money";
+import { moneyDigits } from "./money";
 import type { AllocationPlan, Wallet } from "./types";
 
 /** Số đang gõ của từng ví; `invalid`: ô có phép tính sai (âm, không ra số) — chưa ghi được. */
@@ -44,8 +44,8 @@ export function checkSplit(split: ManualSplit, wallets: Wallet[], amount: number
   const diff = amount - total;
   const wealthBuilding = wallets.find((w) => w.tier === "wealth_building");
   return {
-    done: `Đã chia ${groupDigits(total)} / ${groupDigits(amount)}`,
-    rest: diff > 0 ? `còn ${groupDigits(diff)}` : diff < 0 ? `chia vượt ${groupDigits(-diff)}` : null,
+    done: `Đã chia ${moneyDigits(total)} / ${moneyDigits(amount)}`,
+    rest: diff > 0 ? `còn ${moneyDigits(diff)}` : diff < 0 ? `chia vượt ${moneyDigits(-diff)}` : null,
     over: diff < 0,
     ok: diff === 0 && split.invalid.length === 0,
     reminder: wealthBuilding && !split.amounts[wealthBuilding.id] ? "Tháng này chưa để dành Tích sản" : null,

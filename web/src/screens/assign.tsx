@@ -10,7 +10,7 @@ import { payableDebts } from "../lib/debts";
 import { assignDebtRows, hasInterest } from "../lib/interest";
 import { bookRefLabel } from "../lib/memo-books";
 import { checkSplit, splitPayload, type ManualSplit } from "../lib/manual-split";
-import { formatVnd, groupDigits } from "../lib/money";
+import { formatVnd, moneyDigits } from "../lib/money";
 import { localWalletStatus } from "../lib/pending";
 import { dayKey, shortDate, timeHM } from "../lib/period";
 import { defaultReceivableId } from "../lib/receivables";
@@ -119,7 +119,7 @@ export function LogRow({ log, boot, onOpen, current }: { log: BankLog; boot: Boo
       </span>
       <span class={log.direction === "in" ? "a in num" : "a num"}>
         {log.direction === "in" ? "+" : "−"}
-        {groupDigits(log.amount)}
+        {moneyDigits(log.amount)}
       </span>
       <span class="c">{log.content ?? "(không có nội dung)"}</span>
       <span class={`g ${hint.cls}`}>{hint.text}</span>

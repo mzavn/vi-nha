@@ -7,7 +7,7 @@ import { type ComponentChildren, Fragment } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { api, errorText } from "../lib/api";
 import type { NetWorthSection } from "../lib/hash-route";
-import { formatVnd } from "../lib/money";
+import { formatTypedVnd, formatVnd } from "../lib/money";
 import {
   ASSET_KIND_LABEL,
   assetRowSub,
@@ -763,7 +763,7 @@ function ValueSheet({ item, today, onClose, onSaved }: { item: BalanceItem; toda
       <Footer
         busy={busy}
         error={error}
-        label={`Lưu ${formatVnd(f.amount)}${units && item.unit ? `/${item.unit}` : ""}`}
+        label={`Lưu ${formatTypedVnd(f.amount)}${units && item.unit ? `/${item.unit}` : ""}`}
         onSubmit={() => void send(valuePayload(f, item.measure, today), (b) => api.post(`/v1/balance-items/${encodeURIComponent(item.id)}/values`, b), () => onSaved(valueToast(item, f.amount, f.day)))}
       />
     </Sheet>

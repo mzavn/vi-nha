@@ -9,7 +9,7 @@ import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import { ApiError, api, errorText } from "../lib/api";
 import { checkSplit, splitPayload, type ManualSplit } from "../lib/manual-split";
-import { formatVnd } from "../lib/money";
+import { formatVnd, maskAmounts } from "../lib/money";
 import { ordersLeft } from "../lib/pending";
 import { shortDate, timeHM } from "../lib/period";
 import { linkOriginText, returnedText } from "../lib/refunds";
@@ -81,7 +81,7 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
     ...(tx.tenant_id ? [["Người thuê trả", tx.tenant_name ?? tx.tenant_id] as [string, string]] : []),
     ...(tx.meaning === "income" ? [["Lần chia", tx.allocated ? "đã chia vào các ví" : "chưa chia"] as [string, string]] : []),
     ...(who ? [["Người ghi", who] as [string, string]] : []),
-    ...(tx.note ? [["Ghi chú", tx.note] as [string, string]] : []),
+    ...(tx.note ? [["Ghi chú", maskAmounts(tx.note)] as [string, string]] : []),
     ["Nguồn", ORIGIN_LABEL[txOrigin(tx)]],
   ];
 

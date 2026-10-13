@@ -9,7 +9,7 @@ import { defaultAccountFor, manualAccounts } from "../lib/categories";
 import { debtLinePayload, debtPayload, owedText } from "../lib/debts";
 import { groupBook } from "../lib/memo-books";
 import { debtInterestText, debtTermsPayload, debtTermsToForm, type DebtTermsForm } from "../lib/interest";
-import { formatVnd } from "../lib/money";
+import { formatTypedVnd, formatVnd } from "../lib/money";
 import { TERM_LABEL } from "../lib/net-worth";
 import { netWorthLines } from "../lib/networth";
 import { atForDay, dayKey } from "../lib/period";
@@ -392,7 +392,7 @@ function MoneyMoveSheet(props: { meaning: "lend" | "collect"; refs: ReceivableRe
       </div>
       <div class="pad">
         <button type="button" class="btn btn-primary btn-wide" disabled={!!problem || busy} onClick={() => void submit()}>
-          {problem ?? (lend ? `Ghi cho vay thêm ${formatVnd(amount)}` : `Ghi nhận lại ${formatVnd(amount)}`)}
+          {problem ?? (lend ? `Ghi cho vay thêm ${formatTypedVnd(amount)}` : `Ghi nhận lại ${formatTypedVnd(amount)}`)}
         </button>
       </div>
     </Sheet>

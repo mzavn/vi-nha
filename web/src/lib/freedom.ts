@@ -1,7 +1,7 @@
 // Mốc tự do (balance UC-1103; pwa UC-717 AC-4): câu chữ của card Thông số, Mốc an tâm, Thu nhập, Tự do.
 // Thuần để test. Mọi số tính ở server (GET /v1/freedom); ở đây chỉ dựng chữ.
 
-import { formatVnd, groupDigits } from "./money";
+import { amountsHidden, formatVnd, moneyDigits } from "./money";
 import { bpsText } from "./net-worth";
 import type { FreedomMilestone, FreedomParams, IncomeMilestone, SafetyMilestone } from "./types";
 
@@ -14,7 +14,7 @@ export function paramsSummary(p: FreedomParams): string {
   const expense =
     p.expenseMonthly === null
       ? expenseNeededText
-      : [`Chi ${formatVnd(p.expenseMonthly)}/tháng (${sourceText(p.expenseSource)})`, p.expenseMustMonthly !== null ? `Must ${groupDigits(p.expenseMustMonthly)}` : null].filter(Boolean).join(" · ");
+      : [`Chi ${formatVnd(p.expenseMonthly)}/tháng (${sourceText(p.expenseSource)})`, p.expenseMustMonthly !== null ? `Must ${moneyDigits(p.expenseMustMonthly)}` : null].filter(Boolean).join(" · ");
   return `${expense} · SWR ${bpsText(p.swrBps)}% · lạm phát ${bpsText(p.inflationBps)}%`;
 }
 
@@ -39,8 +39,9 @@ export const freedomHaveText = (f: FreedomMilestone): string =>
 export const freedomCashflowText = (f: FreedomMilestone): string | null =>
   f.cashflowNeed === null ? null : `hoặc dòng tiền ròng ${formatVnd(f.cashflowHave)} / cần ${formatVnd(f.cashflowNeed)}`;
 
-/** Số quy theo giá tương lai — ước lượng, hai chữ số lẻ tỷ: "≈ 7,01 tỷ ₫". */
-export const billionText = (n: number): string => `≈ ${(Math.round(n / 1e7) / 100).toFixed(2).replace(".", ",")} tỷ ₫`.replace(" ₫", "\u00a0₫");
+/** Số quy theo giá tương lai — ước lượng, hai chữ số lẻ tỷ: "≈ 7,01 tỷ ₫"; đang che số (UC-718) thì "≈ •••• ₫". */
+export const billionText = (n: number): string =>
+  amountsHidden() ? `≈ ${formatVnd(n)}` : `≈ ${(Math.round(n / 1e7) / 100).toFixed(2).replace(".", ",")} tỷ ₫`.replace(" ₫", "\u00a0₫");
 
 /** Hàng tuổi: "45 tuổi · năm 2035 · còn 9 năm · ≈ 7,01 tỷ ₫ theo giá 2035". */
 export function freedomTargetText(t: NonNullable<FreedomMilestone["target"]>): string {

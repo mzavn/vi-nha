@@ -7,7 +7,7 @@ import { LOAN_INTEREST_ID } from "../../../src/domain/system-ids";
 import { api, errorText } from "../lib/api";
 import { budgetTotals, coverPrefill, type MoveDraft } from "../lib/budget";
 import { DRIFT_LABEL, driftOf } from "../lib/drift";
-import { formatVnd, groupDigits } from "../lib/money";
+import { formatVnd, maskAmounts, moneyDigits } from "../lib/money";
 import { interestLineText } from "../lib/interest";
 import { applyQueueToBudget } from "../lib/pending";
 import { monthKey, monthLabel, previousMonth, shortDate, weekLabel, weekRange } from "../lib/period";
@@ -154,7 +154,7 @@ function BudgetTab() {
                       </div>
                       <div class="tsub">
                         <span>
-                          đã chi {groupDigits(total.spent)} / {formatVnd(total.target)}
+                          đã chi {moneyDigits(total.spent)} / {formatVnd(total.target)}
                         </span>
                         <span>còn lại</span>
                       </div>
@@ -268,7 +268,7 @@ function BudgetItem({ l, onCover, onOpen, interest }: { l: BudgetLine; onCover: 
       </div>
       <div class="tsub">
         <span>
-          {l.spent === null ? "" : l.target !== null ? `đã chi ${groupDigits(l.spent)} / ${formatVnd(l.target)}` : `đã chi ${formatVnd(l.spent)}`}
+          {l.spent === null ? "" : l.target !== null ? `đã chi ${moneyDigits(l.spent)} / ${formatVnd(l.target)}` : `đã chi ${formatVnd(l.spent)}`}
         </span>
         <span>{!over && used !== null ? `${used}% đã dùng` : ""}</span>
       </div>
@@ -476,7 +476,7 @@ function WealthBuildingTab() {
                         <button type="button" class="tx-open">
                           {assetLabel(r.asset_kind)}
                         </button>
-                        {r.note && <div class="sub-line">{r.note}</div>}
+                        {r.note && <div class="sub-line">{maskAmounts(r.note)}</div>}
                       </td>
                       <td>{shortDate(r.at)}</td>
                       <td class="num">

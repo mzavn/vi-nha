@@ -240,6 +240,92 @@
     font-size: 12.5px;
     margin-top: 1px;
   }
+  .topbar-act {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  /* Nút con mắt (pwa UC-718): máy tính có ở chân thanh bên. */
+  @media (min-width: 1024px) {
+    .topbar .topbar-eye {
+      display: none;
+    }
+  }
+  /* Có mã PIN: app vào nền thì che hết nội dung ngay (pwa UC-719), quay lại mới bỏ che hoặc khóa. */
+  html[data-cover] body {
+    visibility: hidden;
+  }
+
+  /* ── Màn khóa mã PIN (pwa UC-719) ── */
+  .app.lock {
+    max-width: 360px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: calc(48px + var(--safe-top));
+    padding-bottom: calc(24px + var(--safe-bottom));
+    gap: 14px;
+  }
+  .lock-head {
+    display: grid;
+    justify-items: center;
+    gap: 6px;
+    text-align: center;
+  }
+  .lock-head h1 {
+    font-size: 20px;
+    font-weight: 650;
+    letter-spacing: -0.018em;
+  }
+  .lock-head p {
+    margin: 0;
+    color: var(--fg-2);
+    font-size: 13px;
+  }
+  .lock-dots {
+    display: flex;
+    gap: 14px;
+    margin-top: 10px;
+  }
+  .lock-dots i {
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    border: 1.5px solid var(--border-strong);
+  }
+  .lock-dots i.on {
+    background: var(--fg);
+    border-color: var(--fg);
+  }
+  .lock-err {
+    min-height: 20px;
+    margin: 0;
+    text-align: center;
+  }
+  .lock-pad {
+    display: grid;
+    grid-template-columns: repeat(3, 72px);
+    gap: 12px;
+  }
+  .lock-pad .btn {
+    height: 60px;
+    font-size: 22px;
+    font-weight: 550;
+    border-radius: 999px;
+  }
+  .lock-link {
+    color: var(--fg-2);
+  }
+  .lock-forget {
+    display: grid;
+    gap: 8px;
+    justify-items: center;
+    text-align: center;
+    font-size: 13.5px;
+  }
+  .lock-forget p {
+    margin: 0;
+  }
 
   /* ── nút ── */
   .btn {
@@ -2169,6 +2255,14 @@
   .side-about {
     margin: 0;
     padding: 0 4px;
+  }
+  .side-pin {
+    display: flex;
+    gap: 6px;
+  }
+  .side-pin .btn {
+    flex: 1;
+    padding: 4px 6px;
   }
 
   /* ── Hôm nay: bảng điều khiển ──
