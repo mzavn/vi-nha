@@ -118,6 +118,7 @@ Status: `accepted` (đang có hiệu lực) · `superseded by ADR-xx` · `propos
 | ADR-107 | 2026-10-08 | Thẻ tín dụng còn nợ là nợ ngắn hạn ở bảng cân đối; tiền và lưu chuyển tiền vẫn theo Σ sổ | accepted | balance |
 | ADR-108 | 2026-10-12 | Tự chia: số tay của người thắng luật nạp và phần khóa cho một lần chia; Tích sản 0 chỉ nhắc, không chặn | accepted | allocation (+ pwa) |
 | ADR-109 | 2026-10-13 | Cập nhật bản cài bằng nút Deploy qua workflow GitHub của chính repo nhà; app chỉ báo bản mới và dẫn đường | accepted | pwa (+ access, bản công khai) |
+| ADR-110 | 2026-10-13 | Che số tiền và mã PIN là việc của từng máy: che ở chỗ định dạng tiền, PIN cục bộ không qua server, quên PIN đăng xuất máy này cả khi offline | accepted | pwa |
 
 ---
 
@@ -1952,3 +1953,21 @@ Phương án bị loại: **token GitHub lưu trong Worker** (một chạm trong
 - Chưa thử thật trên một bản cài bằng nút Deploy (push của `GITHUB_TOKEN` có kích hoạt Workers Builds — GitHub chỉ chặn push đó tạo lượt chạy workflow; Workers Builds có `.git` để đọc remote).
 ### Verified in code
 `web/src/screens/settings.tsx` › `SECTIONS` (`app-update`), `AppUpdate` · `web/src/lib/app-update.ts` › `compareVersions`, `releaseTag`, `updateView` · `web/src/lib/install-info.ts` › `githubRepo`, `installInfo` · `web/vite.config.ts` › `gitRemote`, `__INSTALL__` · `src/security-headers.ts` › `SECURITY_HEADERS` · `publish/.github/workflows/update.yml` · `scripts/update-from-upstream.mjs` › `parseJsonc`, `mergeWranglerConfig`, `applyRelease` · `scripts/publish-public.mjs` › `createRelease` · test `test/update-from-upstream.test.ts`, `web/src/lib/app-update.test.ts`, `web/src/lib/install-info.test.ts` (commit `ae0f0b5`).
+
+## ADR-110: Che số tiền và mã PIN là việc của từng máy — che ở chỗ định dạng tiền, PIN cục bộ không qua server
+- Date: 2026-10-13 · Status: accepted · Khác D6 / access UC-504 (ví `private` ẩn số với người khác ở server); không đổi ADR-89, ADR-95 (phiên đăng nhập, mật khẩu)
+- Plan ID: — · Context: pwa (UC-718, UC-719, UC-709, UC-711)
+- Source: chủ nhà 2026-10-13, chat — "có cái feat: 1. ẩn số ****, chỉ hiện % nè; 2. mã pin truy cập cho app"; chọn nút con mắt theo từng máy, ô nhập vẫn hiện số; PIN hỏi khi mở app hoặc quay lại sau 1 phút ở nền (change [`261013-an-so-va-ma-pin`](changes/archive/261013-an-so-va-ma-pin/proposal.md))
+### Context
+Mở app là thấy hết số (phiên đăng nhập 30 ngày); không có chế độ che số, không có khóa trên máy. App offline-first.
+### Decision
+- **PIN cục bộ trên máy**, không qua server: mục tiêu là chặn người cầm máy; phiên đăng nhập đã có. Bản ghi `localStorage` `vi-nha:pin` có phiên bản, PBKDF2-SHA-256 150.000 vòng, gắn `memberId`; lớp bảo vệ chính là giới hạn 5 lần sai (bộ đếm tăng trước khi kiểm, lưu ở máy).
+- **Màn khóa là nhánh `return` sớm** trong `App` (sheet dùng `<dialog>.showModal()` ở top layer, lớp phủ không che được); vào nền thì che nội dung ngay.
+- **Quên PIN / sai 5 lần đăng xuất ở máy cả khi offline** bằng cờ `vi-nha:relogin` (cookie phiên là HttpOnly, JS không xoá được); có mạng thì xoá phiên server.
+- **Che số ở chỗ định dạng tiền**: `formatVnd`, `formatSigned`, `Money`, `moneyDigits`, `maskAmounts` (ghi chú có "X ₫"); `groupDigits` giữ thuần cho số đếm, số lượng; số đang gõ dùng `formatTypedVnd` (không che). Cờ ở `money.ts` + state app (vẽ lại cả cây); lưu `vi-nha:hide-amounts` theo máy.
+
+Phương án bị loại: **PIN kiểm ở server** — cần mạng, app offline-first; **lớp phủ trên app** — không che được sheet ở top layer; **che cả `groupDigits`** — che luôn số đếm, số lượng, số đang gõ.
+### Consequences
+Che số là che mắt, không phải bảo mật: thông báo đẩy, Telegram / Zalo, câu lỗi do server trả, MCP vẫn có số. Safari chưa thêm ra màn hình chính có thể xoá dữ liệu sau 7 ngày không mở — PIN mất, phải đặt lại. Ô điền sẵn từ số thật (Thử số) vẫn hiện số.
+### Verified in code
+`web/src/lib/money.ts` › `setAmountsHidden`, `formatVnd`, `formatSigned`, `moneyDigits`, `maskAmounts`, `formatTypedVnd` · `web/src/lib/pin.ts` › `createPinRecord`, `checkPin`, `changePin`, `removePin`, `forgetPinOnDevice`, `shouldLock` · `web/src/screens/lock.tsx` › `Lock` · `web/src/screens/pin-sheet.tsx` · `web/src/state/store.ts` › `setHideAmounts`, `unlock`, `forgetPin` · `web/src/app.tsx` · test `web/src/lib/money.test.ts` › "che số tiền trên máy này (pwa UC-718)"; `web/src/lib/pin.test.ts` › "mã PIN trên máy này (pwa UC-719)" (commit `f7cf796`).

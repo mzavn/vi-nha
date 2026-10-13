@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { errorText } from "../lib/api";
 import { timeHM } from "../lib/period";
 import type { Resource } from "../state/resource";
+import { setHideAmounts, useApp } from "../state/store";
 import { Icon } from "./icons";
 
 export function Card(props: { title?: ComponentChildren; right?: ComponentChildren; flush?: boolean; note?: ComponentChildren; children?: ComponentChildren; id?: string; class?: string }) {
@@ -149,8 +150,23 @@ export function PageHeader(props: { title: string; sub?: ComponentChildren; acti
         </h1>
         {props.sub && <div class="sub">{props.sub}</div>}
       </div>
-      {props.action}
+      <div class="topbar-act">
+        <HideAmountsButton class="btn btn-ghost icon-btn topbar-eye" />
+        {props.action}
+      </div>
     </header>
+  );
+}
+
+/** Nút con mắt (pwa UC-718): che / hiện số tiền trên máy này. Điện thoại ở thanh tiêu đề mọi màn; máy tính ở chân thanh bên. */
+export function HideAmountsButton(props: { class: string; label?: boolean }) {
+  const { hideAmounts } = useApp();
+  const text = hideAmounts ? "Hiện số tiền" : "Che số tiền";
+  return (
+    <button type="button" class={props.class} aria-label={props.label ? undefined : text} onClick={() => setHideAmounts(!hideAmounts)}>
+      <Icon name={hideAmounts ? "eye-off" : "eye"} size={props.label ? 14 : 20} />
+      {props.label && text}
+    </button>
   );
 }
 

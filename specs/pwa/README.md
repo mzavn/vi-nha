@@ -57,6 +57,8 @@ Luật giao diện lấy từ `docs/DESIGN.md` (thắng `pf-wireframe.html`), g�
 | [UC-715](UC-715-xem-sua-xoa-giao-dich.md) | Xem, sửa, xoá một giao dịch | implemented | BR-03, BR-04, BR-01 |
 | [UC-716](UC-716-so-giao-dich.md) | Sổ giao dịch | implemented | BR-01, BR-03, BR-05 |
 | [UC-717](UC-717-man-tai-san-va-tu-do.md) | Màn Tài sản & tự do | implemented | BR-15, BR-12, BR-13, BR-07 |
+| [UC-718](UC-718-che-so-tien-tren-may-nay.md) | Che số tiền trên máy này | implemented | BR-09, BR-01 |
+| [UC-719](UC-719-khoa-app-bang-ma-pin.md) | Khóa app bằng mã PIN | implemented | BR-09 |
 
 Entity model: [entities.md](entities.md).
 

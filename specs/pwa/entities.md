@@ -80,6 +80,10 @@ Nút "Gửi lại" / "Bỏ khoản này" hiện cho khoản của chính ngườ
 
 ## 7. Tuỳ chọn giao diện
 - `localStorage` `vi-nha:theme` ∈ `light` \| `dark`; không có = theo máy. Áp trước khi vẽ (`main.tsx`) qua `data-theme` trên `<html>` — `useTheme` (`web/src/ui/shell.tsx`).
+- `localStorage` `vi-nha:hide-amounts` = `1` khi máy này đang che số tiền (pwa UC-718); không có = hiện số. Đọc lúc khởi động (`loadAmountsHidden`), ghi khi bấm con mắt (`saveAmountsHidden`). Theo từng máy, không gửi server, không xoá khi đăng xuất.
+- `localStorage` `vi-nha:pin` = `{ v: 1, memberId, iter: 150000, salt, hash }` — mã PIN của người đang đăng nhập trên máy (pwa UC-719; PBKDF2-SHA-256, salt 16 byte base64, không chứa PIN). Đọc đồng bộ lúc vào app (`readPin`); hỏng / sai phiên bản = chưa đặt. Xoá khi đăng xuất (mọi cách), phiên hết hạn về màn đăng nhập, người khác đăng nhập, Quên PIN, sai 5 lần.
+- `localStorage` `vi-nha:pin-fails` = số lần sai PIN liên tiếp (tăng **trước** khi kiểm, đúng thì về 0; dùng chung cho mở khóa / Đổi / Tắt); tới 5 → như Quên PIN.
+- `localStorage` `vi-nha:relogin` = `1` sau Quên PIN / sai 5 lần (đăng xuất ở máy cả khi offline): còn cờ thì `checkSession` về màn đăng nhập dù cookie phiên còn hạn; đăng nhập thành công xoá cờ.
 
 ## 8. Máy đã bật thông báo (`vi-nha:push`) — UC-714
 - Subscription thuộc **trình duyệt** (`PushManager`, dùng chung mọi người trên máy); server gắn nó với người đăng nhập lúc gửi lên (notify `PushSubscription`, UC-410).

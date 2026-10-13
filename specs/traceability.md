@@ -11,12 +11,12 @@
 | notify | 11 | 122 | 110 | 12 |
 | access | 10 | 120 | 112 | 8 |
 | mcp | 6 | 44 | 29 | 15 |
-| pwa | 17 | 249 | 133 | 116 |
+| pwa | 19 | 258 | 142 | 116 |
 | rental | 5 | 39 | 29 | 10 |
 | debt | 4 | 32 | 29 | 3 |
 | receivable | 5 | 43 | 38 | 5 |
 | balance | 7 | 43 | 43 | 0 |
-| **Tổng** | **91** | **987** | **776** | **211** |
+| **Tổng** | **93** | **996** | **785** | **211** |
 
 ## Sổ cái (ledger)
 
@@ -1169,7 +1169,7 @@ Status: `implemented` · BR: BR-01
 
 | AC | Test |
 |---|---|
-| ✅ AC-1: Định dạng tiền | `web/src/lib/money.test.ts` › "định dạng tiền › chấm phân nhóm, ₫ sau số"; "định dạng tiền › số âm dùng dấu trừ U+2212, không phải gạch nối"; "định dạng tiền › không làm tròn"; "định dạng tiền › chênh lệch có dấu +" |
+| ✅ AC-1: Định dạng tiền | `web/src/lib/money.test.ts` › "định dạng tiền › chấm phân nhóm, ₫ sau số"; "định dạng tiền › số âm dùng dấu trừ U+2212, không phải gạch nối"; "định dạng tiền › không làm tròn"; "định dạng tiền › chênh lệch có dấu +"; [`web/src/lib/money.test.ts`](../web/src/lib/money.test.ts) › "che số tiền trên máy này (pwa UC-718) › UC-718 AC-1: bật che → formatVnd, formatSigned, số tiền không ₫ ra •••• (giữ dấu, giữ ₫); tắt che → về số thật"; nút con mắt trên màn: ⚠ Chưa có test (giao diện) |
 | ✅ AC-2: Nhãn kỳ | `web/src/lib/period.test.ts` › "nhãn kỳ › tuần trong một tháng: T39 (21–27/9)"; "nhãn kỳ › tuần vắt qua hai tháng ghi đủ cả hai"; "nhãn kỳ › tuần tính theo giờ VN, không theo UTC"; "nhãn kỳ › tháng"; "nhãn kỳ › ngày và giờ" |
 | ⚠ AC-3: FAB ẩn ở Nhập, Cài đặt, Sổ giao dịch, Hướng dẫn và Tài sản & tự do | ⚠ Chưa có test |
 | ⚠ AC-4: Một mốc 1024px, điện thoại không đổi | ⚠ Chưa có test (so ảnh/DOM bằng tay trong báo cáo `ui-ux-designer-260922-1210-desktop-redesign.md`) |
@@ -1281,6 +1281,27 @@ Status: `implemented` · BR: BR-15, BR-12, BR-13, BR-07
 | ✅ AC-3: Chọn kỳ cho Lưu chuyển tiền và Thu chi | [`web/src/lib/reports.test.ts`](../web/src/lib/reports.test.ts) › "chọn kỳ báo cáo › UC-717 AC-3: ‹ / › đọc kỳ liền trước / liền sau; không có › khi đang ở kỳ hiện tại; đổi Tháng / Năm đọc kỳ tương ứng"; [`web/src/lib/reports.test.ts`](../web/src/lib/reports.test.ts) › "chọn kỳ báo cáo › nhãn kỳ \"Tháng 10/2026\" · \"Năm 2026\"; ngày cuối kỳ để chú Σ sổ — kỳ đang chạy là hôm nay"; hiển thị: ⚠ Chưa có test (giao diện — kiểm tay lát 2 cục bộ 390px / 1280px: không tràn ngang, ‹ sang 2025 thì › hiện lại) |
 | ✅ AC-4: Mốc tự do và Thử số trên 390px | [`web/src/lib/projection.test.ts`](../web/src/lib/projection.test.ts) › "Thử số: ô giả định › UC-1107 AC-2: Đặt lại về số thật đưa mọi ô về điểm xuất phát; số gõ chỉ giữ trong bộ nhớ trang"; bố cục và dải cảnh báo: ⚠ Chưa có test (giao diện — kiểm tay lát 3 cục bộ 390px: Mốc tự do, Thử số, sheet Sửa kế hoạch, Các năm không tràn ngang; dải dính dưới thanh tiêu đề; chưa có ảnh chụp) |
 | ✅ AC-5: F5 giữ đúng phần | [`web/src/lib/hash-route.test.ts`](../web/src/lib/hash-route.test.ts) › "màn trong hash › UC-717, UC-707 AC-24: \"Xem bảng cân đối ›\" mở #net-worth/sheet; F5 ở Tài sản & tự do › Tháp mở lại đúng Tháp; phần lạ → giữ phần đang có" |
+
+### [UC-718](pwa/UC-718-che-so-tien-tren-may-nay.md) Che số tiền trên máy này
+Status: `implemented` · BR: BR-09, BR-01
+
+| AC | Test |
+|---|---|
+| ✅ AC-1: Bật che thì số tiền thành ••••, số khác giữ nguyên | [`web/src/lib/money.test.ts`](../web/src/lib/money.test.ts) › "che số tiền trên máy này (pwa UC-718) › UC-718 AC-1: bật che → formatVnd, formatSigned, số tiền không ₫ ra •••• (giữ dấu, giữ ₫); tắt che → về số thật" · "… › UC-718 AC-1: đang che — groupDigits, số đếm, số lượng, phần trăm, chữ trong ô nhập không đổi" · "… › UC-718 AC-1: chỗ tự ghép số tiền cũng bị che — \"≈ 7,01 tỷ ₫\", đã chia / còn" · "… › UC-718 AC-1: ghi chú của dòng giao dịch có số tiền (server ghi \"Đối soát số dư: sổ X ₫, thật Y ₫\") cũng bị che; số không kèm ₫ giữ nguyên"; vẽ trên màn: ⚠ Chưa có test (giao diện — xem tay 390px / 1280px trên `wrangler dev` cục bộ: bật che thì 0 số tiền lộ ở Hôm nay, Ví & quỹ, Sổ giao dịch, Tài sản & tự do; prod 2026-10-13 390px: Hôm nay từ 23 số tiền xuống 0, tải lại vẫn che) |
+| ✅ AC-2: Đang che vẫn thấy số mình đang gõ | [`web/src/lib/money.test.ts`](../web/src/lib/money.test.ts) › "che số tiền trên máy này (pwa UC-718) › UC-718 AC-2: đang che, gõ 50.000 → ô nhập và nút \"Lưu 50.000 ₫\" vẫn hiện số; toast sau khi lưu không có số tiền" |
+| ✅ AC-3: Lựa chọn theo từng máy | [`web/src/lib/money.test.ts`](../web/src/lib/money.test.ts) › "che số tiền trên máy này (pwa UC-718) › UC-718 AC-3: lựa chọn lưu theo từng máy — máy A che, máy B không; máy A tải lại vẫn che" |
+
+### [UC-719](pwa/UC-719-khoa-app-bang-ma-pin.md) Khóa app bằng mã PIN
+Status: `implemented` · BR: BR-09
+
+| AC | Test |
+|---|---|
+| ✅ AC-1: Đặt PIN; mở app thấy màn khóa trước khi thấy số | [`web/src/lib/pin.test.ts`](../web/src/lib/pin.test.ts) › "mã PIN trên máy này (pwa UC-719) › UC-719 AC-1: băm rồi kiểm PIN đúng / sai; bản ghi có v, iter, salt, hash, memberId và không chứa PIN" · "… › UC-719 AC-1: bản ghi đọc lại đồng bộ từ localStorage `vi-nha:pin`; hỏng hay sai phiên bản thì coi như chưa đặt"; màn khóa trước số, về đúng địa chỉ: ⚠ Chưa có test (giao diện — xem tay trên `wrangler dev` cục bộ) |
+| ✅ AC-2: Khóa khi quay lại sau 60 giây | [`web/src/lib/pin.test.ts`](../web/src/lib/pin.test.ts) › "mã PIN trên máy này (pwa UC-719) › UC-719 AC-2: shouldLock — ở nền 59 giây không hỏi; 60 và 61 giây hỏi; đồng hồ chỉnh lùi hỏi; chưa vào nền không hỏi"; che lúc vào nền: ⚠ Chưa có test (chưa thử trên điện thoại thật — ảnh trình chuyển app của iOS) |
+| ✅ AC-3: Sai 5 lần thì đăng xuất máy này | [`web/src/lib/pin.test.ts`](../web/src/lib/pin.test.ts) › "mã PIN trên máy này (pwa UC-719) › UC-719 AC-3: bộ đếm sai tăng TRƯỚC khi kiểm (tải lại giữa chừng không mất lần đếm) và còn sau khi tải lại; đúng thì về 0" · "… › UC-719 AC-3: sai 5 lần liên tiếp → `vi-nha:pin` xoá, `vi-nha:relogin` ghi, hàng đợi khoản chưa gửi giữ nguyên" |
+| ✅ AC-4: Đổi PIN cần PIN cũ | [`web/src/lib/pin.test.ts`](../web/src/lib/pin.test.ts) › "mã PIN trên máy này (pwa UC-719) › UC-719 AC-4: Đổi PIN với PIN cũ sai → lỗi, PIN không đổi, bộ đếm tăng; PIN cũ đúng → PIN mới dùng được, PIN cũ không" |
+| ✅ AC-5: Quên PIN chạy được offline, phải đăng nhập lại | [`web/src/lib/pin.test.ts`](../web/src/lib/pin.test.ts) › "mã PIN trên máy này (pwa UC-719) › UC-719 AC-5: Quên PIN (cả khi offline) → xoá PIN, ghi cờ relogin; còn cờ thì phải đăng nhập lại; đăng nhập thành công xoá cờ"; luồng `checkSession` / `login` trong store: ⚠ Chưa có test (xem tay trên trình duyệt) |
+| ✅ AC-6: PIN thuộc người đang đăng nhập | [`web/src/lib/pin.test.ts`](../web/src/lib/pin.test.ts) › "mã PIN trên máy này (pwa UC-719) › UC-719 AC-6: PIN của người A; đăng xuất rồi người B đăng nhập trên máy này → không còn PIN" |
 
 ## Cho thuê lại (rental)
 

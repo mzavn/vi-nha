@@ -4,7 +4,7 @@
 
 import { useState } from "preact/hooks";
 import { ApiError, api, errorText } from "../lib/api";
-import { formatVnd } from "../lib/money";
+import { formatTypedVnd, formatVnd } from "../lib/money";
 import { monthKey, monthLabel, nextMonth, previousMonth, shortDate } from "../lib/period";
 import {
   balanceText,
@@ -380,7 +380,7 @@ export function LineSheet(props: { tenant: Tenant; rental: Rental; kind: ManualL
           </p>
         )}
         <button type="button" class="btn btn-primary btn-wide" disabled={!online || busy || !f.amount} onClick={() => void submit()}>
-          {busy ? "Đang ghi…" : f.amount ? `Ghi ${formatVnd(f.amount)}` : "Nhập số tiền"}
+          {busy ? "Đang ghi…" : f.amount ? `Ghi ${formatTypedVnd(f.amount)}` : "Nhập số tiền"}
         </button>
         {!online && <NeedsNetwork what="Ghi sổ người thuê" />}
       </div>

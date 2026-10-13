@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 import { ApiError, api, errorText } from "../lib/api";
 import { defaultAccountFor, defaultBankFor, defaultWalletFor, manualAccounts, spendableWallets, walletOfMember } from "../lib/categories";
 import { checkSplit, prefillSplit, setSplitAmount, splitOrders, splitPayload, splitWallets, type ManualSplit } from "../lib/manual-split";
-import { formatVnd } from "../lib/money";
+import { formatTypedVnd, formatVnd } from "../lib/money";
 import { ordersLeft } from "../lib/pending";
 import { atForDay, dayKey } from "../lib/period";
 import { linePayload } from "../lib/rental";
@@ -174,7 +174,7 @@ export function AllocationPreview({
           </div>
           {total !== amount && (
             <p class="err" style={{ margin: "4px 0 0" }}>
-              Tổng chia khác số tiền nhận {formatVnd(amount)}.
+              Tổng chia khác số tiền nhận {formatTypedVnd(amount)}.
             </p>
           )}
         </div>
@@ -466,7 +466,7 @@ function TenantPaidForm({ boot, initialAmount, onDone }: { boot: Bootstrap; init
           </p>
         )}
         <button type="button" class="btn btn-primary btn-wide" disabled={!online || busy || !tenant || !amount} onClick={() => void submit()}>
-          {busy ? "Đang ghi…" : amount && tenant ? `Ghi ${tenant.name} chi ${formatVnd(amount)}` : "Nhập số tiền"}
+          {busy ? "Đang ghi…" : amount && tenant ? `Ghi ${tenant.name} chi ${formatTypedVnd(amount)}` : "Nhập số tiền"}
         </button>
         {!online && <NeedsNetwork what="Ghi sổ người thuê" />}
       </div>

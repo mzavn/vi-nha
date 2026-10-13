@@ -349,7 +349,7 @@
 - [OPEN] Trang đồng ý ở UC-601 mô tả quyền Ghi là "Ghi giao dịch, gán, chia tiền" (`src/oauth/routes.ts`) — chưa nói quyền này cũng cho cập nhật giá tài sản. Chưa quyết có đổi chữ không.
 - [OPEN] Lỗi E2–E6 qua MCP chưa có test riêng (luật nằm ở `balance.addValue`, test REST ở balance UC-1101).
 
-## PWA — 17 divergence, 50 open
+## PWA — 17 divergence, 53 open
 
 ### [pwa/UC-701-dang-nhap-dang-xuat-doi-nguoi.md](pwa/UC-701-dang-nhap-dang-xuat-doi-nguoi.md)
 - [OPEN] `toLogin()` (store.ts:238) không xoá cache số liệu/cache API khi phiên bị vô hiệu ngoài luồng đăng xuất (báo cáo `redteam-260922-0100-auth-exposure.md` §3, viết trên HEAD cũ). Hiện `enter()` → `forgetOtherMember` xoá cache khi người vào khác `vi-nha:last-member` (commit `80875be`, `4b6d298`), nên số của người trước không được nạp cho người sau; nhưng dữ liệu vẫn nằm trên máy trong lúc ở màn đăng nhập. Chưa có quyết định chốt là đã đóng mục §3 hay chưa.
@@ -451,6 +451,13 @@
 ### [pwa/UC-717-man-tai-san-va-tu-do.md](pwa/UC-717-man-tai-san-va-tu-do.md)
 - [DIVERGENCE] Proposal `261008-bang-can-doi` (Thiết kế, máy tính ≥ 1024px): cột phải tóm tắt "vốn chủ, Mốc tự do"; bảng lô, lịch sử, Thử số dùng nhiều cột số. Code: cột phải chỉ có card tóm tắt bảng cân đối ở mọi phần, danh sách giữ dạng hàng tầng như điện thoại (`NetWorth`, `web/src/screens/net-worth.tsx`). → chủ nhà quyết có cần bảng nhiều cột trên máy tính không.
 - [DIVERGENCE] Proposal (Thiết kế, Cân đối): dòng phụ "15,5% tổng · 25,6% vốn chủ"; code bỏ số 0 lẻ cuối nên phần trăm tròn hiện "1%" thay vì "1,0%" (`pctText`); lãi / lỗ luôn có một chữ số lẻ như AC. Lệch chữ, không lệch số.
+
+### [pwa/UC-718-che-so-tien-tren-may-nay.md](pwa/UC-718-che-so-tien-tren-may-nay.md)
+- [OPEN] Cách đếm "0 số lộ" khi xem tay chỉ bắt số có dấu chấm nghìn hoặc kèm ₫; số tiền nhỏ hơn 1.000 không kèm ₫ (nếu có chỗ nào ghép tay) không bắt được.
+- [OPEN] Ô Giả định của Thử số (pwa UC-717) điền sẵn từ số thật nên vẫn hiện số khi che — đúng luật "ô nhập vẫn hiện số" nhưng chủ nhà nên biết.
+
+### [pwa/UC-719-khoa-app-bang-ma-pin.md](pwa/UC-719-khoa-app-bang-ma-pin.md)
+- [OPEN] Che lúc vào nền chưa thử trên điện thoại thật — chưa biết ảnh trình chuyển app của iOS còn thấy số không.
 
 ## Cho thuê lại (rental) — 2 divergence, 18 open
 

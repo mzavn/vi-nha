@@ -3,11 +3,11 @@
 > Bản công khai: hash commit trong History, Status và các dòng "Cập nhật / Hợp nhất" là của repo gốc (private) nơi phát triển — repo này nhận từng bản phát hành qua script, nên không có các commit đó. Link tới `plans/` và test migration cũ của repo gốc đã thành chữ thường.
 
 > Dựng lại ngày 2026-10-01 từ code, test, `docs/`, `plans/`, báo cáo và `git log` (tới commit `a68c9d6`).
-> Hợp nhất change [`261008-mcp-oauth`](changes/archive/261008-mcp-oauth/proposal.md) ngày 2026-10-08 (code commit `e5ecf41`): **nối Claude bằng OAuth thay cho đường dẫn chứa khoá** (ADR-97, thay ADR-30) — endpoint `https://<host>/mcp`, OAuth 2.1 chuẩn MCP (`@cloudflare/workers-oauth-provider`, KV `OAUTH_KV`), chỉ Client ID Metadata Document, PKCE; đăng nhập ở trang uỷ quyền bằng mật khẩu của app; quyền Xem + Ghi, Ghi bỏ tick được (ADR-98); `MCP_SECRET` bỏ, `/mcp/<bất kỳ>` → 404 (mcp UC-601 AC-8…AC-11, AC-1/2/3/5 DEPRECATED). Tool nhìn và ghi như người đã uỷ quyền, nhật ký `via = mcp` (UC-602…UC-605); Cài đặt › Claude và ứng dụng AI liệt kê / gỡ kết nối (access UC-508, pwa UC-709); đổi / gỡ mật khẩu riêng, tắt người, Đăng xuất mọi máy, đổi mật khẩu chung gỡ kết nối AI (UC-501, UC-507); `/oauth/*`, `/.well-known/*`, `/mcp` vào Worker trước `requireAuth`, service worker không đụng tới (UC-503, UC-710). Kết nối Claude cũ đứt — thêm lại connector một lần.
 > Hợp nhất change [`261008-huong-dan-trong-app`](changes/archive/261008-huong-dan-trong-app/proposal.md) ngày 2026-10-08 (code commit `934f30f`): **Hướng dẫn ngay trong app** — màn phụ `#guide` nhúng GitBook, khung chiếm hết chiều cao còn lại, nút Mở ở tab mới, mất mạng thì báo "Hướng dẫn cần mạng" (pwa UC-711 AC-13, AC-14; AC-3, AC-6 sửa); thanh bên và Cài đặt › Máy này đi `#guide` thay vì mở tab mới (UC-709); CSP thêm `frame-src https://mzavn.gitbook.io`, `frame-ancestors 'none'` giữ nguyên (access UC-503). Không ADR, không migration.
 > Hợp nhất change [`261008-bang-can-doi`](changes/archive/261008-bang-can-doi/proposal.md) ngày 2026-10-08 (code commit `8cd48b8`, `31e3505`, `d4f0ab3` — ba lát, migration 0031…0033): **bảng cân đối, tháp tài sản, lãi vay hằng tháng, lưu chuyển tiền, kết quả thu chi, Mốc tự do, kế hoạch thu nhập, Thử số** — context mới [balance](balance/README.md) UC-1101…UC-1107, BR-15, ADR-99…ADR-107; màn `#net-worth` Tài sản & tự do (pwa UC-717 mới; UC-707, UC-711, UC-712); lãi vay tách lãi / gốc, ví hệ thống "Lãi vay" (debt UC-901…UC-903, ledger UC-101, UC-103, UC-104, allocation UC-201); phân loại lại báo cáo (ledger UC-102); `deactivated_at`, chặn lùi ngày mở sổ, khoá `fi_*` (access UC-506, UC-507); kỳ hạn phải thu, `balanceItems` (receivable UC-1001, UC-1005 — đóng [OPEN] thiếu tool MCP); MCP `get_balance_sheet`, `get_reports`, `record_asset_value` (mcp UC-601, UC-602, UC-603, UC-606 mới).
 > Hợp nhất change [`261012-tu-chia`](changes/archive/261012-tu-chia/proposal.md) ngày 2026-10-13 (code commit `a8b43f7`): **Tự chia một khoản thu** (ADR-108) — `POST /v1/allocate` và `/allocate/preview` nhận `amounts` (số tay từng ví, bỏ luật nạp và phần khóa; tổng lệch → `amounts_mismatch`, ví sai → `invalid_amounts`) (allocation UC-203 AC-11, AC-12); sheet Chia thử có nút Tự chia ở nhập thu nhập, màn Gán (chỉ dòng thu nhập đầu), chi tiết khoản thu; Tích sản đứng đầu, Tích sản 0 chỉ nhắc (allocation UC-202 AC-6, AC-7; pwa UC-705, UC-706, UC-715). Không migration.
 > Hợp nhất change [`261013-cap-nhat-tu-app`](changes/archive/261013-cap-nhat-tu-app/proposal.md) ngày 2026-10-13 (code commit `ae0f0b5`): **Cập nhật Ví nhà từ trong app** (ADR-109) — Cài đặt › Nâng cao › Cập nhật Ví nhà hỏi GitHub bản mới khi bấm, chỉ cách cập nhật theo cách cài (pwa UC-709 AC-30, AC-31); CSP `connect-src` thêm `https://api.github.com` (access UC-503); bản công khai có workflow `update.yml` + `scripts/update-from-upstream.mjs` (chép đè bản phát hành mới nhất, giữ cấu hình Cloudflare của nhà), phát hành tạo GitHub Release. Không migration.
+> Hợp nhất change [`261013-an-so-va-ma-pin`](changes/archive/261013-an-so-va-ma-pin/proposal.md) ngày 2026-10-13 (code commit `f7cf796`): **che số tiền trên máy này và khóa app bằng mã PIN** (ADR-110) — nút con mắt ở thanh tiêu đề / thanh bên, số tiền thành "•••• ₫", số đang gõ và phần trăm giữ nguyên, lưu theo từng máy (pwa UC-718 mới); mã PIN 6 số cục bộ trên máy, hỏi khi mở app hoặc quay lại sau ≥ 60 giây, sai 5 lần / Quên PIN thì đăng xuất máy này cả khi offline (pwa UC-719 mới); hàng Mã PIN ở Cài đặt › Máy này (UC-709), nút con mắt và màn khóa ở khung (UC-711). Không đổi server, không migration.
 > Từ nay **spec đứng trước code**: mọi thay đổi hành vi bắt đầu bằng sửa spec, rồi test, rồi code.
 
 ## 1. Spec là gì ở repo này
@@ -32,7 +32,7 @@ Code lệch spec = bug **hoặc** spec chưa cập nhật — không có trườ
 | Entity Model | Hệ thống nói về những danh từ nào? | `specs/<context>/entities.md` |
 | Acceptance Criteria | Làm sao biết đúng? | Mục `## Acceptance Criteria` trong từng UC, mỗi AC trỏ tới test |
 
-Quyết định (vì sao chọn cách này, không chọn cách kia): [decisions.md](decisions.md) — ADR-01…ADR-109, theo thứ tự thời gian.
+Quyết định (vì sao chọn cách này, không chọn cách kia): [decisions.md](decisions.md) — ADR-01…ADR-110, theo thứ tự thời gian.
 
 ## 3. Bounded context và dải ID
 
@@ -56,8 +56,8 @@ ID là vĩnh viễn: không đánh số lại, không dùng lại ID đã xoá. 
 
 ## 4. Chỉ mục Use Case
 
-91 UC · 987 AC · 776 AC có test · **211 AC chưa có test** (chi tiết: [traceability.md](traceability.md)).
-Chỉ số: AC Coverage 78,6% · Spec Coverage 97,8% (88/90 UC) · Trace Ratio 90,0% (45/50 commit từ 2026-10-07) — định nghĩa ở `.claude/skills/mk-specs/references/traceability.md` §4.
+93 UC · 996 AC · 785 AC có test · **211 AC chưa có test** (chi tiết: [traceability.md](traceability.md)).
+Chỉ số: AC Coverage 78,8% · Spec Coverage 97,8% (90/92 UC) · Trace Ratio 90,7% (49/54 commit từ 2026-10-07) — định nghĩa ở `.claude/skills/mk-specs/references/traceability.md` §4.
 
 ### [Sổ cái (ledger)](ledger/README.md)
 
@@ -140,6 +140,7 @@ Chỉ số: AC Coverage 78,6% · Spec Coverage 97,8% (88/90 UC) · Trace Ratio 9
 | [UC-603](mcp/UC-603-ghi-giao-dich-qua-mcp.md) | Ghi giao dịch nhập tay qua MCP | implemented | BR-05, BR-03 |
 | [UC-604](mcp/UC-604-gan-log-qua-mcp.md) | Gán log ngân hàng qua MCP | implemented | BR-05, BR-04 |
 | [UC-605](mcp/UC-605-chia-thu-nhap-qua-mcp.md) | Xem trước & chia thu nhập qua MCP | implemented | BR-05, BR-02 |
+| [UC-606](mcp/UC-606-cap-nhat-gia-tai-san-qua-mcp.md) | Cập nhật giá tài sản qua MCP | implemented | BR-05, BR-15 |
 
 ### [PWA](pwa/README.md)
 
@@ -161,6 +162,9 @@ Chỉ số: AC Coverage 78,6% · Spec Coverage 97,8% (88/90 UC) · Trace Ratio 9
 | [UC-714](pwa/UC-714-bat-thong-bao-tren-may-nay.md) | Bật thông báo trên máy này | implemented | BR-06, BR-09 |
 | [UC-715](pwa/UC-715-xem-sua-xoa-giao-dich.md) | Xem, sửa, xoá một giao dịch | implemented | BR-03, BR-04, BR-01 |
 | [UC-716](pwa/UC-716-so-giao-dich.md) | Sổ giao dịch | implemented | BR-01, BR-03, BR-05 |
+| [UC-717](pwa/UC-717-man-tai-san-va-tu-do.md) | Màn Tài sản & tự do | implemented | BR-15, BR-12, BR-13, BR-07 |
+| [UC-718](pwa/UC-718-che-so-tien-tren-may-nay.md) | Che số tiền trên máy này | implemented | BR-09, BR-01 |
+| [UC-719](pwa/UC-719-khoa-app-bang-ma-pin.md) | Khóa app bằng mã PIN | implemented | BR-09 |
 
 ### [Cho thuê lại (rental)](rental/README.md)
 
@@ -191,6 +195,18 @@ Chỉ số: AC Coverage 78,6% · Spec Coverage 97,8% (88/90 UC) · Trace Ratio 9
 | [UC-1004](receivable/UC-1004-chinh-huy-dong-phai-thu.md) | Chỉnh / huỷ dòng phải thu | implemented | BR-13, BR-04 |
 | [UC-1005](receivable/UC-1005-xem-buc-tranh-tien-that.md) | Xem bức tranh tiền thật | implemented | BR-13, BR-01, BR-07 |
 
+### [Bảng cân đối, mốc tự do & báo cáo (balance)](balance/README.md)
+
+| UC | Tên | Status | BR |
+|---|---|---|---|
+| [UC-1101](balance/UC-1101-quan-ly-tai-san-lo-gia.md) | Thêm mục tài sản, lô, cập nhật giá theo ngày, theo dõi chốt lời / cắt lỗ | implemented | BR-15, BR-05 |
+| [UC-1102](balance/UC-1102-xem-bang-can-doi.md) | Xem bảng cân đối, tháp tài sản và lịch sử theo tháng | implemented | BR-15, BR-12, BR-13, BR-05 |
+| [UC-1103](balance/UC-1103-moc-tu-do.md) | Mốc tự do — Mốc an tâm, thu nhập, Tự do | implemented | BR-15, BR-07, BR-08 |
+| [UC-1104](balance/UC-1104-ke-hoach-thu-nhap.md) | Kế hoạch thu nhập theo năm so với thực tế | implemented | BR-15, BR-02 |
+| [UC-1105](balance/UC-1105-luu-chuyen-tien.md) | Báo cáo lưu chuyển tiền theo tháng / năm | implemented | BR-15, BR-04, BR-12 |
+| [UC-1106](balance/UC-1106-ket-qua-thu-chi.md) | Báo cáo kết quả thu chi theo tháng / năm | implemented | BR-15, BR-02, BR-12 |
+| [UC-1107](balance/UC-1107-thu-so-du-phong.md) | Thử số / Dự phóng — gõ giả định trên nền số thật, không lưu | implemented | BR-15 |
+
 ## 5. Mã quyết định trong plan → ADR
 
 Spec context trích `D#` theo `plans/260921-2228-profit-first-pwa/context.md`; bản đầy đủ ở [decisions.md](decisions.md).
@@ -201,7 +217,7 @@ Spec context trích `D#` theo `plans/260921-2228-profit-first-pwa/context.md`; b
 
 ## 6. Hàng đợi quyết định cho chủ nhà
 
-Toàn bộ 80 divergence và 283 câu hỏi mở nằm ở [open-issues.md](open-issues.md). Dưới đây là những mục **ảnh hưởng tới tiền, tới lời hứa trong BR, hoặc tới bảo mật** — cần chủ nhà chọn bên đúng rồi sửa spec/code theo quy trình ở §7.
+Toàn bộ 80 divergence và 286 câu hỏi mở nằm ở [open-issues.md](open-issues.md). Dưới đây là những mục **ảnh hưởng tới tiền, tới lời hứa trong BR, hoặc tới bảo mật** — cần chủ nhà chọn bên đúng rồi sửa spec/code theo quy trình ở §7.
 
 **Tiền và sổ**
 1. **Nhập tay khoản thu không tự chia ở server** — `docs` §4 nói "chạy ngay khi income được xác nhận"; REST/MCP chỉ ghi, PWA tự gọi `/v1/allocate` tiếp theo, còn Claude phải tự gọi. → [UC-203](allocation/UC-203-chia-mot-khoan-thu-nhap.md), [UC-605](mcp/UC-605-chia-thu-nhap-qua-mcp.md)

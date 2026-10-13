@@ -6,9 +6,10 @@ import { errorText } from "../lib/api";
 import { shortDate, timeHM } from "../lib/period";
 import { appVersionLabel } from "../lib/settings";
 import { SOURCE_URL } from "../lib/splits";
+import { PinSheet, usePinSet } from "../screens/pin-sheet";
 import { go, logout, syncNow, toast, useApp, type Tab } from "../state/store";
 import { Icon } from "./icons";
-import { Seg } from "./parts";
+import { HideAmountsButton, Seg } from "./parts";
 
 /** Một mốc duy nhất cho cả app: CSS dùng cùng giá trị trong @media (min-width: 1024px). */
 export const WIDE = "(min-width: 1024px)";
@@ -97,6 +98,8 @@ export function Sidebar() {
   const [theme, setTheme] = useTheme();
   const { confirmOut, unsynced, onLogout } = useLogout();
   const all = useLogout(true);
+  const hasPin = usePinSet();
+  const [pinMode, setPinMode] = useState<"set" | "change" | "off" | null>(null);
   const mine = app.queue.filter((q) => q.memberId === app.member?.id);
   const pending = mine.filter((q) => q.status === "pending").length;
   const rejected = mine.filter((q) => q.status === "rejected").length;
@@ -180,6 +183,24 @@ export function Sidebar() {
           <Icon name="sync" size={14} />
           {app.syncing ? "Đang đồng bộ…" : "Đồng bộ"}
         </button>
+        <HideAmountsButton class="btn side-sync" label />
+        <div class="side-pin">
+          {hasPin ? (
+            <>
+              <button type="button" class="btn side-sync" onClick={() => setPinMode("change")}>
+                Đổi mã PIN
+              </button>
+              <button type="button" class="btn side-sync" onClick={() => setPinMode("off")}>
+                Tắt PIN
+              </button>
+            </>
+          ) : (
+            <button type="button" class="btn side-sync" onClick={() => setPinMode("set")}>
+              Đặt mã PIN
+            </button>
+          )}
+        </div>
+        {pinMode && <PinSheet mode={pinMode} limits onClose={() => setPinMode(null)} />}
 
         <Seg
           class="side-theme"

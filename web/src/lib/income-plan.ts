@@ -1,7 +1,7 @@
 // Kế hoạch thu nhập theo năm (balance UC-1104): câu chữ card Kế hoạch, sheet Sửa kế hoạch, danh sách các năm.
 // Thuần để test. Mỗi lần lưu là một bản mới ở server (chỉ ghi thêm); ở đây chỉ dựng chữ và kiểm ô nhập.
 
-import { formatVnd, groupDigits } from "./money";
+import { formatVnd, moneyDigits } from "./money";
 import { shortDate } from "./period";
 import type { Result } from "./settings";
 import type { IncomePlanMember, IncomePlanSummary, IncomePlanYear } from "./types";
@@ -13,7 +13,7 @@ const pct1 = (p: number | null): string => (p === null ? "—" : `${p.toFixed(1)
 export function planHeadline(y: IncomePlanYear): string {
   const target = y.current?.householdMonthly ?? 0;
   const a = y.actual.monthlyAverage;
-  return a === null ? `Cả nhà chưa có số / ${formatVnd(target)} mỗi tháng` : `Cả nhà ${groupDigits(a)} / ${formatVnd(target)} mỗi tháng · ${pct1(y.actual.pctOfCurrent)}`;
+  return a === null ? `Cả nhà chưa có số / ${formatVnd(target)} mỗi tháng` : `Cả nhà ${moneyDigits(a)} / ${formatVnd(target)} mỗi tháng · ${pct1(y.actual.pctOfCurrent)}`;
 }
 
 /** "Đầu năm 50.000.000 ₫ (87,0%) · cả năm 8,0% · tính trên 1 tháng đã kết thúc"; đầu năm = hiện tại thì bỏ phần đó. */
@@ -37,7 +37,7 @@ export function editedText(y: IncomePlanYear): string | null {
 
 /** Một người: "28.000.000 / 30.000.000 ₫ · 93,3%"; chưa có tháng nào kết thúc → "chưa có số / 30.000.000 ₫". */
 export const memberPlanText = (m: IncomePlanMember, counted = true): string =>
-  counted ? `${groupDigits(m.actual)} / ${formatVnd(m.planned)} · ${pct1(m.pct)}` : `chưa có số / ${formatVnd(m.planned)}`;
+  counted ? `${moneyDigits(m.actual)} / ${formatVnd(m.planned)} · ${pct1(m.pct)}` : `chưa có số / ${formatVnd(m.planned)}`;
 
 /** Một năm trong "Các năm": "đầu năm 50.000.000 ₫ · thực tế 43.500.000 ₫/tháng · 96,6% · cả năm 8,0%". */
 export function planYearRow(s: IncomePlanSummary): string {

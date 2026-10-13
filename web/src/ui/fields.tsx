@@ -1,11 +1,11 @@
 // Ô nhập dùng chung cho các sheet: số tiền, chọn ví, chọn tài khoản, chọn danh mục.
 
 import { useState } from "preact/hooks";
-import { amountText, evalAmount, formatVnd, groupExpr, isAmountExpr, nextAmount } from "../lib/money";
+import { amountText, evalAmount, formatTypedVnd, groupExpr, isAmountExpr, nextAmount } from "../lib/money";
 import type { AccountRef, CategoryRef, Wallet } from "../lib/types";
 
-/** Dòng dưới ô số tiền khi đang tính: kết quả, hoặc vì sao chưa tính được. */
-export const amountExprHint = (result: number | null): string => (result === null ? "Sai: kết quả phải trên 0, tối đa 1.000 tỷ" : `= ${formatVnd(result)}`);
+/** Dòng dưới ô số tiền khi đang tính: kết quả, hoặc vì sao chưa tính được. Số đang gõ — không che (pwa UC-718). */
+export const amountExprHint = (result: number | null): string => (result === null ? "Sai: kết quả phải trên 0, tối đa 1.000 tỷ" : `= ${formatTypedVnd(result)}`);
 
 /** Ô số tiền có phép tính (UC-703): gõ `24+55` thì ô giữ nguyên phép tính, số tiền là kết quả (sai thì 0, `valid` false);
  *  rời ô / Enter (`commit`) thì ô thành kết quả. Không có dấu phép tính thì như cũ: nhóm chấm khi gõ, vượt trần giữ số trước. */

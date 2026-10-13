@@ -1,23 +1,72 @@
 // Định dạng tiền theo DESIGN.md §5: `1.250.000 ₫`, dấu trừ U+2212, không bao giờ làm tròn.
+// Che số tiền trên máy này (pwa UC-718, ADR-110): cờ nằm ở module này, app bật / tắt qua `setAmountsHidden` và vẽ lại cả cây.
+// Che ở các hàm định dạng TIỀN (`formatVnd`, `formatSigned`, `moneyDigits`); `groupDigits` giữ thuần cho số đếm, số lượng, ô nhập.
+// Module không đọc localStorage lúc import — app đọc lúc khởi động (`loadAmountsHidden`).
 
 export const MINUS = "−";
 /** Khoảng trắng không ngắt dòng giữa số và ₫ — để ₫ không rơi xuống dòng riêng. */
-const NBSP = " ";
+const NBSP = "\u00a0";
+/** Chữ thay cho số tiền khi đang che. */
+export const HIDDEN_DIGITS = "••••";
+export const HIDE_AMOUNTS_KEY = "vi-nha:hide-amounts";
 
-/** `-1250000` → `−1.250.000`. Phần lẻ (nếu có) giữ nguyên, ngăn bằng dấu phẩy. */
+let hidden = false;
+
+export function setAmountsHidden(on: boolean): void {
+  hidden = on;
+}
+export const amountsHidden = (): boolean => hidden;
+
+type FlagStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+
+/** Lựa chọn che số của máy này; localStorage bị chặn (null hoặc ném lỗi) → không che. */
+export function loadAmountsHidden(storage: FlagStorage | null): boolean {
+  try {
+    return storage?.getItem(HIDE_AMOUNTS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveAmountsHidden(storage: FlagStorage | null, on: boolean): void {
+  try {
+    if (on) storage?.setItem(HIDE_AMOUNTS_KEY, "1");
+    else storage?.removeItem(HIDE_AMOUNTS_KEY);
+  } catch {
+    // không lưu được — vẫn che cho lần mở này
+  }
+}
+
+/** `-1250000` → `−1.250.000`. Phần lẻ (nếu có) giữ nguyên, ngăn bằng dấu phẩy. Không bao giờ che (số đếm, số lượng, ô nhập). */
 export function groupDigits(n: number): string {
   const [int = "0", frac] = String(Math.abs(n)).split(".");
   const grouped = int.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
   return (n < 0 ? MINUS : "") + grouped + (frac ? `,${frac}` : "");
 }
 
+/** Số tiền không kèm ₫: như `groupDigits`, nhưng đang che thì `••••` (giữ dấu −). */
+export function moneyDigits(n: number): string {
+  return hidden ? (n < 0 ? MINUS : "") + HIDDEN_DIGITS : groupDigits(n);
+}
+
 export function formatVnd(n: number): string {
+  return `${moneyDigits(n)}${NBSP}₫`;
+}
+
+/** Số người đang gõ (dòng "= X ₫" dưới ô, nút "Lưu X", nút cộng nhanh): không bao giờ che. */
+export function formatTypedVnd(n: number): string {
   return `${groupDigits(n)}${NBSP}₫`;
 }
 
 /** Có dấu + cho số dương — dùng cho chênh lệch. */
 export function formatSigned(n: number): string {
-  return n > 0 ? `+${groupDigits(n)}` : groupDigits(n);
+  return n > 0 ? `+${moneyDigits(n)}` : moneyDigits(n);
+}
+
+/** Chữ có sẵn số tiền (ghi chú server ghi vào dòng giao dịch, vd "Đối soát số dư: sổ 2.090.000 ₫"): đang che thì mọi
+ *  "số ₫" thành `•••• ₫` (giữ dấu −). Số không kèm ₫ (mã, số tài khoản) giữ nguyên. */
+export function maskAmounts(text: string): string {
+  return hidden ? text.replace(/\d[\d.]*(?:,\d+)?[\s\u00a0]?₫/g, `${HIDDEN_DIGITS}${NBSP}₫`) : text;
 }
 
 /** Chuỗi người dùng gõ (có thể lẫn dấu chấm, khoảng trắng) → số đồng, hoặc 0. */

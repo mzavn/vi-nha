@@ -8,7 +8,7 @@ import { moveProblem, moveWallets, type MoveDraft } from "../lib/budget";
 import { defaultAccountFor, defaultWalletFor, manualAccounts } from "../lib/categories";
 import { defaultDebtId, payableDebts, paymentToast } from "../lib/debts";
 import { debtPaymentEntries, hasInterest, prefillSplit, splitOf, splitPaymentToast, withAmount, withInterest, withPrincipal, type SplitDraft } from "../lib/interest";
-import { formatVnd } from "../lib/money";
+import { formatTypedVnd, formatVnd } from "../lib/money";
 import { atForDay, dayKey } from "../lib/period";
 import { withChosen } from "../lib/transactions";
 import type { Reserve, TxRow } from "../lib/types";
@@ -102,7 +102,7 @@ export function MoveBudgetSheet({ initial, title = "Chuyển ngân sách", edit,
           </p>
         )}
         <button type="button" class="btn btn-primary btn-wide" disabled={!!problem || busy || (!!edit && !app.online)} onClick={() => void submit()}>
-          {problem ?? (edit ? "Lưu thay đổi" : `Chuyển ${formatVnd(d.amount)}`)}
+          {problem ?? (edit ? "Lưu thay đổi" : `Chuyển ${formatTypedVnd(d.amount)}`)}
         </button>
         {edit && !app.online && <NeedsNetwork what="Sửa giao dịch" />}
       </div>
@@ -240,7 +240,7 @@ export function DebtSheet({ reserve, debtId, onClose }: { reserve?: Reserve; deb
       </div>
       <div class="pad">
         <button type="button" class="btn btn-primary btn-wide" disabled={!!problem || busy} onClick={() => void submit()}>
-          {problem ?? `Ghi trả nợ ${formatVnd(amount)}`}
+          {problem ?? `Ghi trả nợ ${formatTypedVnd(amount)}`}
         </button>
       </div>
     </Sheet>

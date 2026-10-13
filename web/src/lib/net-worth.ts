@@ -2,7 +2,7 @@
 // Thuần để test. Mọi số đã tính ở server (GET /v1/balance-sheet — balance UC-1101, UC-1102); ở đây chỉ dựng chữ và kiểm ô nhập.
 // Phần trăm server trả đã cắt về 0 sau một chữ số lẻ; null = mẫu số 0 → "—".
 
-import { formatVnd, groupDigits, MINUS } from "./money";
+import { formatVnd, groupDigits, MINUS, moneyDigits } from "./money";
 import type { Result } from "./settings";
 import type { BalanceHistoryPoint, BalanceItem, BalanceLot, BalancePosition, BalanceRow, BalanceSection, BalanceValue, LiabilityRow, PyramidTier } from "./types";
 
@@ -168,9 +168,9 @@ export function lotSub(l: BalanceLot): string {
   const holding = p?.status === "holding";
   return [
     `giá trị ${formatVnd(l.value)}`,
-    l.takeProfitPrice !== null ? `chốt lời ${groupDigits(l.takeProfitPrice)}` : null,
+    l.takeProfitPrice !== null ? `chốt lời ${moneyDigits(l.takeProfitPrice)}` : null,
     l.takeProfitPrice !== null && holding && p.toTakeProfitPct !== null ? `còn ${pctText(p.toTakeProfitPct)}` : null,
-    l.stopLossPrice !== null ? `cắt lỗ ${groupDigits(l.stopLossPrice)}` : null,
+    l.stopLossPrice !== null ? `cắt lỗ ${moneyDigits(l.stopLossPrice)}` : null,
     l.stopLossPrice !== null && holding && p.toStopLossPct !== null ? `còn ${pctText(p.toStopLossPct)}` : null,
   ]
     .filter(Boolean)

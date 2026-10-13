@@ -2,8 +2,10 @@
 
 import { useEffect, useState } from "preact/hooks";
 import { ApiError, api, errorText, httpTransport, request, setUnauthorizedHandler } from "../lib/api";
+import { loadAmountsHidden, saveAmountsHidden, setAmountsHidden } from "../lib/money";
 import { setupNeeded, type SetupBody } from "../lib/setup";
 import { applyQueue, entryToast, localWalletStatus, queuedLineAfter } from "../lib/pending";
+import { checkPin, clearPin, clearRelogin, deviceStorage, forgetPinOnDevice, keepPinFor, needsRelogin, readPin, shouldLock, type PinCheck } from "../lib/pin";
 import { editToast, txWalletId, voidToast } from "../lib/transactions";
 import type { BookFilter } from "../lib/tx-filter";
 import type { Bootstrap, EntryBody, MemberRef, ReplaceEntryResult, Snapshot, TxRow } from "../lib/types";
@@ -54,6 +56,10 @@ export interface AppState {
   entryPreset: { day: string; back: Tab } | null;
   /** Service worker bản mới đã giành quyền (state/sw-update.ts): hiện thanh "Đã có bản mới" kèm nút Tải bản mới. */
   updateReady: boolean;
+  /** Che số tiền trên máy này (pwa UC-718) — cờ thật nằm ở lib/money.ts; ở đây để đổi cờ là vẽ lại cả cây. */
+  hideAmounts: boolean;
+  /** Màn khóa mã PIN đang thay cả màn app (pwa UC-719). Tính cùng lúc vào app, trước khi số hiện ra. */
+  locked: boolean;
 }
 
 const route = typeof location === "undefined" ? parseHash("") : parseHash(location.hash);
@@ -82,6 +88,8 @@ let state: AppState = {
   book: null,
   updateReady: false,
   entryPreset: null,
+  hideAmounts: false,
+  locked: false,
 };
 const listeners = new Set<() => void>();
 
@@ -337,8 +345,10 @@ export const lastMemberId = (): string | null => {
   }
 };
 
+/** Về màn đăng nhập (chưa có phiên, phiên hết hạn): PIN gắn với phiên của người đó nên xoá luôn (pwa UC-719). */
 function toLogin() {
-  setState({ phase: "login", member: null, txOpen: null, editTx: null, entryPreset: null, book: null });
+  clearPin(deviceStorage());
+  setState({ phase: "login", member: null, locked: false, txOpen: null, editTx: null, entryPreset: null, book: null });
 }
 
 /** Người khác vào máy này: xoá mọi số liệu đã cache của người trước (kể cả cache API của service worker). */
@@ -356,13 +366,19 @@ async function forgetOtherMember(memberId: string) {
   }
 }
 
-async function enter(member: Pick<MemberRef, "id" | "name">) {
+/** `byPassword`: vừa đăng nhập / thiết lập bằng mật khẩu — không hỏi PIN ngay. Còn lại (mở app, phiên còn hạn) có PIN thì khóa
+ *  ngay trong cùng lần đặt phase "app", để màn khóa có trước khi số hiện ra. */
+async function enter(member: Pick<MemberRef, "id" | "name">, byPassword = false) {
   await forgetOtherMember(member.id);
+  const storage = deviceStorage();
+  // PIN của người khác trên máy này thì không còn (pwa UC-719 AC-6).
+  keepPinFor(storage, member.id);
   const [boot, snap] = await Promise.all([cacheGet<Bootstrap>(cacheKey(member.id, "bootstrap")), cacheGet<Snapshot>(cacheKey(member.id, "snapshot"))]);
   const sameMember = boot?.data.member?.id === member.id;
   setState({
     phase: "app",
     member,
+    locked: !byPassword && readPin(storage, member.id) !== null,
     boot: sameMember ? boot!.data : null,
     snap: sameMember ? (snap?.data ?? null) : null,
     stale: sameMember,
@@ -375,6 +391,8 @@ async function enter(member: Pick<MemberRef, "id" | "name">) {
 }
 
 async function checkSession() {
+  // Quên PIN / sai 5 lần (pwa UC-719): đã đăng xuất ở máy — phải đăng nhập lại bằng mật khẩu dù cookie phiên còn hạn.
+  if (needsRelogin(deviceStorage())) return toLogin();
   try {
     const { member } = await api.get<{ member: Pick<MemberRef, "id" | "name"> | null }>("/v1/session");
     if (member) return await enter(member);
@@ -393,12 +411,13 @@ async function checkSession() {
 export async function completeSetup(body: SetupBody): Promise<void> {
   const { member } = await api.post<{ member: Pick<MemberRef, "id" | "name"> }>("/v1/setup", body);
   go("today");
-  await enter(member);
+  await enter(member, true);
 }
 
 export async function login(password: string, memberId: string): Promise<void> {
   const { member } = await api.post<{ member: Pick<MemberRef, "id" | "name"> }>("/v1/session", { password, member_id: memberId });
-  await enter(member);
+  clearRelogin(deviceStorage());
+  await enter(member, true);
 }
 
 /** Đăng xuất máy này; `everywhere`: tăng thế hệ phiên ở server — mọi máy (cả máy này) phải đăng nhập lại (ADR-89). */
@@ -410,17 +429,61 @@ export async function logout(everywhere = false): Promise<void> {
   await signedOut();
 }
 
-/** Phiên của máy này đã hết ở server (đăng xuất, tự tắt mình): xoá số đã lưu, về màn đăng nhập. */
+/** Phiên của máy này đã hết ở server (đăng xuất, tự tắt mình): xoá số đã lưu và PIN, về màn đăng nhập. */
 export async function signedOut(): Promise<void> {
+  clearPin(deviceStorage());
   await cacheClear();
   if ("caches" in window) await caches.delete("vi-nha-api").catch(() => false);
   lastEntryQueued = null;
-  setState({ phase: "login", member: null, boot: null, snap: null, stale: false, lastEntry: null, txOpen: null, editTx: null, entryPreset: null, book: null });
+  setState({ phase: "login", member: null, locked: false, boot: null, snap: null, stale: false, lastEntry: null, txOpen: null, editTx: null, entryPreset: null, book: null });
+}
+
+// ── Che số tiền trên máy này (pwa UC-718) ─────────────────────────
+/** Bật / tắt che số, lưu ở máy. Bật thì xoá các câu đang hiện có số (toast, dòng "vừa ghi"). */
+export function setHideAmounts(on: boolean) {
+  setAmountsHidden(on);
+  saveAmountsHidden(deviceStorage(), on);
+  if (!on) return setState({ hideAmounts: false });
+  lastEntryQueued = null;
+  setState({ hideAmounts: true, toast: null, lastEntry: null });
+}
+
+// ── Khóa bằng mã PIN (pwa UC-719) ─────────────────────────────────
+/** Màn khóa: đúng PIN → về đúng màn đang ở (địa chỉ giữ nguyên); sai lần thứ 5 → như Quên PIN. */
+export async function unlock(pin: string): Promise<PinCheck> {
+  const storage = deviceStorage();
+  const memberId = state.member?.id;
+  if (!storage || !memberId) {
+    await forgetPin();
+    return { ok: false, left: 0 };
+  }
+  const r = await checkPin(storage, memberId, pin);
+  if (r.ok) setState({ locked: false });
+  else if (r.left === 0) await forgetPin();
+  return r;
+}
+
+/**
+ * Quên PIN / sai 5 lần: đăng xuất ở máy ngay cả khi offline — xoá PIN, ghi cờ phải đăng nhập lại, về màn đăng nhập.
+ * Có mạng thì gỡ thông báo và xoá phiên ở server (lỗi thì bỏ qua). Hàng đợi khoản chưa gửi vẫn giữ.
+ */
+export async function forgetPin(): Promise<void> {
+  forgetPinOnDevice(deviceStorage());
+  if (navigator.onLine) {
+    void (async () => {
+      await unbindPush().catch(() => undefined);
+      await api.del("/v1/session").catch(() => undefined);
+    })();
+  }
+  await signedOut();
 }
 
 // ── Khởi động ─────────────────────────────────────────────────────
 export function start() {
   setUnauthorizedHandler(toLogin);
+  const hide = loadAmountsHidden(deviceStorage());
+  setAmountsHidden(hide);
+  setState({ hideAmounts: hide });
   addEventListener("hashchange", () => {
     const r = parseHash(location.hash);
     setState({ tab: r.tab, ...(r.walletsTab ? { walletsTab: r.walletsTab } : {}), ...(r.netWorthSection ? { netWorthSection: r.netWorthSection } : {}) });
@@ -431,8 +494,21 @@ export function start() {
     void flushAndRefresh().then(() => refresh());
   });
   addEventListener("offline", () => setState({ online: false }));
+  let hiddenAt: number | null = null;
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState !== "visible" || state.phase !== "app") return;
+    const pinSet = state.phase === "app" && readPin(deviceStorage(), state.member?.id ?? null) !== null;
+    // Có PIN: vào nền thì che ngay (ảnh trình chuyển app không thấy số — cố gắng tốt nhất); quay lại sau ≥ 60 giây thì khóa.
+    if (document.visibilityState === "hidden") {
+      if (!pinSet) return;
+      hiddenAt = Date.now();
+      document.documentElement.setAttribute("data-cover", "");
+      return;
+    }
+    if (pinSet && shouldLock(hiddenAt, Date.now())) setState({ locked: true });
+    hiddenAt = null;
+    // Bỏ che sau khi đã đặt khóa: Preact vẽ lại trước lần vẽ kế tiếp của trình duyệt, số không lộ ra một nhịp.
+    document.documentElement.removeAttribute("data-cover");
+    if (state.phase !== "app") return;
     // Gửi hàng đợi XONG rồi mới tải số: chạy song song thì số mới về (đã gồm khoản vừa gửi) có thể bị trừ
     // thêm lần nữa bởi bản hàng đợi cũ, "còn để chi" tụt ảo trong chốc lát.
     void flushAndRefresh().then(() => (Date.now() - lastRefresh > 30_000 ? refresh() : undefined));

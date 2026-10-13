@@ -50,6 +50,7 @@ import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
 import { Card, PageHeader, Seg, Skeleton } from "../ui/parts";
 import { signOutEverywhereNote, useLogout, useTheme, useWide } from "../ui/shell";
+import { PinRow } from "./pin-sheet";
 import {
   AccountSheet,
   ConfigSheet,
@@ -193,6 +194,8 @@ export function Settings() {
         )}
         {/* Bản lỗi không tải được cài đặt vẫn cập nhật được. */}
         {s.error && <AppUpdate />}
+        {/* Máy này (giao diện, mã PIN, đăng xuất) chỉ lưu ở máy: hiện cả khi cài đặt chưa tải được hoặc offline. */}
+        {!wide && <DeviceCard />}
       </>
     );
   }
@@ -353,7 +356,7 @@ function JumpBar({ onAdvanced }: { onAdvanced: () => void }) {
   );
 }
 
-/** Máy này (điện thoại): giao diện sáng/tối, đăng xuất, đăng xuất mọi máy — trước nằm cuối Hôm nay. Máy tính đã có ở thanh bên. */
+/** Máy này (điện thoại): giao diện sáng/tối, mã PIN, đăng xuất, đăng xuất mọi máy — trước nằm cuối Hôm nay. Máy tính đã có ở thanh bên. */
 function DeviceCard() {
   const { member } = useApp();
   const [theme, changeTheme] = useTheme();
@@ -374,6 +377,7 @@ function DeviceCard() {
           ]}
         />
       </div>
+      <PinRow />
       <div class="field">
         <span class="k">Hướng dẫn</span>
         <button type="button" class="btn" onClick={() => go("guide")}>

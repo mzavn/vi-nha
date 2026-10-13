@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "preact/hooks";
 import { DRIFT_LABEL, driftOf } from "../lib/drift";
-import { formatVnd, groupDigits } from "../lib/money";
+import { formatVnd, maskAmounts, moneyDigits } from "../lib/money";
 import { dayHeading, dayKey, heroLabel, shortDate, timeHM, weekLabel, weekMetaText } from "../lib/period";
 import { txLabel, txSign } from "../lib/transactions";
 import { loadPageSize, PAGE_SIZES, savePageSize, splitPage, txPagePath } from "../lib/tx-paging";
@@ -124,7 +124,7 @@ function Hero({ snap }: { snap: Snapshot }) {
                       <span class="sub-line">
                         {w?.weekTarget != null ? (
                           <>
-                            tuần đã chi {groupDigits(w.spentWeek ?? 0)} / {formatVnd(w.weekTarget)}
+                            tuần đã chi {moneyDigits(w.spentWeek ?? 0)} / {formatVnd(w.weekTarget)}
                           </>
                         ) : w?.balance != null ? (
                           w.balance > 0 ? (
@@ -506,11 +506,11 @@ function TxLine({ r, boot }: { r: TxRow; boot: Bootstrap | null }) {
             <span class="chip">đã xoá</span>
           </>
         )}
-        {(r.note || context) && <div class="sub-line">{[r.note, context].filter(Boolean).join(" · ")}</div>}
+        {(r.note || context) && <div class="sub-line">{[r.note && maskAmounts(r.note), context].filter(Boolean).join(" · ")}</div>}
       </td>
       <td class={`num${sign === "+" ? " dk-in" : ""}${voided ? " dk-void" : ""}`}>
         {sign}
-        {groupDigits(r.amount)}
+        {moneyDigits(r.amount)}
       </td>
     </tr>
   );
