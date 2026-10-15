@@ -300,7 +300,7 @@ export function Settings() {
       {edit?.kind === "sepay-secret" && (
         <SecretSheet secretKey={edit.key} secret={edit.connection[edit.key]} connection={edit.connection} onClose={() => setEdit(null)} onSaved={saved} />
       )}
-      {edit?.kind === "config" && <ConfigSheet config={s.data.config} onClose={() => setEdit(null)} onSaved={saved} />}
+      {edit?.kind === "config" && <ConfigSheet config={s.data.config} wallets={s.data.wallets} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "fi-config" && <FiConfigSheet config={s.data.config} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "notify" && s.data.notifySchedule && <NotifyScheduleSheet schedule={s.data.notifySchedule} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "stream" && <StreamSheet d={s.data} item={edit.item} onClose={() => setEdit(null)} onSaved={saved} />}
@@ -1485,6 +1485,18 @@ function Params({ d, ro, open }: SectionProps) {
         right={<span class="srow-v">{c.safety_fund_months} tháng</span>}
         onClick={edit}
       />
+      {/* Bản cài đặt lưu offline từ trước 0034 thiếu khoá chốt tháng thì chưa hiện hai hàng này. */}
+      {c.month_close_wealth_pct !== undefined && (
+        <>
+          <Row
+            title="Ví Thưởng"
+            sub="Nhận phần dư khi chốt tháng, cùng Tích sản; chưa đặt thì cả phần dư vào Tích sản"
+            right={<span class="srow-v">{c.month_close_reward_wallet ? (d.wallets.find((w) => w.id === c.month_close_reward_wallet)?.name ?? c.month_close_reward_wallet) : "chưa đặt"}</span>}
+            onClick={edit}
+          />
+          <Row title="Chốt tháng: phần dư vào Tích sản" sub="Mặc định của thanh kéo khi chốt tháng" right={<span class="srow-v">{c.month_close_wealth_pct}%</span>} onClick={edit} />
+        </>
+      )}
       {/* Bản cài đặt lưu offline từ trước 0031 thiếu các khoá fi_* thì chưa hiện hàng này. */}
       {c.fi_safety_months !== undefined && (
         <Row title="Tài sản & tự do" sub={fiConfigSummary(c)} right={<Icon name="chevron-right" size={16} />} onClick={ro ? undefined : () => open({ kind: "fi-config" })} />

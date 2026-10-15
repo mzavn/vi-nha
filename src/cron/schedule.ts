@@ -6,7 +6,7 @@
 import { clockMinutes, NOTIFY_CONFIG_KEYS, parseNotifySchedule, type NotifySchedule } from "../domain/notify-schedule";
 import { dayKey, isoWeekday, minuteOfDay, weekKey } from "../domain/period";
 import type { Env } from "../env";
-import { closePreviousMonthOnDayOne, daily } from "./daily";
+import { daily } from "./daily";
 import { summarisedSunday, weekly } from "./weekly";
 
 export interface NotifyState {
@@ -42,7 +42,7 @@ async function claimRun(db: D1Database, kind: "daily_run" | "weekly_run", key: s
 
 /**
  * Chạy việc sau khi đã giành mốc. Việc ném lỗi (DB hỏng giữa chừng) thì nhả mốc để lượt cron sau làm lại —
- * an toàn vì chốt tháng idempotent và notifyMembers không gửi lại người đã nhận.
+ * an toàn vì tin sáng không ghi gì vào sổ và notifyMembers không gửi lại người đã nhận.
  */
 async function runClaimed(db: D1Database, kind: "daily_run" | "weekly_run", key: string, job: () => Promise<unknown>): Promise<void> {
   if (!(await claimRun(db, kind, key))) return;
@@ -60,9 +60,9 @@ export async function runScheduledDigests(env: Env, now: Date, state: NotifyStat
   const today = dayKey(now);
   const jobs: Promise<void>[] = [];
 
-  // Tin sáng. Tắt tin sáng thì ngày 1 vẫn chốt tháng (việc của sổ) vào đúng giờ đó, chỉ không gửi gì.
-  if (state.lastDailyRun !== today && minute >= clockMinutes(schedule.dailyTime)! && (schedule.dailyEnabled || today.endsWith("-01"))) {
-    jobs.push(runClaimed(env.DB, "daily_run", today, () => (schedule.dailyEnabled ? daily(env, now) : closePreviousMonthOnDayOne(env.DB, now))));
+  // Tin sáng. Tắt tin sáng thì không chạy gì, kể cả ngày 1 — chốt tháng do người bấm trên app (ADR-111).
+  if (schedule.dailyEnabled && state.lastDailyRun !== today && minute >= clockMinutes(schedule.dailyTime)!) {
+    jobs.push(runClaimed(env.DB, "daily_run", today, () => daily(env, now)));
   }
 
   // Tổng kết tuần: đúng thứ đã chọn, từ giờ đã chọn; mốc theo tuần được tổng kết nên đổi thứ trong tuần không gửi lại.

@@ -186,7 +186,13 @@ v1.post("/transactions/:id/replace", async (c) => {
 });
 
 // ── Chia tiền ───────────────────────────────────────────────────────
-// `amounts`: Tự chia (UC-203) — số tay cho từng ví thay cho luật nạp.
+// `amounts`: Tự chia (UC-203) — số tay cho từng ví thay cho luật nạp. `wealth_amount`: Tích sản người chọn (ADR-112).
+const wealthAmount = (v: unknown): number | undefined => {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 0) bad("Số Tích sản không hợp lệ: wealth_amount phải là số nguyên không âm.", "invalid_amounts");
+  return v as number;
+};
+
 v1.post("/allocate/preview", async (c) => {
   const b = await body(c);
   return ok(
@@ -200,15 +206,54 @@ v1.post("/allocate/preview", async (c) => {
         accountId: str(b.account_id, "account_id") ?? null,
         incomeStreamId: str(b.income_stream_id, "income_stream_id") ?? null,
       },
-      b.amounts === undefined ? undefined : parseManualAmounts(b.amounts),
+      { amounts: b.amounts === undefined ? undefined : parseManualAmounts(b.amounts), wealthAmount: wealthAmount(b.wealth_amount) },
     ),
   );
 });
 
 v1.post("/allocate", async (c) => {
   const b = await body(c);
-  const amounts = b.amounts === undefined ? undefined : parseManualAmounts(b.amounts);
-  return ok(c, await ledger.allocateIncome(c.env.DB, int(b.income_tx_id, "income_tx_id"), amounts), 201);
+  // Lý do Tích sản 0: cắt khoảng trắng hai đầu, tối đa 500 ký tự; rỗng = không có.
+  const note = str(b.wealth_note, "wealth_note")?.trim();
+  if (note && note.length > 500) bad("wealth_note dài quá 500 ký tự.");
+  // Ký tự điều khiển (trừ xuống dòng) không phải chữ người gõ — chặn để lý do hiển thị / xuất ra không bị phá.
+  if (note && /[\u0000-\u0009\u000B-\u001F\u007F]/.test(note)) bad("wealth_note có ký tự không hợp lệ.");
+  const opts = {
+    amounts: b.amounts === undefined ? undefined : parseManualAmounts(b.amounts),
+    wealthAmount: wealthAmount(b.wealth_amount),
+    wealthNote: note || null,
+  };
+  const id = int(b.income_tx_id, "income_tx_id");
+  const result = await ledger.allocateIncome(c.env.DB, id, opts);
+  await recordChange(c, "income.allocate", `tx:${id}`, {
+    wealth_amount: opts.wealthAmount ?? null,
+    manual: opts.amounts !== undefined,
+    no_wealth: result.wealth?.amount === 0,
+  });
+  return ok(c, result, 201);
+});
+
+// ── Chốt tháng (allocation UC-207) ──────────────────────────────────
+// Tháng luôn là tháng liền trước theo giờ VN. `wealth_pct`: % phần dư vào Tích sản; không gửi = mặc định.
+v1.get("/month-close", async (c) => {
+  const q = c.req.query("wealth_pct");
+  if (q && !/^\d{1,3}$/.test(q)) bad("wealth_pct phải là số nguyên từ 0 đến 100.");
+  return ok(c, await ledger.previewMonthClose(c.env.DB, now(), { wealthPct: q ? Number(q) : undefined }));
+});
+
+v1.post("/month-close", async (c) => {
+  const b = await body(c);
+  const month = typeof b.month === "string" ? b.month : "";
+  const wealthPct = b.wealth_pct === undefined || b.wealth_pct === null ? undefined : int(b.wealth_pct, "wealth_pct");
+  const result = await ledger.closeMonth(c.env.DB, month, { wealthPct, memberId: c.get("memberId") }, now());
+  await recordChange(c, "month.close", `month:${result.month}`, {
+    wealth_pct: result.wealthPct,
+    reward_wallet_id: result.rewardWalletId,
+    to_wealth: result.toWealth,
+    to_reward: result.toReward,
+    covered: result.covered,
+  });
+  return ok(c, result, 201);
 });
 
 // ── Lệnh chuyển tiền ────────────────────────────────────────────────

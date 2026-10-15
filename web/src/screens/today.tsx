@@ -14,6 +14,7 @@ import { go, openTx, refresh, syncNow, useApp, viewSnapshot } from "../state/sto
 import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
 import { Banner, Card, FirstLoadFailed, PageHeader, Skeleton, TierRow } from "../ui/parts";
+import { MonthCloseCard } from "./month-close";
 import { OtherEntrySheet } from "./other-entry-sheet";
 
 const pct = (part: number, whole: number) => (whole > 0 ? Math.round((1000 * part) / whole) / 10 : 0);
@@ -37,7 +38,7 @@ export function Today() {
               <Icon name="settings" size={20} />
             </button>
             <button type="button" class="btn btn-primary" onClick={() => setIncome(true)}>
-              Chia tiền
+              Tiền vào
             </button>
           </div>
         }
@@ -167,6 +168,8 @@ function TodayBody({ snap }: { snap: Snapshot }) {
           {a.transferOrdersOverdue > 0 ? `, ${a.transferOrdersOverdue} quá 3 ngày.` : "."}
         </Banner>
       )}
+
+      <MonthCloseCard />
 
       <SpendableCashCard snap={snap} />
 

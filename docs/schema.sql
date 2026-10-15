@@ -1,5 +1,5 @@
 -- ============================================================
---  PROFIT FIRST — HỘ GIA ĐÌNH · SCHEMA (D1 / SQLite)  v1.33
+--  PROFIT FIRST — HỘ GIA ĐÌNH · SCHEMA (D1 / SQLite)  v1.34
 --  v1.2 (20/9/2026): danh mục · tiền mặt · đa TK · thuế taxable ·
 --  lệnh chuyển tiền · thông báo
 --  v1.3 (21/9/2026): ngân sách theo kỳ chuyển sang query có tham số ·
@@ -61,6 +61,9 @@
 --                     cáo; không đổi ví, số dư, chia tiền) (BR-15)
 --  v1.33 (8/10/2026): Mốc tự do — income_plans · income_plan_lines (kế hoạch thu nhập năm, mỗi lần lưu một bản mới,
 --                     chỉ ghi thêm) (BR-15)
+--  v1.34 (15/10/2026): chốt tháng do người bấm — month_closes (mỗi tháng đã chốt một dòng: người chốt, % phần dư vào
+--                     Tích sản; chặn chốt hai lần, điền sẵn từ lô S… cũ) · allocation_runs.wealth_note (lý do lần chia
+--                     Tích sản 0) (ADR-111, ADR-112)
 -- ============================================================
 --  NGUYÊN TẮC ENCODE:
 --   1. Hai lớp: bank_logs (thô, BẤT BIẾN) vs transactions (đã diễn giải)
@@ -291,7 +294,9 @@ CREATE INDEX idx_tx_interest_debt ON transactions(interest_debt_id, month_key) W
 CREATE TABLE allocation_runs (
   income_tx_id INTEGER PRIMARY KEY REFERENCES transactions(id),
   batch_id     TEXT NOT NULL UNIQUE,
-  at           TEXT NOT NULL DEFAULT (datetime('now'))
+  at           TEXT NOT NULL DEFAULT (datetime('now')),
+  -- Lý do lần chia không trả cho mình (Tích sản 0, ADR-112); NULL khi có Tích sản.
+  wealth_note  TEXT CHECK (wealth_note IS NULL OR length(wealth_note) BETWEEN 1 AND 500)
 );
 
 -- 8. QUY TẮC TỰ GÁN — chỉ được đoán spend/transfer -------------
@@ -934,5 +939,13 @@ BEGIN
   SELECT RAISE(ABORT, 'income_plan_append_only');
 END;
 
+-- CHỐT THÁNG (ADR-111) — mỗi tháng đã chốt một dòng; INSERT đầu batch chốt nên trùng khoá chính = đã chốt.
+CREATE TABLE month_closes (
+  month        TEXT PRIMARY KEY CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[01][0-9]'),
+  closed_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  by_member_id TEXT REFERENCES members(id),
+  wealth_pct   INTEGER NOT NULL CHECK (wealth_pct BETWEEN 0 AND 100)
+);
+
 -- Phiên bản schema — /v1/health đọc từ đây
-INSERT INTO config (k,v) VALUES ('schema_version','1.33');
+INSERT INTO config (k,v) VALUES ('schema_version','1.34');

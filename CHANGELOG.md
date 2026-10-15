@@ -6,6 +6,26 @@ bản cài cũ vẫn lên được bình thường (kể cả nâng database t�
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
 trước (xem README › Cập nhật bản mới).
 
+## v1.3.0 — 16/10/2026
+
+Có nâng cấp database: `0034` (ghi lại tháng đã chốt và lý do khi không trả cho mình — không đổi số liệu cũ).
+
+**Mới**
+
+- **Chốt tháng có xem trước:** ví nào chi lố được bù trước bằng phần dư của ví khác. Phần còn lại chia giữa Tích sản và
+  **Ví Thưởng** (mặc định 50/50, kéo được; tháng không cần thưởng thì để 100% Tích sản). Chọn Ví Thưởng ở Cài đặt › Tham số.
+- **Có Tích sản / Không Tích sản khi chia một khoản thu:** chọn Có thì kéo thanh từ 1% đến 100% (mặc định 10%) hoặc gõ số
+  tiền. Chọn Không thì phải ghi lý do, xem lại được ở tab Tích sản.
+
+**Sửa**
+
+- Nút ghi tiền vào dễ tìm hơn: màn Nhập và Hôm nay giờ có nút **Tiền vào** (trước là "Loại khác" và "Chia tiền").
+
+**Thay đổi**
+
+- Ngày 1 app **không tự quét** phần dư tháng trước sang Tích sản nữa: tin sáng nhắc, bạn mở app để chốt. Chưa chốt thì
+  phần dư vẫn nằm trong số còn để chi.
+
 ## v1.2.0 — 13/10/2026
 
 Không cần nâng cấp database.

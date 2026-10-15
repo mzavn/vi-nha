@@ -75,32 +75,55 @@ describe("múi giờ VN", () => {
 });
 
 describe("ngày 1: chốt tháng trước", () => {
-  it("quét đúng một lần dù chạy cron hai lần; ví cá nhân không bị đụng", async () => {
+  /** Bút toán điều chỉnh làm ví tăng (+) hoặc giảm (−) trong tháng 9. */
+  function flow(walletId: string, amount: number) {
+    const at = "2026-09-15T05:00:00.000Z";
+    raw
+      .prepare("INSERT INTO transactions (at, amount, meaning, wallet_id, counter_wallet_id, week_key, month_key, source) VALUES (?, ?, 'adjust', ?, ?, ?, ?, 'system')")
+      .run(at, Math.abs(amount), amount > 0 ? walletId : null, amount > 0 ? null : walletId, weekKey(at), monthKey(at));
+  }
+  const sCount = () => raw.prepare("SELECT COUNT(*) n FROM transactions WHERE batch_id LIKE 'S%'").get();
+
+  it("UC-207 AC-2: ngày 1 cron không tạo giao dịch S…; tin sáng có câu mời \"Tháng 9: dư 4.140.000 ₫ sau khi bù chi lố — mở app để chốt\"", async () => {
     await salary(40_000_000, "2026-09-10T09:00:00+07:00");
-    await spend(3_000_000, "groceries", "2026-09-12T12:00:00+07:00"); // Ăn uống âm 500k, không bị quét
+    await spend(3_000_000, "groceries", "2026-09-12T12:00:00+07:00"); // Ăn uống âm 500k
 
     const now = new Date("2026-10-01T00:00:00Z"); // 07:00 VN 1/10
     await daily(env, now);
 
-    expect(raw.prepare("SELECT COUNT(*) n FROM transactions WHERE batch_id = 'S202609'").get()).toEqual({ n: 2 });
-    const tichSan = raw.prepare("SELECT balance FROM v_wallet_balance WHERE wallet_id = 'wealth-building'").get() as { balance: number };
-    expect(tichSan.balance).toBe(12_000_000 + 1_200_000 + 3_440_000); // 30% + quét transport + nice-to-have
-    const choiAnh = raw.prepare("SELECT balance FROM v_wallet_balance WHERE wallet_id = 'fun-husband'").get() as { balance: number };
-    expect(choiAnh.balance).toBe(3_280_000); // ví cá nhân giữ nguyên, không bị quét
-
+    expect(sCount()).toEqual({ n: 0 });
+    expect(raw.prepare("SELECT COUNT(*) n FROM month_closes").get()).toEqual({ n: 0 });
     const [{ text }] = sentMessages();
-    expect(text).toContain("🧹 Đã quét 4.640.000 ₫ dư tháng 9 sang Tích sản");
-    expect(text).toContain("🔁 Chuyển 4.640.000 ₫ từ VCB (chính) sang TCB (Tích sản)");
-
-    await daily(env, now); // chạy lại cùng ngày
-    expect(raw.prepare("SELECT COUNT(*) n FROM transactions WHERE batch_id = 'S202609'").get()).toEqual({ n: 2 }); // không quét thêm
-    expect(fetchMock).toHaveBeenCalledTimes(2); // không gửi thêm
+    expect(text).toContain("📌 Tháng 9: dư 4.140.000 ₫ sau khi bù chi lố — mở app để chốt");
+    expect(text).not.toContain("🧹");
   });
 
-  it("không có gì để quét thì không có dòng chốt tháng", async () => {
+  it("UC-207 AC-2: chỉ có bù, không còn dư → \"Tháng 9: chi lố được bù …, không còn dư — mở app để chốt\"", async () => {
+    flow("transport", 400_000);
+    flow("food", -1_000_000);
     await daily(env, new Date("2026-10-01T00:00:00Z"));
     const [{ text }] = sentMessages();
-    expect(text).not.toContain("🧹");
+    expect(text).toContain("📌 Tháng 9: chi lố được bù 400.000 ₫, không còn dư — mở app để chốt");
+    expect(sCount()).toEqual({ n: 0 });
+  });
+
+  it("UC-207 AC-3: không ví dương, không ví âm → không có dòng mời chốt", async () => {
+    await daily(env, new Date("2026-10-01T00:00:00Z"));
+    const [{ text }] = sentMessages();
+    expect(text).not.toContain("📌");
+  });
+
+  it("UC-207: tháng đã chốt trước giờ tin sáng → không mời", async () => {
+    flow("food", 300_000);
+    raw.prepare("INSERT INTO month_closes (month, wealth_pct) VALUES ('2026-09', 100)").run();
+    await daily(env, new Date("2026-10-01T00:00:00Z"));
+    const [{ text }] = sentMessages();
+    expect(text).not.toContain("📌");
+    // Ngày khác ngày 1 thì không mời dù chưa chốt.
+    raw.prepare("DELETE FROM month_closes").run();
+    fetchMock.mockClear();
+    await daily(env, new Date("2026-10-02T00:00:00Z"));
+    expect(sentMessages()[0]!.text).not.toContain("📌");
   });
 
   it("nhắc chốt tháng với người thuê đang ở chưa chốt tháng trước; đã chốt hoặc đã ngừng thì không nhắc", async () => {

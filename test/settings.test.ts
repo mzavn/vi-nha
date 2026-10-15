@@ -301,6 +301,57 @@ describe("thành viên, mã chuyển khoản, tham số", () => {
     expect((await call("PUT", "/v1/settings/config", { emergency_months: 12 })).json.data).toMatchObject({ salary_min_amount: 0, safety_fund_months: 3 });
     expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ salary_min_amount: 0, safety_fund_months: 3 });
   });
+
+  it("UC-507: PUT month_close_reward_wallet — ví tích dồn phe must đang dùng → lưu; phong bì chung / Tích sản / Thuế / ví đã tắt / id không có → 400 invalid_input; null → xoá dòng", async () => {
+    const saved = await call("PUT", "/v1/settings/config", { month_close_reward_wallet: "hometown" });
+    expect(saved.status).toBe(200);
+    expect(saved.json.data).toMatchObject({ month_close_reward_wallet: "hometown" });
+    // Ví chung phe nice (tích dồn) cũng được.
+    expect((await call("PUT", "/v1/settings/config", { month_close_reward_wallet: "travel" })).status).toBe(200);
+    raw.prepare("UPDATE wallets SET active = 0 WHERE id = 'hometown'").run();
+    for (const id of ["food", "nice-to-have", "wealth-building", "tax", "income", "hometown", "khong-co", 5]) {
+      const res = await call("PUT", "/v1/settings/config", { month_close_reward_wallet: id });
+      expect(res.status, String(id)).toBe(400);
+      expect(res.json.error, String(id)).toMatchObject({ code: "invalid_input", field: "month_close_reward_wallet" });
+    }
+    expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ month_close_reward_wallet: "travel" });
+    // Ví đã chọn rồi bị tắt: Cài đặt vẫn thấy id đã lưu (chốt tháng mới coi như chưa đặt).
+    raw.prepare("UPDATE wallets SET active = 0 WHERE id = 'travel'").run();
+    expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ month_close_reward_wallet: "travel" });
+    expect((await call("PUT", "/v1/settings/config", { month_close_reward_wallet: null })).json.data).toMatchObject({ month_close_reward_wallet: null });
+    expect(raw.prepare("SELECT COUNT(*) n FROM config WHERE k = 'month_close_reward_wallet'").get()).toEqual({ n: 0 });
+    raw.prepare("UPDATE wallets SET active = 1 WHERE id = 'travel'").run();
+    await call("PUT", "/v1/settings/config", { month_close_reward_wallet: "travel" });
+    expect((await call("PUT", "/v1/settings/config", { month_close_reward_wallet: "" })).json.data).toMatchObject({ month_close_reward_wallet: null });
+  });
+
+  it("UC-507: Ví Thưởng không được là ví cá nhân hay ví riêng tư → 400 invalid_input; nhật ký ghi giá trị tham số chốt tháng", async () => {
+    raw.prepare("INSERT INTO wallets (id, name, tier, kind, scope, private, sort) VALUES ('secret-fund', 'Quỹ riêng', 'nice', 'accrual', 'shared', 1, 70)").run();
+    for (const id of ["fun-husband", "fun-wife", "secret-fund"]) {
+      const res = await call("PUT", "/v1/settings/config", { month_close_reward_wallet: id });
+      expect(res.status, id).toBe(400);
+      expect(res.json.error, id).toMatchObject({ code: "invalid_input", field: "month_close_reward_wallet" });
+    }
+    await call("PUT", "/v1/settings/config", { month_close_reward_wallet: "travel", month_close_wealth_pct: 40 });
+    const row = raw.prepare("SELECT detail FROM audit_log WHERE action = 'config.update' ORDER BY id DESC LIMIT 1").get();
+    expect(JSON.parse(String(row?.detail))).toEqual({
+      fields: ["month_close_reward_wallet", "month_close_wealth_pct"],
+      month_close_reward_wallet: "travel",
+      month_close_wealth_pct: 40,
+    });
+  });
+
+  it("UC-507: month_close_wealth_pct số nguyên 0–100, sai → 400; chưa đặt thì GET /v1/settings trả 50 và null", async () => {
+    expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ month_close_wealth_pct: 50, month_close_reward_wallet: null });
+    expect((await call("PUT", "/v1/settings/config", { month_close_wealth_pct: 0 })).json.data).toMatchObject({ month_close_wealth_pct: 0 });
+    expect((await call("PUT", "/v1/settings/config", { month_close_wealth_pct: 35 })).json.data).toMatchObject({ month_close_wealth_pct: 35 });
+    for (const v of [101, -1, 2.5, "50"]) {
+      const res = await call("PUT", "/v1/settings/config", { month_close_wealth_pct: v });
+      expect(res.status, String(v)).toBe(400);
+      expect(res.json.error, String(v)).toMatchObject({ code: "invalid_input", field: "month_close_wealth_pct" });
+    }
+    expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ month_close_wealth_pct: 35 });
+  });
 });
 
 describe("giờ nhắc (cả nhà)", () => {

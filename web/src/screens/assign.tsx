@@ -9,7 +9,6 @@ import { defaultAccountFor, defaultWalletFor, spendableWallets, walletOfMember }
 import { payableDebts } from "../lib/debts";
 import { assignDebtRows, hasInterest } from "../lib/interest";
 import { bookRefLabel } from "../lib/memo-books";
-import { checkSplit, splitPayload, type ManualSplit } from "../lib/manual-split";
 import { formatVnd, moneyDigits } from "../lib/money";
 import { localWalletStatus } from "../lib/pending";
 import { dayKey, shortDate, timeHM } from "../lib/period";
@@ -24,7 +23,7 @@ import { AccountSelect, AmountInput, CategorySelect, WalletSelect } from "../ui/
 import { Icon } from "../ui/icons";
 import { Banner, Card, Empty, NeedsNetwork, PageHeader, Seg, Sheet, Skeleton } from "../ui/parts";
 import { useWide } from "../ui/shell";
-import { AllocationPreview, ASSET_KINDS } from "./other-entry-sheet";
+import { AllocationPreview, ASSET_KINDS, useAllocationPreview } from "./other-entry-sheet";
 import { LinkSourcePicker, ReceivablePicker } from "./ref-pickers";
 
 export function Assign() {
@@ -179,9 +178,6 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmIgnore, setConfirmIgnore] = useState(false);
-  const [plan, setPlan] = useState<AllocationPlan | null>(null);
-  /** Tự chia (UC-202): số tay cho khoản thu đang chia thử — dòng thu nhập đầu tiên. */
-  const [split, setSplit] = useState<ManualSplit | null>(null);
   const options = isIn ? ASSIGN_CHOICES.in.filter((o) => o.value !== "tenant" || tenants.length > 0 || rows.some((r) => r.tenantMode)) : ASSIGN_CHOICES.out;
   const check = validateSplits(log.amount, rows);
   const noTenant = rows.some((r) => r.tenantMode && !r.tenant_id);
@@ -193,25 +189,13 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
   const income = rows.find((r) => r.meaning === "income");
   // Người thuê trả mà không chọn nguồn: server tự gán nguồn cho thuê — chia thử cũng theo nguồn đó.
   const previewStream = income?.income_stream_id || (income?.tenant_id ? rental?.incomeStreamId : null) || null;
-  const splitBlocked = !!income && split !== null && !checkSplit(split, boot.wallets, income.amount).ok;
-
-  useEffect(() => {
-    setPlan(null);
-    if (!income || !income.amount || !online) return;
-    const t = setTimeout(() => {
-      api
-        .post<AllocationPlan>("/v1/allocate/preview", {
-          amount: income.amount,
-          taxable: income.taxable === true,
-          at: log.at,
-          account_id: log.account_id,
-          ...(previewStream ? { income_stream_id: previewStream } : {}),
-        })
-        .then(setPlan)
-        .catch(() => setPlan(null));
-    }, 350);
-    return () => clearTimeout(t);
-  }, [income?.amount, income?.taxable, previewStream, online]);
+  // Bảng chia thử (Có / Không Tích sản, Tự chia) là của dòng thu nhập đầu tiên.
+  const preview = useAllocationPreview(
+    income
+      ? { amount: income.amount, taxable: income.taxable === true, at: log.at, account_id: log.account_id, ...(previewStream ? { income_stream_id: previewStream } : {}) }
+      : null,
+    online,
+  );
 
   const update = (key: number, patch: Partial<Row>) => setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
 
@@ -273,8 +257,8 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
       const incomeTxs = res.transactions.filter((t) => t.meaning === "income");
       for (const tx of incomeTxs) {
         try {
-          // Bảng chia thử (và Tự chia) là của dòng thu nhập đầu tiên.
-          const body = { income_tx_id: tx.id, ...(split && tx === incomeTxs[0] ? { amounts: splitPayload(split) } : {}) };
+          // Lựa chọn Tích sản và Tự chia chỉ áp cho khoản thu đầu tiên; các khoản sau chia theo luật.
+          const body = { income_tx_id: tx.id, ...(tx === incomeTxs[0] ? preview.allocateBody() : {}) };
           orders += (await api.post<AllocationPlan>("/v1/allocate", body)).transferOrders.length;
         } catch (err) {
           if (!(err instanceof ApiError && err.code === "already_allocated")) throw new Error(`Đã gán nhưng chưa chia khoản thu: ${errorText(err)}`);
@@ -592,7 +576,12 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
         </div>
       )}
 
-      {plan && income && <AllocationPreview plan={plan} boot={boot} amount={income.amount} split={split} onSplit={setSplit} fromAccountId={log.account_id} />}
+      {income && <AllocationPreview preview={preview} boot={boot} fromAccountId={log.account_id} />}
+      {income && preview.error && (
+        <p class="err" role="alert" style={{ padding: "8px 16px 0", margin: 0 }}>
+          {preview.error}
+        </p>
+      )}
 
       <div class="pad">
         {error && (
@@ -603,7 +592,7 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
         <button
           type="button"
           class="btn btn-primary btn-wide"
-          disabled={!online || busy || !check.ok || blocked || (!!income && !plan) || splitBlocked}
+          disabled={!online || busy || !check.ok || blocked || (!!income && !preview.ready)}
           onClick={() => void submit()}
         >
           {busy ? "Đang gán…" : income ? "Gán, chia và ghi sổ" : "Gán"}

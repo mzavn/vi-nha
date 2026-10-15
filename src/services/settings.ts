@@ -3,9 +3,10 @@
 // khi một tài khoản thành tài khoản Tích sản với số dư có sẵn (ADR-91, `wealthBuildingOpeningEntry` của ledger).
 
 import { bankByCode } from "../domain/banks";
+import { DEFAULT_MONTH_CLOSE_WEALTH_PCT, isRewardWalletCandidate } from "../domain/close";
 import { clockMinutes, NOTIFY_CONFIG_KEYS, parseNotifySchedule, type NotifySchedule } from "../domain/notify-schedule";
 import { dayKey } from "../domain/period";
-import { DomainError } from "../domain/types";
+import { DomainError, type WalletRef } from "../domain/types";
 import type { Env } from "../env";
 import { escapeHtml, sendTelegram } from "../notify/telegram";
 import { syncSepay } from "../cron/backfill";
@@ -722,11 +723,44 @@ export async function readFiConfig(db: D1Database): Promise<FiConfig> {
 }
 
 async function readConfig(db: D1Database) {
+  const reward = await db.prepare("SELECT v FROM config WHERE k = 'month_close_reward_wallet'").first<{ v: string }>();
   return {
     salary_min_amount: await configNumber(db, "salary_min_amount", 1_000_000),
     safety_fund_months: await configNumber(db, "safety_fund_months", 6),
     ...(await readFiConfig(db)),
+    month_close_wealth_pct: await configNumber(db, "month_close_wealth_pct", DEFAULT_MONTH_CLOSE_WEALTH_PCT),
+    // Giá trị đã lưu, không lọc ví đã tắt — để Cài đặt vẫn thấy ví đã chọn; chốt tháng tự coi ví không hợp lệ là chưa đặt.
+    month_close_reward_wallet: reward?.v || null,
   };
+}
+
+/** Hai tham số chốt tháng (UC-207): % phần dư vào Tích sản, Ví Thưởng (null / "" → bỏ). Sai → 400 kèm tên ô. */
+async function monthCloseConfigWrites(db: D1Database, b: Input): Promise<D1PreparedStatement[]> {
+  const upsert = (k: string, v: string) => db.prepare("INSERT INTO config (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v").bind(k, v);
+  const out: D1PreparedStatement[] = [];
+  if (has(b, "month_close_wealth_pct")) {
+    const v = b.month_close_wealth_pct;
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > 100) {
+      fail("invalid_input", "Phần dư vào Tích sản là số nguyên từ 0 đến 100.", 400, "month_close_wealth_pct");
+    }
+    out.push(upsert("month_close_wealth_pct", String(v)));
+  }
+  if (has(b, "month_close_reward_wallet")) {
+    const v = b.month_close_reward_wallet;
+    if (v === null || v === "") {
+      out.push(db.prepare("DELETE FROM config WHERE k = 'month_close_reward_wallet'"));
+    } else {
+      const wallet =
+        typeof v === "string"
+          ? await db.prepare("SELECT tier, kind, scope, private FROM wallets WHERE id = ? AND active = 1").bind(v).first<Pick<WalletRef, "tier" | "kind" | "scope"> & { private: number }>()
+          : null;
+      if (!wallet || !isRewardWalletCandidate({ ...wallet, private: wallet.private === 1 })) {
+        fail("invalid_input", "Ví Thưởng phải là ví chung đang dùng (không riêng tư), phe Must / Hưởng thụ, không phải phong bì.", 400, "month_close_reward_wallet");
+      }
+      out.push(upsert("month_close_reward_wallet", String(v)));
+    }
+  }
+  return out;
 }
 
 /** Kiểm các khoá fi_* có trong body (sai → 400 invalid_input kèm tên ô), trả lệnh ghi; khoá tuỳ chọn gửi null / "" → xoá. */
@@ -777,6 +811,7 @@ export async function updateConfig(db: D1Database, b: Input, now: Date = new Dat
     ...(salary !== null ? [upsert("salary_min_amount", salary)] : []),
     ...(months !== null ? [upsert("safety_fund_months", months)] : []),
     ...(await fiConfigWrites(db, b, now)),
+    ...(await monthCloseConfigWrites(db, b)),
   ];
   if (statements.length) await db.batch(statements);
   return readConfig(db);

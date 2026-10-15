@@ -1886,6 +1886,59 @@
     font-weight: 600;
   }
 
+  /* Có / Không Tích sản khi chia (ADR-112) và thanh tỷ lệ khi chốt tháng (ADR-111). */
+  .wealth-pick {
+    padding: 6px 16px 0;
+  }
+  .wealth-pick > .seg {
+    width: 100%;
+  }
+  .wealth-pick > .seg button {
+    flex: 1;
+  }
+  .wealth-pick .field {
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .wealth-pick .fhint {
+    padding: 0 0 6px;
+  }
+  .wealth-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0 0;
+  }
+  .wealth-pct {
+    flex: none;
+    min-width: 3.2em;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .wealth-range {
+    flex: 1;
+    width: 100%;
+    min-height: 44px;
+    accent-color: var(--primary);
+  }
+  .close-pct {
+    display: grid;
+    gap: 4px;
+    padding: 12px 16px 0;
+    font-size: 13.5px;
+  }
+  .close-detail {
+    padding: 8px 16px 0;
+    font-size: 13px;
+  }
+  .close-detail summary {
+    cursor: pointer;
+    color: var(--fg-2);
+  }
+  .close-detail .wf {
+    padding: 4px 0 0;
+  }
+
   /* ── thanh điều hướng + FAB ── */
   .nav {
     position: fixed;

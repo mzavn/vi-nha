@@ -80,21 +80,17 @@ describe("giờ nhắc: tin sáng theo giờ ở Cài đặt", () => {
     expect(sent("daily")).toBe(2);
   });
 
-  it("tắt tin sáng: không gửi gì, nhưng ngày 1 vẫn chốt tháng trước từ giờ tin sáng", async () => {
+  it("UC-207 AC-2: tắt tin sáng → ngày 1 không chạy gì, không ghi mốc daily_run, không có giao dịch S…", async () => {
     const { tx } = await createEntry(env.DB, { meaning: "income", amount: 40_000_000, account_id: "vcb-husband", at: "2026-09-10T09:00:00+07:00" }, null, vn("2026-09-10T09:00:00"));
-    await allocateIncome(env.DB, Number((tx as { id: number }).id));
+    await allocateIncome(env.DB, Number(tx!.id));
     setConfig("notify_daily_enabled", "0");
-    const swept = () => (raw.prepare("SELECT COUNT(*) n FROM transactions WHERE batch_id = 'S202609'").get() as { n: number }).n;
 
-    await tick("2026-09-30T07:00:00"); // ngày thường: tắt là không làm gì, không cả ghi mốc
-    expect(raw.prepare("SELECT COUNT(*) n FROM notifications WHERE kind = 'daily_run'").get()).toEqual({ n: 0 });
-    await tick("2026-10-01T06:45:00");
-    expect(swept()).toBe(0);
-    await tick("2026-10-01T07:00:00");
-    const closed = swept();
-    expect(closed).toBeGreaterThan(0);
+    await tick("2026-09-30T07:00:00"); // ngày thường
+    await tick("2026-10-01T07:00:00"); // ngày 1
     await tick("2026-10-01T07:15:00");
-    expect(swept()).toBe(closed); // chốt một lần, không quét thêm
+    expect(raw.prepare("SELECT COUNT(*) n FROM notifications WHERE kind = 'daily_run'").get()).toEqual({ n: 0 });
+    expect(raw.prepare("SELECT COUNT(*) n FROM transactions WHERE batch_id LIKE 'S%'").get()).toEqual({ n: 0 });
+    expect(raw.prepare("SELECT COUNT(*) n FROM month_closes").get()).toEqual({ n: 0 });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

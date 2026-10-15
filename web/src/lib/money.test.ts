@@ -192,7 +192,7 @@ describe("che số tiền trên máy này (pwa UC-718)", () => {
   it("UC-718 AC-1: chỗ tự ghép số tiền cũng bị che — \"≈ 7,01 tỷ ₫\", đã chia / còn", () => {
     setAmountsHidden(true);
     expect(billionText(7_012_345_678)).toBe(`≈ ••••${NBSP}₫`);
-    const c = checkSplit({ amounts: { a: 300_000 }, invalid: [] }, [], 1_000_000);
+    const c = checkSplit({ amounts: { a: 300_000 }, invalid: [] }, 1_000_000);
     expect(c.done).toBe("Đã chia •••• / ••••");
     expect(c.rest).toBe("còn ••••");
     setAmountsHidden(false);

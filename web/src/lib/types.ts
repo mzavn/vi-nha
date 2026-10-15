@@ -131,6 +131,8 @@ export interface TxRow {
   linked_from?: TxLinkedFrom[];
   /** GET /v1/transactions/:id: khoản gốc của khoản hoàn tiền / nhận lại có `link_id`. */
   link?: TxLink | null;
+  /** Lý do lần chia khoản thu này không trả cho mình (Tích sản 0, ADR-112); null nếu không có. */
+  wealth_note?: string | null;
 }
 
 export interface TxLinkedFrom {
@@ -194,6 +196,15 @@ export interface WealthBuildingBreakdown {
     count: number;
     amount: number;
   }[];
+  /** Lần chia không trả cho mình (Tích sản 0, có lý do) của khoản thu còn hiệu lực — mới trước, tối đa 50 (ADR-112). */
+  skippedRuns: {
+    incomeTxId: number;
+    at: string;
+    amount: number;
+    incomeNote: string | null;
+    streamName: string | null;
+    wealthNote: string;
+  }[];
 }
 
 /**
@@ -225,7 +236,86 @@ export interface ReplaceEntryResult extends CreateEntryResult {
   replaced: number;
 }
 
-export type AllocationPlan = AllocationResult & { transferOrders: TransferOrderDraft[] };
+/** Tích sản của một bản chia (ADR-112): số trong `funds`, và khoản thu này có chỉnh được Tích sản không (false = nguồn khóa 100%). */
+export interface AllocationWealth {
+  walletId: string;
+  amount: number;
+  adjustable: boolean;
+}
+
+/** POST /v1/allocate/preview. `wealth` null khi nhà chưa có ví Tích sản. */
+export type AllocationPlan = AllocationResult & { transferOrders: TransferOrderDraft[]; wealth: AllocationWealth | null };
+
+/** POST /v1/allocate: kèm lý do Tích sản 0 đã lưu (null nếu không có). */
+export type AllocateResult = AllocationPlan & { batchId: string; wealthNote: string | null };
+
+/** Một ví tham gia chốt tháng (allocation UC-207). Mọi số do server tính. */
+export interface MonthCloseParticipant {
+  walletId: string;
+  name: string;
+  /** Số dư cộng dồn tới hết tháng được chốt. */
+  monthEndBalance: number;
+  /** Phần âm còn phải bù (đã trừ phần lương tháng sau rót vào). */
+  hole: number;
+  coveredByNextIncome: number;
+  contributed: number;
+  coverReceived: number;
+  toWealth: number;
+  toReward: number;
+  /** Số dư hiện tại và sau khi chốt. */
+  balanceNow: number;
+  balanceAfter: number;
+}
+
+export interface MonthCloseCover {
+  fromWalletId: string;
+  toWalletId: string;
+  amount: number;
+}
+
+export interface MonthCloseSweep {
+  fromWalletId: string;
+  toWalletId: string;
+  kind: "wealth" | "reward";
+  amount: number;
+}
+
+/** GET /v1/month-close khi tháng liền trước chưa chốt. */
+export interface MonthCloseOpen {
+  month: string;
+  closed: false;
+  wealthPct: number;
+  defaultWealthPct: number;
+  wealthWalletId: string;
+  /** null = chưa đặt Ví Thưởng hoặc ví đó không còn hợp lệ; khi đó wealthPct luôn 100. */
+  rewardWalletId: string | null;
+  positiveTotal: number;
+  holeTotal: number;
+  covered: number;
+  profit: number;
+  toWealth: number;
+  toReward: number;
+  participants: MonthCloseParticipant[];
+  covers: MonthCloseCover[];
+  sweeps: MonthCloseSweep[];
+  transferOrders: TransferOrderDraft[];
+  /** Ví âm sau khi chốt (đã tiêu tiền dư của tháng chốt sang tháng sau). */
+  warnings: { walletId: string; name: string; balanceAfter: number }[];
+}
+
+/** GET /v1/month-close khi tháng liền trước đã chốt. `closedAt` dạng `YYYY-MM-DD HH:MM:SS` (UTC). */
+export interface MonthCloseDone {
+  month: string;
+  closed: true;
+  closedAt: string;
+  byMemberId: string | null;
+  wealthPct: number;
+}
+
+export type MonthCloseView = MonthCloseOpen | MonthCloseDone;
+
+/** POST /v1/month-close (201). */
+export type MonthCloseResult = Omit<MonthCloseOpen, "closed"> & { closed: true; batchId: string; closedAt: string };
 
 export interface BudgetLine {
   walletId: string;
@@ -455,6 +545,10 @@ export interface SettingsConfig {
   fi_target_age_f1: number | null;
   fi_target_age_f2: number | null;
   fi_target_age_f3: number | null;
+  /** Chốt tháng: % phần dư vào Tích sản (0–100, mặc định 50). Optional: bản cài đặt lưu offline cũ chưa có. */
+  month_close_wealth_pct?: number;
+  /** Ví Thưởng đã lưu (không lọc ví đã tắt); null = chưa đặt. */
+  month_close_reward_wallet?: string | null;
 }
 
 /** Giờ nhắc của cả nhà (GET /v1/settings › notifySchedule). Giờ "HH:MM" giờ VN; weeklyDay 1 = thứ Hai .. 7 = Chủ nhật. */

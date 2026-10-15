@@ -8,20 +8,19 @@
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import { ApiError, api, errorText } from "../lib/api";
-import { checkSplit, splitPayload, type ManualSplit } from "../lib/manual-split";
 import { formatVnd, maskAmounts } from "../lib/money";
 import { ordersLeft } from "../lib/pending";
 import { shortDate, timeHM } from "../lib/period";
 import { linkOriginText, returnedText } from "../lib/refunds";
 import { draftFromTx, editForm, MEANING_LABEL, ORIGIN_LABEL, txActions, txLabel, txOrigin, voidConfirm } from "../lib/transactions";
-import type { AllocationPlan, Bootstrap, TxRow } from "../lib/types";
+import type { AllocateResult, Bootstrap, TxRow } from "../lib/types";
 import { useResource } from "../state/resource";
 import { getState, go, openTx, refresh, setState, toast, useApp, voidEntry } from "../state/store";
 import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
 import { NeedsNetwork, Sheet } from "../ui/parts";
 import { MoveBudgetSheet } from "./budget-sheets";
-import { AllocationPreview, ASSET_KINDS, OtherEntrySheet } from "./other-entry-sheet";
+import { AllocationPreview, ASSET_KINDS, OtherEntrySheet, useAllocationPreview } from "./other-entry-sheet";
 
 export function TxSheet() {
   const { txOpen, boot } = useApp();
@@ -40,9 +39,15 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** Bảng chia thử của khoản thu chưa chia: mở khi bấm Chia, rồi Chia và ghi sổ. */
-  const [plan, setPlan] = useState<AllocationPlan | null>(null);
-  const [split, setSplit] = useState<ManualSplit | null>(null);
+  /** Bảng chia thử của khoản thu chưa chia: mở khi bấm Chia, rồi Chia và ghi sổ. Chia thử đúng như server sẽ chia khoản
+   *  này (allocateIncome): số tiền, thuế, ngày, tài khoản nhận, nguồn thu của nó. */
+  const [previewing, setPreviewing] = useState(false);
+  const trial = useAllocationPreview(
+    previewing && tx
+      ? { amount: tx.amount, taxable: !!tx.taxable, at: tx.at, account_id: tx.counter_account_id, ...(tx.income_stream_id ? { income_stream_id: tx.income_stream_id } : {}) }
+      : null,
+    app.online,
+  );
 
   if (!tx) {
     return (
@@ -80,6 +85,7 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
     ...(tx.receivable_id ? [[tx.meaning === "lend" ? "Cho ai vay" : "Ai trả", tx.receivable_name ?? tx.receivable_id] as [string, string]] : []),
     ...(tx.tenant_id ? [["Người thuê trả", tx.tenant_name ?? tx.tenant_id] as [string, string]] : []),
     ...(tx.meaning === "income" ? [["Lần chia", tx.allocated ? "đã chia vào các ví" : "chưa chia"] as [string, string]] : []),
+    ...(tx.meaning === "income" && tx.allocated && tx.wealth_note ? [["Tích sản", `Không trả cho mình lần này: ${tx.wealth_note}`] as [string, string]] : []),
     ...(who ? [["Người ghi", who] as [string, string]] : []),
     ...(tx.note ? [["Ghi chú", maskAmounts(tx.note)] as [string, string]] : []),
     ["Nguồn", ORIGIN_LABEL[txOrigin(tx)]],
@@ -112,27 +118,14 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
       go("assign", { txOpen: null, assignFocus: tx.log_id ?? null });
     });
 
-  // Chia thử đúng như server sẽ chia khoản này (allocateIncome): số tiền, thuế, ngày, tài khoản nhận, nguồn thu của nó.
-  const preview = () =>
-    run(async () => {
-      setPlan(
-        await api.post<AllocationPlan>("/v1/allocate/preview", {
-          amount: tx.amount,
-          taxable: !!tx.taxable,
-          at: tx.at,
-          account_id: tx.counter_account_id,
-          ...(tx.income_stream_id ? { income_stream_id: tx.income_stream_id } : {}),
-        }),
-      );
-      setBusy(false);
-    });
-
   const allocate = () =>
     run(async () => {
       let orders = 0;
+      let wealthNote = "";
       try {
-        const body = { income_tx_id: tx.id, ...(split ? { amounts: splitPayload(split) } : {}) };
-        orders = (await api.post<AllocationPlan>("/v1/allocate", body)).transferOrders.length;
+        const done = await api.post<AllocateResult>("/v1/allocate", { income_tx_id: tx.id, ...trial.allocateBody() });
+        orders = done.transferOrders.length;
+        if (done.wealth) wealthNote = done.wealth.amount > 0 ? ` (Tích sản ${formatVnd(done.wealth.amount)})` : " (không Tích sản lần này)";
       } catch (err) {
         if (!(err instanceof ApiError && err.code === "already_allocated")) throw err;
       }
@@ -140,7 +133,7 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
       await refresh();
       const after = getState();
       const tail = ordersLeft(orders, after.stale || !after.snap ? null : after.snap.attention.transferOrdersPending);
-      toast(`Đã chia ${formatVnd(tx.amount)}.${tail ? ` ${tail}` : ""}`);
+      toast(`Đã chia ${formatVnd(tx.amount)}${wealthNote}.${tail ? ` ${tail}` : ""}`);
       close();
     });
 
@@ -196,30 +189,28 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
         </>
       )}
       {can.note && <p class="note" style={{ borderTop: "1px solid var(--border)" }}>{can.note}</p>}
-      {plan && <AllocationPreview plan={plan} boot={boot} amount={tx.amount} split={split} onSplit={setSplit} fromAccountId={tx.counter_account_id} />}
+      {previewing && <AllocationPreview preview={trial} boot={boot} fromAccountId={tx.counter_account_id} />}
+      {previewing && !trial.plan && !trial.error && <p class="note">Đang chia thử…</p>}
       <div class="pad">
-        {error && (
+        {(error ?? (previewing ? trial.error : null)) && (
           <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
-            {error}
+            {error ?? trial.error}
           </p>
         )}
-        {plan ? (
+        {previewing ? (
           <div class="grid grid-cols-2 gap-2">
             <button
               type="button"
               class="btn"
               disabled={busy}
-              onClick={() => {
-                setPlan(null);
-                setSplit(null);
-              }}
+              onClick={() => setPreviewing(false)}
             >
               Thôi
             </button>
             <button
               type="button"
               class="btn btn-primary"
-              disabled={busy || !app.online || (split !== null && !checkSplit(split, boot.wallets, tx.amount).ok)}
+              disabled={busy || !app.online || !trial.ready}
               onClick={() => void allocate()}
             >
               {busy ? "Đang chia…" : "Chia và ghi sổ"}
@@ -240,7 +231,7 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
         ) : (
           <div class="grid grid-cols-2 gap-2">
             {canAllocate && (
-              <button type="button" class="btn btn-primary" style={{ gridColumn: "1 / -1" }} disabled={busy || !app.online} onClick={() => void preview()}>
+              <button type="button" class="btn btn-primary" style={{ gridColumn: "1 / -1" }} disabled={busy || !app.online} onClick={() => setPreviewing(true)}>
                 Chia
               </button>
             )}

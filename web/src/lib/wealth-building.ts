@@ -2,6 +2,7 @@
 // Mọi số đi qua `Money` / `formatVnd` — không rút gọn kiểu "55k" trên card này.
 
 import { formatSigned, formatVnd } from "./money";
+import { shortDate } from "./period";
 import { ROLE_LABEL, wealthBuildingAccountLabel } from "./wealth-building-accounts";
 import type { WealthBuildingAccount, WealthBuildingBreakdown } from "./types";
 
@@ -151,4 +152,15 @@ export function safetyFundMonthsText(fund: SafetyFundView): string | null {
 /** "Có 55.000 ₫ · cần 96.000.000 ₫" ("cần ước tính …" khi mức cần đang ước từ ngân sách). */
 export function safetyFundCashText(fund: SafetyFundView, estimated = false): string {
   return `Có ${formatVnd(fund.cash)} · cần ${estimated ? "ước tính " : ""}${formatVnd(fund.target)}`;
+}
+
+/** "Lần chia không trả cho mình" (ADR-112): mỗi lần chia Tích sản 0 kèm lý do; server đã xếp mới trước, chỉ khoản thu còn hiệu lực. */
+export function skippedRunLines(b: WealthBuildingBreakdown): { id: number; date: string; income: string; reason: string }[] {
+  // Bản tải lưu offline từ trước 0034 chưa có `skippedRuns`.
+  return (b.skippedRuns ?? []).map((r) => ({
+    id: r.incomeTxId,
+    date: shortDate(r.at),
+    income: `${r.streamName ?? r.incomeNote ?? "Khoản thu"} · ${formatVnd(r.amount)}`,
+    reason: r.wealthNote,
+  }));
 }

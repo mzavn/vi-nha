@@ -172,7 +172,7 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
       }
       action={
         <button type="button" class="btn" onClick={() => setOther("income")}>
-          Loại khác
+          Tiền vào
         </button>
       }
     />

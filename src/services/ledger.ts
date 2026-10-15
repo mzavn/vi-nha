@@ -1,13 +1,13 @@
 // Tầng dịch vụ: đọc/ghi D1 rồi gọi các hàm thuần trong src/domain.
 // REST (/v1), MCP và cron đều đi qua đây — không route nào tự viết SQL nghiệp vụ.
 
-import { allocate, manualFunds, type AllocationResult, type ManualAmount, type WalletRule } from "../domain/allocation";
-import { endOfMonthIso, monthSweep } from "../domain/close";
+import { allocate, isFullLock, manualFunds, type AllocationResult, type ManualAmount, type WalletRule } from "../domain/allocation";
+import { DEFAULT_MONTH_CLOSE_WEALTH_PCT, endOfMonthIso, isRewardWalletCandidate, nextMonth, planMonthClose, previousMonth } from "../domain/close";
 import { buildEntry, MANUAL_MEANINGS, type EntryInput, type TxRow } from "../domain/entry";
 import { dayKey, mondaysInMonth, monthKey, weekKey, weekStart } from "../domain/period";
 import { normalizeContent } from "../domain/rules";
 import { buildSnapshot, monthTarget, openingWealthBuildingCredit, weekTarget, type Snapshot, type SnapshotData } from "../domain/snapshot";
-import { newTransferMemo, transferOrders, type TransferOrderDraft } from "../domain/transfer-orders";
+import { monthCloseOrders, newTransferMemo, transferOrders, type TransferOrderDraft } from "../domain/transfer-orders";
 import { withInterestRule } from "../domain/interest";
 import { DomainError, type AccountRole, type Refs, type WalletRef } from "../domain/types";
 import { formatMoney } from "../notify/format";
@@ -357,7 +357,8 @@ const TX_FROM = `FROM transactions t
   LEFT JOIN tenants tn ON tn.id = t.tenant_id`;
 const TX_VIEW = `SELECT t.*, c.name AS category_name, COALESCE(w.name, cw.name) AS wallet_name,
          d.name AS debt_name, r.name AS receivable_name, tn.name AS tenant_name,
-         EXISTS (SELECT 1 FROM allocation_runs ar WHERE ar.income_tx_id = t.id) AS allocated
+         EXISTS (SELECT 1 FROM allocation_runs ar WHERE ar.income_tx_id = t.id) AS allocated,
+         (SELECT ar.wealth_note FROM allocation_runs ar WHERE ar.income_tx_id = t.id) AS wealth_note
   ${TX_FROM}`;
 
 /** Các loại xem được trong sổ (mọi loại trừ `fund` — bút toán nạp ví của lần chia không hiện, ledger UC-111). */
@@ -582,27 +583,53 @@ const walletAccounts = (refs: Refs) => Object.fromEntries(refs.wallets.map((w) =
 
 export interface AllocationPlan extends AllocationResult {
   transferOrders: TransferOrderDraft[];
+  /** Tích sản của bản chia (ADR-112); null khi nhà chưa có ví Tích sản. `adjustable` false = nguồn thu khóa trọn 100%. */
+  wealth: { walletId: string; amount: number; adjustable: boolean } | null;
 }
 
-/** `amounts`: Tự chia (UC-203) — ghi đúng các số đó, bỏ luật nạp và nguồn thu; lệnh chuyển tính như chia theo luật. */
+/**
+ * `amounts`: Tự chia (UC-203) — ghi đúng các số đó, bỏ luật nạp và nguồn thu; lệnh chuyển tính như chia theo luật.
+ * `wealthAmount`: Tích sản người chọn (ADR-112) thay khoản cắt % / phần khóa Tích sản; không đi cùng `amounts`.
+ */
 export async function previewAllocation(
   db: D1Database,
   income: { amount: number; taxable: boolean; at: string; accountId: string | null; incomeStreamId?: string | null },
-  amounts?: ManualAmount[],
+  opts: { amounts?: ManualAmount[]; wealthAmount?: number } = {},
 ): Promise<AllocationPlan> {
-  if (amounts) {
-    const refs = await loadRefs(db);
-    const result = manualFunds(amounts, income.amount, refs.wallets);
-    return { ...result, transferOrders: transferOrders(result.funds, walletAccounts(refs), income.accountId) };
+  if (opts.amounts && opts.wealthAmount !== undefined) {
+    throw new DomainError("invalid_amounts", "Số tự chia không hợp lệ: không gửi wealth_amount cùng amounts — ô Tích sản nằm trong amounts.");
   }
   const { refs } = await withInterest(db, await loadRefs(db), monthKey(income.at));
   const stream = income.incomeStreamId ? refs.incomeStreams.find((s) => s.id === income.incomeStreamId) : null;
-  if (stream === undefined) throw new DomainError("unknown_income_stream", `Không có nguồn thu "${income.incomeStreamId}".`);
-  const result = allocate({ income, rules: refs.rules, stream, ...(await allocationContext(db, income.at)) });
-  return { ...result, transferOrders: transferOrders(result.funds, walletAccounts(refs), income.accountId) };
+  const wealthWallet = refs.wallets.find((w) => w.tier === "wealth_building");
+  let result: AllocationResult;
+  if (opts.amounts) {
+    result = manualFunds(opts.amounts, income.amount, refs.wallets);
+  } else {
+    if (stream === undefined) throw new DomainError("unknown_income_stream", `Không có nguồn thu "${income.incomeStreamId}".`);
+    if (opts.wealthAmount !== undefined && !wealthWallet) throw new DomainError("config", "Chưa có ví Tích sản.");
+    const wealthOverride = opts.wealthAmount !== undefined ? { walletId: wealthWallet!.id, amount: opts.wealthAmount } : null;
+    result = allocate({ income, rules: refs.rules, stream, wealthOverride, ...(await allocationContext(db, income.at)) });
+  }
+  const wealth = wealthWallet
+    ? {
+        walletId: wealthWallet.id,
+        amount: result.funds.find((f) => f.walletId === wealthWallet.id)?.amount ?? 0,
+        adjustable: !(stream && isFullLock(stream.locks)),
+      }
+    : null;
+  return { ...result, transferOrders: transferOrders(result.funds, walletAccounts(refs), income.accountId), wealth };
 }
 
-export async function allocateIncome(db: D1Database, incomeTxId: number, amounts?: ManualAmount[]) {
+/**
+ * Ghi lần chia. Người chọn Tích sản (`wealthAmount`) hoặc tự chia (`amounts`) mà Tích sản ra 0 trên khoản thu chỉnh được
+ * Tích sản thì phải có `wealthNote` (ADR-112). Chia tự động (ingest, MCP) không gửi hai trường đó nên không bị hỏi lý do.
+ */
+export async function allocateIncome(
+  db: D1Database,
+  incomeTxId: number,
+  opts: { amounts?: ManualAmount[]; wealthAmount?: number; wealthNote?: string | null } = {},
+) {
   const income = await getTransaction(db, incomeTxId);
   if (!income || income.meaning !== "income" || income.status !== "active") {
     throw new DomainError("not_income", "Không có khoản thu nhập còn hiệu lực với id này.", 404);
@@ -620,13 +647,19 @@ export async function allocateIncome(db: D1Database, incomeTxId: number, amounts
       accountId: (income.counter_account_id as string | null) ?? null,
       incomeStreamId: (income.income_stream_id as string | null) ?? null,
     },
-    amounts,
+    { amounts: opts.amounts, wealthAmount: opts.wealthAmount },
   );
+  const note = opts.wealthNote?.trim() || null;
+  const noWealth = plan.wealth !== null && plan.wealth.amount === 0;
+  if (noWealth && plan.wealth!.adjustable && !note && (opts.amounts || opts.wealthAmount !== undefined)) {
+    throw new DomainError("wealth_note_required", "Tích sản 0: cần ghi lý do.", 400);
+  }
+  const wealthNote = noWealth ? note : null;
   const batchId = `A${incomeTxId}`;
   const holding = String(income.wallet_id);
   const statements = [
     // Trùng khoá chính ở đây làm cả batch huỷ: một khoản thu không bao giờ được chia hai lần.
-    db.prepare("INSERT INTO allocation_runs (income_tx_id, batch_id) VALUES (?, ?)").bind(incomeTxId, batchId),
+    db.prepare("INSERT INTO allocation_runs (income_tx_id, batch_id, wealth_note) VALUES (?, ?, ?)").bind(incomeTxId, batchId, wealthNote),
     ...plan.funds.map((f) =>
       insertTx(db, {
         at,
@@ -661,61 +694,173 @@ export async function allocateIncome(db: D1Database, incomeTxId: number, amounts
     if (/UNIQUE|PRIMARY KEY/i.test(String(err))) throw new DomainError("already_allocated", "Khoản thu này vừa được chia ở nơi khác.", 409);
     throw err;
   }
-  return { batchId, ...plan };
+  return { batchId, ...plan, wealthNote };
 }
 
 // ── Chốt tháng ──────────────────────────────────────────────────────
 
-export async function closeMonth(db: D1Database, month: string) {
-  const batchId = `S${month.replace("-", "")}`;
-  const already = await db.prepare("SELECT 1 FROM transactions WHERE batch_id = ? LIMIT 1").bind(batchId).first();
-  if (already) return { batchId, already: true, sweeps: [], transferOrders: [] as TransferOrderDraft[] };
+/** Tháng đã chốt (D2: dạng ngắn, không tính lại kế hoạch). */
+export interface MonthCloseDone {
+  month: string;
+  closed: true;
+  closedAt: string;
+  byMemberId: string | null;
+  wealthPct: number;
+}
 
-  const refs = await loadRefs(db);
-  const wealthBuilding = refs.wallets.find((w) => w.tier === "wealth_building");
-  if (!wealthBuilding) throw new DomainError("config", "Chưa có ví Tích sản.");
-  const balances = toMap(
-    rows(await db.prepare("SELECT wallet_id AS w, SUM(delta) AS s FROM v_wallet_flow WHERE month_key <= ? GROUP BY wallet_id").bind(month).all()),
-  );
-  const sweeps = monthSweep(refs.wallets, balances);
-  if (sweeps.length === 0) return { batchId, already: false, sweeps, transferOrders: [] as TransferOrderDraft[] };
+interface MonthCloseSettings {
+  defaultWealthPct: number;
+  rewardWalletId: string | null;
+  wealthWalletId: string;
+}
 
-  const at = endOfMonthIso(month);
-  const accountOf = walletAccounts(refs);
-  const bySource = new Map<string | null, number>();
-  for (const s of sweeps) bySource.set(accountOf[s.fromWalletId] ?? null, (bySource.get(accountOf[s.fromWalletId] ?? null) ?? 0) + s.amount);
-  const orders = [...bySource].flatMap(([from, amount]) => transferOrders([{ walletId: wealthBuilding.id, amount }], accountOf, from));
+/**
+ * Ví Tích sản, Ví Thưởng (chỉ khi còn hợp lệ: đang dùng, phe Must / Hưởng thụ, không phải phong bì chung — không thì coi như
+ * chưa đặt) và % mặc định (chưa có Ví Thưởng thì 100).
+ */
+async function monthCloseSettings(db: D1Database, refs: Refs): Promise<MonthCloseSettings> {
+  const wealthWallet = refs.wallets.find((w) => w.tier === "wealth_building");
+  if (!wealthWallet) throw new DomainError("config", "Chưa có ví Tích sản.");
+  const res = await db.prepare("SELECT k, v FROM config WHERE k IN ('month_close_wealth_pct', 'month_close_reward_wallet')").all<{ k: string; v: string }>();
+  const config = Object.fromEntries(rows<{ k: string; v: string }>(res).map((r) => [r.k, r.v]));
+  const reward = refs.wallets.find((w) => w.id === config.month_close_reward_wallet);
+  const rewardWalletId = reward && isRewardWalletCandidate(reward) ? reward.id : null;
+  const pct = Number(config.month_close_wealth_pct ?? DEFAULT_MONTH_CLOSE_WEALTH_PCT);
+  const defaultWealthPct = !rewardWalletId ? 100 : Number.isInteger(pct) ? Math.min(100, Math.max(0, pct)) : DEFAULT_MONTH_CLOSE_WEALTH_PCT;
+  return { defaultWealthPct, rewardWalletId, wealthWalletId: wealthWallet.id };
+}
 
-  await db.batch([
-    ...sweeps.map((s) =>
-      insertTx(db, {
-        at,
-        amount: s.amount,
-        meaning: "transfer",
-        wallet_id: wealthBuilding.id,
-        counter_wallet_id: s.fromWalletId,
-        account_id: null,
-        counter_account_id: null,
-        category_id: null,
-        by_member_id: null,
-        link_id: null,
-        batch_id: batchId,
-        asset_kind: null,
-        taxable: 0,
-        week_key: weekKey(at),
-        month_key: month,
-        source: "system",
-        note: `Chốt tháng ${month}: quét dư sang Tích sản`,
-        client_id: null,
-      }),
-    ),
-    ...orders.map((o) =>
-      db
-        .prepare("INSERT INTO transfer_orders (batch_id, from_account_id, to_account_id, amount, memo) VALUES (?, ?, ?, ?, ?)")
-        .bind(batchId, o.fromAccountId, o.toAccountId, o.amount, newTransferMemo()),
-    ),
+/** `wealth_pct` người chọn: số nguyên 0–100; dưới 100 cần Ví Thưởng. Không gửi thì lấy mặc định. */
+function monthCloseWealthPct(requested: number | undefined, settings: MonthCloseSettings): number {
+  if (requested === undefined) return settings.defaultWealthPct;
+  if (!Number.isInteger(requested) || requested < 0 || requested > 100) {
+    throw new DomainError("invalid_input", "Phần dư vào Tích sản là số nguyên từ 0 đến 100.");
+  }
+  if (requested < 100 && !settings.rewardWalletId) {
+    throw new DomainError("invalid_input", "Chưa đặt Ví Thưởng (Cài đặt › Tham số): phần dư vào hết Tích sản.");
+  }
+  return requested;
+}
+
+/** Kế hoạch chốt tháng `month` từ sổ hiện tại: số dư tới hết tháng, lương tháng sau đã rót, số dư hiện tại. */
+async function monthClosePlan(db: D1Database, refs: Refs, settings: MonthCloseSettings, month: string, wealthPct: number) {
+  const [monthEnd, nextFunds, now] = await db.batch([
+    db.prepare("SELECT wallet_id AS w, SUM(delta) AS s FROM v_wallet_flow WHERE month_key <= ? GROUP BY wallet_id").bind(month),
+    db
+      .prepare("SELECT wallet_id AS w, SUM(amount) AS s FROM transactions WHERE status = 'active' AND meaning = 'fund' AND month_key = ? GROUP BY wallet_id")
+      .bind(nextMonth(month)),
+    db.prepare("SELECT wallet_id AS w, balance AS s FROM v_wallet_balance"),
   ]);
-  return { batchId, already: false, sweeps, transferOrders: orders };
+  const balanceNow = toMap(rows(now!));
+  const plan = planMonthClose({
+    wallets: refs.wallets,
+    balances: toMap(rows(monthEnd!)),
+    coveredByNextIncome: toMap(rows(nextFunds!)),
+    wealthPct,
+    wealthWalletId: settings.wealthWalletId,
+    rewardWalletId: settings.rewardWalletId,
+  });
+  const nameOf = (id: string) => refs.wallets.find((w) => w.id === id)?.name ?? id;
+  const participants = plan.participants.map((p) => {
+    const current = balanceNow[p.walletId] ?? 0;
+    return { ...p, name: nameOf(p.walletId), balanceNow: current, balanceAfter: current + p.coverReceived - p.contributed - p.toWealth - p.toReward };
+  });
+  return {
+    month,
+    closed: false as const,
+    wealthPct,
+    defaultWealthPct: settings.defaultWealthPct,
+    wealthWalletId: settings.wealthWalletId,
+    rewardWalletId: settings.rewardWalletId,
+    positiveTotal: plan.positiveTotal,
+    holeTotal: plan.holeTotal,
+    covered: plan.covered,
+    profit: plan.profit,
+    toWealth: plan.toWealth,
+    toReward: plan.toReward,
+    participants,
+    covers: plan.covers,
+    sweeps: plan.sweeps,
+    transferOrders: monthCloseOrders([...plan.covers, ...plan.sweeps], walletAccounts(refs)),
+    // Ví đã tiêu tiền dư của tháng chốt sang tháng sau: sau khi chốt thành âm — chi lố của tháng sau, bù ở lần chốt sau.
+    warnings: participants.filter((p) => p.balanceAfter < 0 && p.monthEndBalance >= 0).map((p) => ({ walletId: p.walletId, name: p.name, balanceAfter: p.balanceAfter })),
+  };
+}
+
+export type MonthCloseOpen = Awaited<ReturnType<typeof monthClosePlan>>;
+
+const MONTH_CLOSE_DONE_SQL = "SELECT month, closed_at AS closedAt, by_member_id AS byMemberId, wealth_pct AS wealthPct FROM month_closes WHERE month = ?";
+
+/** `GET /v1/month-close`: tháng liền trước (giờ VN) — đã chốt thì dạng ngắn, chưa thì bản xem trước theo `wealthPct`. */
+export async function previewMonthClose(db: D1Database, now: Date, opts: { wealthPct?: number } = {}): Promise<MonthCloseOpen | MonthCloseDone> {
+  const month = previousMonth(monthKey(now));
+  const done = await db.prepare(MONTH_CLOSE_DONE_SQL).bind(month).first<Omit<MonthCloseDone, "closed">>();
+  if (done) return { month: done.month, closed: true, closedAt: done.closedAt, byMemberId: done.byMemberId, wealthPct: Number(done.wealthPct) };
+  const refs = await loadRefs(db);
+  const settings = await monthCloseSettings(db, refs);
+  return monthClosePlan(db, refs, settings, month, monthCloseWealthPct(opts.wealthPct, settings));
+}
+
+/**
+ * `POST /v1/month-close` (UC-207, ADR-111): chỉ tháng liền trước. Một batch: dòng `month_closes` đầu tiên (trùng khoá → 409),
+ * bút toán bù rồi quét (ghi lúc 23:59:59 ngày cuối tháng chốt, giờ VN), lệnh chuyển gộp theo cặp tài khoản.
+ */
+export async function closeMonth(db: D1Database, month: string, opts: { wealthPct?: number; memberId: string | null }, now: Date) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new DomainError("invalid_input", "month phải có dạng YYYY-MM.");
+  if (month !== previousMonth(monthKey(now))) {
+    throw new DomainError("month_not_closable", `Chỉ chốt được tháng liền trước (${previousMonth(monthKey(now))}).`);
+  }
+  const refs = await loadRefs(db);
+  const settings = await monthCloseSettings(db, refs);
+  const wealthPct = monthCloseWealthPct(opts.wealthPct, settings);
+  const alreadyClosed = () => new DomainError("already_closed", `Tháng ${month} đã chốt.`, 409);
+  if (await db.prepare("SELECT 1 FROM month_closes WHERE month = ?").bind(month).first()) throw alreadyClosed();
+
+  const plan = await monthClosePlan(db, refs, settings, month, wealthPct);
+  const batchId = `S${month.replace("-", "")}`;
+  const closedAt = now.toISOString().slice(0, 19).replace("T", " ");
+  const at = endOfMonthIso(month);
+  const nameOf = (id: string) => refs.wallets.find((w) => w.id === id)?.name ?? id;
+  const moves = [
+    ...plan.covers.map((m) => ({ ...m, note: `Chốt tháng ${month}: bù chi lố cho ${nameOf(m.toWalletId)}` })),
+    ...plan.sweeps.map((m) => ({ ...m, note: `Chốt tháng ${month}: ${m.kind === "wealth" ? "sang Tích sản" : "sang Ví Thưởng"}` })),
+  ];
+  try {
+    await db.batch([
+      db.prepare("INSERT INTO month_closes (month, closed_at, by_member_id, wealth_pct) VALUES (?, ?, ?, ?)").bind(month, closedAt, opts.memberId, wealthPct),
+      ...moves.map((m) =>
+        insertTx(db, {
+          at,
+          amount: m.amount,
+          meaning: "transfer",
+          wallet_id: m.toWalletId,
+          counter_wallet_id: m.fromWalletId,
+          account_id: null,
+          counter_account_id: null,
+          category_id: null,
+          by_member_id: opts.memberId,
+          link_id: null,
+          batch_id: batchId,
+          asset_kind: null,
+          taxable: 0,
+          week_key: weekKey(at),
+          month_key: month,
+          source: "system",
+          note: m.note,
+          client_id: null,
+        }),
+      ),
+      ...plan.transferOrders.map((o) =>
+        db
+          .prepare("INSERT INTO transfer_orders (batch_id, from_account_id, to_account_id, amount, memo) VALUES (?, ?, ?, ?, ?)")
+          .bind(batchId, o.fromAccountId, o.toAccountId, o.amount, newTransferMemo()),
+      ),
+    ]);
+  } catch (err) {
+    if (/UNIQUE|PRIMARY KEY/i.test(String(err))) throw alreadyClosed();
+    throw err;
+  }
+  return { ...plan, closed: true as const, batchId, closedAt };
 }
 
 // ── Đếm ví / nhập số dư thật ────────────────────────────────────────
@@ -1054,7 +1199,7 @@ export async function wealthBuildingBreakdown(db: D1Database) {
   // Cùng dòng đầu của `v_wealth_building` như snapshot — một nguồn số cho cả card lẫn Quỹ an tâm.
   const ts = await db.prepare("SELECT wallet_id AS walletId, name, cash, assets FROM v_wealth_building").first<{ walletId: string; name: string; cash: number; assets: number }>();
   if (!ts) throw new DomainError("config", "Chưa có ví Tích sản.");
-  const [places, flows] = await db.batch([
+  const [places, flows, skipped] = await db.batch([
     // Log chờ gán của tài khoản Tích sản: log của chính nó, hoặc log của tài khoản có rule (heo) trỏ tới nó và nội dung
     // chứa mẫu. Số theo phía tài khoản Tích sản: chuyển vào (tiền ra từ tài khoản chi) +, rút về (tiền vào tài khoản chi) −.
     db.prepare(
@@ -1109,6 +1254,15 @@ export async function wealthBuildingBreakdown(db: D1Database) {
          ORDER BY f.direction, SUM(f.amount) DESC`,
       )
       .bind(ts.walletId),
+    // Lần chia không trả cho mình (Tích sản 0, ADR-112) của khoản thu còn hiệu lực, mới trước.
+    db.prepare(
+      `SELECT ar.income_tx_id AS incomeTxId, t.at, t.amount, t.note AS incomeNote, s.name AS streamName, ar.wealth_note AS wealthNote
+       FROM allocation_runs ar
+       JOIN transactions t ON t.id = ar.income_tx_id AND t.status = 'active'
+       LEFT JOIN income_streams s ON s.id = t.income_stream_id
+       WHERE ar.wealth_note IS NOT NULL
+       ORDER BY t.at DESC, t.id DESC LIMIT 50`,
+    ),
   ]);
   type Flow = {
     kind: WealthBuildingFlowKind;
@@ -1136,6 +1290,11 @@ export async function wealthBuildingBreakdown(db: D1Database) {
       walletActive: f.walletActive === null ? null : Boolean(f.walletActive),
       count: Number(f.count),
       amount: Number(f.amount),
+    })),
+    skippedRuns: rows<{ incomeTxId: number; at: string; amount: number; incomeNote: string | null; streamName: string | null; wealthNote: string }>(skipped!).map((r) => ({
+      ...r,
+      incomeTxId: Number(r.incomeTxId),
+      amount: Number(r.amount),
     })),
   };
 }
