@@ -11,7 +11,7 @@ import { formatVnd, maskAmounts, moneyDigits } from "../lib/money";
 import { interestLineText } from "../lib/interest";
 import { applyQueueToBudget } from "../lib/pending";
 import { monthKey, monthLabel, previousMonth, shortDate, weekLabel, weekRange } from "../lib/period";
-import { safetyFundCashText, safetyFundMonthsText, wealthBuildingKinds, wealthBuildingPlaces, wealthBuildingSources, type AssetLabels, type WealthBuildingLine } from "../lib/wealth-building";
+import { safetyFundCashText, safetyFundMonthsText, skippedRunLines, wealthBuildingKinds, wealthBuildingPlaces, wealthBuildingSources, type AssetLabels, type WealthBuildingLine } from "../lib/wealth-building";
 import { defaultFilter } from "../lib/tx-filter";
 import type { AccountRow, Budget, BudgetLine, InterestLine, Reserve, SpendByCategory, WealthBuildingBreakdown, TransferOrder, TxRow } from "../lib/types";
 import { useResource } from "../state/resource";
@@ -370,6 +370,7 @@ function WealthBuildingTab() {
   const assetLabel = (k: string | null) => ASSET_KINDS.find((a) => a.value === k)?.label ?? k ?? "";
   const assetLabels: AssetLabels = Object.fromEntries(ASSET_KINDS.map((a) => [a.value, a.label]));
   const wide = useWide();
+  const skipped = breakdown.data ? skippedRunLines(breakdown.data) : [];
 
   const cards = (
     <>
@@ -455,6 +456,31 @@ function WealthBuildingTab() {
           }}
         </Loadable>
       </Card>
+      {skipped.length > 0 && (
+        <Card title="Lần chia không trả cho mình" flush note="Các lần chia Tích sản 0 kèm lý do đã ghi (khoản thu còn hiệu lực, mới trước).">
+          <table class="data">
+            <thead>
+              <tr>
+                <th scope="col">Khoản thu · lý do</th>
+                <th scope="col">Ngày</th>
+              </tr>
+            </thead>
+            <tbody>
+              {skipped.map((r) => (
+                <tr key={r.id} class="tx-row" onClick={() => openTx(r.id)}>
+                  <td>
+                    <button type="button" class="tx-open">
+                      {r.income}
+                    </button>
+                    <div class="sub-line">{r.reason}</div>
+                  </td>
+                  <td>{r.date}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
       <Card title="Tài sản đang giữ" flush>
         <Loadable res={txs}>
           {() =>

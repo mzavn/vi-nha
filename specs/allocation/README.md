@@ -35,7 +35,7 @@ và gỡ một lần chia khi khoản thu bị huỷ. Engine (`src/domain/alloca
 | [UC-204](UC-204-sinh-lenh-chuyen-tien.md) | Sinh lệnh chuyển tiền | implemented | BR-02, BR-04, BR-09 |
 | [UC-205](UC-205-theo-doi-lenh-chuyen-tien.md) | Theo dõi & đánh dấu lệnh chuyển tiền | implemented | BR-04, BR-06 |
 | [UC-206](UC-206-go-lan-chia-khi-huy-khoan-thu.md) | Gỡ lần chia khi huỷ khoản thu | implemented | BR-04, BR-09 |
-| [UC-207](UC-207-chot-thang-quet-du.md) | Chốt tháng: quét dư phong bì chung sang Tích sản | implemented | BR-02, BR-07 |
+| [UC-207](UC-207-chot-thang-quet-du.md) | Chốt tháng: bù ví chi lố, chia phần dư sang Tích sản / Ví Thưởng | implemented | BR-02, BR-07 |
 
 Entity model: [entities.md](entities.md).
 

@@ -1,7 +1,7 @@
 # UC-715: Xem, sửa, xoá một giao dịch
 - Status: implemented
 - BR: BR-03, BR-04, BR-01
-- Decisions: [ADR-73](../decisions.md) (sửa = huỷ + ghi mới trong một batch; giao dịch ngân hàng chỉ gỡ gán); ADR-02 luật 1; D12 (sửa / xoá cần mạng); DESIGN.md §4 (Toast nói kết quả kèm hệ quả, ≥ 44px); ADR-92 (tên trong mã nguồn, dữ liệu, địa chỉ màn bằng tiếng Anh)
+- Decisions: [ADR-73](../decisions.md) (sửa = huỷ + ghi mới trong một batch; giao dịch ngân hàng chỉ gỡ gán); ADR-02 luật 1; D12 (sửa / xoá cần mạng); DESIGN.md §4 (Toast nói kết quả kèm hệ quả, ≥ 44px); ADR-92 (tên trong mã nguồn, dữ liệu, địa chỉ màn bằng tiếng Anh); ADR-112 (Có / Không Tích sản khi Chia; hàng lý do Tích sản 0)
 - Actor: thành viên đã đăng nhập (vợ hoặc chồng) vừa nhập nhầm
 - Trigger: chạm một dòng giao dịch ở: "Giao dịch gần đây" (Hôm nay máy tính, màn Nhập — điện thoại và máy tính), Sổ giao dịch (UC-716), Ví & quỹ › Tích sản › Tài sản đang giữ, Ví & quỹ › Nợ › chi tiết một khoản (lần trả / cho vay / nhận lại), Người thuê › tháng › Đã chuyển
 
@@ -15,6 +15,7 @@
 - v7 (2026-10-06, commit `43e4699`): change [`261006-so-giao-dich`](../changes/archive/261006-so-giao-dich/proposal.md) — sheet này cũng mở từ màn **Sổ giao dịch** (pwa [UC-716](UC-716-so-giao-dich.md)); không đổi gì trong sheet. Sửa khoản chi từ sổ về lại sổ với bộ lọc cũ (`editTx.back = "so"`); xoá / sửa thì danh sách và tổng của sổ tải lại, vị trí cuộn giữ khi sheet đóng.
 - v8 (2026-10-07, commit `7424f26`): định danh `WealthBuildingTab` (thay `TichsanTab`) — ADR-92 (change [261007-doi-ten-tieng-anh](../changes/archive/261007-doi-ten-tieng-anh/proposal.md))
 - v9 (2026-10-12, commit `a8b43f7`): chi tiết khoản thu chưa chia có nút **Tự chia** ở bảng Chia thử (allocation UC-202 5b, UC-203; ADR-108) (change [261012-tu-chia](../changes/archive/261012-tu-chia/proposal.md))
+- v10 (2026-10-16, commit `0528219`): bảng Chia có **Có / Không Tích sản** (ADR-112); khoản thu đã chia không Tích sản có hàng "Tích sản: Không trả cho mình lần này: {lý do}"; toast nói số Tích sản. Thêm 2a, AC-10 (change [261015-chot-thang-va-keo-tich-san](../changes/archive/261015-chot-thang-va-keo-tich-san/proposal.md))
 
 ## Preconditions
 - Đã có `bootstrap`. Xem được khi mất mạng nếu dòng đã có trong danh sách; Sửa / Xoá / Gán lại / Chia cần mạng.
@@ -23,6 +24,7 @@
 ## Main Flow
 1. Chạm một dòng (cả hàng bấm được; ô tên là một nút cho bàn phím) → `openTx(id, dòng?)` → sheet chi tiết vẽ ở khung app, đọc lại `GET /v1/transactions/:id` khi có mạng (ledger UC-111).
 2. Sheet hiện bằng tiếng Việt: Loại, Số tiền, Lúc, Danh mục, Trừ ví, Cộng vào ví, Tiền ra từ, Tiền vào, Loại tài sản, Trả nợ cho, Cho ai vay / Ai trả, Người thuê trả, Lần chia (khoản thu: "đã chia vào các ví" / "chưa chia"), Người ghi, Ghi chú, Nguồn ("Ghi tay" / "Từ ngân hàng (SePay)" / "Hệ thống"); dòng đã xoá có chip "đã xoá".
+   - 2a. Khoản thu đã chia với Tích sản 0 (`wealth_note` có — allocation UC-203 4c, ADR-112): thêm hàng **Tích sản** "Không trả cho mình lần này: {lý do}".
    - 2b. **Liên kết hai chiều** (chỉ khi đọc được từ server — dòng mở từ danh sách khi mất mạng không có):
      - Dòng có `link` (khoản `refund` / `collect` có khoản gốc): hàng **Trả cho** "khoản chi d/m · X ₫" / "khoản cho vay d/m · X ₫" (`linkOriginText`) có mũi tên, chạm → `openTx(khoản gốc)` (sheet đổi sang khoản gốc). Khoản gốc đã bị xoá (`link.status ≠ 'active'` — xoá không gỡ liên kết, ledger UC-102) thì hàng nói thêm " · khoản gốc đã xoá"; chạm vẫn mở, khoản gốc có chip "đã xoá". Nhãn "Trả cho" không bị ép hẹp khi chữ bên phải dài (chữ bên phải xuống dòng).
      - Dòng `spend` / `lend` có `linked_from` không rỗng: hàng **Đã nhận lại** "{tổng} ₫ · trả dư Z ₫" / "· còn thiếu Z ₫" / "· đủ" (chênh = tổng nhận − khoản gốc; `returnedText`), rồi mỗi khoản một hàng "d/m · {Hoàn tiền / Nhận lại tiền cho vay}" — "Y ₫" có mũi tên, chạm → `openTx(khoản đó)`. Chỉ tính khoản còn hiệu lực; gỡ gán / xoá khoản trả về thì nó biến khỏi mục này.
@@ -44,6 +46,7 @@
    - Toast "Đã sửa thành 120.000 ₫ Xăng xe. Đi lại còn 830.000 ₫ tuần này." (khoản thu: "Đã sửa thành X và chia lại.").
 6. **Gán lại**: `POST /v1/logs/transactions/:txId/void` (ingest UC-306) → toast "Đã gỡ gán X. Chọn lại cách gán cho giao dịch này." → màn Gán với log đó chọn sẵn (điện thoại: mở thẳng sheet gán — UC-706 3b).
 7. **Chia** (khoản thu chưa chia): `POST /v1/allocate/preview { amount, taxable, at, account_id: counter_account_id, income_stream_id? }` lấy từ chính khoản đó (đúng các trường server dùng khi chia — allocation UC-203) → bảng **Chia thử trước khi ghi** (`AllocationPreview`, như UC-705 bước 4) và hai nút **Thôi** (đóng bảng) / **Chia và ghi sổ** → `POST /v1/allocate { income_tx_id }` (`already_allocated` không coi là lỗi) → tải lại số → toast "Đã chia X." + " Còn N lệnh chuyển tiền cần làm." (`ordersLeft`, như UC-705 bước 6); sheet đóng.
+   - Đầu bảng có **Có Tích sản** (thanh 1–100%, mặc định 10%) / **Không Tích sản** (ô Lý do bắt buộc) — allocation UC-202 5c, ADR-112; **Chia và ghi sổ** luôn gửi `wealth_amount` (và `wealth_note` khi Không); toast thêm "(Tích sản X ₫)" / "(không Tích sản lần này)".
    - Bảng có nút **Tự chia** (allocation UC-202 5b, ADR-108); đang Tự chia thì **Chia và ghi sổ** gửi `POST /v1/allocate { income_tx_id, amounts }`, nút tắt khi tổng lệch hay có ô sai.
 
 ## Alternative Flows
@@ -109,6 +112,12 @@
 - When mở chi tiết khoản nhận lại, chạm hàng Trả cho
 - Then hàng "Trả cho · khoản cho vay 25/9 · 200.000 ₫ · khoản gốc đã xoá" (nhãn "Trả cho" nằm một dòng, chữ bên phải xuống dòng); chạm mở khoản cho vay có chip "đã xoá"; sửa (không xoá) một khoản gốc thì khoản trả về trỏ sang khoản mới, mục Đã nhận lại vẫn hiện ở khoản mới
 - Tests: [`web/src/lib/refunds.test.ts`](../../web/src/lib/refunds.test.ts) › "trả cho khoản cho vay, xem hai chiều (change 261005-lien-ket-khoan-goc) › khoản gốc đã xoá: liên kết giữ, dòng Trả cho nói khoản gốc đã xoá"; [`test/receivables.test.ts`](../../test/receivables.test.ts) › "trả cho khoản cho vay khi nhập tay (change 261005-lien-ket-khoan-goc) › sửa khoản gốc: khoản trả về trỏ sang khoản mới; đổi loại hay đổi người của khoản gốc thì invalid_link, không đổi gì; xoá khoản gốc thì liên kết giữ, khoản gốc hiện đã xoá" (server); hàng trong sheet: ⚠ Chưa có test (đã xem tận mắt ở 390px, `wrangler dev` cục bộ)
+
+### AC-10: Khoản thu chia không Tích sản cho thấy lý do
+- Given khoản thu đã chia với `wealth_amount 0` và lý do
+- When mở chi tiết
+- Then hàng "Tích sản: Không trả cho mình lần này: {lý do}"; `GET /v1/transactions/:id` có `wealth_note`
+- Tests: [`test/api.test.ts`](../../test/api.test.ts) › "Tích sản người chọn khi chia và lý do Tích sản 0 › UC-203 AC-13: wealth_amount 0 không wealth_note → 400 wealth_note_required, không ghi gì; có note → ghi, allocation_runs.wealth_note lưu, GET /v1/transactions/:id có wealth_note, GET /v1/wealth-building liệt kê trong skippedRuns"; [`web/src/lib/wealth-slider.test.ts`](../../web/src/lib/wealth-slider.test.ts) › "Có / Không Tích sản khi chia (change 261015-chot-thang-va-keo-tich-san) › UC-202 AC-8: chọn Không Tích sản → cần lý do, nút ghi tắt tới khi có lý do; body là wealth_amount 0 + wealth_note"; hàng trong sheet và toast: ⚠ Chưa có test (giao diện — xem tay 390px / 1280px cục bộ)
 
 ## Traceability
 - Code: `web/src/screens/tx-sheet.tsx` › `TxSheet`, `TxSheetBody` (`canAllocate`, `preview`, `allocate`, `linkedFrom`, hàng Trả cho / Đã nhận lại); `web/src/lib/refunds.ts` › `linkOriginText`, `returnedText`; `web/src/lib/types.ts` › `TxRow` (`linked_from`, `link`), `TxLink`, `TxLinkedFrom`; `web/src/lib/transactions.ts` › `txActions`, `txOrigin`, `txLabel`, `editForm`, `draftFromTx`, `editedAt`, `withChosen`, `voidConfirm`, `voidToast`, `editToast`, `txWalletId`; `web/src/lib/pending.ts` › `walletRemain`, `ordersLeft`; `web/src/state/store.ts` › `openTx`, `voidEntry`, `replaceEntry`, `txOpen`, `editTx`; `web/src/screens/entry.tsx` › `Entry`, `EntryForm` (chế độ sửa); `web/src/screens/other-entry-sheet.tsx` › `OtherEntrySheet`, `IncomeForm`, `QueuedForm` (`edit`), `AllocationPreview`; `web/src/screens/budget-sheets.tsx` › `MoveBudgetSheet` (`edit`); `web/src/screens/today-desktop.tsx` › `RecentTransactions`, `TxLine`; `web/src/screens/memo-book.tsx` › `BookDetailSheet` (lần tiền đi / về bấm được); `web/src/screens/wallets.tsx` › `WealthBuildingTab`; `web/src/screens/tenants.tsx` (Đã chuyển); `web/src/screens/assign.tsx` › `Assign`; `web/src/app.tsx`; `web/src/styles.css` › `.tx-row`, `.tx-open`.

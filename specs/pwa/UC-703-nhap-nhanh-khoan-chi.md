@@ -23,6 +23,7 @@
 - v15 (2026-10-06, commit `43e4699`): change [`261006-so-giao-dich`](../changes/archive/261006-so-giao-dich/proposal.md) — đầu card "Giao dịch gần đây" thêm link **Xem tất cả ›** mở Sổ giao dịch (pwa [UC-716](UC-716-so-giao-dich.md)); **+ Ghi khoản** ở Sổ giao dịch mở màn này với ngày điền sẵn (7b): dòng phụ "Ghi vào ngày 30/9 — ghi xong quay về Sổ giao dịch", lưu xong về sổ.
 - v16 (2026-10-06, commit `a0d0ccc`): card Giao dịch gần đây có nút rộng **Mở Sổ giao dịch — xem theo tháng, lọc, tìm** dưới phần chia trang (pwa UC-716).
 - v17 (2026-10-07, commit `7424f26`): địa chỉ màn Nhập `#entry`, shortcut manifest `/#entry` (thay `#nhap`) — ADR-92 (change [261007-doi-ten-tieng-anh](../changes/archive/261007-doi-ten-tieng-anh/proposal.md))
+- v18 (2026-10-15): chủ nhà: "rename nút đó thành tiền vào" — nút header "Loại khác" → **Tiền vào**.
 
 ## Preconditions
 - Đã có `bootstrap` (từ mạng hoặc bản lưu của đúng người — UC-710); chưa có thì hiện skeleton, hoặc — lần tải đầu đã hỏng — "Chưa tải được số." / "Không có mạng." kèm **Tải lại** (pwa UC-702 E1).
@@ -48,7 +49,7 @@
 - 3c. "Thêm ghi chú, đổi ngày": ghi chú ≤ 500 ký tự; ngày tối đa hôm nay (đồng hồ máy). Ngày lùi → `at` = 12:00 giờ VN của ngày đó; hôm nay → giờ thật.
 - 3d. Sau khi tải lại bootstrap mà tài khoản đang chọn không còn trong danh sách nhập tay → tài khoản về mặc định.
 - 5a. Offline: phụ đề đổi thành "Không có mạng — khoản chi vẫn ghi, tự gửi khi có mạng"; luồng giữ nguyên.
-- Header có nút **Loại khác** (UC-705); cuối màn có card "Đếm ví / nhập số dư thật" (UC-708), danh sách "Chưa lên sổ" (UC-704) và "Giao dịch gần đây" (chia trang — AC-13; chạm dòng → UC-715; link **Xem tất cả ›** ở đầu card → Sổ giao dịch, UC-716).
+- Header có nút **Tiền vào** (sheet "Tiền vào & loại khác", UC-705); cuối màn có card "Đếm ví / nhập số dư thật" (UC-708), danh sách "Chưa lên sổ" (UC-704) và "Giao dịch gần đây" (chia trang — AC-13; chạm dòng → UC-715; link **Xem tất cả ›** ở đầu card → Sổ giao dịch, UC-716).
 - 7a. Chế độ sửa (mở từ **Sửa** ở UC-715): form điền sẵn khoản chi cũ, ô ghi chú và ngày mở sẵn, khoản trả nợ hiện "Trả nợ cho {tên}"; Lưu gọi `/v1/transactions/:id/replace` (không qua hàng đợi, cần mạng), xong về màn đã mở; **Thôi sửa** hoặc rời màn thì bỏ sửa.
 - 7b. Mở từ **+ Ghi khoản** ở Sổ giao dịch (UC-716, `entryPreset`): ngày điền sẵn là ngày cuối tháng đang xem ở sổ nếu tháng đó đã qua (không thì hôm nay) — hàng ngày hiện "30/9", đổi được; dòng phụ "Ghi vào ngày {d/m} — ghi xong quay về Sổ giao dịch" (mất mạng: dòng phụ offline như 5a). Lưu (kể cả khi vào hàng đợi) → về Sổ giao dịch; rời màn mà không lưu thì bỏ ngày điền sẵn. Loại khác vẫn dùng ngày riêng của sheet.
 

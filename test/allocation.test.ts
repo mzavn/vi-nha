@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { AllocationConfigError, allocate, type AllocationInput, type WalletRule } from "../src/domain/allocation";
+import { AllocationConfigError, allocate, isFullLock, type AllocationInput, type WalletRule } from "../src/domain/allocation";
+import { DomainError } from "../src/domain/types";
 import { openDb } from "./helpers/d1-sqlite";
 
 // Luật nạp lấy từ chính seed, để bảng số dưới đây luôn nói về cấu hình thật của nhà.
@@ -26,6 +27,7 @@ function input(amount: number, over: Partial<AllocationInput> & { taxable?: bool
     balances: over.balances ?? {},
     openingBalances: over.openingBalances ?? {},
     stream: over.stream,
+    wealthOverride: over.wealthOverride,
   };
 }
 
@@ -184,5 +186,66 @@ describe("chia theo nguồn thu", () => {
   it("khóa trọn 100% chia nhiều ví: đồng lẻ làm tròn về ví khóa đầu tiên", () => {
     const stream = { locks: [{ walletId: "rental-income", percent: 0.3 }, { walletId: "wealth-building", percent: 0.7 }] };
     expect(byWallet(allocate(input(7, { stream })))).toEqual({ "rental-income": 3, "wealth-building": 4 });
+  });
+});
+
+// ADR-112: Có Tích sản (kéo 1–100%) / Không Tích sản — số Tích sản người chọn thay khoản cắt % / phần khóa.
+describe("wealthOverride: Tích sản người chọn khi chia", () => {
+  const WB = "wealth-building";
+  const override = (amount: number) => ({ walletId: WB, amount });
+  const invalid = (fn: () => unknown) => {
+    try {
+      fn();
+    } catch (err) {
+      expect(err).toBeInstanceOf(DomainError);
+      expect(err).toMatchObject({ code: "invalid_amounts" });
+      return;
+    }
+    throw new Error("không ném lỗi");
+  };
+
+  it("UC-203 AC-13: wealthOverride 3.600.000 trên khoản thu 24.000.000 (luật Tích sản 30%) → Tích sản 3.600.000, phần còn lại 20.400.000 chia theo luật", () => {
+    const got = byWallet(allocate(input(24_000_000, { wealthOverride: override(3_600_000) })));
+    expect(got[WB]).toBe(3_600_000);
+    expect(got["tax"]).toBeUndefined();
+    expect(Object.entries(got).filter(([id]) => id !== WB).reduce((s, [, v]) => s + v, 0)).toBe(20_400_000);
+    expect(sum(got, MUST)).toBe(13_000_000);
+  });
+
+  it("UC-203 AC-13: khoản thu 10.000.000 tính thuế 10%, wealthOverride 9.500.000 → DomainError invalid_amounts, không phải AllocationConfigError", () => {
+    invalid(() => allocate(input(10_000_000, { taxable: true, wealthOverride: override(9_500_000) })));
+    // Vừa khít: 9.000.000 + thuế 1.000.000 = khoản thu → ghi được, dòng thác nhận 0.
+    const got = byWallet(allocate(input(10_000_000, { taxable: true, wealthOverride: override(9_000_000) })));
+    expect(got).toEqual({ [WB]: 9_000_000, tax: 1_000_000 });
+  });
+
+  it("UC-203: nguồn thu khóa Tích sản 45% → override thay phần khóa; nguồn không khóa Tích sản → thêm khoản cắt; nguồn khóa 100% → invalid_amounts", () => {
+    const wife = { locks: [{ walletId: WB, percent: 0.45 }] };
+    const got = byWallet(allocate(input(11_000_000, { stream: wife, wealthOverride: override(1_100_000) })));
+    expect(got[WB]).toBe(1_100_000);
+    expect(sum(got, MUST)).toBe(9_900_000); // dưới tổng sàn Must: toàn bộ phần còn lại vào Must
+
+    const plain = byWallet(allocate(input(19_100_000, { stream: { locks: [] }, wealthOverride: override(1_910_000) })));
+    expect(plain[WB]).toBe(1_910_000);
+    expect(plain["tax"]).toBeUndefined();
+
+    const rental = { locks: [{ walletId: "rental-income", percent: 1 }] };
+    expect(isFullLock(rental.locks)).toBe(true);
+    expect(isFullLock(wife.locks)).toBe(false);
+    expect(isFullLock([])).toBe(false);
+    invalid(() => allocate(input(5_000_000, { stream: rental, wealthOverride: override(500_000) })));
+
+    // Phần khóa khác + Tích sản vượt khoản thu → invalid_amounts.
+    const other = { locks: [{ walletId: "travel", percent: 0.6 }] };
+    invalid(() => allocate(input(1_000_000, { stream: other, wealthOverride: override(500_000) })));
+  });
+
+  it("UC-203: wealthOverride 0 → không có fund Tích sản, Thuế vẫn cắt; override âm / lẻ / vượt khoản thu → invalid_amounts", () => {
+    const r = allocate(input(10_000_000, { taxable: true, wealthOverride: override(0) }));
+    const got = byWallet(r);
+    expect(got[WB]).toBeUndefined();
+    expect(got["tax"]).toBe(1_000_000);
+    expect(r.funds.reduce((s, f) => s + f.amount, 0)).toBe(10_000_000);
+    for (const amount of [-1, 1000.5, 10_000_001, Number.NaN]) invalid(() => allocate(input(10_000_000, { wealthOverride: override(amount) })));
   });
 });

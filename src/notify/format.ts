@@ -97,11 +97,13 @@ export interface DailyMessageInput {
   backfillScope?: "day" | "week" | "month";
   /** Giao dịch ngân hàng cần xem tay trong 24 giờ qua: không đọc được, hoặc đã ghi nhưng xử lý tiếp bị lỗi (ví dụ chưa chia). */
   unreadableBankTransactions?: number;
-  /** Chỉ có giá trị vào ngày 1 hằng tháng, sau khi chốt tháng trước xong. */
+  /** Ngày 1, tháng trước chưa chốt mà có phần dư hoặc chi lố được bù: mời mở app chốt (UC-207, ADR-111). */
   monthClose: {
     month: string; // "2026-09"
-    amount: number;
-    transfers: { fromName: string; toName: string; amount: number }[];
+    /** Lợi nhuận thêm: phần dư sau khi bù chi lố. */
+    profit: number;
+    /** Phần chi lố sẽ được bù. */
+    covered: number;
   } | null;
   /** Chỉ có giá trị vào ngày 10 & 25, khi còn income chưa chia. */
   incomeReminder: { day: number; unallocatedCount: number } | null;
@@ -116,7 +118,7 @@ export interface DailyMessageInput {
 }
 
 /**
- * Tin sáng. Bản đầy đủ: dòng 💰, rồi các dòng việc cần làm (📥 ❗ 🔁 ⚠️ 📅 🧮 🏠 🧹), rồi các dòng thông tin
+ * Tin sáng. Bản đầy đủ: dòng 💰, rồi các dòng việc cần làm (📥 ❗ 🔁 ⚠️ 📅 🧮 🏠 📌), rồi các dòng thông tin
  * (🎯 💳 🤝 🏦 🔗 🩹). Bản ngắn: tiêu đề "Còn X tuần này", nội dung là việc cần làm theo cùng thứ tự, rồi chỗ lệch đối soát.
  */
 export function dailyMessage(input: DailyMessageInput): NotifyMessage {
@@ -166,14 +168,15 @@ export function dailyMessage(input: DailyMessageInput): NotifyMessage {
   }
   if (tenants.length > 0) todo.push(`chốt tháng ${tenants.map((t) => t.name).join(", ")}`);
 
-  if (input.monthClose && input.monthClose.amount > 0) {
-    const monthNumber = Number(input.monthClose.month.split("-")[1]);
-    lines.push(`🧹 Đã quét ${formatMoney(input.monthClose.amount)} dư tháng ${monthNumber} sang Tích sản`);
-    for (const t of input.monthClose.transfers) {
-      lines.push(`🔁 Chuyển ${formatMoney(t.amount)} từ ${escapeHtml(t.fromName)} sang ${escapeHtml(t.toName)}`);
-    }
-    const orders = input.monthClose.transfers.length;
-    todo.push(`quét ${formatMoney(input.monthClose.amount)} dư tháng ${monthNumber}${orders > 0 ? ` (${orders} lệnh chuyển)` : ""}`);
+  const close = input.monthClose;
+  if (close && (close.profit > 0 || close.covered > 0)) {
+    const monthNumber = Number(close.month.split("-")[1]);
+    lines.push(
+      close.profit > 0
+        ? `📌 Tháng ${monthNumber}: dư ${formatMoney(close.profit)} sau khi bù chi lố — mở app để chốt`
+        : `📌 Tháng ${monthNumber}: chi lố được bù ${formatMoney(close.covered)}, không còn dư — mở app để chốt`,
+    );
+    todo.push(`chốt tháng ${monthNumber}`);
   }
 
   // ── Thông tin ──

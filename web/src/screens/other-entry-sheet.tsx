@@ -2,7 +2,7 @@
 // Thu nhập và người thuê chi cần mạng (thu nhập ghi xong chia ngay hoặc để chia sau / sổ người thuê không có hàng đợi); năm loại còn lại đi qua hàng đợi như khoản chi.
 // Có `edit`: cùng form, điền sẵn từ một khoản đã lên sổ; lưu là thay khoản đó (POST /v1/transactions/:id/replace, UC-715) nên cần mạng.
 
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { ApiError, api, errorText } from "../lib/api";
 import { defaultAccountFor, defaultBankFor, defaultWalletFor, manualAccounts, spendableWallets, walletOfMember } from "../lib/categories";
 import { checkSplit, prefillSplit, setSplitAmount, splitOrders, splitPayload, splitWallets, type ManualSplit } from "../lib/manual-split";
@@ -13,8 +13,20 @@ import { linePayload } from "../lib/rental";
 import { collectToast, defaultReceivableId, lendToast } from "../lib/receivables";
 import { deferredIncomeToast } from "../lib/splits";
 import { wealthBuildingMoveHint } from "../lib/wealth-building-accounts";
+import {
+  initialWealth,
+  syncSplitWealth,
+  WEALTH_TICKS,
+  wealthAmountFor,
+  wealthBlocked,
+  wealthBody,
+  wealthFromAmount,
+  wealthSplitNote,
+  withIncome,
+  type WealthChoice,
+} from "../lib/wealth-slider";
 import { draftFromTx, editedAt, MEANING_LABEL, withChosen, type TxDraft } from "../lib/transactions";
-import type { AllocationPlan, Bootstrap, CreateEntryResult, EntryBody, Rental, SettingsData, TxRow, Wallet } from "../lib/types";
+import type { AllocateResult, AllocationPlan, Bootstrap, CreateEntryResult, EntryBody, Rental, SettingsData, TxRow, Wallet } from "../lib/types";
 import { useResource } from "../state/resource";
 import { getState, refresh, replaceEntry, saveEntry, toast, useApp } from "../state/store";
 import { AccountSelect, AmountInput, CategorySelect, newClientId, WalletSelect } from "../ui/fields";
@@ -64,7 +76,7 @@ export function OtherEntrySheet({
   if (!boot) return null;
   const heading = edit ? `Sửa: ${(MEANING_LABEL[edit.meaning] ?? edit.meaning).toLowerCase()}` : title;
   return (
-    <Sheet open title={heading ?? "Loại khác"} onClose={onClose}>
+    <Sheet open title={heading ?? "Tiền vào & loại khác"} onClose={onClose}>
       {!heading && <Seg class="pad" label="Loại giao dịch" value={kind} options={KINDS} onChange={setKind} />}
       {kind === "income" ? (
         <IncomeForm boot={boot} initialAmount={initialAmount} edit={edit && draft ? { tx: edit, draft } : undefined} onDone={onClose} />
@@ -89,31 +101,232 @@ const tierNote = (w: Wallet | undefined): string => {
   return w.mustGroup === "have" ? "phần còn lại" : "Must";
 };
 
+/** Thân `/v1/allocate/preview` trừ phần Tích sản — đúng các trường server dùng để chia khoản thu. */
+export interface PreviewInput {
+  amount: number;
+  taxable: boolean;
+  at: string;
+  account_id: string | null;
+  income_stream_id?: string;
+}
+
+export interface AllocationPreviewState {
+  input: PreviewInput | null;
+  plan: AllocationPlan | null;
+  error: string | null;
+  split: ManualSplit | null;
+  setSplit: (split: ManualSplit | null) => void;
+  /** null: chưa biết khoản thu có chỉnh được Tích sản không, hoặc không chỉnh được (nguồn khóa 100%). */
+  wealth: WealthChoice | null;
+  setWealth: (choice: WealthChoice) => void;
+  /** Được bấm ghi: có bản chia thử mới, không lỗi, Tự chia khớp tổng, lựa chọn Tích sản đủ (Không thì có lý do). */
+  ready: boolean;
+  /** Phần thân `/v1/allocate` theo cách chia đang chọn. */
+  allocateBody: () => { amounts?: { wallet_id: string; amount: number }[]; wealth_amount?: number; wealth_note?: string };
+}
+
+/**
+ * Chia thử một khoản thu (UC-202) kèm lựa chọn Có / Không Tích sản (ADR-112). Lần xem trước đầu không gửi `wealth_amount`;
+ * server nói `wealth.adjustable` thì đặt Có Tích sản 10% và xem trước lại với số đó. Đổi nguồn thu → dò lại từ đầu;
+ * đổi số tiền → giữ %, tính lại số. Kéo / gõ Tích sản giữ bảng cũ trong lúc chờ (thanh không bị gỡ khi đang kéo);
+ * ở Tự chia thì không gọi lại — ô Tích sản đồng bộ ngay với thanh.
+ */
+export function useAllocationPreview(input: PreviewInput | null, online: boolean): AllocationPreviewState {
+  const [plan, setPlan] = useState<AllocationPlan | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [split, setSplit] = useState<ManualSplit | null>(null);
+  const [wealth, setWealthState] = useState<WealthChoice | null>(null);
+  const last = useRef<{ key: string; stream: string; amount: number } | null>(null);
+  const key = input && online ? JSON.stringify(input) : null;
+  const wealthAmount = wealth === null ? null : wealth.mode === "on" ? wealth.amount : 0;
+
+  useEffect(() => {
+    if (!input || key === null || !input.amount) {
+      last.current = null;
+      setPlan(null);
+      setError(null);
+      setWealthState(null);
+      if (!input) setSplit(null);
+      return;
+    }
+    const prev = last.current;
+    const stream = input.income_stream_id ?? "";
+    last.current = { key, stream, amount: input.amount };
+    let sent = wealthAmount;
+    if (prev?.key !== key) {
+      setPlan(null);
+      setError(null);
+      if (prev && prev.stream !== stream) {
+        // Nguồn khác có thể khóa 100% (tiền thuê): hỏi lại server có chỉnh được không.
+        sent = null;
+        setWealthState(null);
+      } else if (prev && prev.amount !== input.amount && wealth) {
+        const next = withIncome(wealth, input.amount);
+        sent = next.mode === "on" ? next.amount : 0;
+        setWealthState(next);
+        if (split && plan?.wealth) setSplit(syncSplitWealth(split, plan.wealth.walletId, next));
+      }
+    } else if (split) return;
+    let live = true;
+    const t = setTimeout(() => {
+      api
+        .post<AllocationPlan>("/v1/allocate/preview", { ...input, ...(sent === null ? {} : { wealth_amount: sent }) })
+        .then((p) => {
+          if (!live) return;
+          setPlan(p);
+          setError(null);
+          if (sent === null && p.wealth?.adjustable) {
+            const first = initialWealth(input.amount);
+            setWealthState(first);
+            setSplit((s) => (s && p.wealth ? syncSplitWealth(s, p.wealth.walletId, first) : s));
+          }
+        })
+        .catch((err) => live && setError(errorText(err)));
+    }, 350);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [key, split ? "split" : wealthAmount]);
+
+  function setWealth(choice: WealthChoice) {
+    setWealthState(choice);
+    if (split && plan?.wealth) setSplit(syncSplitWealth(split, plan.wealth.walletId, choice));
+  }
+
+  const amount = input?.amount ?? 0;
+  const ready =
+    plan !== null &&
+    error === null &&
+    (split === null || checkSplit(split, amount).ok) &&
+    !wealthBlocked(wealth) &&
+    !(plan.wealth?.adjustable && wealth === null);
+  return {
+    input,
+    plan,
+    error,
+    split,
+    setSplit,
+    wealth,
+    setWealth,
+    ready,
+    allocateBody: () => (split ? { amounts: splitPayload(split), ...wealthSplitNote(wealth) } : wealthBody(wealth)),
+  };
+}
+
+/** Có / Không Tích sản: thanh 1–100% (vạch 1 · 10 · 30) với ô số hai chiều, hoặc ô Lý do bắt buộc. */
+function WealthPicker({ choice, amount, onChange }: { choice: WealthChoice; amount: number; onChange: (c: WealthChoice) => void }) {
+  // Số đang gõ dưới 1% hoặc vượt khoản thu: giữ trong ô, kẹp khi rời ô — không nhảy số giữa lúc gõ.
+  const [draft, setDraft] = useState<number | null>(null);
+  const commit = () => {
+    if (draft === null) return;
+    setDraft(null);
+    onChange({ mode: "on", ...wealthFromAmount(draft, amount) });
+  };
+  return (
+    <div class="wealth-pick">
+      <Seg
+        label="Tích sản lần này"
+        value={choice.mode}
+        options={[
+          { value: "on", label: "Có Tích sản" },
+          { value: "off", label: "Không Tích sản" },
+        ]}
+        onChange={(m) => m !== choice.mode && onChange(m === "on" ? initialWealth(amount) : { mode: "off", note: "" })}
+      />
+      {choice.mode === "on" ? (
+        <>
+          <div class="wealth-row">
+            <label for="wealth-pct" class="wealth-pct">
+              {String(choice.pct).replace(".", ",")}%
+            </label>
+            <input
+              id="wealth-pct"
+              class="wealth-range"
+              type="range"
+              min={1}
+              max={100}
+              step={1}
+              list="wealth-ticks"
+              value={choice.pct}
+              aria-valuetext={`${choice.pct}% — ${formatTypedVnd(choice.amount)}`}
+              onInput={(e) => {
+                const pct = Number(e.currentTarget.value);
+                setDraft(null);
+                onChange({ mode: "on", pct, amount: wealthAmountFor(pct, amount) });
+              }}
+            />
+            <datalist id="wealth-ticks">
+              {WEALTH_TICKS.map((t) => (
+                <option key={t} value={t} label={`${t}%`} />
+              ))}
+            </datalist>
+          </div>
+          <div class="field" style={{ borderTop: "none", minHeight: 0 }}>
+            <label for="wealth-amount">Vào Tích sản</label>
+            <span onFocusOut={commit} style={{ display: "contents" }}>
+              <AmountInput
+                id="wealth-amount"
+                value={draft ?? choice.amount}
+                onChange={(n, valid) => {
+                  if (!valid) return;
+                  const next = wealthFromAmount(n, amount);
+                  if (next.amount === n) {
+                    setDraft(null);
+                    onChange({ mode: "on", ...next });
+                  } else setDraft(n);
+                }}
+              />
+            </span>
+          </div>
+          <p class="fhint">Profit First: trả cho mình trước — 1% cũng được, 10% mặc định, 30% là đích.</p>
+        </>
+      ) : (
+        <div class="field" style={{ borderTop: "none", flexWrap: "wrap" }}>
+          <label for="wealth-note">Lý do</label>
+          <input
+            id="wealth-note"
+            class="ctl full"
+            maxLength={500}
+            placeholder="Vì sao lần này không trả cho mình?"
+            value={choice.note}
+            aria-invalid={choice.note.trim() === "" ? "true" : undefined}
+            onInput={(e) => onChange({ mode: "off", note: e.currentTarget.value })}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * Bảng "chia thử" — dùng chung cho thu nhập nhập tay, khoản tiền vào ở màn Gán và chi tiết khoản thu chưa chia.
- * `split` khác null: đang Tự chia (UC-202) — mỗi ví một ô số; chỗ gọi gửi `splitPayload(split)` khi ghi.
+ * Đầu bảng: Có / Không Tích sản (khi khoản thu chỉnh được Tích sản). `split` khác null: đang Tự chia (UC-202) — mỗi ví
+ * một ô số; ô Tích sản đi theo lựa chọn ở trên (chỉ hiện ô riêng khi không có lựa chọn, vd nguồn khóa 100%).
  */
 export function AllocationPreview({
-  plan,
+  preview,
   boot,
-  amount,
-  split,
-  onSplit,
   fromAccountId,
 }: {
-  plan: AllocationPlan;
+  preview: AllocationPreviewState;
   boot: Bootstrap;
-  amount: number;
-  split: ManualSplit | null;
-  onSplit: (split: ManualSplit | null) => void;
   /** Tài khoản tiền về — lệnh chuyển xem trước của Tự chia tính từ đây. */
   fromAccountId: string | null;
 }) {
+  const { plan, split, wealth, setSplit: onSplit } = preview;
+  if (!plan || !preview.input) return null;
+  const amount = preview.input.amount;
+  const wealthWalletId = plan.wealth?.walletId ?? null;
   const wallet = (id: string) => boot.wallets.find((w) => w.id === id);
   const account = (id: string) => boot.accounts.find((a) => a.id === id)?.name ?? id;
   const total = plan.funds.reduce((s, f) => s + f.amount, 0);
   const orders = split ? splitOrders(split, boot.wallets, fromAccountId) : plan.transferOrders;
-  const check = split ? checkSplit(split, boot.wallets, amount) : null;
+  const check = split ? checkSplit(split, amount) : null;
+  const startSplit = () => {
+    const s = prefillSplit(plan, boot.wallets);
+    return wealth && wealthWalletId ? syncSplitWealth(s, wealthWalletId, wealth) : s;
+  };
   return (
     <>
       <div class="card-h" style={{ paddingBottom: "2px" }}>
@@ -125,33 +338,28 @@ export function AllocationPreview({
             { value: "rules", label: "Theo luật" },
             { value: "manual", label: "Tự chia" },
           ]}
-          onChange={(v) => onSplit(v === "manual" ? prefillSplit(plan, boot.wallets) : null)}
+          onChange={(v) => onSplit(v === "manual" ? startSplit() : null)}
         />
       </div>
+      {wealth && <WealthPicker choice={wealth} amount={amount} onChange={preview.setWealth} />}
       {split && check ? (
         <>
-          {splitWallets(boot.wallets).map((w) => (
-            <div class="field" key={w.id}>
-              <label for={`split-${w.id}`}>
-                {w.name} <span class="sub-line">{tierNote(w)}</span>
-                {w.tier === "wealth_building" && <span class="sub-line" style={{ display: "block" }}>Profit First: để dành trước — nhỏ cũng được</span>}
-              </label>
-              <AmountInput id={`split-${w.id}`} value={split.amounts[w.id] ?? 0} onChange={(n, valid) => onSplit(setSplitAmount(split, w.id, n, valid))} />
-            </div>
-          ))}
+          {splitWallets(boot.wallets)
+            .filter((w) => !(wealth && w.id === wealthWalletId))
+            .map((w) => (
+              <div class="field" key={w.id}>
+                <label for={`split-${w.id}`}>
+                  {w.name} <span class="sub-line">{tierNote(w)}</span>
+                </label>
+                <AmountInput id={`split-${w.id}`} value={split.amounts[w.id] ?? 0} onChange={(n, valid) => onSplit(setSplitAmount(split, w.id, n, valid))} />
+              </div>
+            ))}
           <div class="wf">
             <div class="r total" aria-live="polite">
               <span>{check.done}</span>
               {check.rest && <span class={check.over ? "err" : undefined}>{check.rest}</span>}
             </div>
           </div>
-          {check.reminder && (
-            <div style={{ padding: "10px 16px 0" }}>
-              <Banner tone="warn" mark="!">
-                {check.reminder}. Vẫn ghi được.
-              </Banner>
-            </div>
-          )}
         </>
       ) : (
         <div class="wf">
@@ -186,6 +394,7 @@ export function AllocationPreview({
           </Banner>
         </div>
       )}
+      {/* Lỗi chia thử do chỗ gọi hiện ngay dưới bảng (cả khi chưa có bảng). */}
       <div class="note">
         {orders.length === 0
           ? "Không sinh lệnh chuyển tiền: các ví nhận tiền nằm cùng tài khoản."
@@ -207,10 +416,6 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
   const [day, setDay] = useState(() => d?.day ?? dayKey(new Date()));
   const [streamId, setStreamId] = useState(d?.income_stream_id ?? "");
   const [tenantId, setTenantId] = useState(d?.tenant_id ?? "");
-  const [plan, setPlan] = useState<AllocationPlan | null>(null);
-  const [split, setSplit] = useState<ManualSplit | null>(null);
-  const splitBlocked = split !== null && !checkSplit(split, boot.wallets, amount).ok;
-  const [previewError, setPreviewError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** Khoản thu đã ghi nhưng chia chưa xong: bấm lại chỉ chia, không ghi thêm khoản thu. */
@@ -233,24 +438,14 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
   // Người thuê trả mà không chọn nguồn: server tự gán nguồn cho thuê — chia thử cũng theo nguồn đó.
   const previewStream = streamId || (tenantId ? (rental?.incomeStreamId ?? "") : "");
 
-  useEffect(() => {
-    setPlan(null);
-    setPreviewError(null);
-    if (!amount || !online) return;
-    const t = setTimeout(() => {
-      api
-        .post<AllocationPlan>("/v1/allocate/preview", {
-          amount,
-          taxable: taxable === "yes",
-          at: at(),
-          account_id: accountId,
-          ...(previewStream ? { income_stream_id: previewStream } : {}),
-        })
-        .then(setPlan)
-        .catch((err) => setPreviewError(errorText(err)));
-    }, 350);
-    return () => clearTimeout(t);
-  }, [amount, taxable, accountId, day, previewStream, online]);
+  // Giờ chia thử cố định theo ngày đã chọn — không đổi mỗi lần vẽ lại (khoá xem trước đổi là gọi lại server).
+  const previewAt = useMemo(at, [day]);
+  const preview = useAllocationPreview(
+    accountId
+      ? { amount, taxable: taxable === "yes", at: previewAt, account_id: accountId, ...(previewStream ? { income_stream_id: previewStream } : {}) }
+      : null,
+    online,
+  );
 
   /** `defer`: chỉ ghi khoản thu (nằm ở ví Thu nhập), không chia — chia sau ở chi tiết giao dịch (UC-715). */
   async function submit(defer = false) {
@@ -283,12 +478,11 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
         return;
       }
       let orders = 0;
+      let wealthNote = "";
       try {
-        const done = await api.post<AllocationPlan & { batchId: string }>("/v1/allocate", {
-          income_tx_id: id,
-          ...(split ? { amounts: splitPayload(split) } : {}),
-        });
+        const done = await api.post<AllocateResult>("/v1/allocate", { income_tx_id: id, ...preview.allocateBody() });
         orders = done.transferOrders.length;
+        if (done.wealth) wealthNote = done.wealth.amount > 0 ? ` (Tích sản ${formatVnd(done.wealth.amount)})` : " (không Tích sản lần này)";
       } catch (err) {
         if (!(err instanceof ApiError && err.code === "already_allocated")) throw err;
       }
@@ -296,7 +490,7 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
       await refresh();
       const after = getState();
       const tail = ordersLeft(orders, after.stale || !after.snap ? null : after.snap.attention.transferOrdersPending);
-      toast(`${edit ? `Đã sửa thành ${formatVnd(amount)} và chia lại` : `Đã chia ${formatVnd(amount)}`}.${tail ? ` ${tail}` : ""}`);
+      toast(`${edit ? `Đã sửa thành ${formatVnd(amount)} và chia lại` : `Đã chia ${formatVnd(amount)}`}${wealthNote}.${tail ? ` ${tail}` : ""}`);
       onDone();
     } catch (err) {
       setError(`${id !== null ? (edit ? "Đã sửa khoản thu nhưng chưa chia. " : "Đã ghi khoản thu nhưng chưa chia. ") : ""}${errorText(err)}`);
@@ -360,15 +554,19 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
         <label for="i-day">Ngày</label>
         <input id="i-day" class="ctl" type="date" max={today} value={day} onInput={(e) => setDay(e.currentTarget.value || today)} />
       </div>
-      {plan && <AllocationPreview plan={plan} boot={boot} amount={amount} split={split} onSplit={setSplit} fromAccountId={accountId} />}
-      {previewError && <p class="err" style={{ padding: "8px 16px 0", margin: 0 }}>{previewError}</p>}
+      <AllocationPreview preview={preview} boot={boot} fromAccountId={accountId} />
+      {preview.error && (
+        <p class="err" role="alert" style={{ padding: "8px 16px 0", margin: 0 }}>
+          {preview.error}
+        </p>
+      )}
       <div class="pad">
         {error && (
           <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
             {error}
           </p>
         )}
-        <button type="button" class="btn btn-primary btn-wide" disabled={!online || busy || !plan || !accountId || splitBlocked} onClick={() => void submit()}>
+        <button type="button" class="btn btn-primary btn-wide" disabled={!online || busy || !preview.ready || !accountId} onClick={() => void submit()}>
           {busy ? "Đang chia…" : txId !== null ? "Chia lại" : edit ? "Sửa và chia lại" : "Chia và ghi sổ"}
         </button>
         {!edit && txId === null && (

@@ -1,8 +1,8 @@
 # Entity model — allocation
 
-Context này sở hữu: **AllocationRule**, **IncomeStream** (kèm **IncomeStreamLock**), **AllocationRun**, **TransferOrder**, và hai "dạng bút toán" do nó sinh trên entity `Transaction`
-(ledger sở hữu bảng): **FundEntry** và **SweepEntry**. Tham chiếu theo tên: `Wallet`, `Account`, `Transaction` (ledger), `BankLog`, `Rule` (ingest),
-`Config` (access — key `salary_min_amount`; rental — key `rental_income_stream_id`), `Tenant` (rental).
+Context này sở hữu: **AllocationRule**, **IncomeStream** (kèm **IncomeStreamLock**), **AllocationRun**, **MonthClose** (`month_closes`), **TransferOrder**, và hai "dạng bút toán" do nó sinh trên entity `Transaction`
+(ledger sở hữu bảng): **FundEntry** và **MonthCloseEntry**. Tham chiếu theo tên: `Wallet`, `Account`, `Transaction` (ledger), `BankLog`, `Rule` (ingest),
+`Config` (access — key `salary_min_amount`, `month_close_wealth_pct`, `month_close_reward_wallet`; rental — key `rental_income_stream_id`), `Tenant` (rental).
 
 ---
 
@@ -60,6 +60,7 @@ Gắn nguồn: nhập tay/gán chọn tay; tiền người thuê không chọn t
 | `income_tx_id` | PRIMARY KEY → một khoản thu **không bao giờ** được chia hai lần; trùng khoá làm cả batch ghi huỷ (`allocateIncome`) |
 | `batch_id` | `A<income_tx_id>`, UNIQUE; cũng là `batch_id` của mọi FundEntry và TransferOrder của lần chia |
 | `at` | Thời điểm ghi (`datetime('now')`, UTC) |
+| `wealth_note` | Lý do lần chia **không trả cho mình** (Tích sản 0, ADR-112): `NULL` hoặc 1–500 ký tự (CHECK, migration 0034, schema v1.34); chỉ ghi khi Tích sản 0 và bản chia chỉnh được Tích sản; dòng cũ `NULL`. Đọc: `GET /v1/transactions/:id` (`wealth_note`), `GET /v1/wealth-building` › `skippedRuns` (chỉ khoản thu còn hiệu lực) |
 
 **Trạng thái:** không có cột trạng thái. Tồn tại = "đã chia". Khi gỡ lần chia (UC-206) dòng này **được giữ nguyên** — khoản thu đã huỷ không bao giờ được chia lại (`undoAllocationStatements`).
 Khoản thu `active` không có dòng ở đây = "chưa chia" (notify đếm để nhắc ngày 10/25 — UC-405).
@@ -71,10 +72,22 @@ Khoản thu `active` không có dòng ở đây = "chưa chia" (notify đếm đ
 - **Trạng thái:** `active` → `void` chỉ qua UC-206 (cả đợt cùng lúc). Không huỷ lẻ: `voidTransaction` từ chối `meaning='fund'` hoặc `source='system'` (409 `system_tx`).
 - **Guard DB** (`migrations/0006_allocation_undo_guard.sql`, trigger `trg_fund_void_needs_unsettled_batch`): chuyển một fund `active → void` bị ABORT `allocation_settled` nếu đợt của nó có TransferOrder `done`.
 
-## SweepEntry — bút toán chốt tháng (dòng `transactions`, `meaning='transfer'`, `batch_id = S<YYYYMM>`)
-- `wallet_id` = ví Tích sản, `counter_wallet_id` = phong bì bị quét; `amount` = số dư dương cuối tháng của phong bì đó.
-- `at` = giây cuối cùng của tháng theo giờ VN (`endOfMonthIso`), `month_key` = tháng được chốt, `week_key = weekKey(at)`; `source='system'`; `note = "Chốt tháng <YYYY-MM>: quét dư sang Tích sản"`.
-- **Invariant:** mỗi tháng chốt tối đa một lần — có bất kỳ `transactions.batch_id = S<YYYYMM>` thì `closeMonth` không ghi gì (kiểm ở app, không có ràng buộc DB; xem [OPEN] ở UC-207).
+## MonthClose — tháng đã chốt (`month_closes`, migration 0034, schema v1.34; ADR-111)
+| Trường | Luật |
+|---|---|
+| `month` | PRIMARY KEY, `YYYY-MM` (CHECK `GLOB '[0-9][0-9][0-9][0-9]-[01][0-9]'` — không chặn `2026-00` / `2026-19`, app chỉ nhận tháng liền trước). Khoá chính là chốt chặn chốt hai lần: INSERT đứng **đầu** `db.batch` của `closeMonth`, trùng → cả batch huỷ, 409 `already_closed` |
+| `closed_at` | `datetime('now')` UTC, dạng `YYYY-MM-DD HH:MM:SS` (API trả `closedAt` nguyên dạng này) |
+| `by_member_id` | → `members(id)`; người bấm chốt; `NULL` cho tháng điền sẵn |
+| `wealth_pct` | % phần dư vào Tích sản đã dùng (0–100, CHECK) |
+
+- Migration 0034 điền sẵn tháng đã có lô `S<YYYYMM>` (`source='system'`) do cron cũ ghi: `wealth_pct` 100, `by_member_id` NULL, `closed_at` = `MIN(created_at)` của lô. Tháng không có lô thì không điền.
+- Tháng không có gì để bù / quét vẫn có dòng khi người bấm chốt.
+
+## MonthCloseEntry — bút toán chốt tháng (dòng `transactions`, `meaning='transfer'`, `batch_id = S<YYYYMM>`)
+- Hai loại (UC-207, ADR-111): **bù** — `wallet_id` = ví chi lố, `counter_wallet_id` = ví dư góp, `note = "Chốt tháng <YYYY-MM>: bù chi lố cho <ví>"`; **quét** — `wallet_id` = Tích sản hoặc Ví Thưởng, `counter_wallet_id` = ví dư, `note = "Chốt tháng <YYYY-MM>: sang Tích sản"` / `"… sang Ví Thưởng"`. `amount` > 0.
+- `at` = giây cuối cùng của tháng theo giờ VN (`endOfMonthIso`) **kể cả khi chốt muộn**, `month_key` = tháng được chốt, `week_key = weekKey(at)`; `source='system'`.
+- **Invariant:** mỗi tháng tối đa một bộ — nhờ khoá chính `month_closes` trong cùng batch (trước 0034 chỉ kiểm ở app). Sau chốt, mọi ví tham gia có `L > 0` về 0 tính tới cuối tháng chốt; Σ bù = C = min(P, N).
+- Lô `S…` cũ (trước 0034) chỉ có loại quét 100% sang Tích sản.
 
 ## TransferOrder — lệnh chuyển tiền thật (`transfer_orders`)
 | Trường | Luật |
@@ -103,5 +116,7 @@ stateDiagram-v2
 - `Transaction(income)` 1 — 0..1 `AllocationRun` 1 — n `FundEntry` (qua `batch_id`, và `FundEntry.link_id` → income).
 - `Transaction(income)` n — 0..1 `IncomeStream` (qua `income_stream_id`); `Rule` (ingest) n — 0..1 `IncomeStream`; `IncomeStream` 1 — n `IncomeStreamLock` n — 1 `Wallet`.
 - `AllocationRun` 1 — 0..n `TransferOrder` (qua `batch_id`; không có khoá ngoại).
+- `MonthClose` 1 — 0..n `MonthCloseEntry` và 0..n `TransferOrder` (qua `batch_id = S<YYYYMM>`; không có khoá ngoại); `MonthClose.by_member_id` → `Member` (access).
+- `Config.month_close_wealth_pct`, `Config.month_close_reward_wallet` (access UC-507) cho mặc định của chốt tháng.
 - `AllocationRule` n — 1 `Wallet`; `Wallet.account_id` quyết định có sinh `TransferOrder` hay không.
 - `Config.salary_min_amount` (access sở hữu bảng) quyết định khoản khớp mẫu lương có được **tự** chia hay không (UC-203 luồng 1b).

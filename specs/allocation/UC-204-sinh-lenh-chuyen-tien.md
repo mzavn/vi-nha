@@ -1,13 +1,14 @@
 # UC-204: Sinh lệnh chuyển tiền
 - Status: implemented
 - BR: BR-02, BR-04, BR-09
-- Decisions: D4 (lương về TK nào thì lệnh xuất phát từ TK đó); commit `8ef7a99` (memo ngẫu nhiên riêng từng lệnh); `plans/reports/redteam-260922-0100-money-correctness.md` Phát hiện 4 (khớp nhầm lệnh khi memo dùng chung cả đợt)
+- Decisions: D4 (lương về TK nào thì lệnh xuất phát từ TK đó); commit `8ef7a99` (memo ngẫu nhiên riêng từng lệnh); `plans/reports/redteam-260922-0100-money-correctness.md` Phát hiện 4 (khớp nhầm lệnh khi memo dùng chung cả đợt); ADR-111 (chốt tháng: gộp lệnh theo cặp nguồn → đích)
 - Actor: hệ thống — được gọi trong UC-202 (bản nháp), UC-203 và UC-207 (ghi), và quyết toán thuế năm (ledger)
 - Trigger: lời gọi `transferOrders(moves, walletAccount, fromAccountId)` + `newTransferMemo()` lúc ghi
 
 ## History
 - v1 (2026-09-22, commit `b92fc0f`): gộp fund theo tài khoản đích; memo `PF <batch_id>` dùng chung cả đợt.
 - v2 (2026-09-22, commit `8ef7a99`): memo `PF` + 6 ký tự ngẫu nhiên **riêng từng lệnh**; ingest tra lệnh theo memo. Lý do: mã theo `batch_id` tuần tự đoán được — người ngoài chuyển đúng số tiền với memo đoán được vào TK của nhà là đánh dấu "đã chuyển" được một lệnh thật; và hai lệnh cùng đợt không phân biệt được.
+- v3 (2026-10-16, commit `0528219`): bước 3b: lệnh chuyển của chốt tháng gộp theo cặp tài khoản nguồn → đích (`monthCloseOrders`) vì chốt tháng nay có bù ví chi lố và Ví Thưởng (allocation UC-207 AC-5) (change [261015-chot-thang-va-keo-tich-san](../changes/archive/261015-chot-thang-va-keo-tich-san/proposal.md))
 
 ## Preconditions
 - Có danh sách `moves` (fund của lần chia, hoặc khoản quét về Tích sản) và bản đồ `wallet → account_id` của các ví active.
@@ -21,7 +22,7 @@
 
 ## Alternative Flows
 - 3a. Mọi ví đích trú cùng TK nhận tiền → không có lệnh.
-- 3b. Chốt tháng (UC-207): gọi riêng cho **từng TK nguồn** của các phong bì bị quét, với một `move` duy nhất về ví Tích sản → có thể nhiều lệnh cùng đích, khác nguồn.
+- 3b. Chốt tháng (UC-207, ADR-111): mỗi tài khoản nguồn có thể có nhiều move (bù ví chi lố ở tài khoản khác, sang Tích sản, sang Ví Thưởng) → `monthCloseOrders` gộp theo **cặp (TK nguồn, TK đích)**, mỗi cặp một lệnh, memo riêng; bù giữa hai ví cùng tài khoản không sinh lệnh. (MODIFIED — trước đây gọi riêng từng TK nguồn với một move về Tích sản.)
 
 ## Exceptions
 - Không có lỗi nghiệp vụ; hàm thuần trả danh sách (có thể rỗng).
@@ -58,7 +59,7 @@
 - Tests: `test/ingest-integrity.test.ts` › "lệnh chuyển tiền › một lần chia có hai lệnh: chân thứ hai gắn đúng giao dịch của lệnh mình" (khớp memo thuộc ingest)
 
 ## Traceability
-- Code: `src/domain/transfer-orders.ts` › `transferOrders`, `newTransferMemo`, `MEMO_ALPHABET`, `TransferOrderDraft`, `Move`; `src/services/ledger.ts` › `walletAccounts`, `allocateIncome`, `closeMonth`, `settleTax`; nhận diện memo: `src/domain/rules.ts` › `extractTransferMemo` (ingest)
+- Code: `src/domain/transfer-orders.ts` › `monthCloseOrders` (chốt tháng, 3b); `src/domain/transfer-orders.ts` › `transferOrders`, `newTransferMemo`, `MEMO_ALPHABET`, `TransferOrderDraft`, `Move`; `src/services/ledger.ts` › `walletAccounts`, `allocateIncome`, `closeMonth`, `settleTax`; nhận diện memo: `src/domain/rules.ts` › `extractTransferMemo` (ingest)
 - Migrations/DB: `transfer_orders` (`migrations/0001_schema.sql` mục 10)
 
 ## Divergences & Open Questions

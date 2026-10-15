@@ -181,7 +181,9 @@ settingsRoutes.patch("/rules/:id", async (c) => {
 settingsRoutes.put("/config", async (c) => {
   const b = await body(c);
   const config = await settings.updateConfig(c.env.DB, b);
-  await recordChange(c, "config.update", null, { fields: Object.keys(b).filter((k) => /^[a-z0-9_]{1,40}$/.test(k)).sort() });
+  // Tham số chốt tháng không bí mật: ghi luôn giá trị mới để biết ai đổi Ví Thưởng / tỷ lệ thành gì.
+  const monthClose = Object.fromEntries((["month_close_reward_wallet", "month_close_wealth_pct"] as const).filter((k) => k in b).map((k) => [k, config[k]]));
+  await recordChange(c, "config.update", null, { fields: Object.keys(b).filter((k) => /^[a-z0-9_]{1,40}$/.test(k)).sort(), ...monthClose });
   return ok(c, config);
 });
 settingsRoutes.patch("/notify-schedule", async (c) => ok(c, await settings.updateNotifySchedule(c.env.DB, await body(c))));

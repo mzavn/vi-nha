@@ -15,6 +15,7 @@ import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
 import { Card, Empty, FirstLoadFailed, PageHeader, Skeleton } from "../ui/parts";
 import { LogRow } from "./assign";
+import { MonthCloseCard } from "./month-close";
 import { OtherEntrySheet } from "./other-entry-sheet";
 import { GoalsCard, SpendableCashCard, WaterfallCard } from "./today";
 
@@ -36,7 +37,7 @@ export function TodayDesk() {
         sub={sub}
         action={
           <button type="button" class="btn btn-primary" onClick={() => setIncome(true)}>
-            Chia tiền
+            Tiền vào
           </button>
         }
       />
@@ -45,27 +46,31 @@ export function TodayDesk() {
           {app.loadFailed ? <FirstLoadFailed online={app.online} onRetry={() => void refresh(true)} /> : <Skeleton rows={6} />}
         </Card>
       ) : (
-        // Hai chồng: chính (số hero, phong bì, giao dịch) và phụ (việc cần làm, dòng thác, quỹ).
-        // ≥1280px hai chồng đứng cạnh nhau; 1024–1279px các card xếp thành lưới hai cột (xem .dash trong CSS).
-        <div class={hasTodo ? "dash" : "dash no-todo"}>
-          <div class="dash-main">
-            <Hero snap={snap} />
-            <SpendWallets snap={snap} />
-            <RecentTransactions title="Giao dịch gần đây" class="dash-recent" />
+        <>
+          {/* Chốt tháng (UC-207): việc một lần mỗi tháng — đứng trên cả hai chồng, ngoài lưới vùng của .dash. */}
+          <MonthCloseCard />
+          {/* Hai chồng: chính (số hero, phong bì, giao dịch) và phụ (việc cần làm, dòng thác, quỹ).
+              ≥1280px hai chồng đứng cạnh nhau; 1024–1279px các card xếp thành lưới hai cột (xem .dash trong CSS). */}
+          <div class={hasTodo ? "dash" : "dash no-todo"}>
+            <div class="dash-main">
+              <Hero snap={snap} />
+              <SpendWallets snap={snap} />
+              <RecentTransactions title="Giao dịch gần đây" class="dash-recent" />
+            </div>
+            <div class="dash-side">
+              {hasTodo && <Todo snap={snap} rejected={rejected} />}
+              <div class="dash-cash">
+                <SpendableCashCard snap={snap} />
+              </div>
+              <div class="dash-tiers">
+                <WaterfallCard snap={snap} />
+              </div>
+              <div class="dash-goals">
+                <GoalsCard snap={snap} />
+              </div>
+            </div>
           </div>
-          <div class="dash-side">
-            {hasTodo && <Todo snap={snap} rejected={rejected} />}
-            <div class="dash-cash">
-              <SpendableCashCard snap={snap} />
-            </div>
-            <div class="dash-tiers">
-              <WaterfallCard snap={snap} />
-            </div>
-            <div class="dash-goals">
-              <GoalsCard snap={snap} />
-            </div>
-          </div>
-        </div>
+        </>
       )}
       {income && <OtherEntrySheet kind="income" amount={0} title="Ghi thu nhập và chia" onClose={() => setIncome(false)} />}
     </>

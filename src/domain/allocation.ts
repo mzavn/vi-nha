@@ -42,6 +42,11 @@ export interface AllocationInput {
    * Có = phần khóa chỉ lấy theo `locks` của nguồn (không trích thuế), phần còn lại chạy dòng thác.
    */
   stream?: { locks: { walletId: string; percent: number }[] } | null;
+  /**
+   * Tích sản người chọn khi chia (ADR-112): thay khoản cắt % của Tích sản (không có nguồn thu) hoặc phần khóa Tích sản
+   * của nguồn (nguồn không khóa Tích sản thì thêm một khoản cắt). Thuế và phần khóa khác vẫn cắt; vượt khoản thu → invalid_amounts.
+   */
+  wealthOverride?: { walletId: string; amount: number } | null;
 }
 
 export interface Fund {
@@ -90,6 +95,13 @@ function pour(pool: number, wants: Want[], into: Map<string, number>): number {
   return pool;
 }
 
+/** Nguồn thu khóa trọn 100% (vd tiền người thuê): không chạy dòng thác, không chỉnh được Tích sản. */
+export function isFullLock(locks: { percent: number }[]): boolean {
+  return locks.length > 0 && Math.abs(locks.reduce((s, l) => s + l.percent, 0) - 1) < 1e-9;
+}
+
+const invalidWealth = (detail: string) => new DomainError("invalid_amounts", `Số Tích sản không hợp lệ: ${detail}`);
+
 export function allocate(input: AllocationInput): AllocationResult {
   const { income, rules, fundedThisMonth, balances, openingBalances } = input;
   if (!Number.isInteger(income.amount) || income.amount <= 0) {
@@ -128,18 +140,29 @@ export function allocate(input: AllocationInput): AllocationResult {
 
   const out = new Map<string, number>();
   let pool = income.amount;
+  const override = input.wealthOverride ?? null;
+  if (override && (!Number.isInteger(override.amount) || override.amount < 0 || override.amount > income.amount)) {
+    throw invalidWealth("phải là số nguyên từ 0 tới số tiền khoản thu.");
+  }
+  if (override && input.stream && isFullLock(input.stream.locks)) throw invalidWealth("nguồn thu này khóa trọn 100%, không chỉnh Tích sản được.");
+  if (override) {
+    out.set(override.walletId, override.amount);
+    pool -= override.amount;
+  }
 
   // 1–2. Phần khóa: phần trăm của CHÍNH khoản thu, không phụ thuộc nhu cầu.
   if (input.stream) {
     // Theo nguồn thu: chỉ khóa theo hồ sơ của nguồn, không trích thuế theo luật toàn cục.
     const locks = input.stream.locks;
     for (const lock of locks) {
+      if (override && lock.walletId === override.walletId) continue;
       const cut = Math.floor(income.amount * lock.percent);
       out.set(lock.walletId, (out.get(lock.walletId) ?? 0) + cut);
       pool -= cut;
     }
+    if (pool < 0 && override) throw invalidWealth("Tích sản cộng phần khóa khác vượt số tiền khoản thu.");
     if (pool < 0) throw new AllocationConfigError("Tổng phần khóa của nguồn thu vượt 100%.");
-    if (locks.length > 0 && Math.abs(locks.reduce((s, l) => s + l.percent, 0) - 1) < 1e-9) {
+    if (isFullLock(locks)) {
       // Khóa trọn 100%: đồng lẻ do làm tròn về ví khóa đầu tiên; không chạy dòng thác, không cờ thiếu sàn.
       out.set(locks[0]!.walletId, out.get(locks[0]!.walletId)! + pool);
       const funds = [...out].filter(([, amount]) => amount > 0).map(([walletId, amount]) => ({ walletId, amount }));
@@ -149,10 +172,12 @@ export function allocate(input: AllocationInput): AllocationResult {
     for (const r of rules) {
       if (r.mode !== "percent" || (r.tier !== "wealth_building" && r.tier !== "tax")) continue;
       if (r.tier === "tax" && !income.taxable) continue;
+      if (r.tier === "wealth_building" && override) continue;
       const cut = Math.floor(income.amount * (r.percent ?? 0));
       out.set(r.walletId, (out.get(r.walletId) ?? 0) + cut);
       pool -= cut;
     }
+    if (pool < 0 && override) throw invalidWealth("Tích sản cộng Thuế vượt số tiền khoản thu.");
     if (pool < 0) throw new AllocationConfigError("Tổng phần trăm Tích sản + Thuế vượt 100% thu nhập.");
   }
 
@@ -225,7 +250,8 @@ export function parseManualAmounts(raw: unknown): ManualAmount[] {
 }
 
 /**
- * Tự chia (UC-203, ADR-108 nháp): số tay thắng luật nạp, phần khóa của nguồn thu và sàn / bù thiếu cho lần chia này.
+ * Tự chia (UC-203, ADR-108): số tay thắng luật nạp, phần khóa của nguồn thu và sàn / bù thiếu cho lần chia này.
+ * ADR-112: Tích sản 0 cần lý do — kiểm ở service.
  * Ví phải đang dùng, không phải ví giữ tiền, không trùng; Σ phải bằng khoản thu. Số 0 bỏ qua. Cùng hình dạng `allocate` trả.
  */
 export function manualFunds(amounts: ManualAmount[], incomeAmount: number, wallets: { id: string; tier: string }[]): AllocationResult {

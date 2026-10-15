@@ -116,9 +116,11 @@ Status: `accepted` (đang có hiệu lực) · `superseded by ADR-xx` · `propos
 | ADR-105 | 2026-10-08 | Thử số / Dự phóng tính ở máy, không lưu | accepted | balance (+ pwa) |
 | ADR-106 | 2026-10-08 | Lãi vay là chi phí Must hằng tháng: ví hệ thống "Lãi vay" có dự kiến tự tính từ sổ nợ; mỗi lần trả tách khoản chi lãi và khoản chi gốc | accepted | debt (+ ledger, allocation, pwa, mcp) |
 | ADR-107 | 2026-10-08 | Thẻ tín dụng còn nợ là nợ ngắn hạn ở bảng cân đối; tiền và lưu chuyển tiền vẫn theo Σ sổ | accepted | balance |
-| ADR-108 | 2026-10-12 | Tự chia: số tay của người thắng luật nạp và phần khóa cho một lần chia; Tích sản 0 chỉ nhắc, không chặn | accepted | allocation (+ pwa) |
+| ADR-108 | 2026-10-12 | Tự chia: số tay của người thắng luật nạp và phần khóa cho một lần chia; Tích sản 0 chỉ nhắc, không chặn | accepted (phần "Tích sản 0 chỉ nhắc" superseded by ADR-112) | allocation (+ pwa) |
 | ADR-109 | 2026-10-13 | Cập nhật bản cài bằng nút Deploy qua workflow GitHub của chính repo nhà; app chỉ báo bản mới và dẫn đường | accepted | pwa (+ access, bản công khai) |
 | ADR-110 | 2026-10-13 | Che số tiền và mã PIN là việc của từng máy: che ở chỗ định dạng tiền, PIN cục bộ không qua server, quên PIN đăng xuất máy này cả khi offline | accepted | pwa |
+| ADR-111 | 2026-10-15 | Chốt tháng là quyết định của người: bù ví chi lố trước, phần dư chia Tích sản / Ví Thưởng theo tỷ lệ chọn mỗi tháng; cron ngày 1 chỉ mời | accepted | allocation (+ notify, access, pwa) |
+| ADR-112 | 2026-10-15 | Khi chia: Có Tích sản (kéo 1–100%, mặc định 10%) hoặc Không Tích sản (bắt buộc lý do) | accepted | allocation (+ pwa) |
 
 ---
 
@@ -1971,3 +1973,42 @@ Phương án bị loại: **PIN kiểm ở server** — cần mạng, app offlin
 Che số là che mắt, không phải bảo mật: thông báo đẩy, Telegram / Zalo, câu lỗi do server trả, MCP vẫn có số. Safari chưa thêm ra màn hình chính có thể xoá dữ liệu sau 7 ngày không mở — PIN mất, phải đặt lại. Ô điền sẵn từ số thật (Thử số) vẫn hiện số.
 ### Verified in code
 `web/src/lib/money.ts` › `setAmountsHidden`, `formatVnd`, `formatSigned`, `moneyDigits`, `maskAmounts`, `formatTypedVnd` · `web/src/lib/pin.ts` › `createPinRecord`, `checkPin`, `changePin`, `removePin`, `forgetPinOnDevice`, `shouldLock` · `web/src/screens/lock.tsx` › `Lock` · `web/src/screens/pin-sheet.tsx` · `web/src/state/store.ts` › `setHideAmounts`, `unlock`, `forgetPin` · `web/src/app.tsx` · test `web/src/lib/money.test.ts` › "che số tiền trên máy này (pwa UC-718)"; `web/src/lib/pin.test.ts` › "mã PIN trên máy này (pwa UC-719)" (commit `f7cf796`).
+
+## ADR-111: Chốt tháng là quyết định của người — bù ví chi lố trước, phần dư chia Tích sản / Ví Thưởng theo tỷ lệ chọn mỗi tháng
+- Date: 2026-10-15 · Status: accepted · Thay UC-207 5b (ví âm chờ lần chia sau) và việc cron ngày 1 tự quét 100% số dư dương sang Tích sản; giữ D3 ở phần "chỉ phong bì chung tham gia"
+- Plan ID: — · Context: allocation (UC-207, UC-204) + notify (UC-401, UC-402, UC-403) + access (UC-507) + pwa (UC-702, UC-709)
+- Source: chủ nhà 2026-10-15, chat — "Chốt tháng: bù ví âm trước → còn dư thì xem trước, chia 50/50 Tích sản / Ví Thưởng"; change [261015-chot-thang-va-keo-tich-san](changes/archive/261015-chot-thang-va-keo-tich-san/proposal.md)
+### Context
+Cron ngày 1 tự quét 100% số dư dương của phong bì chung sang Tích sản, kể cả khi tắt tin sáng; phong bì âm chờ lương sau gánh. Tháng chi lố vẫn "thưởng" phần dư, không có Ví Thưởng, không chọn được tỷ lệ; "đã chốt" chỉ kiểm bằng `batch_id` ở app (chạy song song có thể quét hai lần). Công thức của nhà: "Doanh thu được chi − chi phí = Lợi nhuận thêm", phần dư chia đôi Tích sản / Ví Thưởng.
+### Decision
+- **Người bấm chốt** trên PWA (thẻ Chốt tháng ở Hôm nay → sheet xem trước → nút Chốt tháng); cron ngày 1 chỉ đọc xem trước và mời trong tin sáng (📌), không ghi. Tắt tin sáng thì ngày 1 không chạy gì.
+- `GET` / `POST /v1/month-close`: chỉ **tháng liền trước** (khác → 400 `month_not_closable`); `POST` tính lại từ sổ, ghi một `db.batch` với INSERT `month_closes` đứng đầu — khoá chính chặn chốt hai lần (409 `already_closed`).
+- **Bước 1 — bù chi lố**: hố = |số dư âm| − phần lương tháng sau đã rót vào ví đó; C = min(Σ dương, Σ hố); ví dương góp theo tỷ lệ (`floor`, đồng lẻ vào ví đầu); ghép đổ thác ví âm hố lớn trước, ví dương dư lớn trước, hoà theo `sort` rồi `id`.
+- **Bước 2 — Lợi nhuận thêm** L = P − C chia X% Tích sản / (100−X)% Ví Thưởng theo từng ví; X mặc định `config.month_close_wealth_pct` (50), chọn mỗi lần chốt; chưa có Ví Thưởng → X = 100.
+- **Ví Thưởng** (`config.month_close_reward_wallet`): ví chung, không riêng tư, phe must / nice, không phải phong bì (rà bảo mật: không cho ví cá nhân / riêng tư); ví lưu mà không còn hợp lệ → coi như chưa đặt.
+- Bút toán ghi lúc 23:59:59 ngày cuối tháng chốt, `month_key` = tháng chốt, kể cả chốt muộn; lệnh chuyển gộp theo cặp tài khoản nguồn → đích (UC-204 3b). Nhật ký `month.close`.
+- Migration 0034 điền sẵn `month_closes` cho tháng đã có lô `S…` cũ (100%, người chốt NULL).
+
+Phương án bị loại: **tự chốt 50/50 không hỏi** — chủ nhà muốn xem trước; **giữ cron chốt khi tắt tin sáng** — chốt là quyết định của người; **cho chốt tháng bất kỳ** — đơn giản hoá, tháng bỏ qua được gộp vào lần chốt sau vì số dư cộng dồn.
+### Consequences
+Tháng chưa chốt thì phần dư vẫn nằm trong "còn để chi"; chốt muộn sau khi đã tiêu sang tháng sau làm ví âm (cảnh báo trong xem trước, bù ở lần chốt sau). Chốt cần mạng, chưa có tool MCP. Xem trước và `POST` cách nhau (TOCTOU): `POST` không gửi bản đã duyệt nên sổ đổi giữa chừng thì bút toán khác bản xem (toast hiện số thật) — [OPEN] ở UC-207. Nhà chưa có ví Tích sản thì tin sáng ngày 1 lỗi (giữ như cũ). Chữ ở Cài đặt › Giờ nhắc còn nói "ngày 1 vẫn tự chốt tháng" — [DIVERGENCE] ở pwa UC-709.
+### Verified in code
+`src/domain/close.ts` › `planMonthClose`, `isMonthCloseParticipant`, `isRewardWalletCandidate`, `DEFAULT_MONTH_CLOSE_WEALTH_PCT`, `nextMonth` · `src/services/ledger.ts` › `previewMonthClose`, `closeMonth` · `src/domain/transfer-orders.ts` › `monthCloseOrders` · `src/routes/v1.ts` › `/month-close` · `src/cron/daily.ts` › `monthCloseInvite` · `src/cron/schedule.ts` · `src/services/settings.ts` › `monthCloseConfigWrites` · `migrations/0034_month_closes.sql` · `web/src/screens/month-close.tsx`, `web/src/lib/month-close.ts` — commit `0528219`
+
+## ADR-112: Khi chia — Có Tích sản (kéo 1–100%, mặc định 10%) hoặc Không Tích sản (bắt buộc lý do)
+- Date: 2026-10-15 · Status: accepted · Thay một phần ADR-108 (Tích sản 0 ở Tự chia nay cần lý do thay vì chỉ nhắc); phần còn lại của ADR-108 giữ nguyên
+- Plan ID: — · Context: allocation (UC-202, UC-203) + pwa (UC-715, UC-707)
+- Source: chủ nhà 2026-10-15, chat — "thang tích sản thì để dạng KÉO % khi chia … mặc định số nhỏ nhất là 1%, to nhất là 100%, có 1 số khoản vào vẫn 0% được nhưng mà cần ghi chú nếu chọn là 0% để xem lý do là gì sau này tra lại"; "để 2 lựa chọn khi tiền vào … mặc định chọn có tích sản thì là để kéo từ 1% trở lên, thanh luôn để mặc định 10%, còn không thì hiển thị nút lý do"; change [261015-chot-thang-va-keo-tich-san](changes/archive/261015-chot-thang-va-keo-tich-san/proposal.md)
+### Context
+Tích sản theo % luật nạp hoặc gõ tay ở Tự chia (ADR-108); không kéo nhanh được; Tích sản 0 chỉ nhắc, không lưu lý do. Thang của nhà: 1% tối thiểu, 10% mặc định, 30% hướng tới.
+### Decision
+- Sheet Chia thử có hai nút **Có Tích sản** (mặc định; thanh 1–100%, vạch 1 · 10 · 30, **mặc định 10%** bất kể luật nạp; kéo ra số tiền làm tròn nghìn, gõ số thì thanh nhảy) / **Không Tích sản** (ô Lý do bắt buộc). Người kéo / gõ thắng luật.
+- API: `wealth_amount` (số nguyên ≥ 0, ≤ khoản thu) ở `/allocate/preview` và `/allocate` thay khoản cắt Tích sản hoặc phần khóa Tích sản của nguồn; Thuế vẫn cắt; sai → 400 `invalid_amounts` (không 500); nguồn khóa 100% không chỉnh được (`wealth.adjustable` false).
+- Tích sản 0 khi bản chia **chỉnh được** (`adjustable`) và người có chọn (gửi `wealth_amount` hoặc `amounts`) → bắt `wealth_note` (400 `wealth_note_required`); preview không bao giờ bắt; chia tự động ở ingest và MCP không bắt (không áp 1%). Lý do lưu `allocation_runs.wealth_note`, xem ở chi tiết khoản thu và tab Tích sản ("Lần chia không trả cho mình").
+- Mỗi lần `POST /v1/allocate` ghi nhật ký `income.allocate`; lý do lọc ký tự điều khiển (rà bảo mật).
+
+Phương án bị loại: **mặc định theo % luật nạp** — chủ nhà muốn luôn 10%; **cho 0% không lý do** — mất dấu để tra lại; **bắt lý do cả khi nguồn khóa 100%** (đề bài ban đầu) — người không chọn được Tích sản thì không có gì để giải thích.
+### Consequences
+Lần chia tay ở PWA luôn gửi `wealth_amount`, nên % luật nạp Tích sản chỉ còn là số cho chia tự động và MCP. MCP `allocate_income` không áp mức 1% và không bắt lý do (cố ý). Settings không bắt bội số; thanh kẹp 1% chỉ khi rời ô.
+### Verified in code
+`src/domain/allocation.ts` › `wealthOverride`, `isFullLock` · `src/services/ledger.ts` › `previewAllocation`, `allocateIncome` (`wealth_note_required`) · `src/routes/v1.ts` › `wealthAmount`, `/allocate` (`income.allocate`) · `migrations/0034_month_closes.sql` (`allocation_runs.wealth_note`) · `web/src/lib/wealth-slider.ts`, `web/src/screens/other-entry-sheet.tsx` › `useAllocationPreview` · `web/src/lib/wealth-building.ts` › `skippedRunLines` — commit `0528219`

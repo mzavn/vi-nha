@@ -1,9 +1,9 @@
 # UC-705: Nhập loại khác — thu nhập, hoàn tiền, mua tài sản, cho vay, chuyển nội bộ
 - Status: implemented
 - BR: BR-02, BR-03, BR-07
-- Decisions: D2, D3, D12, D14; DESIGN.md §6 ("Chia và ghi sổ" → toast "Đã chia"), §4 (sheet mở thẳng một việc không hiện `seg` chọn loại); commit `80875be`, `b8e8f0c`; ADR-58 (sổ người thuê ngoài sổ cái), ADR-59 (phần khóa theo nguồn thu chọn tay); ADR-67 (audit 261001 F09, F17, F23); ADR-72 (cho vay / nhận lại tiền cho vay gắn khoản phải thu; nhận lại không phải thu nhập); ADR-84 (mua hộ người khác là Cho vay; trả dư thì phần dư là Thu nhập); ADR-92 (tên trong mã nguồn, dữ liệu, địa chỉ màn bằng tiếng Anh)
+- Decisions: D2, D3, D12, D14; DESIGN.md §6 ("Chia và ghi sổ" → toast "Đã chia"), §4 (sheet mở thẳng một việc không hiện `seg` chọn loại); commit `80875be`, `b8e8f0c`; ADR-58 (sổ người thuê ngoài sổ cái), ADR-59 (phần khóa theo nguồn thu chọn tay); ADR-67 (audit 261001 F09, F17, F23); ADR-72 (cho vay / nhận lại tiền cho vay gắn khoản phải thu; nhận lại không phải thu nhập); ADR-84 (mua hộ người khác là Cho vay; trả dư thì phần dư là Thu nhập); ADR-92 (tên trong mã nguồn, dữ liệu, địa chỉ màn bằng tiếng Anh); ADR-112 (Có / Không Tích sản khi chia)
 - Actor: thành viên đã đăng nhập
-- Trigger: nút **Loại khác** (header màn Nhập, mang theo số tiền đang gõ — sheet "Loại khác" chọn được bảy loại); nút chính **Chia tiền** (header Hôm nay — sheet "Ghi thu nhập và chia", chỉ loại Thu nhập); nút **Mua tài sản** (Ví & quỹ › Tích sản — sheet "Mua tài sản", chỉ loại đó)
+- Trigger: nút **Tiền vào** (header màn Nhập, mang theo số tiền đang gõ — sheet "Tiền vào & loại khác" chọn được bảy loại, mặc định Thu nhập); nút chính **Tiền vào** (header Hôm nay — sheet "Ghi thu nhập và chia", chỉ loại Thu nhập); nút **Mua tài sản** (Ví & quỹ › Tích sản — sheet "Mua tài sản", chỉ loại đó)
 
 ## History
 - v1 (2026-09-22, commit `a756f68`): sheet 5 loại; thu nhập cần mạng (xem trước chia → ghi → chia, "Chia lại" khi chia hỏng); 4 loại còn lại đi qua hàng đợi.
@@ -27,16 +27,19 @@
 - v19 (2026-10-06, commit `9c265ee`): change [`261006-tai-khoan-phao`](../changes/archive/261006-tai-khoan-phao/proposal.md), ADR-88 — **Chuyển nội bộ** từ tài khoản thường vào tài khoản Tích sản (heo, phao dự phòng, sổ tiết kiệm) mà không bật "Chuyển cả tiền giữa hai ví": dòng nhắc cuối sheet thành "Tiền vào {tên} là Tích sản: ghi xong, ví Có thì tốt chuyển sang Tích sản (như bỏ heo đất)." (`tichsanMoveHint`); server tự chuyển ví (ledger UC-101 AC-24) — khoản chờ đồng bộ chưa trừ tạm Có thì tốt. Tài khoản mặc định (`defaultAccountFor`, `defaultBankFor`, ô "Vào" khi trùng "Từ") không lấy tài khoản Tích sản nào (trước chỉ tránh heo). Chủ nhà: "Tiền vào phao tự vào Tích sản (như heo đất)". AC-22.
 - v20 (2026-10-07, commit `7424f26`): vai tài khoản phao dự phòng lưu là `buffer` (thay `phao`) ở AC-22 — ADR-92 (change [261007-doi-ten-tieng-anh](../changes/archive/261007-doi-ten-tieng-anh/proposal.md))
 - v21 (2026-10-12, commit `a8b43f7`): bảng Chia thử có nút **Tự chia** (allocation UC-202 5b, UC-203 4b; ADR-108) (change [261012-tu-chia](../changes/archive/261012-tu-chia/proposal.md))
+- v22 (2026-10-15): chủ nhà: "rename nút đó thành tiền vào" — nút màn Nhập "Loại khác" và nút Hôm nay "Chia tiền" → **Tiền vào**; tiêu đề sheet màn Nhập "Tiền vào & loại khác".
+- v23 (2026-10-16, commit `0528219`): bảng Chia thử có **Có / Không Tích sản** (thanh 1–100% mặc định 10% / lý do bắt buộc — allocation UC-202 5c, ADR-112); toast nói số Tích sản (change [261015-chot-thang-va-keo-tich-san](../changes/archive/261015-chot-thang-va-keo-tich-san/proposal.md))
 
 ## Preconditions
 - Có `bootstrap`. Thu nhập và Người thuê chi cần mạng; năm loại còn lại không cần.
 
 ## Main Flow — Thu nhập (cần mạng)
-1. Sheet "Loại khác" (mở từ màn Nhập), nhóm nút loại: Thu nhập · Hoàn tiền · Mua tài sản · Cho vay · Nhận lại tiền cho vay · Chuyển nội bộ · Người thuê chi. Mở từ **Chia tiền** ở Hôm nay thì sheet tên "Ghi thu nhập và chia", **không** có nhóm nút loại (chỉ Thu nhập); mở từ **Mua tài sản** thì tên "Mua tài sản", cũng không có nhóm nút loại.
+1. Sheet "Tiền vào & loại khác" (mở từ màn Nhập), nhóm nút loại: Thu nhập · Hoàn tiền · Mua tài sản · Cho vay · Nhận lại tiền cho vay · Chuyển nội bộ · Người thuê chi. Mở từ **Chia tiền** ở Hôm nay thì sheet tên "Ghi thu nhập và chia", **không** có nhóm nút loại (chỉ Thu nhập); mở từ **Mua tài sản** thì tên "Mua tài sản", cũng không có nhóm nút loại.
 2. Ô: **Số tiền nhận**; **Vào tài khoản** (mặc định ngân hàng của người nhập, không có thì ngân hàng đầu tiên; chiều vào: `manualAccounts(accounts, "in")` — chỉ tài khoản không nối SePay); **Người thuê trả** (chỉ khi có mạng và có người thuê đang ở — `GET /v1/rental`; mặc định "Không phải người thuê"); **Nguồn thu** (chỉ khi có mạng và có nguồn đang dùng — `GET /v1/settings` › `incomeStreams`; mục trống là "Mặc định (luật % chung)", hoặc "Theo cấu hình cho thuê" khi đã chọn người thuê); **Thuế**: "Đã khấu trừ tại nguồn" / "Chưa — để riêng thuế"; ghi chú; ngày (≤ hôm nay).
 3. Có số tiền và có mạng → sau 350 ms kể từ lần sửa cuối gọi allocation › xem trước chia (`POST /v1/allocate/preview { amount, taxable, at, account_id, income_stream_id? }`). `income_stream_id` = nguồn đã chọn; chọn người thuê mà để trống nguồn thì dùng nguồn cho thuê của cấu hình (`rental.incomeStreamId`), đúng như server sẽ tự gắn.
 4. Bảng **Chia thử trước khi ghi**: mỗi ví nhận (tên, nhãn tầng "khóa"/"giữ riêng"/"hưởng thụ"/"Must"/"phần còn lại"), **"đã bù X cho tháng trước"** khi `deficitCovered[ví] > 0` (D3), số tiền; dòng Tổng. Tổng ≠ số nhận → "Tổng chia khác số tiền nhận X.". Có ví chưa tới sàn → banner "Chưa tới sàn: {ví}. Ghi đúng như vậy, không vay phần đã khóa.". Ghi chú lệnh chuyển: "Không sinh lệnh chuyển tiền: các ví nhận tiền nằm cùng tài khoản." hoặc "Sau khi ghi sẽ sinh N lệnh chuyển tiền: A → B X; … Phân bổ trong app chỉ là ảo cho tới khi tiền đi thật."
    - **Tự chia** (allocation UC-202 5b, ADR-108): nút ở bảng Chia thử — mỗi ví một ô số (trừ ví giữ tiền), Tích sản đứng đầu, điền sẵn theo luật; chân "Đã chia X / Y" · còn / vượt; ghi gửi `amounts` (allocation UC-203).
+   - **Có / Không Tích sản** (allocation UC-202 5c, ADR-112) ở đầu bảng Chia thử: Có → thanh 1–100% mặc định 10%; Không → ô Lý do bắt buộc; ghi luôn gửi `wealth_amount` (+ `wealth_note`); toast thêm "(Tích sản X ₫)" / "(không Tích sản lần này)".
 5. Nút chính **Chia và ghi sổ** (chỉ bật khi có mạng, có bảng chia thử, có tài khoản) → `POST /v1/transactions { meaning: "income", client_id, …, income_stream_id?, tenant_id? }` (một `client_id` cố định cho cả vòng đời sheet; chỉ gửi trường đã chọn) → `POST /v1/allocate { income_tx_id }`.
    - 5a. Nút phụ **Ghi, để chia sau** (chỉ khi ghi mới — không có khi sửa, không có sau khi đã ghi mà chia hỏng; bật khi có mạng, có số tiền, có tài khoản, **không** cần bảng chia thử) → cùng `POST /v1/transactions` nhưng **không** gọi `/v1/allocate`: khoản thu nằm ở ví Thu nhập, chưa chia. Tải lại số, toast "Đã ghi X ₫ vào ví Thu nhập, chưa chia. Chia ở Giao dịch gần đây › khoản này › Chia." (`deferredIncomeToast`, `web/src/lib/splits.ts`); đóng sheet. Chia sau ở sheet chi tiết giao dịch (UC-715) hoặc banner Hôm nay (UC-702).
 6. Tải lại số, rồi toast "Đã chia X." (sửa: "Đã sửa thành X và chia lại.") + " Còn N lệnh chuyển tiền cần làm." với N là **tổng** lệnh đang chờ (`snapshot.attention.transferOrdersPending`, như màn Gán UC-706 bước 10 — `ordersLeft`); tải lại không được thì " Có thêm N lệnh chuyển tiền cần làm." theo lệnh lần chia này vừa sinh; đóng sheet.
@@ -147,8 +150,8 @@
 
 ### AC-13: Sheet mở thẳng một việc không hỏi lại loại
 - Given đang ở Hôm nay
-- When bấm **Chia tiền**
-- Then sheet tên "Ghi thu nhập và chia", không có nhóm nút loại, form Thu nhập hiện ngay; mở từ màn Nhập thì vẫn là "Loại khác" với bảy loại
+- When bấm **Tiền vào**
+- Then sheet tên "Ghi thu nhập và chia", không có nhóm nút loại, form Thu nhập hiện ngay; mở từ màn Nhập thì là "Tiền vào & loại khác" với bảy loại
 - Tests: ⚠ Chưa có test
 
 ### AC-14: Chuyển nội bộ không mặc định hai tài khoản trùng nhau

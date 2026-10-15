@@ -46,6 +46,7 @@ import {
 } from "../lib/settings";
 import { isIncomeHolding } from "../lib/budget";
 import { memberSubmitError, newMemberPayload, passwordPayload, proofMode } from "../lib/members";
+import { rewardWalletOptions } from "../lib/month-close";
 import { dateText } from "../lib/net-worth";
 import { feePayload, rentalConfigPayload, tenantPayload } from "../lib/rental";
 import { openingCreditHint, ROLE_LABEL } from "../lib/wealth-building-accounts";
@@ -1246,10 +1247,15 @@ export function SepayConnectionSheet({ item, onClose, onSaved }: { item: SepayCo
 
 // ── Tham số ───────────────────────────────────────────────────────
 
-export function ConfigSheet({ config, onClose, onSaved }: { config: SettingsConfig; onClose: () => void; onSaved: Saved }) {
+export function ConfigSheet({ config, wallets, onClose, onSaved }: { config: SettingsConfig; wallets: SettingsWallet[]; onClose: () => void; onSaved: Saved }) {
   const [salary, setSalary] = useState(config.salary_min_amount);
   const [months, setMonths] = useState(String(config.safety_fund_months));
+  const [closePct, setClosePct] = useState(String(config.month_close_wealth_pct ?? 50));
+  const [reward, setReward] = useState(config.month_close_reward_wallet ?? "");
   const { busy, error, errors, run } = useSubmit(onSaved, onClose);
+  // Ví đã chọn mà nay đã tắt / không còn hợp lệ vẫn hiện để biết (chốt tháng coi như chưa đặt).
+  const options = rewardWalletOptions(wallets.filter((w) => w.active));
+  const stale = reward && !options.some((w) => w.id === reward) ? wallets.find((w) => w.id === reward) : undefined;
   return (
     <Sheet open title="Tham số" onClose={onClose}>
       <Field id="c-salary" label="Ngưỡng tự chia lương" error={errors.salary_min_amount} first>
@@ -1260,11 +1266,42 @@ export function ConfigSheet({ config, onClose, onSaved }: { config: SettingsConf
         <input id="c-months" class="ctl money" inputMode="numeric" pattern="[0-9]*" autocomplete="off" value={months} onInput={(ev) => setMonths(ev.currentTarget.value)} {...invalid(errors, "safety_fund_months", "c-months")} />
       </Field>
       <Hint>Quỹ an tâm = số tháng này × chi Must trung bình một tháng. Tích sản giữ đủ Quỹ an tâm bằng tiền rồi mới mua tài sản.</Hint>
+      <Field id="c-reward" label="Ví Thưởng" error={errors.month_close_reward_wallet}>
+        <select id="c-reward" class="ctl" value={reward} onChange={(ev) => setReward(ev.currentTarget.value)}>
+          <option value="">Chưa đặt</option>
+          {stale && <option value={stale.id}>{stale.name} (không còn dùng được)</option>}
+          {options.map((w) => (
+            <option key={w.id} value={w.id}>
+              {w.name}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Hint>Phần dư khi chốt tháng chia giữa Tích sản và ví này; chưa đặt thì 100% vào Tích sản. Chọn ví tích luỹ phe Must / Hưởng thụ, không phải phong bì chung.</Hint>
+      <Field id="c-close-pct" label="Phần dư vào Tích sản (%)" error={errors.month_close_wealth_pct}>
+        <input
+          id="c-close-pct"
+          class="ctl money"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          autocomplete="off"
+          value={closePct}
+          onInput={(ev) => setClosePct(ev.currentTarget.value)}
+          {...invalid(errors, "month_close_wealth_pct", "c-close-pct")}
+        />
+      </Field>
+      <Hint>Mặc định của thanh kéo khi chốt tháng (đổi được mỗi lần chốt). Nên là bội số của 5, ví dụ 50 = chia đôi.</Hint>
       <Footer
         busy={busy}
         error={error}
         label="Lưu tham số"
-        onSubmit={() => void run(configPayload({ salary_min_amount: salary, safety_fund_months: months }), (body) => api.put("/v1/settings/config", body), "Đã lưu tham số. Áp dụng từ khoản thu tới.")}
+        onSubmit={() =>
+          void run(
+            configPayload({ salary_min_amount: salary, safety_fund_months: months, month_close_wealth_pct: closePct, month_close_reward_wallet: reward }),
+            (body) => api.put("/v1/settings/config", body),
+            "Đã lưu tham số. Áp dụng từ khoản thu tới.",
+          )
+        }
       />
     </Sheet>
   );
@@ -1334,7 +1371,7 @@ export function NotifyScheduleSheet({ schedule, onClose, onSaved }: { schedule: 
       <Field id="n-daily" label="Giờ gửi" error={errors.daily_time}>
         {time("n-daily", "dailyTime", "daily_time")}
       </Field>
-      <Hint>Tắt tin sáng thì ngày 1 vẫn tự chốt tháng vào giờ này, chỉ không gửi tin. Đổi giờ sau khi hôm nay đã gửi thì mai mới áp dụng.</Hint>
+      <Hint>Tắt tin sáng thì ngày 1 không có tin mời chốt tháng — mở Hôm nay để chốt. Đổi giờ sau khi hôm nay đã gửi thì mai mới áp dụng.</Hint>
       <div class="set-sub">Tổng kết tuần</div>
       <Check id="n-weekly-on" label="Gửi tổng kết tuần" checked={f.weeklyEnabled} onChange={(v) => set({ weeklyEnabled: v })} />
       <Field id="n-weekday" label="Ngày" error={errors.weekly_day}>

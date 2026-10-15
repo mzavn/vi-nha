@@ -35,6 +35,10 @@ Giá trị lưu DB / API dùng `snake_case`; trường JSON và tên TypeScript 
 | Chưa gán | pending log (`bank_logs.status = 'pending'`) |
 | Đối soát | reconciliation |
 | Nghĩa giao dịch | `meaning`: `spend`, `income`, `refund`, `transfer`, `buy_asset`, `lend`, `collect` |
+| Chốt tháng | month close (`GET` / `POST /v1/month-close`, bảng `month_closes`) |
+| Ví Thưởng | reward wallet (`config.month_close_reward_wallet`) |
+| Lợi nhuận thêm (phần dư khi chốt tháng) | `profit`; % vào Tích sản `config.month_close_wealth_pct` |
+| Có / Không Tích sản (khi chia), lý do | `wealth_amount`, `wealth_note` (`allocation_runs.wealth_note`) |
 
 ## Địa chỉ màn PWA
 

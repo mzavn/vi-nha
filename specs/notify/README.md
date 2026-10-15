@@ -34,7 +34,7 @@ Chỉ có chiều ra: bot không nhận lệnh (`plans/260921-2228-profit-first-
 |---|---|---|---|
 | [UC-401](UC-401-lich-cron-va-dieu-phoi.md) | Lịch cron & điều phối | implemented | BR-06, BR-10 |
 | [UC-402](UC-402-tin-sang-0700.md) | Tin sáng (giờ nhắc, mặc định 07:00) | implemented | BR-01, BR-04, BR-06, BR-07 |
-| [UC-403](UC-403-kich-hoat-chot-thang-ngay-1.md) | Kích hoạt chốt tháng ngày 1 | implemented | BR-02, BR-06, BR-07 |
+| [UC-403](UC-403-kich-hoat-chot-thang-ngay-1.md) | Mời chốt tháng ngày 1 | implemented | BR-02, BR-06, BR-07 |
 | [UC-404](UC-404-nhac-dem-vi-chu-nhat.md) | Nhắc đếm ví / nhập số dư Chủ nhật | implemented | BR-04, BR-06 |
 | [UC-405](UC-405-nhac-khoan-thu-chua-chia-ngay-10-25.md) | Nhắc khoản thu chưa chia ngày 10 & 25 | implemented | BR-02, BR-06 |
 | [UC-406](UC-406-tong-ket-tuan-thu-hai.md) | Tổng kết tuần (giờ nhắc, mặc định 08:00 thứ Hai) | implemented | BR-01, BR-06 |

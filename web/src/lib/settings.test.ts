@@ -98,6 +98,8 @@ describe("nhật ký thay đổi", () => {
     expect(auditView(entry({ action: "mcp.revoke" })).title).toBe("Gỡ kết nối ứng dụng AI: claude.ai");
     expect(auditView(entry({ action: "tx.create", target: "tx:40", via: "mcp" }))).toMatchObject({ title: "Ghi giao dịch #40", sub: "Chồng · qua Claude · 09:05 6/10" });
     expect(auditView(entry({ action: "log.assign", target: "log:7", via: "mcp" })).title).toBe("Gán giao dịch ngân hàng #7");
+    // UC-207: chốt tháng ghi nhật ký với target "month:YYYY-MM".
+    expect(auditView(entry({ action: "month.close", target: "month:2026-10", detail: { wealth_pct: 50 } })).title).toBe("Chốt tháng 2026-10");
   });
 });
 
@@ -371,10 +373,26 @@ describe("thành viên, tham số", () => {
     expect(memberPayload({ name: "Chồng", tg_chat_id: "" }, { ...me, tg_chat_id: "123456" })).toEqual({ ok: true, value: { tg_chat_id: null } });
   });
 
+  const config = { salary_min_amount: 0, safety_fund_months: "6", month_close_wealth_pct: "50", month_close_reward_wallet: "" };
+
   it("số tháng phao 1–24, ngưỡng lương không âm", () => {
-    expect(configPayload({ salary_min_amount: 0, safety_fund_months: "6" })).toEqual({ ok: true, value: { salary_min_amount: 0, safety_fund_months: 6 } });
-    expect(configPayload({ salary_min_amount: 5_000_000, safety_fund_months: "0" }).ok).toBe(false);
-    expect(configPayload({ salary_min_amount: 5_000_000, safety_fund_months: "3,5" }).ok).toBe(false);
+    expect(configPayload(config)).toEqual({
+      ok: true,
+      value: { salary_min_amount: 0, safety_fund_months: 6, month_close_wealth_pct: 50, month_close_reward_wallet: null },
+    });
+    expect(configPayload({ ...config, salary_min_amount: 5_000_000, safety_fund_months: "0" }).ok).toBe(false);
+    expect(configPayload({ ...config, salary_min_amount: 5_000_000, safety_fund_months: "3,5" }).ok).toBe(false);
+  });
+
+  it("UC-507: tham số chốt tháng — tỷ lệ 0–100 số nguyên, Ví Thưởng rỗng → null", () => {
+    expect(configPayload({ ...config, month_close_wealth_pct: "0", month_close_reward_wallet: "reward" })).toMatchObject({
+      ok: true,
+      value: { month_close_wealth_pct: 0, month_close_reward_wallet: "reward" },
+    });
+    expect(configPayload({ ...config, month_close_wealth_pct: "100" })).toMatchObject({ ok: true, value: { month_close_wealth_pct: 100 } });
+    for (const bad of ["101", "-1", "2,5", "", "abc"]) {
+      expect(configPayload({ ...config, month_close_wealth_pct: bad })).toEqual({ ok: false, errors: { month_close_wealth_pct: "Tỷ lệ là số nguyên từ 0 đến 100." } });
+    }
   });
 });
 
@@ -400,11 +418,11 @@ describe("giờ nhắc", () => {
     expect(bad.ok ? [] : Object.keys(bad.errors).sort()).toEqual(["daily_time", "quiet_end", "quiet_start", "weekly_day", "weekly_time"]);
   });
 
-  it("tóm tắt: tắt thì ghi Tắt (tin sáng tắt vẫn nói ngày 1 chốt tháng), giờ yên lặng bằng nhau là Không đặt", () => {
+  it("tóm tắt: tắt thì ghi Tắt (tin sáng tắt thì không có câu mời chốt tháng ngày 1), giờ yên lặng bằng nhau là Không đặt", () => {
     expect(scheduleRows(schedule()).map((r) => r.value)).toEqual(["07:00", "Thứ Hai 08:00", "Bật", "22:00–06:30"]);
     const off = scheduleRows(schedule({ dailyEnabled: false, weeklyEnabled: false, quietStart: "00:00", quietEnd: "00:00" }));
     expect(off.map((r) => r.value)).toEqual(["Tắt", "Tắt", "Bật", "Không đặt"]);
-    expect(off[0]!.sub).toContain("ngày 1 vẫn tự chốt tháng lúc 07:00");
+    expect(off[0]!.sub).toBe("Đang tắt — ngày 1 không có tin mời chốt tháng; mở Hôm nay để chốt");
   });
 });
 

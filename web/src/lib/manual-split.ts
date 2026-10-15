@@ -18,7 +18,6 @@ export interface SplitCheck {
   over: boolean;
   /** Được bấm Chia và ghi sổ: tổng khớp và không ô nào sai. */
   ok: boolean;
-  reminder: string | null;
 }
 
 /** Ví có ô số: mọi ví đang dùng trừ ví giữ tiền (Thu nhập, Thu cho thuê); Tích sản đứng đầu, còn lại theo thứ tự ví. */
@@ -39,16 +38,15 @@ export function setSplitAmount(split: ManualSplit, walletId: string, amount: num
   return { amounts: { ...split.amounts, [walletId]: amount }, invalid: valid ? others : [...others, walletId] };
 }
 
-export function checkSplit(split: ManualSplit, wallets: Wallet[], amount: number): SplitCheck {
+/** Chỉ xét tổng và ô sai; Tích sản 0 cần lý do do lựa chọn Không Tích sản bắt (ADR-112). */
+export function checkSplit(split: ManualSplit, amount: number): SplitCheck {
   const total = Object.values(split.amounts).reduce((s, n) => s + n, 0);
   const diff = amount - total;
-  const wealthBuilding = wallets.find((w) => w.tier === "wealth_building");
   return {
     done: `Đã chia ${moneyDigits(total)} / ${moneyDigits(amount)}`,
     rest: diff > 0 ? `còn ${moneyDigits(diff)}` : diff < 0 ? `chia vượt ${moneyDigits(-diff)}` : null,
     over: diff < 0,
     ok: diff === 0 && split.invalid.length === 0,
-    reminder: wealthBuilding && !split.amounts[wealthBuilding.id] ? "Tháng này chưa để dành Tích sản" : null,
   };
 }
 

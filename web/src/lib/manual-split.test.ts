@@ -40,6 +40,7 @@ const PLAN: AllocationPlan = {
   underfunded: [],
   deficitCovered: {},
   transferOrders: [],
+  wealth: { walletId: "wealth-building", amount: 5_700_000, adjustable: true },
 };
 
 const AC6: Record<string, number> = {
@@ -69,7 +70,7 @@ describe("tự chia một khoản thu (change 261012-tu-chia)", () => {
 
   it("UC-202 AC-6: gõ đủ 19.000.000 → chân \"Đã chia 19.000.000 / 19.000.000\", được ghi; gửi đúng các số > 0; lệnh chuyển gộp theo tài khoản đích của ví", () => {
     const split = typed(AC6);
-    expect(checkSplit(split, WALLETS, 19_000_000)).toEqual({ done: "Đã chia 19.000.000 / 19.000.000", rest: null, over: false, ok: true, reminder: null });
+    expect(checkSplit(split, 19_000_000)).toEqual({ done: "Đã chia 19.000.000 / 19.000.000", rest: null, over: false, ok: true });
     expect(splitPayload(split)).toEqual(Object.entries(AC6).map(([wallet_id, amount]) => ({ wallet_id, amount })));
     expect(splitOrders(split, WALLETS, "vcb-a")).toEqual([
       { fromAccountId: "vcb-a", toAccountId: "tcb-a", amount: 2_900_000, walletIds: ["wealth-building", "debt"] },
@@ -78,21 +79,21 @@ describe("tự chia một khoản thu (change 261012-tu-chia)", () => {
   });
 
   it("UC-202 AC-7: tổng khác khoản thu → không ghi được, chân nói còn / vượt bao nhiêu", () => {
-    const less = checkSplit(typed({ ...AC6, transport: 499_000 }), WALLETS, 19_000_000);
+    const less = checkSplit(typed({ ...AC6, transport: 499_000 }), 19_000_000);
     expect(less).toMatchObject({ done: "Đã chia 18.999.000 / 19.000.000", rest: "còn 1.000", over: false, ok: false });
-    const more = checkSplit(typed({ ...AC6, transport: 600_000 }), WALLETS, 19_000_000);
+    const more = checkSplit(typed({ ...AC6, transport: 600_000 }), 19_000_000);
     expect(more).toMatchObject({ done: "Đã chia 19.100.000 / 19.000.000", rest: "chia vượt 100.000", over: true, ok: false });
   });
 
   it("UC-202 AC-7: ô có phép tính sai (âm, không ra số) → không ghi được dù tổng khớp; sửa lại ô thì hết lỗi", () => {
     const wrong = setSplitAmount(typed(AC6), "transport", 0, false);
     expect(wrong.invalid).toEqual(["transport"]);
-    expect(checkSplit(setSplitAmount(wrong, "food", 5_500_000, true), WALLETS, 19_000_000).ok).toBe(false);
-    expect(checkSplit(setSplitAmount(wrong, "transport", 500_000, true), WALLETS, 19_000_000)).toMatchObject({ ok: true, rest: null });
+    expect(checkSplit(setSplitAmount(wrong, "food", 5_500_000, true), 19_000_000).ok).toBe(false);
+    expect(checkSplit(setSplitAmount(wrong, "transport", 500_000, true), 19_000_000)).toMatchObject({ ok: true, rest: null });
   });
 
-  it("UC-202 AC-7: Tích sản 0 → câu nhắc, vẫn ghi được nếu tổng khớp", () => {
-    const check = checkSplit(typed({ ...AC6, "wealth-building": 0, food: 5_200_000 }), WALLETS, 19_000_000);
-    expect(check).toMatchObject({ ok: true, reminder: "Tháng này chưa để dành Tích sản" });
+  it("UC-202 AC-7: Tích sản 0 → không còn câu nhắc; checkSplit chỉ xét tổng — lý do do lựa chọn Không Tích sản bắt", () => {
+    const check = checkSplit(typed({ ...AC6, "wealth-building": 0, food: 5_200_000 }), 19_000_000);
+    expect(check).toEqual({ done: "Đã chia 19.000.000 / 19.000.000", rest: null, over: false, ok: true });
   });
 });

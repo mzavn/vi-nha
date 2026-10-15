@@ -133,11 +133,11 @@
 - [OPEN] Trigger 0006 chặn theo `batch_id` cho **mọi** fund `active → void`; ngoài lần chia không có nơi nào khác sinh fund nên hiện không ảnh hưởng luồng khác.
 
 ### [allocation/UC-207-chot-thang-quet-du.md](allocation/UC-207-chot-thang-quet-du.md)
-- [DIVERGENCE] `plans/260921-2228-profit-first-pwa/phase-02-allocation-core.md` (Chốt kỳ) và `phase-07-cron-telegram.md` ghi `batch_id = sweep-<month_key>`; code dùng `S<YYYYMM>` (`src/services/ledger.ts:309`).
-- [OPEN] Tính "đúng một lần" là kiểm-rồi-ghi ở app, không có ràng buộc DB (`idx_tx_batch` không unique). Hai lần `closeMonth` cùng tháng chạy song song có thể cùng thấy "chưa chốt" và quét hai lần (suy ra từ code; cron hiện chạy một lần/ngày).
-- [OPEN] Tháng không có gì để quét thì không để lại dấu `S<YYYYMM>`; nếu sau đó có giao dịch ghi lùi ngày vào tháng đã qua và cron ngày 1 của tháng sau chỉ chốt tháng liền trước, tháng đó không bao giờ được chốt lại (chỉ có thể gọi `closeMonth` trực tiếp).
-- [OPEN] Chỉ quét ví **active**; phong bì chung đã tắt mà còn dư dương thì không bao giờ được quét.
-- [OPEN] Dấu "đã chốt" đếm cả dòng `void` (câu kiểm không lọc `status`).
+- [DIVERGENCE] `plans/260921-2228-profit-first-pwa/phase-02-allocation-core.md` (Chốt kỳ) và `phase-07-cron-telegram.md` ghi `batch_id = sweep-<month_key>`; code dùng `S<YYYYMM>`.
+- [OPEN] Xem trước và chốt cách nhau một khoảng (TOCTOU): `POST` chỉ gửi `{ month, wealth_pct }`, server tính lại từ sổ hiện tại — người kia ghi / huỷ giao dịch tháng M giữa lúc xem và lúc bấm thì bút toán khác bản đã duyệt (toast hiện số thật nên phát hiện được). Chưa có kiểm `expected` → 409 `plan_changed`.
+- [OPEN] Chưa có tool MCP cho chốt tháng; chốt cần mạng.
+- [OPEN] Chỉ ví **active** tham gia; phong bì chung đã tắt mà còn dư không bao giờ được chốt.
+- [OPEN] Mọi lỗi `UNIQUE` / `PRIMARY KEY` trong batch chốt đều thành 409 `already_closed` (thực tế chỉ `month_closes` có khoá trùng được).
 
 ## Bank feed (ingest) — 11 divergence, 38 open
 
@@ -204,7 +204,7 @@
 - [OPEN] `createRule` không chặn rule người thuê trỏ tới người thuê đã ra (`active = 0`); gợi ý vẫn hiện nhưng gán sẽ lỗi `inactive_tenant`.
 - [OPEN] `account_id`, `counter_account_id`, `from_wallet_id` chỉ đặt được bằng migration: `POST /v1/rules`, `create_rule` ở màn Gán và `updateRule` ở Cài đặt không nhận ba trường này (ADR-77 Consequences). Thêm tài khoản MB mới cho người có heo thì phải thêm rule bằng SQL.
 
-## Nhắc & Telegram (notify) — 8 divergence, 31 open
+## Nhắc & Telegram (notify) — 7 divergence, 29 open
 
 ### [notify/UC-401-lich-cron-va-dieu-phoi.md](notify/UC-401-lich-cron-va-dieu-phoi.md)
 - [OPEN] Lịch khai hai nơi (`wrangler.jsonc` và `CRONS`) không có kiểm tra tự động giữ đồng bộ; lệch nhau thì job im lặng không chạy (chỉ `console.warn`).
@@ -220,10 +220,7 @@
 - [DIVERGENCE] Proposal `261001-cho-thue-lai` §Thiết kế: "tin sáng ngày 1 nhắc chốt tháng với từng người thuê đang `active`"; code chỉ nhắc người `active` **chưa** chốt tháng trước (`src/services/rental.ts` › `unsettledTenants`), và kèm số dư hiện tại.
 
 ### [notify/UC-403-kich-hoat-chot-thang-ngay-1.md](notify/UC-403-kich-hoat-chot-thang-ngay-1.md)
-- [DIVERGENCE] Phase-07 ghi "Idempotent nhờ `batch_id = sweep-<month_key>`" (`plans/260921-2228-profit-first-pwa/phase-07-cron-telegram.md` § Hằng ngày) nhưng code dùng `batch_id = 'S' + yyyymm` (`src/services/ledger.ts` › `closeMonth`: `` `S${month.replace("-", "")}` ``; test khẳng định `'S202609'`).
-- [OPEN] `closeMonth` chỉ được gọi từ lượt cron ngày 1 (không có route/MCP tool nào gọi nó — grep `closeMonth` trong `src/`). Lượt lỗi hay lỡ được lượt 5 phút sau làm bù trong ngày 1 (UC-401), nhưng nếu Worker không chạy suốt ngày 1 thì tháng trước không bao giờ được chốt tự động và không có đường chốt tay.
-- [OPEN] Nếu lần chạy đầu đã chốt xong nhưng hỏng trước khi gửi, lần chạy lại cùng ngày gửi tin **không có** dòng 🧹 (vì `closeMonth` trả `already`) — người nhà không được báo đã quét.
-- [OPEN] Chưa có bot token vẫn chốt tháng (tác dụng phụ xảy ra dù không ai được báo).
+- [OPEN] Nhà chưa có ví Tích sản thì ngày 1 `previewMonthClose` ném lỗi `config` → tin sáng ngày 1 không gửi (giữ như cũ, báo cáo CloseBackend).
 
 ### [notify/UC-404-nhac-dem-vi-chu-nhat.md](notify/UC-404-nhac-dem-vi-chu-nhat.md)
 - [OPEN] Câu chữ dòng 🧮 do agent phase-07 tự soạn, chưa được duyệt (`plans/reports/fullstack-developer-260922-0020-cron-telegram.md` "Giả định cần xác nhận" #2).

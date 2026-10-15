@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { safetyFundCashText, safetyFundMonthsText, wealthBuildingKinds, wealthBuildingPlaces, wealthBuildingSources, type WealthBuildingLine } from "./wealth-building";
+import { safetyFundCashText, safetyFundMonthsText, skippedRunLines, wealthBuildingKinds, wealthBuildingPlaces, wealthBuildingSources, type WealthBuildingLine } from "./wealth-building";
 import type { WealthBuildingAccount, WealthBuildingBreakdown } from "./types";
 
 const NBSP = "\u00a0";
@@ -33,7 +33,7 @@ const piggyBank = (memberId: keyof typeof MEMBER_NAME, balance: number, over: Pa
   pendingNet: 0,
   ...over,
 });
-const breakdown = (over: Partial<WealthBuildingBreakdown>): WealthBuildingBreakdown => ({ walletId: "wealth-building", name: "Tích sản", cash: 0, assets: 0, accounts: [], flows: [], ...over });
+const breakdown = (over: Partial<WealthBuildingBreakdown>): WealthBuildingBreakdown => ({ walletId: "wealth-building", name: "Tích sản", cash: 0, assets: 0, accounts: [], flows: [], skippedRuns: [], ...over });
 const shown = (lines: WealthBuildingLine[]) => lines.map((l) => [l.label, l.value]);
 
 describe("tab Tích sản: tiền nào, loại nào, đang ở đâu (ADR-86)", () => {
@@ -201,5 +201,21 @@ describe("tab Tích sản: tiền nào, loại nào, đang ở đâu (ADR-86)", 
     expect(safetyFundMonthsText({ ...fund, monthsCovered: null })).toBeNull();
     expect(safetyFundCashText(fund)).toBe(`Có 55.000${NBSP}₫ · cần 96.000.000${NBSP}₫`);
     expect(safetyFundCashText(fund, true)).toBe(`Có 55.000${NBSP}₫ · cần ước tính 96.000.000${NBSP}₫`);
+  });
+
+  it("UC-707: danh sách \"Lần chia không trả cho mình\" — ngày, khoản thu, lý do; mới trước", () => {
+    const b = breakdown({
+      skippedRuns: [
+        { incomeTxId: 812, at: "2026-11-03T02:00:00.000Z", amount: 24_000_000, incomeNote: "lương tháng 11", streamName: "Lương chồng", wealthNote: "Trả học phí kỳ 1" },
+        { incomeTxId: 790, at: "2026-10-20T18:00:00.000Z", amount: 1_500_000, incomeNote: "bán đồ cũ", streamName: null, wealthNote: "Bù tiền sửa xe" },
+        { incomeTxId: 700, at: "2026-10-02T03:00:00.000Z", amount: 300_000, incomeNote: null, streamName: null, wealthNote: "Ít quá" },
+      ],
+    });
+    expect(skippedRunLines(b)).toEqual([
+      { id: 812, date: "3/11", income: `Lương chồng · 24.000.000${NBSP}₫`, reason: "Trả học phí kỳ 1" },
+      { id: 790, date: "21/10", income: `bán đồ cũ · 1.500.000${NBSP}₫`, reason: "Bù tiền sửa xe" },
+      { id: 700, date: "2/10", income: `Khoản thu · 300.000${NBSP}₫`, reason: "Ít quá" },
+    ]);
+    expect(skippedRunLines(breakdown({}))).toEqual([]);
   });
 });

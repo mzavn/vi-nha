@@ -1,7 +1,7 @@
 # UC-401: Lịch cron & điều phối
 - Status: implemented
 - BR: BR-06, BR-10
-- Decisions: D11 (cron 02:00 rà soát); ADR-68 (giờ nhắc chỉnh trong app); ADR-70 (nhịp 15 phút, đêm mỗi giờ); ADR-78 (khoảng rà của lượt 02:00 ba lớp — lịch không đổi); `docs/core_design_rules.md` §5 (nhịp kỳ), §9 "Kiến trúc: Cloudflare Worker + D1"; phase-07 § Cron ("Mọi `day_key` / `week_key` / 'hôm nay là ngày mấy' tính theo Asia/Ho_Chi_Minh")
+- Decisions: D11 (cron 02:00 rà soát); ADR-68 (giờ nhắc chỉnh trong app); ADR-70 (nhịp 15 phút, đêm mỗi giờ); ADR-78 (khoảng rà của lượt 02:00 ba lớp — lịch không đổi); `docs/core_design_rules.md` §5 (nhịp kỳ), §9 "Kiến trúc: Cloudflare Worker + D1"; phase-07 § Cron ("Mọi `day_key` / `week_key` / 'hôm nay là ngày mấy' tính theo Asia/Ho_Chi_Minh"); ADR-111 (tắt tin sáng thì ngày 1 không chạy gì)
 - Actor: Cloudflare Cron Triggers
 - Trigger: `scheduled(event)` với `event.cron` ∈ `wrangler.jsonc` › `triggers.crons`
 
@@ -14,6 +14,7 @@
 - v6 (2026-10-01, commit `a301077`): chỉ còn hai cron — `0 19 * * *` và `*/5 * * * *` (288 lượt/ngày thay 1440). Bỏ `0 0 * * *` và `0 1 * * 1`: tin sáng và tổng kết tuần chạy trong lượt 5 phút theo giờ ở `config` (Cài đặt › Thông báo › Giờ nhắc), chống chạy hai lần bằng mốc `daily_run` / `weekly_run` (ADR-68).
 - v7 (2026-10-01, commit `e72b5de`): hai biểu thức `*/15 0-17,21-23 * * *` (mỗi 15 phút, trừ 01:00–03:59 VN) và `0 18,19,20 * * *` (01:00, 02:00, 03:00 VN) cùng vào một lượt `tick` — ≈ 87 lượt/ngày thay 289. Bỏ cron riêng `0 19 * * *`: rà soát (ingest UC-304) chạy trong lượt có giờ VN đúng 02:00, cô lập với các việc khác bằng `Promise.allSettled` (ADR-70).
 - v8 (2026-10-03, commit `d44390e`): lịch và lượt không đổi — rà soát vẫn chỉ chạy ở lượt 02:00 VN; khoảng rà của lượt đó thành ba lớp (ngày thường: hôm qua; thứ Hai: cả tuần trước; ngày 1: cả tháng trước — ingest UC-304, ADR-78), dòng `notifications(kind='backfill')` mang thêm `scope`. Không thêm cron riêng cho tuần/tháng (quota trigger ADR-56).
+- v9 (2026-10-16, commit `0528219`): tin sáng chỉ đến hạn khi bật — bỏ ngoại lệ ngày 1 (cron không chốt tháng nữa, ADR-111) (change [261015-chot-thang-va-keo-tich-san](../changes/archive/261015-chot-thang-va-keo-tich-san/proposal.md))
 
 ## Preconditions
 - Worker đã deploy với `triggers.crons` như bảng dưới; `CRONS` trong code trùng từng ký tự.
@@ -34,14 +35,14 @@
 | Việc | Khi | Chống làm lại |
 |---|---|---|
 | báo giao dịch chưa gán (UC-407) | `notify_pending_enabled` bật và giờ VN không trong giờ yên lặng | `notifications(kind='pending_log', day_key=<log id>, 'system', ok=1)` chỉ sau khi gửi được |
-| `runScheduledDigests(env, now, state)` (bước 3c) | mọi lượt | mốc `notifications(kind='daily_run'/'weekly_run', 'system')` + chống gửi trùng của từng tin (UC-408); chốt tháng: `batch_id = 'S<yyyymm>'` (UC-403) |
+| `runScheduledDigests(env, now, state)` (bước 3c) | mọi lượt | mốc `notifications(kind='daily_run'/'weekly_run', 'system')` + chống gửi trùng của từng tin (UC-408) |
 | `cancelStaleTestSeries` (UC-410) | mọi lượt | `UPDATE … WHERE status IN ('pending','running')` — chạy lại không đổi thêm gì |
 | `backfill` (ingest, UC-304) — không gửi tin; khoảng rà ngày / tuần (thứ Hai) / tháng (ngày 1) theo `backfillWindow` (ADR-78) | chỉ lượt có giờ VN đúng 02:00 (`minuteOfDay(now) = 120`, tức `scheduledTime` 19:00 UTC ngày hôm trước) | thuộc ingest: chống trùng log + `notifications(kind='backfill', day_key=dayKey(now), 'system')` `INSERT OR IGNORE` |
 
 3c. `runScheduledDigests` (giờ VN của `now`, không đọc DB thêm khi không có việc):
-   - **Tin sáng** đến hạn khi mốc `daily_run` gần nhất ≠ hôm nay **và** giờ hiện tại ≥ `notify_daily_time` **và** (tin sáng bật **hoặc** hôm nay là ngày 1). Đến hạn thì giành mốc `INSERT OR IGNORE INTO notifications (kind, day_key, chat_id, payload, ok) VALUES ('daily_run', <ngày VN>, 'system', NULL, 1)`; chỉ lượt chèn được dòng mới chạy: tin sáng bật → `daily` (UC-402..405); tắt (chỉ ngày 1) → chỉ chốt tháng (UC-403), không gửi.
+   - **Tin sáng** đến hạn khi mốc `daily_run` gần nhất ≠ hôm nay **và** giờ hiện tại ≥ `notify_daily_time` **và** tin sáng bật (tắt thì không chạy gì, kể cả ngày 1 — ADR-111). Đến hạn thì giành mốc `INSERT OR IGNORE INTO notifications (kind, day_key, chat_id, payload, ok) VALUES ('daily_run', <ngày VN>, 'system', NULL, 1)`; chỉ lượt chèn được dòng mới chạy `daily` (UC-402..405).
    - **Tổng kết tuần** đến hạn khi bật **và** thứ ISO hôm nay = `notify_weekly_day` **và** giờ ≥ `notify_weekly_time` **và** mốc `weekly_run` gần nhất ≠ tuần được tổng kết (UC-406). Giành mốc `weekly_run` với `day_key` = tuần đó rồi chạy `weekly`.
-   - Việc đã giành mốc mà ném lỗi → xoá mốc vừa giành rồi ném tiếp: lượt cron sau làm lại (an toàn vì chốt tháng idempotent và `notifyMembers` không gửi lại người đã nhận).
+   - Việc đã giành mốc mà ném lỗi → xoá mốc vừa giành rồi ném tiếp: lượt cron sau làm lại (an toàn vì tin sáng không ghi gì vào sổ — chốt tháng do người bấm, ADR-111 — và `notifyMembers` không gửi lại người đã nhận).
    - Hệ quả: lượt đúng giờ bị lỡ thì lượt kế tiếp chạy bù; giờ nằm trong 01:00–03:59 chạy ở lượt mỗi giờ kế tiếp (01:30 → 02:00); không bao giờ chạy hai lần một ngày (một tuần); đổi giờ sau khi hôm nay đã chạy thì mai mới áp dụng.
 4. Mỗi handler tự đổi `now` sang lịch VN bằng `src/domain/period.ts` (`dayKey`, `weekKey`, `monthKey`, `isoWeekday`, `minuteOfDay`, offset +7h cố định).
 

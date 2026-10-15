@@ -1,7 +1,7 @@
 # UC-402: Tin sáng (giờ nhắc, mặc định 07:00)
 - Status: implemented
 - BR: BR-01, BR-04, BR-06, BR-07
-- Decisions: D2 (10/25 chỉ nhắc), D3 (chốt tháng), D11 (rà soát 02:00); ADR-68 (giờ nhắc chỉnh trong app); `docs/core_design_rules.md` §8 (dòng "7:00 sáng", "Vượt ngân sách: chỉ hiện mục ≥ 80%"), §7 ("Lệch ≠ 0 → … nhắc Telegram sáng hôm sau"); `docs/DESIGN.md` §5 (tiền, kỳ), §6 (giọng chữ); commits `a954744`, `eb7846e`; ADR-61 (chốt tay mỗi tháng với người thuê — tin sáng chỉ nhắc); ADR-71 (sổ nợ — dòng 💳); ADR-72 (sổ phải thu — dòng 🤝); ADR-78 (rà soát ba lớp — dòng 🩹 ghi rõ lượt soát tuần/tháng); ADR-79 (hai bản: ngắn cho thông báo đẩy, đầy đủ cho Telegram; việc cần làm trước); ADR-92 (tên trong code tiếng Anh); ADR-93 (Quỹ an tâm)
+- Decisions: D2 (10/25 chỉ nhắc), D3 (chốt tháng), D11 (rà soát 02:00); ADR-68 (giờ nhắc chỉnh trong app); `docs/core_design_rules.md` §8 (dòng "7:00 sáng", "Vượt ngân sách: chỉ hiện mục ≥ 80%"), §7 ("Lệch ≠ 0 → … nhắc Telegram sáng hôm sau"); `docs/DESIGN.md` §5 (tiền, kỳ), §6 (giọng chữ); commits `a954744`, `eb7846e`; ADR-61 (chốt tay mỗi tháng với người thuê — tin sáng chỉ nhắc); ADR-71 (sổ nợ — dòng 💳); ADR-72 (sổ phải thu — dòng 🤝); ADR-78 (rà soát ba lớp — dòng 🩹 ghi rõ lượt soát tuần/tháng); ADR-79 (hai bản: ngắn cho thông báo đẩy, đầy đủ cho Telegram; việc cần làm trước); ADR-92 (tên trong code tiếng Anh); ADR-93 (Quỹ an tâm); ADR-111 (ngày 1 chỉ mời chốt tháng, dòng 📌)
 - Actor: lượt cron (UC-401: mỗi 15 phút, 01:00–03:59 VN mỗi giờ) từ giờ tin sáng `notify_daily_time` (mặc định 07:00 VN), khi `notify_daily_enabled` bật; người nhận: mọi thành viên đang hoạt động có `tg_chat_id`
 - Trigger: `runScheduledDigests` giành được mốc `daily_run` của hôm nay → `src/cron/daily.ts` › `daily(env, now)`
 
@@ -20,14 +20,15 @@
 - v11 (2026-10-03, commit `e91b68f`): "còn để chi" âm không còn viết "Còn … −X" (dễ đọc nhầm): bản đầy đủ "💰 Tuần này đã chi vượt X (còn N ngày)", bản ngắn tiêu đề "Tuần này vượt X" (dự phòng "Vượt X"). Cùng luật với hero PWA (pwa UC-702 v9). Thêm AC-29.
 - v12 (2026-10-06, commit `9c265ee`): **bỏ số lũy kế SePay** (ADR-87, change [`261006-bo-luy-ke-sepay`](../changes/archive/261006-bo-luy-ke-sepay/proposal.md)) — chủ nhà: "bỏ hẳn cái data mà sepay trả về đó, đừng quan tâm lũy kế của nó nữa nè". 🏦 Đối soát chỉ còn `bookDrift ≠ 0` (sổ khác giao dịch ngân hàng đã gán); AC-8 viết lại theo lệch sổ.
 - v13 (2026-10-07, commit `7424f26`): chip 🎯 "Phao x/y tháng" thành "Quỹ an tâm x/y tháng" (ADR-93 — "khẩn cấp" mang nghĩa tai hoạ; hết trùng chữ với tài khoản phao dự phòng); số đọc từ `snapshot.safetyFund` (trước là `emergency`), N = `config.safety_fund_months`, view `v_safety_fund`; trường `DailyMessageInput` thành `safetyFundMonthsCovered`, `safetyFundMonthsTarget`; push tin sáng mở `/#today` (ADR-92). AC-3, AC-5, AC-25, AC-28 sửa chữ theo (change [261007-doi-ten-tieng-anh](../changes/archive/261007-doi-ten-tieng-anh/proposal.md)).
+- v14 (2026-10-16, commit `0528219`): ngày 1 không còn chốt tháng trước khi dựng tin; dòng 🧹/🔁 thay bằng 📌 mời mở app chốt (UC-403, ADR-111); bản ngắn có mục `chốt tháng <m>`; tắt tin sáng thì ngày 1 không chạy gì. AC-26 sửa (change [261015-chot-thang-va-keo-tich-san](../changes/archive/261015-chot-thang-va-keo-tich-san/proposal.md))
 
 ## Preconditions
 - Có bot token (`telegram_bot_token`, UC-508) và ≥ 1 thành viên có `tg_chat_id` — nếu không, tin được dựng nhưng không ai nhận (UC-408).
 
 ## Main Flow
-0. Lượt cron gọi `daily` khi tới giờ tin sáng và hôm nay chưa chạy (UC-401 bước 3c). Giờ trong 01:00–03:59 chạy ở lượt mỗi giờ kế tiếp. Đổi giờ sau khi hôm nay đã gửi thì mai mới áp dụng. Tắt tin sáng thì không gọi `daily`; ngày 1 vẫn chốt tháng (UC-403).
+0. Lượt cron gọi `daily` khi tới giờ tin sáng và hôm nay chưa chạy (UC-401 bước 3c). Giờ trong 01:00–03:59 chạy ở lượt mỗi giờ kế tiếp. Đổi giờ sau khi hôm nay đã gửi thì mai mới áp dụng. Tắt tin sáng thì không gọi `daily` — kể cả ngày 1 (không mời chốt, không chốt; UC-403, ADR-111).
 1. `today = dayKey(now)` theo giờ VN; `dayOfMonth` = ngày trong `today`.
-2. Nếu `dayOfMonth = 1`: chốt tháng trước **trước khi** dựng tin (UC-403).
+2. Nếu `dayOfMonth = 1`: `monthCloseInvite` đọc xem trước chốt tháng trước (UC-403) — chỉ đọc, không ghi; tháng chưa chốt mà còn dư hoặc có chi lố được bù → dòng 📌 mời chốt.
 3. `snapshot = getSnapshot(db, null, now)` (UC-103) — **người xem = null**: ví `private` của từng người bị ẩn số (`src/domain/snapshot.ts` › `hidden`), nên không góp vào "còn để chi" hay "sắp vỡ" của tin gửi chung.
 4. Tính các dòng:
    - **💰 Còn để chi tuần này** = `snapshot.spendableThisWeek`; số ngày = `8 − thứ ISO (VN)` (tính cả hôm nay). Âm → **"💰 Tuần này đã chi vượt X (còn N ngày)"** với X là số dương; tiêu đề bản ngắn "Tuần này vượt X".
@@ -46,23 +47,23 @@
 5. `dailyMessage(input)` dựng **hai bản** `{ full, push }` (ADR-79); `notifyMembers(env, "daily", today, message)` gửi `full` qua Telegram và `push` tới từng máy đã bật (UC-408, UC-410).
 
 ### Luật định dạng (`src/notify/format.ts`)
-- Thứ tự dòng cố định — 💰, rồi **việc cần làm**: 📥 → ❗ → 🔁 (quá hạn) → ⚠️ → 📅 (ngày 10/25) → 🧮 (Chủ nhật) → 🏠 (ngày 1) → 🧹/🔁 (ngày 1); rồi **thông tin**: 🎯 → 💳 → 🤝 → 🏦 → 🔗 → 🩹. Chỉ 💰 và 🏦 luôn có; mọi dòng khác chỉ hiện khi số > 0 / danh sách khác rỗng.
+- Thứ tự dòng cố định — 💰, rồi **việc cần làm**: 📥 → ❗ → 🔁 (quá hạn) → ⚠️ → 📅 (ngày 10/25) → 🧮 (Chủ nhật) → 🏠 (ngày 1) → 📌 (ngày 1, mời chốt tháng); rồi **thông tin**: 🎯 → 💳 → 🤝 → 🏦 → 🔗 → 🩹. Chỉ 💰 và 🏦 luôn có; mọi dòng khác chỉ hiện khi số > 0 / danh sách khác rỗng.
 - Tiền: `formatMoney` — nhóm nghìn kiểu `vi-VN` (`1.250.000 ₫`), `₫` sau số cách một khoảng, số âm dùng dấu `−` U+2212, không rút gọn (`DESIGN.md` §5).
 - Phần trăm: làm tròn số nguyên (`92%`). Quỹ an tâm: số tháng một chữ số thập phân, dấu phẩy (`3,2`).
 - Mục trong cùng dòng nối bằng ` · `. Mọi tên ví/tài khoản/danh mục của bản đầy đủ đi qua `escapeHtml` (`&`, `<`, `>`) vì tin gửi `parse_mode=HTML`; bản ngắn giữ chữ thật.
 
 ### Bản ngắn (thông báo đẩy, ADR-79)
 - Tiêu đề: `Còn <tiền> tuần này`; dài quá 25 ký tự thì `Còn <tiền>`.
-- Nội dung: các mục việc cần làm theo đúng thứ tự trên — `<N> chưa gán` · `<N> cần xem tay` · `<N> chuyển tiền quá hạn` · mỗi ví sắp vỡ `<tên> <pct>%` · `còn <N> khoản thu chưa chia` · `đếm ví tiền mặt` · `chốt tháng <tên>, <tên>` · `quét <tiền> dư tháng <m>` (+ ` (<k> lệnh chuyển)` khi có lệnh) — rồi mỗi tài khoản lệch `lệch <tiền> ở <tên>`; nối bằng ` · `, chữ đầu viết hoa. Không có mục nào → `Không có việc cần làm · đối soát khớp`. Mục tiêu, phao, nợ, phải thu, tự ghép, vá đêm không lên bản ngắn.
+- Nội dung: các mục việc cần làm theo đúng thứ tự trên — `<N> chưa gán` · `<N> cần xem tay` · `<N> chuyển tiền quá hạn` · mỗi ví sắp vỡ `<tên> <pct>%` · `còn <N> khoản thu chưa chia` · `đếm ví tiền mặt` · `chốt tháng <tên>, <tên>` · `chốt tháng <m>` — rồi mỗi tài khoản lệch `lệch <tiền> ở <tên>`; nối bằng ` · `, chữ đầu viết hoa. Không có mục nào → `Không có việc cần làm · đối soát khớp`. Mục tiêu, phao, nợ, phải thu, tự ghép, vá đêm không lên bản ngắn.
 - Tối đa 150 ký tự (đếm theo ký tự, không theo byte): không vừa thì bỏ mục từ cuối lên và thêm ` …`; một mục dài hơn cả 150 thì cắt giữa chừng, kết thúc bằng `…`. Không emoji, không HTML.
 - Giọng chữ: không xưng hô, không chấm than (`DESIGN.md` §6, chú thích đầu `format.ts`).
 
 ## Alternative Flows
-- 2a. Ngày 1 nhưng quét được 0 ₫ (hoặc tháng đã chốt từ trước) → không có dòng 🧹 (UC-403).
+- 2a. Ngày 1 nhưng tháng trước đã chốt, hoặc không dư và không có chi lố được bù → không có dòng 📌 (UC-403).
 - 5a. Đã có dòng `notifications(daily, today, chat_id)` cho người nhận → bỏ qua người đó (chống trùng, UC-408).
 
 ## Exceptions
-- E1. Chưa có bot token → `notifyMembers` trả 0, không ghi `notifications`; các tác dụng phụ trước đó (chốt tháng) vẫn đã xảy ra. Không có lần gửi bù trong ngày.
+- E1. Chưa có bot token → `notifyMembers` trả 0, không ghi `notifications`; tin sáng không có tác dụng phụ lên sổ (từ ADR-111 cron không chốt tháng). Không có lần gửi bù trong ngày.
 - E2. Telegram từ chối/hỏng sau 3 lượt → `ok=0`, tin ngày đó mất với người nhận ấy (UC-408 E2).
 
 ## Acceptance Criteria
@@ -183,7 +184,7 @@
 - Given `notify_daily_enabled = '0'`
 - When lượt 07:00 ngày 30/9 và các lượt ngày 1/10
 - Then không có tin nào; ngày 30/9 không có dòng `daily_run` (ngày 1 xem UC-403 AC-5)
-- Tests: `test/cron-schedule.test.ts` › "giờ nhắc: tin sáng theo giờ ở Cài đặt › tắt tin sáng: không gửi gì, nhưng ngày 1 vẫn chốt tháng trước từ giờ tin sáng"
+- Tests: `test/cron-schedule.test.ts` › "giờ nhắc: tin sáng theo giờ ở Cài đặt › UC-207 AC-2: tắt tin sáng → ngày 1 không chạy gì, không ghi mốc daily_run, không có giao dịch S…"
 
 ### AC-22: Giờ trong 01:00–04:00 gửi ở lượt mỗi giờ kế tiếp
 - Given `notify_daily_time = '01:30'`
@@ -209,10 +210,10 @@
 - Then `push = { title: "Còn 3.250.000 ₫ tuần này", body: "Không có việc cần làm · đối soát khớp" }` (thông tin không lên bản ngắn) / `body = "Lệch 120.000 ₫ ở MB"`
 - Tests: `test/format.test.ts` › "dailyMessage — bản ngắn cho thông báo đẩy › không có việc: tiêu đề còn để chi tuần này, nội dung báo không có việc và đối soát khớp; thông tin không lên"; `test/format.test.ts` › "dailyMessage — bản ngắn cho thông báo đẩy › chỉ lệch đối soát: nội dung là chỗ lệch"
 
-### AC-26: Bản ngắn xếp việc cần làm trước, chỗ lệch sau
-- Given 3 chưa gán, 1 cần xem tay, 2 chuyển tiền quá hạn, Ăn uống 88%, ngày 10 còn 1 khoản thu chưa chia, lệch 5.000 ₫ ở MB; hoặc Chủ nhật đếm ví + ngày 1 chốt An + quét 4.640.000 ₫ có 1 lệnh chuyển
+### AC-26: Bản ngắn xếp việc cần làm trước, chỗ lệch sau (MODIFIED v14: mục "chốt tháng <m>" thay "quét …")
+- Given 3 chưa gán, 1 cần xem tay, 2 chuyển tiền quá hạn, Ăn uống 88%, ngày 10 còn 1 khoản thu chưa chia, lệch 5.000 ₫ ở MB; hoặc Chủ nhật đếm ví + ngày 1 chốt người thuê Anh Bình + mời chốt tháng 9
 - When `dailyMessage`
-- Then `body = "3 chưa gán · 1 cần xem tay · 2 chuyển tiền quá hạn · Ăn uống 88% · còn 1 khoản thu chưa chia · lệch 5.000 ₫ ở MB"`; `"Đếm ví tiền mặt · chốt tháng An · quét 4.640.000 ₫ dư tháng 9 (1 lệnh chuyển)"`
+- Then `body = "3 chưa gán · 1 cần xem tay · 2 chuyển tiền quá hạn · Ăn uống 88% · còn 1 khoản thu chưa chia · lệch 5.000 ₫ ở MB"`; `"Đếm ví tiền mặt · chốt tháng Anh Bình · chốt tháng 9"`
 - Tests: `test/format.test.ts` › "dailyMessage — bản ngắn cho thông báo đẩy › việc cần làm theo thứ tự chưa gán → xem tay → chuyển tiền → sắp vỡ → chưa chia → đếm ví → chốt người thuê → quét tháng, rồi chỗ lệch"
 
 ### AC-27: Bản ngắn không quá 25 / 150 ký tự

@@ -5,7 +5,7 @@ và các **read model** tính ra (view SQL + hàm thuần): WalletBalance, Spent
 
 Tham chiếu theo tên (không sở hữu):
 - `Member`, `Config` — **access** (`specs/access/entities.md`). Ở ledger, member chỉ là **nhãn**: "ai chi" (`transactions.by_member_id`), chủ tài khoản (`accounts.owner_member_id`), chủ ví cá nhân (`wallets.member_id`). Tiền thuộc về **hộ** (`migrations/0001_schema.sql` dòng 14: "Đơn vị là HỘ GIA ĐÌNH; `by_member_id` chỉ là nhãn").
-- `AllocationRule` (bảng `allocations`), `AllocationRun`, `TransferOrder`, `IncomeStream` (nguồn thu + phần khóa), và hai dạng bút toán `FundEntry`/`SweepEntry` — **allocation** (`specs/allocation/entities.md`). Ledger chỉ **đọc** luật nạp để tính dự kiến kỳ (`monthTarget`, `weekTarget`), và **ghi** `TransferOrder` khi quyết toán thuế (UC-110).
+- `AllocationRule` (bảng `allocations`), `AllocationRun`, `MonthClose`, `TransferOrder`, `IncomeStream` (nguồn thu + phần khóa), và hai dạng bút toán `FundEntry`/`MonthCloseEntry` — **allocation** (`specs/allocation/entities.md`). Ledger chỉ **đọc** luật nạp để tính dự kiến kỳ (`monthTarget`, `weekTarget`), và **ghi** `TransferOrder` khi quyết toán thuế (UC-110).
 - `BankLog`, `Rule` — **ingest** (`specs/ingest/entities.md`).
 - `Tenant` (người thuê) — **rental** (`specs/rental/`). Khoản `income` gắn `tenant_id` là tiền người thuê trả; sổ người thuê nằm ngoài sổ cái (ADR-58).
 - `Debt` (khoản nợ) — **debt** (`specs/debt/`). Khoản `spend` gắn `debt_id` là tiền trả nợ **gốc**; khoản `spend` gắn `interest_debt_id` là tiền trả **lãi** của khoản nợ (chi phí, không giảm nợ — ADR-106); sổ nợ nằm ngoài sổ cái (ADR-71).

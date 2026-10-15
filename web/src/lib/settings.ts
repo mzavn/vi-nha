@@ -499,12 +499,26 @@ export function memberPayload(f: { name: string; tg_chat_id: string }, current: 
   }));
 }
 
-export function configPayload(f: { salary_min_amount: number; safety_fund_months: string }): Result<Pick<SettingsConfig, "salary_min_amount" | "safety_fund_months">> {
+type ConfigFields = "salary_min_amount" | "safety_fund_months" | "month_close_wealth_pct" | "month_close_reward_wallet";
+
+export function configPayload(f: {
+  salary_min_amount: number;
+  safety_fund_months: string;
+  month_close_wealth_pct: string;
+  month_close_reward_wallet: string;
+}): Result<Required<Pick<SettingsConfig, ConfigFields>>> {
   const errors: Errors = {};
   const months = parseInteger(f.safety_fund_months, 1, 24);
   if (months === null) errors.safety_fund_months = "Số tháng là số nguyên từ 1 đến 24.";
   if (f.salary_min_amount < 0) errors.salary_min_amount = "Ngưỡng không âm.";
-  return done(errors, () => ({ salary_min_amount: f.salary_min_amount, safety_fund_months: months! }));
+  const closePct = parseInteger(f.month_close_wealth_pct, 0, 100);
+  if (closePct === null) errors.month_close_wealth_pct = "Tỷ lệ là số nguyên từ 0 đến 100.";
+  return done(errors, () => ({
+    salary_min_amount: f.salary_min_amount,
+    safety_fund_months: months!,
+    month_close_wealth_pct: closePct!,
+    month_close_reward_wallet: orNull(f.month_close_reward_wallet),
+  }));
 }
 
 // ── Tham số Tài sản & tự do (access UC-507 AC-16) ──────────────────
@@ -620,7 +634,7 @@ export function scheduleRows(s: NotifySchedule): { title: string; sub: string; v
   return [
     {
       title: "Tin sáng",
-      sub: s.dailyEnabled ? "Còn để chi tuần này, ví sắp vỡ, đối soát, việc cần làm" : `Đang tắt — ngày 1 vẫn tự chốt tháng lúc ${s.dailyTime}, chỉ không gửi tin`,
+      sub: s.dailyEnabled ? "Còn để chi tuần này, ví sắp vỡ, đối soát, việc cần làm" : "Đang tắt — ngày 1 không có tin mời chốt tháng; mở Hôm nay để chốt",
       value: s.dailyEnabled ? s.dailyTime : "Tắt",
     },
     {
@@ -731,6 +745,7 @@ const AUDIT_ACTION: Record<string, string> = {
   "log.assign": "Gán giao dịch ngân hàng",
   "income.allocate": "Chia khoản thu",
   "tenant.paid_for_us": "Người thuê trả hộ",
+  "month.close": "Chốt tháng",
 };
 const AUDIT_VIA: Record<AuditEntry["via"], string> = { session: "", token: " · qua API token", mcp: " · qua Claude" };
 

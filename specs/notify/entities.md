@@ -22,7 +22,7 @@
 |---|---|---|---|---|---|---|
 | `daily` | `notifyMembers` từ `src/cron/daily.ts` › `daily` | `dayKey(now)` giờ VN, `2026-09-22` | chat của thành viên, `push:<id>` hoặc `zalo:<id>` | văn bản tin | 0 → 1/0 | — |
 | `weekly` | `notifyMembers` từ `src/cron/weekly.ts` › `weekly` | `weekKey` của tuần được tổng kết (`summarisedSunday`), `2026-W39` | chat của thành viên, `push:<id>` hoặc `zalo:<id>` | văn bản tin | 0 → 1/0 | — |
-| `daily_run` | `src/cron/schedule.ts` › `claimRun` (giành mốc trước khi chạy tin sáng / chốt tháng), `INSERT OR IGNORE` | `dayKey(now)` giờ VN | `'system'` | `NULL` | 1 | `loadNotifyState` (`MAX(day_key)`) — đã chạy hôm nay chưa; việc lỗi thì `runClaimed` xoá dòng |
+| `daily_run` | `src/cron/schedule.ts` › `claimRun` (giành mốc trước khi chạy tin sáng), `INSERT OR IGNORE` | `dayKey(now)` giờ VN | `'system'` | `NULL` | 1 | `loadNotifyState` (`MAX(day_key)`) — đã chạy hôm nay chưa; việc lỗi thì `runClaimed` xoá dòng |
 | `weekly_run` | `claimRun` trước khi chạy tổng kết tuần | `weekKey` của tuần được tổng kết | `'system'` | `NULL` | 1 | `loadNotifyState` — tuần này đã tổng kết chưa |
 | `pending_batch` | `notifyMembers` từ `src/cron/pending-notifier.ts` › `notifyPendingLogs` | `now.toISOString()` — mỗi lần chạy một khoá mới | chat của thành viên, `push:<id>` hoặc `zalo:<id>` | văn bản tin | 0 → 1/0 | — |
 | `pending_log` | `notifyPendingLogs`, chỉ sau khi tin gộp gửi được ≥ 1 người nhận, ≥ 1 máy hoặc ≥ 1 chat Zalo | `bank_logs.id` | `'system'` | `{"amount","direction"}` | 1 (`ON CONFLICT … DO UPDATE SET ok = 1`) | `notifyPendingLogs` (loại log đã báo) |
@@ -122,7 +122,7 @@ Ba dòng trong `config` (Config thuộc access — xem [access/entities.md](../a
 
 | Khoá `CRONS` | Biểu thức (UTC) | Giờ VN | Handler | Context sở hữu việc |
 |---|---|---|---|---|
-| `quarterHour` | `*/15 0-17,21-23 * * *` | mỗi 15 phút, trừ 01:00–03:59 (84 lượt/ngày) | `tick` | notify (UC-401..407, UC-410), gọi chốt tháng của allocation (UC-207) |
+| `quarterHour` | `*/15 0-17,21-23 * * *` | mỗi 15 phút, trừ 01:00–03:59 (84 lượt/ngày) | `tick` | notify (UC-401..407, UC-410); ngày 1 mời chốt tháng (UC-403 đọc xem trước của allocation UC-207, không ghi) |
 | `nightHourly` | `0 18,19,20 * * *` | 01:00, 02:00, 03:00 (3 lượt/ngày) | `tick` | như trên; lượt 02:00 thêm rà soát của ingest (UC-304) |
 
 `tick`: `runScheduledDigests` (tin sáng, tổng kết tuần theo Giờ nhắc) + `notifyPendingLogs` (khi bật, ngoài giờ yên lặng) + `cancelStaleTestSeries` + `backfill` (chỉ khi giờ VN đúng 02:00), song song bằng `Promise.allSettled` (ADR-70).
@@ -135,8 +135,8 @@ Trước ADR-68 còn hai cron cố định `0 0 * * *` (tin sáng 07:00) và `0 
 
 | Khoá `config` | Trường API (`notifySchedule`) | Mặc định | Luật |
 |---|---|---|---|
-| `notify_daily_time` | `dailyTime` | `07:00` | giờ VN `HH:MM`, phút chia hết cho 15 (giờ trong 01:00–03:59 chạy ở lượt mỗi giờ kế tiếp); giờ tin sáng (UC-402..405) và giờ chốt tháng ngày 1 (UC-403) |
-| `notify_daily_enabled` | `dailyEnabled` | `1` | `'1'`/`'0'`; tắt chỉ tắt tin, không tắt chốt tháng |
+| `notify_daily_time` | `dailyTime` | `07:00` | giờ VN `HH:MM`, phút chia hết cho 15 (giờ trong 01:00–03:59 chạy ở lượt mỗi giờ kế tiếp); giờ tin sáng (UC-402..405), gồm câu mời chốt tháng ngày 1 (UC-403) |
+| `notify_daily_enabled` | `dailyEnabled` | `1` | `'1'`/`'0'`; tắt thì ngày 1 cũng không chạy gì (chốt tháng do người bấm trên app — ADR-111) |
 | `notify_weekly_day` | `weeklyDay` | `1` | thứ ISO 1 = thứ Hai .. 7 = Chủ nhật (UC-406) |
 | `notify_weekly_time` | `weeklyTime` | `08:00` | như `notify_daily_time` |
 | `notify_weekly_enabled` | `weeklyEnabled` | `1` | `'1'`/`'0'` |

@@ -1,4 +1,4 @@
-// Tin sáng, gửi vào giờ cả nhà chọn ở Cài đặt (mặc định 07:00 VN, src/cron/schedule.ts). Gộp luôn: chốt tháng ngày 1,
+// Tin sáng, gửi vào giờ cả nhà chọn ở Cài đặt (mặc định 07:00 VN, src/cron/schedule.ts). Gộp luôn: mời chốt tháng ngày 1,
 // nhắc đếm ví Chủ nhật, nhắc income chưa chia ngày 10 & 25 — xem plans/260921-2228-profit-first-pwa/phase-07-cron-telegram.md.
 
 import { previousMonth } from "../domain/close";
@@ -6,7 +6,7 @@ import { dayKey, isoWeekday, monthKey } from "../domain/period";
 import type { Env } from "../env";
 import { dailyMessage, type DailyMessageInput } from "../notify/format";
 import { notifyMembers } from "../notify/telegram";
-import { closeMonth, getSnapshot, loadRefs, reconcile } from "../services/ledger";
+import { getSnapshot, loadRefs, previewMonthClose, reconcile } from "../services/ledger";
 import { unsettledTenants } from "../services/rental";
 
 type ReconcileRow = {
@@ -17,22 +17,14 @@ type ReconcileRow = {
 };
 
 /**
- * Ngày 1 (lịch VN): chốt tháng trước (idempotent qua batch_id). Đây là việc của sổ, không phải thông báo —
- * tắt tin sáng thì lịch vẫn gọi riêng hàm này. Trả dòng "đã quét" cho tin sáng, null nếu không phải ngày 1 hay không có gì quét.
+ * Ngày 1 (lịch VN): mời chốt tháng trước (UC-207, ADR-111) — cron không ghi gì vào sổ, người bấm chốt trên app.
+ * null nếu không phải ngày 1, tháng trước đã chốt, hay không có phong bì chung nào dương (không gì để dư hay để bù).
  */
-export async function closePreviousMonthOnDayOne(db: D1Database, now: Date): Promise<DailyMessageInput["monthClose"]> {
+export async function monthCloseInvite(db: D1Database, now: Date): Promise<DailyMessageInput["monthClose"]> {
   if (dayKey(now).slice(8, 10) !== "01") return null;
-  const month = previousMonth(monthKey(now));
-  const closed = await closeMonth(db, month);
-  const sweptAmount = closed.sweeps.reduce((sum, s) => sum + s.amount, 0);
-  if (sweptAmount === 0) return null;
-  const { accounts } = await loadRefs(db);
-  const nameOf = (id: string) => accounts.find((a) => a.id === id)?.name ?? id;
-  return {
-    month,
-    amount: sweptAmount,
-    transfers: closed.transferOrders.map((o) => ({ fromName: nameOf(o.fromAccountId), toName: nameOf(o.toAccountId), amount: o.amount })),
-  };
+  const view = await previewMonthClose(db, now);
+  if (view.closed || view.positiveTotal === 0) return null;
+  return { month: view.month, profit: view.profit, covered: view.covered };
 }
 
 export async function daily(env: Env, now: Date): Promise<void> {
@@ -40,8 +32,8 @@ export async function daily(env: Env, now: Date): Promise<void> {
   const today = dayKey(now);
   const dayOfMonth = Number(today.slice(8, 10));
 
-  // Ngày 1: chốt tháng trước trước tiên rồi mới build tin.
-  const monthClose = await closePreviousMonthOnDayOne(db, now);
+  // Ngày 1: mời chốt tháng trước nếu còn dư hoặc có chi lố được bù.
+  const monthClose = await monthCloseInvite(db, now);
 
   // Ngày 1: nhắc chốt tháng trước với từng người thuê đang ở (chỉ nhắc — người chốt trên PWA, UC-804).
   const rentalSettleReminder = dayOfMonth === 1 ? await unsettledTenants(db, previousMonth(monthKey(now))) : [];

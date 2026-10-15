@@ -94,26 +94,19 @@ describe("dailyMessage", () => {
     expect(text).toContain("⚠️ Sắp vỡ: A 99% · B 80%");
   });
 
-  it("ngày 1: dòng chốt tháng kèm lệnh chuyển tiền, chỉ hiện khi số quét > 0", () => {
-    const text = dailyMessage({
-      ...base,
-      monthClose: {
-        month: "2026-09",
-        amount: 4_640_000,
-        transfers: [{ fromName: "VCB (chính)", toName: "TCB (Tích sản)", amount: 4_640_000 }],
-      },
-    }).full;
+  it("UC-207 AC-2: dòng 📌 mời chốt khi còn dư; câu riêng khi chỉ có bù; profit 0 và covered 0 → không có dòng", () => {
+    const text = dailyMessage({ ...base, monthClose: { month: "2026-09", profit: 4_140_000, covered: 500_000 } }).full;
     expect(text.split("\n")).toEqual([
       "💰 Còn để chi tuần này: 3.250.000 ₫ (4 ngày)",
-      "🧹 Đã quét 4.640.000 ₫ dư tháng 9 sang Tích sản",
-      "🔁 Chuyển 4.640.000 ₫ từ VCB (chính) sang TCB (Tích sản)",
+      "📌 Tháng 9: dư 4.140.000 ₫ sau khi bù chi lố — mở app để chốt",
       "🏦 Đối soát: khớp",
     ]);
-  });
-
-  it("chốt tháng quét được 0 đồng thì không thêm dòng nào", () => {
-    const text = dailyMessage({ ...base, monthClose: { month: "2026-09", amount: 0, transfers: [] } }).full;
-    expect(text).not.toContain("🧹");
+    expect(dailyMessage({ ...base, monthClose: { month: "2026-09", profit: 0, covered: 1_000_000 } }).full).toContain(
+      "📌 Tháng 9: chi lố được bù 1.000.000 ₫, không còn dư — mở app để chốt",
+    );
+    const nothing = dailyMessage({ ...base, monthClose: { month: "2026-09", profit: 0, covered: 0 } });
+    expect(nothing.full).not.toContain("📌");
+    expect(nothing.push.body).not.toContain("chốt tháng");
   });
 
   it("Chủ nhật: nhắc đếm ví/nhập số dư kèm tên tài khoản", () => {
@@ -207,9 +200,10 @@ describe("dailyMessage — bản ngắn cho thông báo đẩy", () => {
       ...base,
       cashCountReminder: ["Tiền mặt"],
       rentalSettleReminder: [{ name: "Anh Bình", balance: 7_075_000 }],
-      monthClose: { month: "2026-09", amount: 4_640_000, transfers: [{ fromName: "VCB", toName: "TCB", amount: 4_640_000 }] },
+      monthClose: { month: "2026-09", profit: 4_140_000, covered: 500_000 },
     }).push;
-    expect(dayOne.body).toBe("Đếm ví tiền mặt · chốt tháng Anh Bình · quét 4.640.000 ₫ dư tháng 9 (1 lệnh chuyển)");
+    // UC-207 AC-2: push ngày 1 có "chốt tháng 9" trong việc cần làm.
+    expect(dayOne.body).toBe("Đếm ví tiền mặt · chốt tháng Anh Bình · chốt tháng 9");
   });
 
   it("tin dài nhất: tiêu đề ≤ 25, nội dung ≤ 150; cắt từ cuối, giữ việc đứng đầu, kết thúc bằng …", () => {
@@ -227,7 +221,7 @@ describe("dailyMessage — bản ngắn cho thông báo đẩy", () => {
       incomeReminder: { day: 25, unallocatedCount: 2 },
       cashCountReminder: ["Tiền mặt (chồng)", "Tiền mặt (vợ)"],
       rentalSettleReminder: [{ name: "Anh Bình", balance: 7_075_000 }, { name: "An", balance: -80_000 }],
-      monthClose: { month: "2026-09", amount: 4_640_000, transfers: [{ fromName: "VCB (chính)", toName: "TCB (Tích sản)", amount: 4_640_000 }] },
+      monthClose: { month: "2026-09", profit: 4_140_000, covered: 500_000 },
       receivables: { balance: 3_000_000, count: 1 },
       driftAccounts: [{ name: "VCB (vợ)", amount: 1_000_000 }],
     });
@@ -236,7 +230,7 @@ describe("dailyMessage — bản ngắn cho thông báo đẩy", () => {
     expect(push.body).toBe("12 chưa gán · 2 cần xem tay · 3 chuyển tiền quá hạn · Ăn uống gia đình mở rộng 135% · Đi lại & xăng xe hằng ngày 105% · Chơi (chồng) 92% …");
     expect(push.body).not.toContain("<");
     // Bản đầy đủ giữ mọi dòng: việc cần làm trước, thông tin sau, dưới giới hạn 4096 ký tự của Telegram.
-    expect(full.split("\n").map((l) => Array.from(l)[0])).toEqual(["💰", "📥", "❗", "🔁", "⚠", "📅", "🧮", "🏠", "🏠", "🧹", "🔁", "🎯", "💳", "🤝", "🏦", "🔗", "🩹"]);
+    expect(full.split("\n").map((l) => Array.from(l)[0])).toEqual(["💰", "📥", "❗", "🔁", "⚠", "📅", "🧮", "🏠", "🏠", "📌", "🎯", "💳", "🤝", "🏦", "🔗", "🩹"]);
     expect(full.length).toBeLessThan(4096);
   });
 
