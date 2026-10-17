@@ -440,6 +440,12 @@ export interface SettingsAccount {
   owner_member_id: string | null;
   opening_balance: number;
   opened_at: string | null;
+  /** Mốc theo dõi SePay (ISO, ADR-113): log trước mốc như trước ngày số dư đầu; null = từ ngày số dư đầu. */
+  feed_from: string | null;
+  /** Lúc bật "SePay báo cả tiền ra" (ISO); log ra trước mốc không tự gán. */
+  sepay_out_from: string | null;
+  /** Log SePay sớm nhất của tài khoản (ISO); null khi chưa có — để gợi ý đặt mốc theo dõi. */
+  first_log_at: string | null;
   active: boolean;
   /** Ngày tắt (YYYY-MM-DD giờ VN); null khi đang dùng hoặc tắt từ trước v1.31. */
   deactivated_at: string | null;
@@ -640,7 +646,9 @@ export interface SepaySyncResult {
   duplicates: number;
   /** Giao dịch trước ngày mở sổ của tài khoản (ADR-76): đã nằm trong số dư đầu, không ghi vào sổ. */
   beforeOpening: number;
-  perConnection: { id: string; name: string; added: number; duplicates: number; beforeOpening: number; error: string | null }[];
+  /** Giao dịch trước mốc theo dõi SePay (ADR-113): đã có trong sổ, không ghi lại. */
+  beforeFeed: number;
+  perConnection: { id: string; name: string; added: number; duplicates: number; beforeOpening: number; beforeFeed: number; error: string | null }[];
   errors: string[];
 }
 

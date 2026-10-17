@@ -1,5 +1,5 @@
 -- ============================================================
---  PROFIT FIRST — HỘ GIA ĐÌNH · SCHEMA (D1 / SQLite)  v1.34
+--  PROFIT FIRST — HỘ GIA ĐÌNH · SCHEMA (D1 / SQLite)  v1.36
 --  v1.2 (20/9/2026): danh mục · tiền mặt · đa TK · thuế taxable ·
 --  lệnh chuyển tiền · thông báo
 --  v1.3 (21/9/2026): ngân sách theo kỳ chuyển sang query có tham số ·
@@ -64,6 +64,10 @@
 --  v1.34 (15/10/2026): chốt tháng do người bấm — month_closes (mỗi tháng đã chốt một dòng: người chốt, % phần dư vào
 --                     Tích sản; chặn chốt hai lần, điền sẵn từ lô S… cũ) · allocation_runs.wealth_note (lý do lần chia
 --                     Tích sản 0) (ADR-111, ADR-112)
+--  v1.35 (16/10/2026): đối soát chỉ tính giao dịch sinh từ log của chính tài khoản (tài khoản nối SePay sau không còn lệch giả).
+--  v1.36 (17/10/2026): mốc theo dõi SePay cho tài khoản đã dùng — accounts.feed_from (log lịch sử trước mốc như log trước
+--                     ngày mở sổ; log webhook không bao giờ bị bỏ vì mốc) · accounts.sepay_out_from (log ra trước lúc bật
+--                     "báo cả tiền ra" không tự gán); số theo ngân hàng tính động: sổ trước mốc + log trong phạm vi (ADR-113)
 -- ============================================================
 --  NGUYÊN TẮC ENCODE:
 --   1. Hai lớp: bank_logs (thô, BẤT BIẾN) vs transactions (đã diễn giải)
@@ -157,7 +161,9 @@ CREATE TABLE accounts (
                   CHECK (spendable IN (0,1)),
   role            TEXT                            -- tài khoản Tích sản (ADR-88): NULL thường · piggy_bank (heo đất) · buffer (phao dự phòng) · term_deposit (sổ tiết kiệm)
                   CHECK (role IS NULL OR (role IN ('piggy_bank','term_deposit') AND locked = 1) OR (role = 'buffer' AND locked = 0)),
-  deactivated_at  TEXT                            -- 'YYYY-MM-DD' giờ VN lúc tắt; bật lại -> NULL; tắt từ trước v1.31 -> NULL
+  deactivated_at  TEXT,                           -- 'YYYY-MM-DD' giờ VN lúc tắt; bật lại -> NULL; tắt từ trước v1.31 -> NULL
+  feed_from       TEXT,                           -- lúc bắt đầu theo dõi SePay (toISOString); log lịch sử (backfill) at < mốc như trước ngày mở sổ, webhook vẫn tính; NULL = từ opened_at (ADR-113)
+  sepay_out_from  TEXT                            -- lúc bật "SePay báo cả tiền ra"; log ra trước mốc không tự gán (như "chỉ tiền vào"); NULL = không có mốc
 );
 CREATE UNIQUE INDEX idx_acct_no ON accounts(account_no) WHERE account_no IS NOT NULL;
 
@@ -646,11 +652,27 @@ CREATE VIEW v_account_book AS
 
 -- Số dư theo NGÂN HÀNG (số lũy kế SePay gửi kèm) không dùng: sai cả hai dấu ở tài khoản thật (ADR-87).
 
--- Sổ theo LOG (lớp 1): mở sổ + mọi log đã nhận TỪ NGÀY MỞ SỔ (giờ VN) trở đi — log trước đó đã nằm trong
--- opening_balance (ADR-76); tách riêng phần log chưa gán
+-- Sổ theo LOG (lớp 1): log TRONG PHẠM VI = từ ngày mở sổ (giờ VN) và — với log lịch sử (rà soát, Đồng bộ lại) — từ mốc
+-- theo dõi SePay feed_from (nếu có) trở đi; log webhook không bao giờ bị bỏ vì mốc (webhook về trễ). Log ngoài phạm vi đã
+-- nằm trong opening_balance (ADR-76) hoặc đã vào sổ bằng đường khác (ADR-113); tách riêng phần log chưa gán.
+-- feed_balance của tài khoản nối sau (có feed_from) = mở sổ + giao dịch active trước mốc KHÔNG mang log của chính tài
+-- khoản trong phạm vi + log trong phạm vi — tính động, huỷ / sửa / ghi bù khoản trước mốc vẫn khớp sổ (v1.36).
 CREATE VIEW v_account_logs AS
   SELECT a.id AS account_id,
-         a.opening_balance + COALESCE(SUM(CASE l.direction WHEN 'in' THEN l.amount ELSE -l.amount END),0) AS feed_balance,
+         a.opening_balance
+         + CASE WHEN a.feed_from IS NULL THEN 0 ELSE COALESCE((
+             SELECT SUM(CASE WHEN t.account_id=a.id THEN -t.amount ELSE t.amount END)
+             FROM transactions t
+             WHERE t.status='active' AND (t.account_id=a.id OR t.counter_account_id=a.id)
+               AND julianday(t.at) < julianday(a.feed_from)
+               AND NOT EXISTS (
+                 SELECT 1 FROM bank_logs o
+                 WHERE o.id IN (t.log_id, t.log_id_2) AND o.account_id=a.id
+                   AND (a.opened_at IS NULL OR date(o.at, '+7 hours') >= a.opened_at)
+                   AND (julianday(o.at) >= julianday(a.feed_from) OR o.source='webhook')
+               )
+           ),0) END
+         + COALESCE(SUM(CASE l.direction WHEN 'in' THEN l.amount ELSE -l.amount END),0) AS feed_balance,
          COALESCE(SUM(CASE WHEN l.status='assigned'
                            THEN CASE l.direction WHEN 'in' THEN l.amount ELSE -l.amount END END),0) AS assigned_net,
          COALESCE(SUM(CASE WHEN l.status='pending'
@@ -658,14 +680,22 @@ CREATE VIEW v_account_logs AS
          COUNT(CASE WHEN l.status='pending' THEN 1 END) AS pending_count
   FROM accounts a JOIN bank_logs l ON l.account_id=a.id
    AND (a.opened_at IS NULL OR date(l.at, '+7 hours') >= a.opened_at)
+   AND (a.feed_from IS NULL OR julianday(l.at) >= julianday(a.feed_from) OR l.source='webhook')
   GROUP BY a.id;
 
 -- Phần của sổ transactions sinh ra TỪ LOG, theo từng tài khoản
+-- Chỉ giao dịch có log (log_id / log_id_2) CỦA chính tài khoản, cùng phạm vi với v_account_logs (v1.35, mốc v1.36).
 CREATE VIEW v_account_tx_from_logs AS
   SELECT a.id AS account_id,
          COALESCE(SUM(CASE WHEN t.account_id=a.id THEN -t.amount ELSE t.amount END),0) AS tx_net
   FROM accounts a JOIN transactions t
-    ON t.status='active' AND t.log_id IS NOT NULL AND (t.account_id=a.id OR t.counter_account_id=a.id)
+    ON t.status='active' AND (t.account_id=a.id OR t.counter_account_id=a.id)
+   AND EXISTS (
+     SELECT 1 FROM bank_logs l
+     WHERE l.id IN (t.log_id, t.log_id_2) AND l.account_id=a.id
+       AND (a.opened_at IS NULL OR date(l.at, '+7 hours') >= a.opened_at)
+       AND (a.feed_from IS NULL OR julianday(l.at) >= julianday(a.feed_from) OR l.source='webhook')
+   )
   GROUP BY a.id;
 
 -- ĐỐI SOÁT — bằng chứng "tiền là thật"
@@ -948,4 +978,4 @@ CREATE TABLE month_closes (
 );
 
 -- Phiên bản schema — /v1/health đọc từ đây
-INSERT INTO config (k,v) VALUES ('schema_version','1.34');
+INSERT INTO config (k,v) VALUES ('schema_version','1.36');

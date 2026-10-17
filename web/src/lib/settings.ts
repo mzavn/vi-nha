@@ -7,8 +7,8 @@ import { DEFAULT_SEPAY_CONNECTION_ID } from "../../../src/domain/system-ids";
 import { ApiError, errorText } from "./api";
 import { formatVnd } from "./money";
 import { sqliteUtcToIso } from "./push";
-import { shortDate, timeHM } from "./period";
-import type { Allocation, AllocationMode, AuditEntry, IncomeStream, NotifySchedule, Rule, Secret, SepayConnection, SettingsAccount, SettingsConfig, SettingsMember, SettingsWallet } from "./types";
+import { dayKey, shortDate, timeHM } from "./period";
+import type { Allocation, AllocationMode, AuditEntry, IncomeStream, NotifySchedule, Rule, Secret, SepayConnection, SepaySyncResult, SettingsAccount, SettingsConfig, SettingsMember, SettingsWallet } from "./types";
 
 export type Errors = Record<string, string>;
 export type Result<T> = { ok: true; value: T } | { ok: false; errors: Errors };
@@ -89,6 +89,17 @@ export function syncRangeError(from: string, to: string, today: string): string 
   const days = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000 + 1;
   if (days > SYNC_MAX_DAYS) return `Mỗi lần đồng bộ tối đa ${SYNC_MAX_DAYS} ngày — chia thành nhiều lần.`;
   return null;
+}
+
+/**
+ * Câu toast sau Đồng bộ lại (UC-304): giao dịch trước ngày mở sổ (đã trong số dư đầu, ADR-76) và trước mốc theo dõi SePay
+ * (đã có trong sổ, ADR-113) đếm riêng; kết nối lỗi thì nói, không chỉ "Đã lấy thêm 0 giao dịch" như thể xong xuôi.
+ */
+export function sepaySyncText(r: SepaySyncResult): string {
+  const early = r.beforeOpening > 0 ? ` ${r.beforeOpening} giao dịch trước ngày mở sổ — đã có trong số dư đầu, không ghi lại.` : "";
+  const beforeFeed = r.beforeFeed > 0 ? ` ${r.beforeFeed} giao dịch trước mốc theo dõi SePay — đã có trong sổ, không ghi lại.` : "";
+  const failed = r.errors.length > 0 ? " Có chỗ chưa lấy được — xem lý do dưới nút Đồng bộ." : "";
+  return `Đã lấy thêm ${r.added} giao dịch, ${r.duplicates} đã có sẵn.${early}${beforeFeed}${failed}`;
 }
 
 // ── Cách nạp (allocation) ─────────────────────────────────────────
@@ -326,6 +337,36 @@ export function sepayOutHint(code: string): string {
 /** Mặc định của "SePay báo cả tiền ra" khi bật SePay hoặc đổi ngân hàng: theo tài liệu SePay. */
 export const sepayOutDefault = (code: string): boolean => bankByCode(code)?.sepay?.out ?? false;
 
+/**
+ * "SePay theo dõi từ" (ADR-113): `enabled` lúc bật (không gửi — server đặt mốc lúc bật khi sổ đã có dữ liệu của tài khoản) ·
+ * `opening` ngày số dư đầu (lấy lịch sử, gửi null) · `time` giờ tuỳ chọn (`feed_from`).
+ */
+export type FeedMode = "enabled" | "opening" | "time";
+
+/** ISO → giá trị ô datetime-local theo giờ VN, đủ giây ("2026-10-15T22:25:07"). */
+export function vnDateTimeInput(iso: string): string {
+  return iso ? new Date(Date.parse(iso) + 7 * 3600_000).toISOString().slice(0, 19) : "";
+}
+
+/** Giá trị ô datetime-local (giờ VN, có hoặc không có giây) → ISO; sai → "". */
+export function isoFromVnInput(v: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(v)) return "";
+  const t = Date.parse(`${v.length === 16 ? `${v}:00` : v}+07:00`);
+  return Number.isNaN(t) ? "" : new Date(t).toISOString();
+}
+
+/**
+ * Gợi ý đặt mốc theo dõi (UC-709): tài khoản đã nối SePay, chưa có mốc, mà log SePay sớm nhất rơi sau ngày số dư đầu — có
+ * vẻ nối SePay sau khi đã dùng. Trả đúng `at` của log đó (đặt mốc bằng nó thì chính log ấy vẫn trong phạm vi); còn lại null.
+ */
+export function feedFromSuggestion(a: SettingsAccount | null): string | null {
+  if (!a?.sepay_enabled || a.feed_from || !a.first_log_at || !a.opened_at) return null;
+  return dayKey(a.first_log_at) > a.opened_at ? a.first_log_at : null;
+}
+
+/** Mốc dưới dạng người đọc: "22:25 15/10". */
+export const feedFromText = (iso: string): string => `${timeHM(iso)} ${shortDate(iso)}`;
+
 export interface AccountForm {
   name: string;
   kind: SettingsAccount["kind"];
@@ -340,6 +381,9 @@ export interface AccountForm {
   owner_member_id: string;
   opening_balance: number;
   opened_at: string;
+  feed_mode: FeedMode;
+  /** ISO của giờ tuỳ chọn (`feed_mode` = `time`); "" = chưa chọn. */
+  feed_from: string;
   active: boolean;
   /** "Tính vào tiền chi được" (ADR-85). Thêm mới: bật, thẻ tín dụng và tài khoản Tích sản tắt (`spendableDefault`). Tài khoản khóa luôn tắt. */
   spendable: boolean;
@@ -348,7 +392,7 @@ export interface AccountForm {
 }
 
 export function accountToForm(a: SettingsAccount | null): AccountForm {
-  if (!a) return { name: "", kind: "bank", bank: "", account_no: "", sub_account: "", sepay_enabled: false, sepay_out: false, sepay_connection_id: "", owner_member_id: "", opening_balance: 0, opened_at: "", active: true, spendable: true, role: null };
+  if (!a) return { name: "", kind: "bank", bank: "", account_no: "", sub_account: "", sepay_enabled: false, sepay_out: false, sepay_connection_id: "", owner_member_id: "", opening_balance: 0, opened_at: "", feed_mode: "enabled", feed_from: "", active: true, spendable: true, role: null };
   return {
     name: a.name,
     kind: a.kind,
@@ -361,6 +405,9 @@ export function accountToForm(a: SettingsAccount | null): AccountForm {
     owner_member_id: a.owner_member_id ?? "",
     opening_balance: a.opening_balance,
     opened_at: a.opened_at ?? "",
+    // Đã nối: có mốc thì là giờ đó, chưa có là từ ngày số dư đầu. Chưa nối: bật lúc này thì mặc định Lúc bật.
+    feed_mode: a.feed_from ? "time" : a.sepay_enabled ? "opening" : "enabled",
+    feed_from: a.feed_from ?? "",
     active: a.active,
     spendable: a.spendable && !a.locked,
     role: a.role,
@@ -372,10 +419,12 @@ export const spendableDefault = (kind: AccountForm["kind"], role: AccountForm["r
 
 /**
  * Lỗi khi lưu tài khoản thuộc ô nào: đổi ngày mở sổ về sau giao dịch sớm nhất (409 `opening_after_entries`, access UC-506 AC-24)
- * hiện ngay dưới ô ngày, nguyên câu server nói (ngày giao dịch sớm nhất, việc cần làm). Lỗi khác hiện trên nút như cũ.
+ * hiện ngay dưới ô ngày, nguyên câu server nói (ngày giao dịch sớm nhất, việc cần làm); mốc theo dõi SePay sai (UC-506 AC-25)
+ * hiện dưới ô mốc. Lỗi khác hiện trên nút như cũ.
  */
 export function accountSubmitError(err: unknown): { field: string | null; message: string } {
   if (err instanceof ApiError && err.code === "opening_after_entries") return { field: "opened_at", message: err.message };
+  if (err instanceof ApiError && err.field === "feed_from") return { field: "feed_from", message: err.message };
   return { field: null, message: errorText(err) };
 }
 
@@ -392,6 +441,9 @@ export function accountPayload(f: AccountForm, existing: SettingsAccount | null)
   if (f.sepay_enabled && f.kind !== "bank") errors.sepay_enabled = "SePay chỉ nối được tài khoản ngân hàng.";
   else if (f.sepay_enabled && !bankByCode(f.bank)?.sepay && (!existing?.sepay_enabled || f.bank !== (existing.bank ?? "") || f.kind !== existing.kind)) errors.sepay_enabled = "SePay chưa hỗ trợ ngân hàng này.";
   else if (f.sepay_enabled && !accountNo) errors.account_no = "SePay khớp giao dịch theo số tài khoản — nhập số tài khoản.";
+  // Mốc theo dõi chỉ gửi khi sửa tài khoản đang / sắp nối SePay; tài khoản mới chưa có gì trong sổ để trùng.
+  const feed = existing && f.sepay_enabled && f.kind === "bank" ? f.feed_mode : null;
+  if (feed === "time" && !f.feed_from) errors.feed_from = "Chọn giờ bắt đầu theo dõi.";
   const cash = f.kind === "cash";
   // Heo đất và sổ tiết kiệm khóa: không bao giờ tính vào tiền chi được — server cũng chặn (locked_account).
   const locked = f.role === "term_deposit" || f.role === "piggy_bank";
@@ -407,6 +459,7 @@ export function accountPayload(f: AccountForm, existing: SettingsAccount | null)
     owner_member_id: f.owner_member_id || null,
     opening_balance: f.opening_balance,
     opened_at: f.opened_at || null,
+    ...(feed === "opening" ? { feed_from: null } : feed === "time" ? { feed_from: f.feed_from } : {}),
     ...(existing ? { active: f.active } : {}),
     spendable: f.spendable && !locked,
     // Heo đất và sổ tiết kiệm giữ vai trò từ lúc tạo: sửa thì không gửi (server chỉ cho đổi thường ↔ phao — ADR-88).

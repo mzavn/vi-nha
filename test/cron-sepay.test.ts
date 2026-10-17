@@ -175,8 +175,8 @@ describe("nhiều kết nối SePay — mỗi kết nối một token (ADR-75)",
     const result = await runBackfill(env, new Date("2026-09-22T19:00:00.000Z"), companies(data, calls));
     expect(calls.map((c) => c.token)).toEqual(["husband-token-0001", "wife-token-0002"]);
     expect(result.perConnection).toEqual([
-      { id: "default", name: "SePay chính", added: 1, duplicates: 0, beforeOpening: 0, error: null },
-      { id: "sepay-wife", name: "SePay của vợ", added: 1, duplicates: 0, beforeOpening: 0, error: null },
+      { id: "default", name: "SePay chính", added: 1, duplicates: 0, beforeOpening: 0, beforeFeed: 0, error: null },
+      { id: "sepay-wife", name: "SePay của vợ", added: 1, duplicates: 0, beforeOpening: 0, beforeFeed: 0, error: null },
     ]);
     expect(accountOf("m1")).toEqual({ account_id: "vcb-husband" });
     expect(accountOf("t1")).toEqual({ account_id: "vcb-wife" });
@@ -256,6 +256,25 @@ describe("nhiều kết nối SePay — mỗi kết nối một token (ADR-75)",
       // Chạy lại: mọi giao dịch đã có (kể cả hai khoản trước mốc).
       const second = await syncSepayRange(env, body, now, companies(data, []));
       expect(second).toMatchObject({ added: 0, duplicates: 3, beforeOpening: 0 });
+    });
+
+    it("UC-302 AC-12: Đồng bộ lại vắt qua mốc theo dõi SePay: giao dịch trước mốc lưu 'ignored', đếm riêng beforeFeed (đã có trong sổ), không về màn Gán", async () => {
+      raw.prepare("UPDATE accounts SET opened_at = '2026-10-01', feed_from = '2026-10-02T03:00:00.000Z' WHERE id = 'vcb-wife'").run();
+      const data = {
+        "wife-token-0002": [
+          tx("t-30", "0011yyyyyyy", { transaction_date: "2026-09-30 09:00:00", amount_in: 50000 }),
+          tx("t-01", "0011yyyyyyy", { transaction_date: "2026-10-01 09:00:00", amount_in: 9000000 }),
+          tx("t-02", "0011yyyyyyy", { transaction_date: "2026-10-02 10:00:00", amount_in: 70000 }),
+        ],
+      };
+      const body = { connection_id: "sepay-wife", from: "2026-09-30", to: "2026-10-02" };
+      const first = await syncSepayRange(env, body, now, companies(data, []));
+      expect(first).toMatchObject({ added: 1, duplicates: 0, beforeOpening: 1, beforeFeed: 1, perConnection: [{ id: "sepay-wife", added: 1, beforeOpening: 1, beforeFeed: 1 }] });
+      expect(raw.prepare("SELECT id, status FROM bank_logs ORDER BY at").all()).toEqual([
+        { id: "t-30", status: "ignored" },
+        { id: "t-01", status: "ignored" },
+        { id: "t-02", status: "pending" },
+      ]);
     });
   });
 });

@@ -9,7 +9,7 @@ import { normalizeContent } from "../domain/rules";
 import { buildSnapshot, monthTarget, openingWealthBuildingCredit, weekTarget, type Snapshot, type SnapshotData } from "../domain/snapshot";
 import { monthCloseOrders, newTransferMemo, transferOrders, type TransferOrderDraft } from "../domain/transfer-orders";
 import { withInterestRule } from "../domain/interest";
-import { DomainError, type AccountRole, type Refs, type WalletRef } from "../domain/types";
+import { DomainError, type AccountRef, type AccountRole, type Refs, type WalletRef } from "../domain/types";
 import { formatMoney } from "../notify/format";
 import { itemsTotal } from "./balance";
 import { debtInterest, expectedInterestTotal, type DebtInterest } from "./debts";
@@ -46,7 +46,8 @@ export async function loadRefs(db: D1Database): Promise<Refs> {
     ),
     db.prepare(`SELECT id, name, default_wallet_id AS defaultWalletId, icon, sort FROM categories WHERE active = 1 ORDER BY sort, name`),
     db.prepare(
-      `SELECT id, name, kind, owner_member_id AS ownerMemberId, sepay_enabled AS sepayEnabled, sepay_out AS sepayOut, opened_at AS openedAt, locked, role
+      `SELECT id, name, kind, owner_member_id AS ownerMemberId, sepay_enabled AS sepayEnabled, sepay_out AS sepayOut, opened_at AS openedAt,
+              feed_from AS feedFrom, sepay_out_from AS sepayOutFrom, locked, role
        FROM accounts WHERE active = 1 ORDER BY kind, name`,
     ),
     db.prepare(`SELECT id, name, role FROM members WHERE active = 1 ORDER BY role = 'owner' DESC, name`),
@@ -133,6 +134,20 @@ export async function walletStatus(db: D1Database, walletId: string, viewerId: s
   };
 }
 
+/**
+ * Tài khoản đã nối SePay mà khoản nhập tay chạm đúng chiều SePay báo về (ADR-66): ghi thêm là đếm hai lần. Khoản trước
+ * mốc theo dõi SePay (`feedFrom`, ADR-113) — với tiền ra, cả trước lúc bật "báo cả tiền ra" (`sepayOutFrom`) — SePay không
+ * đưa vào sổ nữa nên ghi tay được.
+ */
+function fedAccount(refs: Refs, row: TxRow): AccountRef | undefined {
+  const at = Date.parse(row.at);
+  const since = (from: string | null) => from === null || at >= Date.parse(from);
+  return (
+    refs.accounts.find((a) => a.sepayEnabled && a.id === row.counter_account_id && since(a.feedFrom)) ??
+    refs.accounts.find((a) => a.sepayOut && a.id === row.account_id && since(a.feedFrom) && since(a.sepayOutFrom))
+  );
+}
+
 export async function createEntry(db: D1Database, input: EntryInput, memberId: string | null, now: Date) {
   const clientId = input.client_id?.trim() || null;
   const existing = async () =>
@@ -147,9 +162,8 @@ export async function createEntry(db: D1Database, input: EntryInput, memberId: s
   // Chiều tiền mà SePay báo về thì tự về từ ngân hàng. Ghi tay thêm chiều đó là đếm cùng một khoản tiền hai lần
   // (nhập tay rồi lại gán log), và đối soát không bắt được vì nó chỉ so log với log (ADR-48, tinh chỉnh ADR-66):
   // tiền VÀO tài khoản đã nối SePay luôn bị chặn; tiền RA chỉ bị chặn khi SePay báo cả tiền ra (`sepay_out`).
-  const fed =
-    refs.accounts.find((a) => a.sepayEnabled && a.id === row.counter_account_id) ??
-    refs.accounts.find((a) => a.sepayOut && a.id === row.account_id);
+  // Khoản trước mốc theo dõi SePay (ADR-113) thì SePay không đưa vào sổ nữa: ghi tay được.
+  const fed = fedAccount(refs, row);
   if (fed) {
     throw new DomainError("fed_account", `${fed.name} đã nối ngân hàng: khoản này sẽ tự về, gán nó ở màn Gán thay vì nhập tay.`);
   }
@@ -247,9 +261,7 @@ export async function replaceTransaction(db: D1Database, id: number, input: Entr
   };
   const row = buildEntry(input, refs, author, now);
 
-  const fed =
-    refs.accounts.find((a) => a.sepayEnabled && a.id === row.counter_account_id) ??
-    refs.accounts.find((a) => a.sepayOut && a.id === row.account_id);
+  const fed = fedAccount(refs, row);
   if (fed) {
     throw new DomainError("fed_account", `${fed.name} đã nối ngân hàng: khoản này sẽ tự về, gán nó ở màn Gán thay vì nhập tay.`);
   }

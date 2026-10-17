@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Env } from "../src/env";
 import { assignLog, ingestLog, listPendingLogs, pairLogs, unassignTransaction, type ParsedBankLog } from "../src/services/ingest";
-import { countAccount, createEntry, setTransferOrderStatus, voidTransaction } from "../src/services/ledger";
+import { countAccount, createEntry, replaceTransaction, setTransferOrderStatus, voidTransaction } from "../src/services/ledger";
 import { asD1, openDb } from "./helpers/d1-sqlite";
 
 let env: Env;
@@ -236,6 +236,35 @@ describe("D14 theo chiều tiền (ADR-66): MB nối SePay, chỉ báo tiền v�
     raw.prepare("UPDATE accounts SET sepay_out = 1 WHERE id = 'mb-husband'").run();
     await expect(
       createEntry(env.DB, { meaning: "spend", amount: 150_000, category_id: "eating-out", account_id: "mb-husband" }, "husband", now()),
+    ).rejects.toMatchObject({ code: "fed_account" });
+  });
+});
+
+describe("mốc theo dõi SePay: khoản trước mốc nhập tay được (ADR-113)", () => {
+  // MB nối SePay sau: mở sổ 1/10, theo dõi từ 22:24 ngày 15/10 giờ VN.
+  beforeEach(() => {
+    raw.prepare("UPDATE accounts SET sepay_out = 0, opened_at = '2026-10-01', feed_from = '2026-10-15T15:24:00.000Z' WHERE id = 'mb-husband'").run();
+  });
+  const today = new Date("2026-10-17T03:00:00.000Z");
+  const income = (at: string) => createEntry(env.DB, { meaning: "income", amount: 1_500_000, account_id: "mb-husband", at }, "husband", today);
+
+  it("UC-506 AC-26: khoản tiền vào ngày 12/10 (trước mốc 15/10) nhập tay → ghi được; ngày 16/10 → fed_account", async () => {
+    const { tx } = await income("2026-10-12T10:00:00+07:00");
+    expect(tx).toMatchObject({ meaning: "income", counter_account_id: "mb-husband", source: "manual" });
+    await expect(income("2026-10-16T10:00:00+07:00")).rejects.toMatchObject({ code: "fed_account" });
+    // Ngay trước mốc một giây vẫn ghi được; đúng mốc thì đã là phần SePay báo về.
+    expect((await income("2026-10-15T15:23:59.000Z")).tx).toMatchObject({ counter_account_id: "mb-husband" });
+    await expect(income("2026-10-15T15:24:00.000Z")).rejects.toMatchObject({ code: "fed_account" });
+  });
+
+  it("UC-506 AC-26: sửa khoản trước mốc mà vẫn trước mốc → được; dời sang sau mốc → fed_account", async () => {
+    const { tx } = await income("2026-10-12T10:00:00+07:00");
+    const id = Number(tx!.id);
+    const moved = await replaceTransaction(env.DB, id, { meaning: "income", amount: 1_400_000, account_id: "mb-husband", at: "2026-10-13T10:00:00+07:00" }, "husband", today);
+    expect(moved.tx).toMatchObject({ amount: 1_400_000, counter_account_id: "mb-husband" });
+    const movedId = "id" in moved.tx ? Number(moved.tx.id) : NaN;
+    await expect(
+      replaceTransaction(env.DB, movedId, { meaning: "income", amount: 1_400_000, account_id: "mb-husband", at: "2026-10-16T10:00:00+07:00" }, "husband", today),
     ).rejects.toMatchObject({ code: "fed_account" });
   });
 });

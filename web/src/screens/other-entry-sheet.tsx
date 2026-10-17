@@ -506,7 +506,7 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
       </div>
       <div class="field">
         <label for="i-acct">Vào tài khoản</label>
-        <AccountSelect id="i-acct" accounts={manualAccounts(boot.accounts, "in")} value={accountId} onChange={setAccountId} />
+        <AccountSelect id="i-acct" accounts={manualAccounts(boot.accounts, "in", day)} value={accountId} onChange={setAccountId} />
       </div>
       {tenants.length > 0 && (
         <div class="field">
@@ -829,7 +829,7 @@ function QueuedForm({
           </div>
           <div class="field">
             <label for="o-acct">Tiền về</label>
-            <AccountSelect id="o-acct" accounts={manualAccounts(boot.accounts, "in")} value={accountId} onChange={setAccountId} />
+            <AccountSelect id="o-acct" accounts={manualAccounts(boot.accounts, "in", day)} value={accountId} onChange={setAccountId} />
           </div>
         </>
       )}
@@ -842,7 +842,7 @@ function QueuedForm({
           </div>
           <div class="field">
             <label for="o-acct">Trả từ</label>
-            <AccountSelect id="o-acct" accounts={manualAccounts(boot.accounts, "out")} value={accountId} onChange={setAccountId} allowNone="không qua tài khoản nào" />
+            <AccountSelect id="o-acct" accounts={manualAccounts(boot.accounts, "out", day)} value={accountId} onChange={setAccountId} allowNone="không qua tài khoản nào" />
           </div>
         </>
       )}
@@ -880,14 +880,14 @@ function QueuedForm({
       {kind === "lend" && (
         <div class="field">
           <label for="o-acct">Tiền ra từ</label>
-          <AccountSelect id="o-acct" accounts={manualAccounts(boot.accounts, "out")} value={accountId} onChange={setAccountId} />
+          <AccountSelect id="o-acct" accounts={manualAccounts(boot.accounts, "out", day)} value={accountId} onChange={setAccountId} />
         </div>
       )}
 
       {kind === "collect" && (
         <div class="field">
           <label for="o-acct">Tiền vào</label>
-          <AccountSelect id="o-acct" accounts={manualAccounts(boot.accounts, "in")} value={accountId} onChange={setAccountId} />
+          <AccountSelect id="o-acct" accounts={manualAccounts(boot.accounts, "in", day)} value={accountId} onChange={setAccountId} />
         </div>
       )}
 
@@ -895,11 +895,11 @@ function QueuedForm({
         <>
           <div class="field">
             <label for="o-from">Từ</label>
-            <AccountSelect id="o-from" accounts={manualAccounts(boot.accounts, "out")} value={accountId} onChange={setAccountId} />
+            <AccountSelect id="o-from" accounts={manualAccounts(boot.accounts, "out", day)} value={accountId} onChange={setAccountId} />
           </div>
           <div class="field">
             <label for="o-to">Vào</label>
-            <AccountSelect id="o-to" accounts={manualAccounts(boot.accounts, "in")} value={toAccountId} onChange={setToAccountId} />
+            <AccountSelect id="o-to" accounts={manualAccounts(boot.accounts, "in", day)} value={toAccountId} onChange={setToAccountId} />
           </div>
           <div class="field">
             <label class="check">
