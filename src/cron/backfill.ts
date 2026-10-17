@@ -39,6 +39,8 @@ export interface ConnectionSync {
   duplicates: number;
   /** Giao dịch mới nhưng trước ngày mở sổ của tài khoản (ADR-76): đã nằm trong số dư đầu, lưu 'ignored', không vào sổ. */
   beforeOpening: number;
+  /** Giao dịch mới nhưng trước mốc theo dõi SePay của tài khoản (ADR-113): đã có trong sổ, lưu 'ignored', không ghi lại. */
+  beforeFeed: number;
   error: string | null;
 }
 
@@ -46,6 +48,7 @@ export interface SyncResult {
   added: number;
   duplicates: number;
   beforeOpening: number;
+  beforeFeed: number;
   perConnection: ConnectionSync[];
   /** "<tên kết nối>: <lỗi>" — một kết nối lỗi không chặn kết nối khác. */
   errors: string[];
@@ -75,14 +78,14 @@ export async function syncSepay(
     ).all<KnownAccount>()
   ).results ?? [];
 
-  const result: SyncResult = { added: 0, duplicates: 0, beforeOpening: 0, perConnection: [], errors: [] };
+  const result: SyncResult = { added: 0, duplicates: 0, beforeOpening: 0, beforeFeed: 0, perConnection: [], errors: [] };
   let seen: { ids: Set<string>; refs: Set<string> } | null = null;
 
   for (const conn of connections) {
     const mine = accounts.filter((a) => a.sepay_connection_id === conn.id);
     // Chưa có tài khoản nào thuộc kết nối: không gọi SePay (API v2 không lọc theo số tài khoản, lấy về cũng bỏ hết).
     if (mine.length === 0) continue;
-    const entry: ConnectionSync = { id: conn.id, name: conn.name, added: 0, duplicates: 0, beforeOpening: 0, error: null };
+    const entry: ConnectionSync = { id: conn.id, name: conn.name, added: 0, duplicates: 0, beforeOpening: 0, beforeFeed: 0, error: null };
     result.perConnection.push(entry);
     if (!conn.apiToken) {
       entry.error = NO_TOKEN;
@@ -119,6 +122,7 @@ export async function syncSepay(
       try {
         const r = await ingestLog(env.DB, parsed, "backfill", now, conn.id);
         if (r.beforeOpening) entry.beforeOpening++;
+        else if (r.beforeFeed) entry.beforeFeed++;
         else if (r.created) entry.added++;
         else entry.duplicates++;
         seen.ids.add(parsed.id);
@@ -132,6 +136,7 @@ export async function syncSepay(
     result.added += c.added;
     result.duplicates += c.duplicates;
     result.beforeOpening += c.beforeOpening;
+    result.beforeFeed += c.beforeFeed;
     if (c.error) result.errors.push(`${c.name}: ${c.error}`);
   }
   return result;

@@ -6,6 +6,23 @@ bản cài cũ vẫn lên được bình thường (kể cả nâng database t�
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
 trước (xem README › Cập nhật bản mới).
 
+## v1.4.0 — 17/10/2026
+
+Có nâng cấp database: `0035` (chỉ sửa cách tính đối soát — không đổi số liệu), `0036` (thêm mốc theo dõi SePay cho từng tài
+khoản — tài khoản có sẵn để trống, số liệu không đổi).
+
+**Sửa**
+
+- Tài khoản mới nối SePay không còn báo lệch giả "Sổ khác giao dịch ngân hàng đã gán" bằng các khoản chuyển vào từ trước
+  khi nối.
+- **Nối SePay cho tài khoản đã dùng:** bật SePay cho tài khoản đã có giao dịch trong sổ thì app ghi mốc "SePay theo dõi từ"
+  lúc bật. Giao dịch SePay trước mốc (rà soát đêm, Đồng bộ lại gửi lại lịch sử) không còn về màn Gán lần nữa, nên không bị
+  ghi hai lần; khoản trước mốc vẫn nhập tay được. Cột "theo ngân hàng" ở tab Tài khoản khớp sổ cho tài khoản nối sau.
+- Bật "SePay báo cả tiền ra" sau này: khoản chi trước lúc bật SePay gửi lại không tự gán theo mã chuyển khoản (đã nhập tay).
+- **Tài khoản đã nối SePay từ trước bản này:** vào Cài đặt › Tài khoản › mở tài khoản. Nếu app gợi ý "Giao dịch SePay sớm
+  nhất … sau ngày số dư đầu" và các khoản trước đó đã có trong sổ, bấm **Đặt mốc lúc đó** rồi Lưu. Làm trước lượt rà soát
+  tuần (02:00 thứ Hai) hay rà soát tháng (02:00 ngày 1).
+
 ## v1.3.0 — 16/10/2026
 
 Có nâng cấp database: `0034` (ghi lại tháng đã chốt và lý do khi không trả cho mình — không đổi số liệu cũ).

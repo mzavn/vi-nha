@@ -156,4 +156,31 @@ describe("cảnh báo cả nhà khi kênh báo tin hay khoá đổi", () => {
     await call("PATCH", "/v1/settings/members/wife", { tg_chat_id: "9999", name: "Vợ" });
     expect(telegram).toEqual([]); // chat không đổi: không báo
   });
+
+  it("UC-506 AC-25: đổi mốc theo dõi SePay → nhật ký ghi cũ → mới (cả ngày / số dư đầu khi đổi) và báo cả nhà; sửa tên thì không báo, không ghi giá trị", async () => {
+    telegramReady();
+    const before = raw.prepare("SELECT opened_at FROM accounts WHERE id = 'vcb-husband'").get() as { opened_at: string };
+    const res = await call("PATCH", "/v1/settings/accounts/vcb-husband", { feed_from: "2026-10-15T22:25:00+07:00", opened_at: "2026-10-01", opening_balance: 500_000 }, "wife");
+    expect(res.status).toBe(200);
+    const row = raw.prepare("SELECT member_id, action, target, detail FROM audit_log ORDER BY id DESC LIMIT 1").get() as { member_id: string; action: string; target: string; detail: string };
+    expect(row).toMatchObject({ member_id: "wife", action: "account.update", target: "account:vcb-husband" });
+    expect(JSON.parse(row.detail)).toEqual({
+      fields: ["feed_from", "opened_at", "opening_balance"],
+      changes: {
+        feed_from: { from: null, to: "2026-10-15T15:25:00.000Z" },
+        ...(before.opened_at === "2026-10-01" ? {} : { opened_at: { from: before.opened_at, to: "2026-10-01" } }),
+        opening_balance: { from: 0, to: 500_000 },
+      },
+    });
+    const text = "⚠️ Vợ (qua API token) vừa đổi mốc theo dõi SePay của VCB (chính): ngày số dư đầu → 22:25:00 15/10/2026 — nếu không phải người nhà làm, vào Cài đặt gỡ ngay.";
+    expect(telegram).toEqual([
+      { token: TG_TOKEN, chat_id: "1001", text },
+      { token: TG_TOKEN, chat_id: "2002", text },
+    ]);
+
+    telegram = [];
+    await call("PATCH", "/v1/settings/accounts/vcb-husband", { name: "VCB", feed_from: "2026-10-15T15:25:00.000Z", opening_balance: 500_000 });
+    expect(telegram).toEqual([]);
+    expect(auditRows().at(-1)).toMatchObject({ action: "account.update", detail: '{"fields":["feed_from","name","opening_balance"]}' });
+  });
 });

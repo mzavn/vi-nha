@@ -2,6 +2,7 @@
 
 import { cashAccountOf, walletFor } from "../../../src/domain/entry";
 import type { Refs } from "../../../src/domain/types";
+import { dayKey } from "../../../src/domain/period";
 import { isIncomeHolding } from "./budget";
 import type { AccountRef, Bootstrap, CategoryRef, Wallet } from "./types";
 
@@ -50,10 +51,16 @@ export type AccountDirection = "in" | "out";
 /**
  * Tài khoản nhập tay được cho chiều tiền này. Chiều nào SePay báo về thì tự về từ ngân hàng — nhập tay thêm là đếm
  * hai lần, nên server từ chối; ở đây ẩn luôn để người dùng không nhập xong mới biết (ADR-66): tiền vào tài khoản đã
- * nối SePay luôn tự về; tiền ra chỉ tự về khi tài khoản bật "SePay báo cả tiền ra".
+ * nối SePay luôn tự về; tiền ra chỉ tự về khi tài khoản bật "SePay báo cả tiền ra". Có `day` thì khoản trước mốc theo dõi
+ * SePay (`feedFrom`, tiền ra cả `sepayOutFrom`) nhập tay được — SePay không báo lại khoản đó (ADR-113).
  */
-export const manualAccounts = (accounts: AccountRef[], direction: AccountDirection): AccountRef[] =>
-  accounts.filter((a) => !a.sepayEnabled || (direction === "out" && !a.sepayOut));
+export function manualAccounts(accounts: AccountRef[], direction: AccountDirection, day?: string): AccountRef[] {
+  // Ngày khoản trước ngày (giờ VN) của mốc theo dõi SePay (ADR-113): SePay không báo khoản đó → nhập tay được.
+  const before = (mark: string | null | undefined) => !!day && !!mark && day < dayKey(new Date(mark));
+  return accounts.filter(
+    (a) => !a.sepayEnabled || before(a.feedFrom) || (direction === "out" && (!a.sepayOut || before(a.sepayOutFrom))),
+  );
+}
 
 /** Tài khoản mặc định: tiền mặt của người đang nhập, không có thì tài khoản đầu tiên nhập tay được theo chiều này (không lấy tài khoản Tích sản — heo, phao, sổ). */
 export function defaultAccountFor(boot: Pick<Bootstrap, "wallets" | "accounts" | "categories">, memberId: string | null, direction: AccountDirection): string | null {

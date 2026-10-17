@@ -15,6 +15,7 @@
 - v7 (2026-10-03, commit `c67420e`): không đổi code gỡ gán — chân thứ hai **gắn sau** vào chuyển nội bộ đã ghi (ADR-81, ingest UC-303 bước 2b, UC-305 bước 5b) nằm ở `log_id_2` nên gỡ gán giao dịch đó trả **cả hai** log về `pending` như một cặp ghép; thêm AC-10 và test. Sửa prod 3/10: gỡ gán giao dịch ghi lần hai (chỉ chân vào) → log chân vào về `pending`, màn Gán gợi ý khớp vào giao dịch còn lại (UC-305 AC-23).
 - v8 (2026-10-03, commit `2608b66`): không đổi code — theo ingest UC-305 v15, log chân đầu mồ côi của lệnh `PF` (nội dung `PF …`, không phải rút tiền) không còn bị gợi ý "Rút tiền mặt"; cập nhật [OPEN] gỡ gán một chân.
 - v9 (2026-10-06, commit `d059eaa`): change [`261006-bao-mat-kenh-bao-tin`](../changes/archive/261006-bao-mat-kenh-bao-tin/proposal.md) (ADR-90, red-team INSIDER-04) — gỡ gán thành công ghi nhật ký `tx.unassign` (`target = tx:<id>`, `detail = { voided, logs }`, người gọi + `via`); lỗi không ghi. Thêm AC-11.
+- v10 (2026-10-17, commit `cb54dd7`): không đổi code ghép tay; ghi [OPEN] ghép tay không xét mốc theo dõi SePay (ADR-113) (change [261017-noi-sepay-sau](../changes/archive/261017-noi-sepay-sau/proposal.md))
 
 ## Preconditions
 - Ghép tay: cả hai log `pending`. Gỡ gán: giao dịch `active`, sinh từ log (`log_id` khác NULL).
@@ -98,5 +99,6 @@
 - PWA: `web/src/screens/tx-sheet.tsx` (Gán lại), `web/src/screens/assign.tsx` › `Assign` (điện thoại: mở thẳng sheet gán của log được chọn sẵn).
 
 ## Divergences & Open Questions
+- [OPEN] Ghép tay không xét mốc theo dõi SePay (`feed_from`, ADR-113) — chỉ xét `opened_at`. Log lịch sử trước mốc được ghi thẳng `ignored` nên không ghép được; log lịch sử trước mốc lỡ còn `pending` (nhận trước khi có mốc — thực tế bị chặn vì bật SePay khi còn log chờ gán là 409 `pending_logs`, mốc không vượt được log chờ gán) thì ghép tay vẫn được. Ghép tự động (UC-303 bước 2) đã bỏ log như vậy.
 - [OPEN] Ghép tay không giới hạn khoảng cách thời gian và không kiểm memo `PF`; `at` của transfer lấy theo chân ra.
 - [OPEN] Gỡ gán một giao dịch PF chỉ một chân: lệnh về `pending`, log về `pending`; nếu chân kia về sau, UC-303 bước 1.1 ghép lại cả hai (AC-5 của UC-303). Nếu chân kia **không** bao giờ về, log chân đầu nằm chờ không gợi ý gì (nội dung `PF …` không phải rút tiền — UC-305 v15; trước đó bị gợi ý "Rút tiền mặt") — người gán phải tự nhận ra đây là chuyển nội bộ.

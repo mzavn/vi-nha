@@ -15,11 +15,15 @@ import {
   clearSecretPayload,
   configPayload,
   connectionPicker,
+  type FeedMode,
+  feedFromSuggestion,
+  feedFromText,
   type FiConfigForm,
   fiConfigPayload,
   fiConfigToForm,
   type Errors,
   followsCodeConvention,
+  isoFromVnInput,
   MATCH_LABEL,
   MEANING_LABEL,
   linkCodeLeft,
@@ -39,6 +43,7 @@ import {
   spendableDefault,
   streamPayload,
   streamToForm,
+  vnDateTimeInput,
   walletPayload,
   walletToForm,
   WEEKDAY_LABEL,
@@ -199,6 +204,14 @@ const ROLE_HINT: Record<AccountRole, string> = {
 };
 type RoleChoice = "" | "buffer" | "term_deposit";
 
+/** Lời dặn dưới hàng "SePay theo dõi từ" (ADR-113). */
+const FEED_HINT: Record<FeedMode, string> = {
+  enabled:
+    "Sổ đã có giao dịch của tài khoản này (nhập tay, hay ghi từ tài khoản kia): app chỉ nhận giao dịch SePay từ lúc bật, khoản trước đó không về lần nữa. Tài khoản chưa có gì trong sổ thì app lấy cả lịch sử từ ngày số dư đầu.",
+  opening: "App nhận mọi giao dịch SePay từ ngày số dư đầu — chọn khi các khoản đó chưa có trong sổ.",
+  time: "Giao dịch SePay trước giờ này coi như đã có trong sổ, app bỏ qua; khoản trước giờ này nhập tay được.",
+};
+
 export function AccountSheet({ d, item, onClose, onSaved }: { d: SettingsData; item: SettingsAccount | null; onClose: () => void; onSaved: Saved }) {
   const [f, setF] = useState(() => accountToForm(item));
   const set = (patch: Partial<typeof f>) => setF((x) => ({ ...x, ...patch }));
@@ -242,6 +255,13 @@ export function AccountSheet({ d, item, onClose, onSaved }: { d: SettingsData; i
   const sepayLocked = !bank?.sepay && !f.sepay_enabled;
   const pickBank = (code: string) => set({ bank: code, ...(f.sepay_enabled ? { sepay_out: sepayOutDefault(code) } : {}) });
   const picker = f.kind === "bank" ? connectionPicker(d.integrations.sepay_connections ?? [], f.sepay_connection_id, item?.sepay_connection_id ?? "") : null;
+  // Mốc theo dõi SePay (ADR-113): chỉ khi sửa tài khoản; "Lúc bật" chỉ có nghĩa khi đang bật SePay ở lần lưu này.
+  const feedSuggestion = feedFromSuggestion(item);
+  const feedOptions: { value: FeedMode; label: string }[] = [
+    ...(f.sepay_enabled && !item?.sepay_enabled ? [{ value: "enabled" as const, label: "Lúc bật" }] : []),
+    { value: "opening", label: "Ngày số dư đầu" },
+    { value: "time", label: "Giờ tuỳ chọn" },
+  ];
 
   return (
     <Sheet open title={isNew ? "Thêm tài khoản" : `Sửa ${item.name}`} onClose={onClose}>
@@ -355,6 +375,40 @@ export function AccountSheet({ d, item, onClose, onSaved }: { d: SettingsData; i
                   onInput={(ev) => set({ sub_account: ev.currentTarget.value })}
                 />
               </Field>
+              {!isNew && (
+                <>
+                  <Field id="a-feed" label="SePay theo dõi từ" wrap error={errors.feed_from}>
+                    <Seg
+                      label="SePay theo dõi từ"
+                      value={f.feed_mode}
+                      onChange={(feed_mode) => set({ feed_mode, ...(feed_mode === "time" && !f.feed_from ? { feed_from: feedSuggestion ?? "" } : {}) })}
+                      options={feedOptions}
+                    />
+                  </Field>
+                  {f.feed_mode === "time" && (
+                    <Field id="a-feed-at" label="Giờ bắt đầu (giờ VN)">
+                      <input
+                        id="a-feed-at"
+                        class="ctl"
+                        type="datetime-local"
+                        step={1}
+                        value={vnDateTimeInput(f.feed_from)}
+                        onInput={(ev) => set({ feed_from: isoFromVnInput(ev.currentTarget.value) })}
+                      />
+                    </Field>
+                  )}
+                  <Hint>{FEED_HINT[f.feed_mode]}</Hint>
+                  {feedSuggestion && f.feed_mode !== "time" && (
+                    <Hint>
+                      Giao dịch SePay sớm nhất của tài khoản này lúc {feedFromText(feedSuggestion)}, sau ngày số dư đầu — có vẻ tài khoản nối SePay khi sổ đã ghi các
+                      khoản trước đó. Đặt mốc lúc đó để rà soát đêm hay Đồng bộ lại không đưa chúng về lần nữa.{" "}
+                      <button type="button" class="btn btn-ghost" onClick={() => set({ feed_mode: "time", feed_from: feedSuggestion })}>
+                        Đặt mốc lúc đó
+                      </button>
+                    </Hint>
+                  )}
+                </>
+              )}
             </>
           )}
         </>

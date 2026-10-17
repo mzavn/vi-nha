@@ -10,6 +10,8 @@ const acct = (id: string, name: string, role: AccountRef["role"] = null): Accoun
   sepayEnabled: false,
   sepayOut: false,
   openedAt: null,
+  feedFrom: null,
+  sepayOutFrom: null,
   locked: role === "piggy_bank" || role === "term_deposit",
   role,
 });

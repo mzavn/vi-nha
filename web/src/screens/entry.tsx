@@ -288,7 +288,7 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
         )}
         <div class="field">
           <label for="f-acct">Trả bằng</label>
-          <AccountSelect id="f-acct" accounts={manualAccounts(boot.accounts, "out")} value={accountId} onChange={setAccountId} />
+          <AccountSelect id="f-acct" accounts={manualAccounts(boot.accounts, "out", day)} value={accountId} onChange={setAccountId} />
         </div>
         {edit?.tx.debt_id && (
           // Khoản trả nợ giữ nguyên chỗ gắn ở sổ nợ khi sửa.

@@ -1,7 +1,7 @@
 # UC-302: Ghi log ngân hàng chống trùng
 - Status: implemented
 - BR: BR-04, BR-03
-- Decisions: D11; S9 (khoá `(account_id, reference_number)`, `phase-04-ingest-sepay.md` §"Học từ hệ đang chạy"); ADR-76 (log trước ngày mở sổ); commit `c3ab508` (unique index), `b8e8f0c` (nhận diện song sinh), `43baea1` (song sinh: đánh dấu thay vì bỏ), `eb7846e` (lỗi sau khi ghi → ghi lại); `docs/core_design_rules.md` §9 dòng "Tài khoản có bank feed"; `plans/reports/redteam-260922-0100-money-correctness.md` Phát hiện 1
+- Decisions: D11; S9 (khoá `(account_id, reference_number)`, `phase-04-ingest-sepay.md` §"Học từ hệ đang chạy"); ADR-76 (log trước ngày mở sổ); commit `c3ab508` (unique index), `b8e8f0c` (nhận diện song sinh), `43baea1` (song sinh: đánh dấu thay vì bỏ), `eb7846e` (lỗi sau khi ghi → ghi lại); `docs/core_design_rules.md` §9 dòng "Tài khoản có bank feed"; `plans/reports/redteam-260922-0100-money-correctness.md` Phát hiện 1; ADR-113 (mốc theo dõi SePay: log lịch sử trước mốc như trước ngày mở sổ, webhook luôn tính)
 - Actor: hệ thống — gọi từ UC-301 (webhook) và UC-304 (backfill)
 - Trigger: `ingestLog(db, parsed, source, now)`
 
@@ -14,23 +14,25 @@
 - v6 (2026-09-22, commit `eb7846e`): lỗi ở bước khớp sau khi log đã ghi → ghi `ingest_error` thay vì ném ra (webhook gửi lại cũng không bao giờ chạy lại bước khớp).
 - v7 (2026-10-03, commit `f74bc70`): **số dư đầu là mốc** (ADR-76) — log mà ngày VN trước `opened_at` của tài khoản khớp được ghi thẳng `status='ignored'` (đã nằm trong số dư đầu), không khớp, không báo, không kiểm lệch feed; kết quả mang `beforeOpening: true`. Lỗi gốc: đồng bộ lại từ 28/9 đưa giao dịch tháng 9 vào sổ của tài khoản mở sổ 1/10.
 - v8 (2026-10-06, commit `9c265ee`): **bỏ số lũy kế** (ADR-87, change [`261006-bo-luy-ke-sepay`](../changes/archive/261006-bo-luy-ke-sepay/proposal.md)) — chủ nhà: "bỏ hẳn cái data mà sepay trả về đó, đừng quan tâm lũy kế của nó nữa nè". `INSERT` không còn cột `accumulated`; sau khi khớp không còn bước kiểm lệch feed (`checkReconcileDrift`, UC-308 v5). AC-9 bỏ phần `accumulated` / `reconcile_drift`.
+- v9 (2026-10-17, commit `cb54dd7`): **log lịch sử trước mốc theo dõi SePay** (ADR-113): rà soát / Đồng bộ lại trả log có `at` < `accounts.feed_from` → `ignored` như log trước ngày mở sổ, trả `beforeFeed`; webhook không áp mốc. Thêm 2c, AC-12 (change [261017-noi-sepay-sau](../changes/archive/261017-noi-sepay-sau/proposal.md))
 
 ## Preconditions
 - `parsed` đã hợp lệ (UC-301 bước 4 hoặc UC-304 `parseHistoryRow`).
 
 ## Main Flow
 1. Nếu đã có log cùng `id` → trả `{created: false, logId: id}`; **không** chạy lại bước khớp.
-2. Tra `account_id` (kèm `opened_at`): `accounts.sub_account = subAccount` (nếu có), không được thì `accounts.account_no = accountNo`; không được → `NULL`. Log **trước ngày mở sổ** = tài khoản có `opened_at` và `dayKey(at)` (ngày giờ VN) < `opened_at` (ADR-76).
+2. Tra `account_id` (kèm `opened_at`, `feed_from`): `accounts.sub_account = subAccount` (nếu có), không được thì `accounts.account_no = accountNo`; không được → `NULL`. Log **trước ngày mở sổ** = tài khoản có `opened_at` và `dayKey(at)` (ngày giờ VN) < `opened_at` (ADR-76). Log **trước mốc theo dõi SePay** (`beforeFeed`, ADR-113) = log **không** đến từ webhook (`source <> 'webhook'` — rà soát đêm, Đồng bộ lại), không trước ngày mở sổ, tài khoản có `feed_from` và `at` < `feed_from` (log đúng bằng mốc nằm trong phạm vi).
 3. Nếu có `referenceNumber`: đã có log cùng `reference_number` và cùng `account_id` (so bằng `IS`, nên cả `NULL`) → trả `{created: false, logId: <id log cũ>}`.
-4. Nếu biết `account_id` và log không trước ngày mở sổ: tìm log **song sinh** (`findPossibleTwin`): khác `source`, cùng `account_id`, `amount`, `direction`, `at` trong ±180 giây, và ít nhất một bên thiếu `reference_number` (NULL/rỗng).
-5. `INSERT OR IGNORE` log với `status='pending'` (trước ngày mở sổ: `'ignored'`), `received_at = now` (UTC, khuôn SQLite). Không có dòng nào được ghi (thua race trùng id hoặc trùng unique index) → `{created: false}`.
-5b. Log trước ngày mở sổ → trả `{created: true, logId, beforeOpening: true}`; dừng ở đây (2b).
+4. Nếu biết `account_id` và log không trước ngày mở sổ / trước mốc: tìm log **song sinh** (`findPossibleTwin`): khác `source`, cùng `account_id`, `amount`, `direction`, `at` trong ±180 giây, và ít nhất một bên thiếu `reference_number` (NULL/rỗng).
+5. `INSERT OR IGNORE` log với `status='pending'` (trước ngày mở sổ hay trước mốc: `'ignored'`), `received_at = now` (UTC, khuôn SQLite). Không có dòng nào được ghi (thua race trùng id hoặc trùng unique index) → `{created: false}`.
+5b. Log trước ngày mở sổ → trả `{created: true, logId, beforeOpening: true}`; log trước mốc → `{created: true, logId, beforeFeed: true}`; dừng ở đây (2b, 2c).
 6. Nếu biết `account_id` **và** không có song sinh: chạy UC-303 (tự khớp). Không có bước kiểm lệch sau đó (ADR-87).
 7. Trả `{created: true, logId}`.
 
 ## Alternative Flows
 - 2a. Không tra được tài khoản → log vẫn được lưu `pending`, `account_id NULL`; bỏ qua bước 4 và 6. Cron báo chưa gán hiện "TK lạ" (notify UC-407).
 - 2b. **Trước ngày mở sổ** (ADR-76): `opening_balance` đã gồm khoản này. Log vẫn được lưu (để đối chiếu, và để lần sau nhận ra trùng) nhưng ở `ignored`: không xét song sinh, không khớp lệnh chuyển / ghép cặp / rule (UC-303), không vào danh sách chờ gán (UC-305) hay tin báo chưa gán (notify UC-407), không kiểm lệch feed, không tính vào `v_account_logs` (UC-308). Log ngay ngày `opened_at` (từ 00:00 giờ VN) đi luồng thường. Tài khoản `opened_at` NULL: không có mốc.
+- 2c. **Trước mốc theo dõi SePay** (ADR-113, access UC-506 3h): tài khoản nối SePay khi sổ đã có dữ liệu — khoản trước mốc đã vào sổ bằng đường khác (ghi từ log của tài khoản kia, nhập tay khi chưa nối). Log lịch sử trước mốc xử lý y như 2b (`ignored`, không vào sổ, màn Gán, ghép cặp, đối soát). **Webhook không áp mốc**: webhook về trễ mang giờ trước mốc vẫn đi luồng thường (`pending`, đối soát khớp sau khi gán). Rà soát / Đồng bộ lại đếm riêng `beforeFeed` (UC-304).
 - 4a. Có song sinh → log vẫn được lưu `pending`, **không** tự khớp, **không** kiểm lệch feed; màn Gán gắn gợi ý `possible_duplicate_of` (UC-305). Người trong nhà "Bỏ qua" nếu đúng là một, gán nếu là hai giao dịch thật.
 - 6a. Bước khớp ném lỗi (ví dụ lương đã ghi nhưng chia lỗi) → `recordIngestError(db, source, id, "Đã ghi giao dịch nhưng xử lý tiếp bị lỗi: …")` (UC-308); vẫn chạy kiểm lệch feed và trả `created: true`.
 
@@ -100,9 +102,15 @@
 - Then log `pending`; `feed_balance` = 400.000
 - Tests: `test/ingest.test.ts` › "số dư đầu là mốc: log trước ngày mở sổ không vào sổ (ADR-76) › tài khoản không có ngày mở sổ: log cũ bao lâu vẫn chờ gán và vào số dư theo log như trước"
 
+### AC-12: Log lịch sử trước mốc theo dõi SePay → `ignored`; webhook không áp mốc (ADR-113)
+- Given tài khoản mở sổ 1/10, mốc `feed_from` 15/10 22:24
+- When rà soát trả log vào 11/10 9.000.000; log 15/10 22:30; log có `at` đúng bằng mốc; webhook tới 22:25 mang `at` 22:20; rà soát trả log 22:21; log lịch sử trước mốc lỡ còn `pending`; Đồng bộ lại vắt qua mốc
+- Then 11/10 → `ignored`, không ở màn Gán; 22:30 và log đúng mốc đi luồng thường; webhook 22:20 → `pending`, gán xong sổ = theo ngân hàng, lệch 0; cùng giờ đó qua rà soát → báo đã có; rà soát 22:21 → `ignored`; log `pending` trước mốc không làm ứng viên ghép cặp tự động; Đồng bộ lại đếm riêng `beforeFeed`, PWA nói "K giao dịch trước mốc theo dõi SePay — đã có trong sổ, không ghi lại."
+- Tests: [`test/ingest.test.ts`](../../test/ingest.test.ts) › "mốc theo dõi SePay: log trước mốc như log trước ngày mở sổ (ADR-113) › UC-302 AC-12: rà soát trả log vào 11/10 9.000.000 → ignored, không ở màn Gán; log 15/10 22:30 xử lý bình thường; log đúng bằng mốc nằm trong phạm vi" · "… › UC-302 AC-12: log lịch sử trước mốc lỡ còn 'pending' không làm ứng viên ghép cặp tự động" · "… › UC-302 AC-12: webhook về trễ mang giờ trước mốc (bật 22:24, chi 22:20) vẫn chờ gán và đối soát khớp sau khi gán; cùng giờ đó qua rà soát thì bỏ qua"; [`test/cron-sepay.test.ts`](../../test/cron-sepay.test.ts) › "nhiều kết nối SePay — mỗi kết nối một token (ADR-75) › đồng bộ lại theo khoảng ngày (POST /v1/settings/sepay/sync) › UC-302 AC-12: Đồng bộ lại vắt qua mốc theo dõi SePay: giao dịch trước mốc lưu 'ignored', đếm riêng beforeFeed (đã có trong sổ), không về màn Gán"; [`web/src/lib/settings.test.ts`](../../web/src/lib/settings.test.ts) › "tài khoản › UC-302 AC-12: câu báo sau Đồng bộ lại đếm riêng giao dịch trước mốc theo dõi SePay"
+
 ## Traceability
-- Code: `src/services/ingest.ts` › `ingestLog` (`beforeOpening`), `findPossibleTwin`, `sqliteDateTime`, `recordIngestError`; `src/domain/period.ts` › `dayKey`
-- Migrations/DB: `bank_logs` PK `id`; `idx_logs_ref` UNIQUE partial (`migrations/0005_ingest_integrity_guards.sql`); `accounts.opened_at` (`migrations/0001_schema.sql`), `v_account_logs` theo mốc (`migrations/0016_opening_date_cutoff.sql`)
+- Code: `src/services/ingest.ts` › `ingestLog` (`beforeOpening`, `beforeFeed`), `findPossibleTwin`, `sqliteDateTime`, `recordIngestError`; `src/domain/period.ts` › `dayKey`
+- Migrations/DB: `bank_logs` PK `id`; `idx_logs_ref` UNIQUE partial (`migrations/0005_ingest_integrity_guards.sql`); `accounts.opened_at` (`migrations/0001_schema.sql`), `v_account_logs` theo mốc (`migrations/0016_opening_date_cutoff.sql`); `accounts.feed_from`, phạm vi log theo mốc (`migrations/0036_feed_from.sql`, schema v1.36)
 
 ## Divergences & Open Questions
 - [DIVERGENCE] `phase-04-ingest-sepay.md` §"Rà soát 02:00" bước 2–3: trùng (TK, số tiền, hướng, thời điểm) → "Đã có → bỏ qua"; code (`43baea1`) vẫn ghi log và chỉ đánh dấu "có thể trùng". `docs/core_design_rules.md` §9 đã cập nhật theo code.

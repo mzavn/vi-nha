@@ -22,7 +22,7 @@ lưu nguyên payload, không diễn giải. Giao dịch sổ sách (Transaction)
 | `ref_code` | `payload.code ?? extractCode(content)`, viết hoa — mã `[QE]xx` cho rule loại `code` |
 | `reference_number` | Mã FT ngân hàng (`referenceCode` / `reference_number`). Duy nhất trong một TK khi khác NULL/rỗng (`idx_logs_ref`, migration 0005) |
 | `raw` | JSON nguyên văn payload/dòng API — bản lưu đối chiếu duy nhất của mọi trường SePay gửi mà app không dùng, kể cả số lũy kế (`accumulated`): không đọc, không lưu cột riêng, không so (cột `accumulated` bỏ ở migration 0023, ADR-87) |
-| `source` | `webhook` \| `backfill` (`CHECK`) |
+| `source` | `webhook` \| `backfill` (`CHECK`); mặc định `webhook`. Quyết định log có bị mốc theo dõi SePay loại không (chỉ `backfill`, ADR-113) |
 | `status` | `pending` \| `assigned` \| `ignored` (`CHECK`), mặc định `pending` |
 | `received_at` | Giờ server nhận, khuôn `YYYY-MM-DD HH:MM:SS` UTC (`sqliteDateTime`) — cron báo chưa gán (notify UC-407) so theo cột này |
 
@@ -30,12 +30,12 @@ lưu nguyên payload, không diễn giải. Giao dịch sổ sách (Transaction)
 ```mermaid
 stateDiagram-v2
   [*] --> pending: ingestLog (webhook/backfill)
-  [*] --> ignored: ingestLog, log trước ngày mở sổ của TK (UC-302 2b, ADR-76)
+  [*] --> ignored: ingestLog, log trước ngày mở sổ của TK (UC-302 2b, ADR-76) hay log lịch sử trước mốc theo dõi SePay (UC-302 2c, ADR-113)
   pending --> assigned: tự khớp (UC-303) / gán tay (UC-305) / ghép tay (UC-306)
   pending --> ignored: bỏ qua (UC-305)
   assigned --> pending: gỡ gán (UC-306, unassignTransaction)
 ```
-`ignored` là trạng thái cuối: không có đường nào trong code đưa log `ignored` về `pending`. Log ghi thẳng `ignored` vì trước ngày mở sổ (`opened_at`) không khác gì log người bấm Bỏ qua — chỉ phân biệt được bằng cách so ngày log với `opened_at`.
+`ignored` là trạng thái cuối: không có đường nào trong code đưa log `ignored` về `pending`. Log ghi thẳng `ignored` vì trước ngày mở sổ (`opened_at`) hay vì là log lịch sử (`source='backfill'`) trước mốc theo dõi SePay (`accounts.feed_from`, ADR-113) không khác gì log người bấm Bỏ qua — chỉ phân biệt được bằng cách so `at` với `opened_at` / `feed_from`. Log `webhook` không bao giờ bị bỏ vì `feed_from`.
 
 ### Quan hệ
 - 1 BankLog → 0..N Transaction `active` qua `transactions.log_id` (tách nhiều dòng khi gán tay).

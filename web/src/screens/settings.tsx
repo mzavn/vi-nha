@@ -15,7 +15,7 @@ import { connectionRows } from "../lib/ai-connections";
 import { canAddMember, passwordLine } from "../lib/members";
 import { formatVnd } from "../lib/money";
 import { dayKey, previousDay, shortDate } from "../lib/period";
-import { ACCOUNT_KIND_LABEL, allocationSummary, appVersionLabel, auditView, bankName, fiConfigSummary, formatPercent, groupWallets, MATCH_LABEL, MEANING_LABEL, scheduleRows, secretLabel, sepayLabel, streamSummary, syncRangeError } from "../lib/settings";
+import { ACCOUNT_KIND_LABEL, allocationSummary, appVersionLabel, auditView, bankName, fiConfigSummary, formatPercent, groupWallets, MATCH_LABEL, MEANING_LABEL, scheduleRows, secretLabel, sepayLabel, sepaySyncText, streamSummary, syncRangeError } from "../lib/settings";
 import { deviceLabel, isIos, lastOkText, seriesView, sqliteUtcToIso, type PushState } from "../lib/push";
 import { balanceText } from "../lib/rental";
 import { SEPAY_REGISTER_URL, SOURCE_URL } from "../lib/splits";
@@ -685,10 +685,7 @@ function SepaySync({ d, ro }: SectionProps) {
     setErrors([]);
     try {
       const r = await api.post<SepaySyncResult>("/v1/settings/sepay/sync", { from, to, ...(connection ? { connection_id: connection } : {}) });
-      const early = r.beforeOpening > 0 ? ` ${r.beforeOpening} giao dịch trước ngày mở sổ — đã có trong số dư đầu, không ghi lại.` : "";
-      // Kết nối lỗi thì toast phải nói, không chỉ "Đã lấy thêm 0 giao dịch" như thể xong xuôi — lý do nằm dưới nút.
-      const failed = r.errors.length > 0 ? " Có chỗ chưa lấy được — xem lý do dưới nút Đồng bộ." : "";
-      toast(`Đã lấy thêm ${r.added} giao dịch, ${r.duplicates} đã có sẵn.${early}${failed}`);
+      toast(sepaySyncText(r));
       setErrors(r.errors);
       await refresh(true);
     } catch (err) {

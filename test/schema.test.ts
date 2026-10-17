@@ -31,7 +31,7 @@ describe("migrations", () => {
     const views = db.prepare("SELECT name FROM sqlite_master WHERE type='view'").all() as { name: string }[];
     expect(views.length).toBeGreaterThan(0);
     for (const v of views) db.prepare(`SELECT * FROM ${v.name} LIMIT 1`).all();
-    expect(db.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.34" });
+    expect(db.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.36" });
   });
 
   it("đã bỏ hai view ngân sách mù kỳ", () => {
@@ -305,5 +305,91 @@ describe("đối soát", () => {
   it("tài khoản không có feed (tiền mặt) không bị tính book_drift", () => {
     const db = openDb();
     expect(db.prepare("SELECT book_drift FROM v_reconcile WHERE account_id='cash-husband'").get()).toEqual({ book_drift: null });
+  });
+
+  it("UC-106 AC-8: chuyển khoản cũ ghi từ log của tài khoản gửi không làm tài khoản nhận (nối SePay sau) lệch giả", () => {
+    const db = openDb();
+    const L = (id: string, acct: string, dir: string, amount: number) =>
+      db.prepare(`INSERT INTO bank_logs (id, at, amount, direction, account_id, status) VALUES (?, '2026-09-21T09:00:00+07:00', ?, ?, ?, 'pending')`).run(id, amount, dir, acct);
+    const tx = (log: string, log2: string | null, from: string, to: string, amount: number) =>
+      db.prepare(
+        `INSERT INTO transactions (log_id, log_id_2, at, amount, meaning, account_id, counter_account_id, week_key, month_key)
+         VALUES (?, ?, '2026-09-21', ?, 'transfer', ?, ?, '2026-W39', '2026-09')`,
+      ).run(log, log2, amount, from, to);
+    // B → A 9.000.000 khi A chưa nối SePay: chỉ có log ra của B.
+    L("B1", "vcb-wife", "out", 9_000_000);
+    tx("B1", null, "vcb-wife", "vcb-husband", 9_000_000);
+    // A → B 100.000 sau khi A nối SePay: hai chân, ghép cặp.
+    L("A1", "vcb-husband", "out", 100_000);
+    L("B2", "vcb-wife", "in", 100_000);
+    tx("A1", "B2", "vcb-husband", "vcb-wife", 100_000);
+    db.prepare("UPDATE bank_logs SET status = 'assigned'").run();
+    const drift = (a: string) => (db.prepare("SELECT book_drift FROM v_reconcile WHERE account_id = ?").get(a) as { book_drift: number }).book_drift;
+    expect([drift("vcb-husband"), drift("vcb-wife")]).toEqual([0, 0]);
+  });
+
+  it("UC-106 AC-9: giao dịch mang log trước ngày mở sổ của tài khoản không vào phần sổ sinh từ log (cùng phạm vi với log đã gán)", () => {
+    const db = openDb();
+    db.prepare("UPDATE accounts SET opened_at = '2026-10-01' WHERE id = 'vcb-husband'").run();
+    db.prepare(`INSERT INTO bank_logs (id, at, amount, direction, account_id, status) VALUES ('OLD', '2026-09-21T09:00:00+07:00', 70000, 'out', 'vcb-husband', 'pending')`).run();
+    db.prepare(`INSERT INTO bank_logs (id, at, amount, direction, account_id, status) VALUES ('NEW', '2026-10-02T09:00:00+07:00', 30000, 'out', 'vcb-husband', 'pending')`).run();
+    db.prepare(
+      `INSERT INTO transactions (log_id, at, amount, meaning, counter_wallet_id, account_id, category_id, week_key, month_key)
+       VALUES ('NEW', '2026-10-02', 30000, 'spend', 'food', 'vcb-husband', 'groceries', '2026-W40', '2026-10')`,
+    ).run();
+    db.prepare("UPDATE bank_logs SET status = 'assigned' WHERE id = 'NEW'").run();
+    db.prepare("UPDATE bank_logs SET status = 'ignored' WHERE id = 'OLD'").run();
+    expect(row(db)).toMatchObject({ book_drift: 0 });
+  });
+
+  it("UC-106 AC-10: tài khoản nối SePay sau (có mốc theo dõi): số theo ngân hàng = sổ lúc bật + log sau mốc; huỷ / ghi bù khoản trước mốc, sửa số dư đầu vẫn khớp sổ", () => {
+    const db = openDb();
+    db.prepare("UPDATE accounts SET opened_at = '2026-10-01', opening_balance = 10000000, feed_from = '2026-10-15T15:24:00.000Z' WHERE id = 'vcb-husband'").run();
+    // Log ghi 'pending' (trigger chỉ cho ghi giao dịch từ log đang chờ), rồi đánh dấu đã gán một lượt.
+    const L = (id: string, acct: string, at: string, dir: string, amount: number) =>
+      db.prepare(`INSERT INTO bank_logs (id, at, amount, direction, account_id, status) VALUES (?, ?, ?, ?, ?, 'pending')`).run(id, at, amount, dir, acct);
+    const tx = (at: string, amount: number, meaning: string, from: string | null, to: string | null, log: string | null = null, log2: string | null = null) =>
+      db.prepare(
+        `INSERT INTO transactions (log_id, log_id_2, at, amount, meaning, counter_wallet_id, category_id, account_id, counter_account_id, week_key, month_key)
+         VALUES (?1, ?2, ?3, ?4, ?5, CASE ?5 WHEN 'spend' THEN 'food' END, CASE ?5 WHEN 'spend' THEN 'groceries' END, ?6, ?7, '2026-W42', '2026-10') RETURNING id`,
+      ).get(log, log2, at, amount, meaning, from, to) as { id: number };
+    // Trước mốc: thu nhập nhập tay, chi từ log cũ của chính VCB (trước mốc), chuyển vào ghi từ log của tài khoản vợ.
+    const manual = tx("2026-10-05T03:00:00.000Z", 1_602_464, "income", null, "vcb-husband");
+    L("OLD", "vcb-husband", "2026-10-10T03:00:00.000Z", "out", 9_000_000);
+    db.prepare("UPDATE bank_logs SET source = 'backfill' WHERE id = 'OLD'").run(); // lịch sử SePay gửi lại, trước mốc
+    tx("2026-10-10T03:00:00.000Z", 9_000_000, "spend", "vcb-husband", null, "OLD");
+    L("W1", "vcb-wife", "2026-10-11T03:00:00.000Z", "out", 9_000_000);
+    tx("2026-10-11T03:00:00.000Z", 9_000_000, "transfer", "vcb-wife", "vcb-husband", "W1");
+    const rec = () => db.prepare("SELECT book_balance, feed_balance, book_drift FROM v_reconcile WHERE account_id = 'vcb-husband'").get();
+    // Sau mốc: ghép cặp ghi lúc 15:20 (chân vợ) nhưng log của VCB lúc 15:26 trong phạm vi → chỉ đếm một lần; rồi chi 600.000.
+    L("W2", "vcb-wife", "2026-10-15T15:20:00.000Z", "out", 500_000);
+    L("V1", "vcb-husband", "2026-10-15T15:26:00.000Z", "in", 500_000);
+    tx("2026-10-15T15:20:00.000Z", 500_000, "transfer", "vcb-wife", "vcb-husband", "W2", "V1");
+    L("V2", "vcb-husband", "2026-10-16T03:00:00.000Z", "out", 600_000);
+    tx("2026-10-16T03:00:00.000Z", 600_000, "spend", "vcb-husband", null, "V2");
+    db.prepare("UPDATE bank_logs SET status = 'assigned'").run();
+    expect(rec()).toEqual({ book_balance: 11_502_464, feed_balance: 11_502_464, book_drift: 0 });
+
+    db.prepare("UPDATE transactions SET status = 'void' WHERE id = ?").run(manual.id);
+    expect(rec()).toEqual({ book_balance: 9_900_000, feed_balance: 9_900_000, book_drift: 0 });
+    tx("2026-10-12T03:00:00.000Z", 200_000, "spend", "vcb-husband", null);
+    expect(rec()).toEqual({ book_balance: 9_700_000, feed_balance: 9_700_000, book_drift: 0 });
+    db.prepare("UPDATE accounts SET opening_balance = 10500000 WHERE id = 'vcb-husband'").run();
+    expect(rec()).toEqual({ book_balance: 10_200_000, feed_balance: 10_200_000, book_drift: 0 });
+  });
+
+  it("UC-106 AC-10: log đúng bằng mốc nằm trong phạm vi; log lịch sử trước mốc không vào assigned_net / pending; webhook về trễ mang giờ trước mốc vẫn trong phạm vi", () => {
+    const db = openDb();
+    db.prepare("UPDATE accounts SET opened_at = '2026-10-01', feed_from = '2026-10-15T15:24:00.000Z' WHERE id = 'vcb-husband'").run();
+    const L = (id: string, at: string, source: string) =>
+      db.prepare(`INSERT INTO bank_logs (id, at, amount, direction, account_id, source, status) VALUES (?, ?, 100000, 'in', 'vcb-husband', ?, 'pending')`).run(id, at, source);
+    L("TRUOC", "2026-10-15T15:23:59.999Z", "backfill");
+    L("DUNG", "2026-10-15T15:24:00.000Z", "backfill");
+    L("TRE", "2026-10-15T15:20:00.000Z", "webhook");
+    expect(db.prepare("SELECT feed_balance, pending_net, pending_count FROM v_account_logs WHERE account_id = 'vcb-husband'").get()).toEqual({
+      feed_balance: 200_000,
+      pending_net: 200_000,
+      pending_count: 2,
+    });
   });
 });

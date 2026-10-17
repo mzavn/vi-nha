@@ -375,12 +375,14 @@ async function matchLog(db: D1Database, log: LogCtx): Promise<void> {
   }
 
   // 2+3. Ghép cặp nội bộ: log ngược hướng, cùng số tiền, khác TK của hộ, lệch ≤ 10 phút, chưa gán — và không trước
-  // ngày mở sổ của tài khoản nó (ADR-76; log như vậy nhận trước khi có luật này có thể còn 'pending').
+  // ngày mở sổ của tài khoản nó, hay là log lịch sử trước mốc theo dõi SePay (ADR-76, ADR-113; log như vậy nhận trước khi
+  // có luật này có thể còn 'pending'). Log webhook không bao giờ bị loại vì mốc.
   const candidates = await db
     .prepare(
       `SELECT l.id, l.at, l.account_id AS accountId, l.direction, l.amount FROM bank_logs l JOIN accounts a ON a.id = l.account_id
        WHERE l.status = 'pending' AND l.account_id <> ? AND l.amount = ? AND l.direction <> ? AND l.id <> ?
-         AND (a.opened_at IS NULL OR date(l.at, '+7 hours') >= a.opened_at)`,
+         AND (a.opened_at IS NULL OR date(l.at, '+7 hours') >= a.opened_at)
+         AND (a.feed_from IS NULL OR julianday(l.at) >= julianday(a.feed_from) OR l.source = 'webhook')`,
     )
     .bind(log.accountId, log.amount, log.direction, log.id)
     .all<PairCandidate>();
@@ -424,7 +426,8 @@ async function matchLog(db: D1Database, log: LogCtx): Promise<void> {
   // Rule người thuê chỉ để gợi ý ở màn Gán (ADR-60), không bao giờ tự gán.
   // Tiền ra của tài khoản đang để "chỉ tiền vào" (sepay_out = 0) được nhập tay ở màn Nhập (ADR-66): log này có thể
   // là đúng khoản đã nhập, nên không tự gán theo rule — giữ 'pending' để người xem (gợi ý kèm lời nhắc ở màn Gán).
-  if (log.direction === "out" && (await outNotFed(db, log.accountId))) return;
+  // Log ra trước lúc bật "báo cả tiền ra" (sepay_out_from, SePay gửi lại lịch sử) cũng vậy: khoản chi đó đã nhập tay.
+  if (log.direction === "out" && (await outNotFed(db, log.accountId, log.at))) return;
   const rule = matchRule(
     (await loadRuleRows(db)).filter((r) => !r.tenantId && (!r.accountId || r.accountId === log.accountId)),
     log.direction,
@@ -528,10 +531,16 @@ async function matchLog(db: D1Database, log: LogCtx): Promise<void> {
   // 6. Còn lại: giữ 'pending' (giá trị mặc định lúc insert), không làm gì thêm — lượt cron kế tiếp (≤ 15 phút) sẽ báo.
 }
 
-/** Tài khoản mà SePay không được coi là báo tiền ra (không nối, hoặc sepay_out = 0): tiền ra của nó nhập tay được (ADR-66). */
-async function outNotFed(db: D1Database, accountId: string): Promise<boolean> {
-  const row = await db.prepare("SELECT sepay_enabled AND sepay_out AS fed FROM accounts WHERE id = ?").bind(accountId).first<{ fed: number }>();
-  return !!row && !row.fed;
+/**
+ * Log ra mà SePay không được coi là báo tiền ra (tài khoản không nối, sepay_out = 0, hoặc log trước lúc bật "báo cả tiền
+ * ra" — `sepay_out_from`): khoản chi đó nhập tay được (ADR-66, ADR-113).
+ */
+async function outNotFed(db: D1Database, accountId: string, at: string): Promise<boolean> {
+  const row = await db
+    .prepare("SELECT sepay_enabled AND sepay_out AS fed, sepay_out_from AS since FROM accounts WHERE id = ?")
+    .bind(accountId)
+    .first<{ fed: number; since: string | null }>();
+  return !!row && (!row.fed || (row.since !== null && Date.parse(at) < Date.parse(row.since)));
 }
 
 /** Log có thể là cùng một giao dịch với log đang xét: khác nguồn, cùng tài khoản/số tiền/chiều, lệch ≤ 3 phút, một bên thiếu mã. */
@@ -558,7 +567,9 @@ async function findPossibleTwin(
  * `connectionId` (ADR-75): log đến qua kết nối SePay nào thì chỉ khớp vào tài khoản thuộc kết nối đó — khoá webhook
  * của SePay người này không ghi được vào tài khoản của người kia. Không khớp được thì như tài khoản lạ (account_id NULL).
  * Log của ngày trước ngày mở sổ của tài khoản (ADR-76) đã nằm trong số dư đầu: lưu 'ignored' để đối chiếu, không khớp,
- * không báo, không ghép cặp — `beforeOpening: true`.
+ * không báo, không ghép cặp — `beforeOpening: true`. Log LỊCH SỬ (rà soát, Đồng bộ lại) trước mốc theo dõi SePay
+ * (`feed_from`, ADR-113) đã vào sổ bằng đường khác: xử lý y như vậy — `beforeFeed: true`. Webhook là SePay báo lúc đó (kể cả
+ * về trễ mang giờ trước mốc): không bao giờ bị bỏ vì mốc.
  */
 export async function ingestLog(
   db: D1Database,
@@ -566,20 +577,24 @@ export async function ingestLog(
   source: "webhook" | "backfill",
   now: Date,
   connectionId?: string,
-): Promise<{ created: boolean; logId: string; beforeOpening?: boolean }> {
+): Promise<{ created: boolean; logId: string; beforeOpening?: boolean; beforeFeed?: boolean }> {
   const byId = await db.prepare("SELECT id FROM bank_logs WHERE id = ?").bind(parsed.id).first<{ id: string }>();
   if (byId) return { created: false, logId: parsed.id };
 
   // Tài khoản ảo (VA) của SePay mang subAccount riêng: khớp nó trước, rồi mới tới số tài khoản chính.
   const scope = connectionId === undefined ? "" : " AND sepay_connection_id = ?";
   const lookup = (col: "sub_account" | "account_no", value: string) => {
-    const st = db.prepare(`SELECT id, opened_at FROM accounts WHERE ${col} = ?${scope}`);
-    return (connectionId === undefined ? st.bind(value) : st.bind(value, connectionId)).first<{ id: string; opened_at: string | null }>();
+    const st = db.prepare(`SELECT id, opened_at, feed_from FROM accounts WHERE ${col} = ?${scope}`);
+    return (connectionId === undefined ? st.bind(value) : st.bind(value, connectionId)).first<{ id: string; opened_at: string | null; feed_from: string | null }>();
   };
   const account =
     (parsed.subAccount ? await lookup("sub_account", parsed.subAccount) : null) ?? (parsed.accountNo ? await lookup("account_no", parsed.accountNo) : null);
   const accountId = account?.id ?? null;
-  const beforeOpening = !!account?.opened_at && dayKey(parsed.at) < account.opened_at;
+  const beforeOpeningDay = !!account?.opened_at && dayKey(parsed.at) < account.opened_at;
+  // Log lịch sử trước mốc theo dõi SePay (ADR-113): khoản đó đã vào sổ bằng đường khác — xử lý như log trước ngày mở sổ.
+  // Webhook về trễ (mang giờ trước mốc) vẫn là SePay báo lúc đó, không bỏ.
+  const beforeFeed = source !== "webhook" && !beforeOpeningDay && !!account?.feed_from && Date.parse(parsed.at) < Date.parse(account.feed_from);
+  const beforeOpening = beforeOpeningDay || beforeFeed;
 
   if (parsed.referenceNumber) {
     // S9: khoá chống trùng giữa webhook và rà soát là (account_id, reference_number), không chỉ riêng id.
@@ -617,7 +632,8 @@ export async function ingestLog(
     .run();
   // Thua race chống trùng: trùng id, hoặc trùng (tài khoản, mã tham chiếu) nhờ unique index ở migration 0005.
   if (!insert.meta.changes) return { created: false, logId: parsed.id };
-  if (beforeOpening) return { created: true, logId: parsed.id, beforeOpening: true };
+  if (beforeOpeningDay) return { created: true, logId: parsed.id, beforeOpening: true };
+  if (beforeFeed) return { created: true, logId: parsed.id, beforeFeed: true };
 
   if (accountId && !twin) {
     try {
@@ -644,7 +660,10 @@ export async function listPendingLogs(db: D1Database, limit: number): Promise<Re
   const list = rows(res);
   const ruleRows = await loadRuleRows(db);
   const sepayOut = new Map(
-    rows<{ id: string; fed: number }>(await db.prepare("SELECT id, sepay_enabled AND sepay_out AS fed FROM accounts").all()).map((a) => [a.id, Boolean(a.fed)]),
+    rows<{ id: string; fed: number; since: string | null }>(await db.prepare("SELECT id, sepay_enabled AND sepay_out AS fed, sepay_out_from AS since FROM accounts").all()).map((a) => [
+      a.id,
+      { fed: Boolean(a.fed), since: a.since },
+    ]),
   );
   // Tài khoản tiền mặt để gợi ý "Rút tiền mặt" chỉ phụ thuộc tài khoản nguồn: hỏi DB một lần cho mỗi tài khoản.
   const cashCache = new Map<string, Promise<string | null>>();
@@ -676,21 +695,26 @@ export async function listPendingLogs(db: D1Database, limit: number): Promise<Re
         const hhmm = `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
         return { ...log, suggestion: { meaning: "transfer", other_account_id: leg.accountId, attach_to_tx: leg.txId, label: `Khớp chuyển nội bộ đã ghi lúc ${hhmm}` } };
       }
-      return { ...log, suggestion: await suggestFor(log, ruleRows, cashOf, sepayOut.get(log.account_id as string) === false) };
+      // Log ra không được coi là SePay báo (ADR-66), hay từ trước lúc bật "báo cả tiền ra" (ADR-113): nhắc có thể đã nhập tay.
+      const out = sepayOut.get(log.account_id as string);
+      const outNote = !out ? null : !out.fed ? OUT_NOT_FED_NOTE : out.since !== null && Date.parse(String(log.at)) < Date.parse(out.since) ? OUT_BEFORE_MARK_NOTE : null;
+      return { ...log, suggestion: await suggestFor(log, ruleRows, cashOf, outNote) };
     }),
   );
 }
 
 const OUT_NOT_FED_NOTE =
   "SePay vừa báo tiền ra cho tài khoản đang để 'chỉ tiền vào'. Nếu khoản này đã nhập tay thì Bỏ qua; rồi bật 'SePay báo cả tiền ra' ở Cài đặt.";
+const OUT_BEFORE_MARK_NOTE = "Khoản chi này từ trước lúc bật 'SePay báo cả tiền ra' — khi đó chi tiêu nhập tay. Nếu đã nhập tay thì Bỏ qua.";
 const PIGGY_BANK_RETURN_NOTE = "Chỉ đổi chỗ tiền; tiền vẫn thuộc Tích sản cho tới khi anh tự chuyển ví.";
 
 /**
  * Gợi ý cho màn Gán: rule khớp mã nhưng thiếu danh mục → gợi ý ví; log `out` không khớp rule mà nội dung trông như
  * rút tiền mặt (`looksLikeCashWithdrawal` — ATM, RUT TIEN…) → gợi ý Rút tiền mặt; không khớp gì khác → không gợi ý
  * (trả QR, hoá đơn không phải rút tiền — màn Gán mặc định Chi tiêu);
- * log `in` khớp rule người thuê → gợi ý "Thu từ <tên>". Log `out` của tài khoản "chỉ tiền vào" (`outNotFed`, ADR-66)
- * không được tự gán, nên gợi ý luôn theo rule khớp và kèm lời nhắc có thể đã nhập tay. Rule chuyển nội bộ có tài khoản
+ * log `in` khớp rule người thuê → gợi ý "Thu từ <tên>". Log `out` của tài khoản "chỉ tiền vào" (`outNotFed`, ADR-66) hay
+ * từ trước lúc bật "báo cả tiền ra" (ADR-113) không được tự gán, nên gợi ý luôn theo rule khớp và kèm lời nhắc `outNote`
+ * (có thể đã nhập tay). Rule chuyển nội bộ có tài khoản
  * đầu kia (heo đất, ADR-77/ADR-82): tiền ra gợi ý chuyển sang đó kèm chuyển ví vào Tích sản; tiền vào khớp cùng rule là
  * heo trả về — gợi ý chuyển tài khoản chiều ngược lại, không chuyển ví (tiền vẫn thuộc Tích sản), không bao giờ tự gán.
  */
@@ -698,9 +722,10 @@ async function suggestFor(
   log: Row,
   allRules: LoadedRule[],
   cashOf: (accountId: string) => Promise<string | null>,
-  outNotFed: boolean,
+  outNote: string | null,
 ): Promise<Record<string, unknown> | null> {
   if (!log.account_id) return null;
+  const outNotFed = outNote !== null;
   const rules = allRules.filter((r) => !r.accountId || r.accountId === log.account_id);
   if (log.direction === "in") {
     // Tiền vào luôn hỏi; chỉ gợi ý người thuê khi khớp rule của họ, người vẫn phải bấm xác nhận.
@@ -725,8 +750,8 @@ async function suggestFor(
     const cash = await cashOf(log.account_id as string);
     if (cash) base = { meaning: "transfer", other_account_id: cash, label: "Rút tiền mặt" };
   }
-  if (!outNotFed) return base;
-  return { ...base, note: base?.note ? `${OUT_NOT_FED_NOTE} ${base.note as string}` : OUT_NOT_FED_NOTE };
+  if (!outNote) return base;
+  return { ...base, note: base?.note ? `${outNote} ${base.note as string}` : outNote };
 }
 
 // ── Gán / bỏ qua / ghép tay ───────────────────────────────────────────

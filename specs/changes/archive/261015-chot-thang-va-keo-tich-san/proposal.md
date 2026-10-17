@@ -76,4 +76,4 @@ Reviewer agent (2026-10-15) — approve with changes. Đã sửa: không bù hai
 - [x] Test đỏ → code (AC ở trên); rà bảo mật (security-reviewer: 0 critical/high, 1 medium + 2 low đã sửa — Ví Thưởng chỉ ví chung, lọc ký tự điều khiển, nhật ký lần chia)
 - [x] Sao lưu D1 (`before-0034`, diễn tập migration 0034 trên bản sao); deploy prod 2026-10-16 ~00:02 giờ VN, version `9325ae00`; xem 390px / 1280px
 - [x] Hợp nhất specs (+ ADR-111, ADR-112)
-- [ ] GitBook; CHANGELOG; phát hành
+- [x] CHANGELOG v1.3.0; phát hành v1.3.0 (mzavn/vi-nha, CI xanh, GitHub Release) · GitBook: chốt tháng, Có/Không Tích sản, nguyên lý Profit First (repo vi-nha-doc)

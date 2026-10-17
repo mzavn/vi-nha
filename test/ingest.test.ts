@@ -377,6 +377,71 @@ describe("số dư đầu là mốc: log trước ngày mở sổ không vào s�
   });
 });
 
+describe("mốc theo dõi SePay: log trước mốc như log trước ngày mở sổ (ADR-113)", () => {
+  // VCB và TCB mở sổ 1/10; VCB nối SePay sau, theo dõi từ 22:24 ngày 15/10 giờ VN.
+  const MARK = "2026-10-15T15:24:00.000Z";
+  beforeEach(() => {
+    raw.prepare("UPDATE accounts SET opened_at = '2026-10-01', opening_balance = 0 WHERE id IN ('vcb-husband', 'tcb-husband')").run();
+    raw.prepare("UPDATE accounts SET feed_from = ? WHERE id = 'vcb-husband'").run(MARK);
+  });
+  const later = () => new Date("2026-10-17T02:00:00.000Z");
+
+  it("UC-302 AC-12: rà soát trả log vào 11/10 9.000.000 → ignored, không ở màn Gán; log 15/10 22:30 xử lý bình thường; log đúng bằng mốc nằm trong phạm vi", async () => {
+    const early = await ingestLog(env.DB, log({ id: "vao-11-10", at: "2026-10-11T03:00:00.000Z", direction: "in", amount: 9_000_000 }), "backfill", later());
+    expect(early).toEqual({ created: true, logId: "vao-11-10", beforeFeed: true });
+    expect(bankLog("vao-11-10")).toMatchObject({ status: "ignored", account_id: "vcb-husband" });
+    expect(txOf("vao-11-10")).toEqual([]);
+
+    await ingestLog(env.DB, log({ id: "dung-moc", at: MARK, direction: "in", amount: 200_000, content: "linh tinh" }), "webhook", later());
+    expect(bankLog("dung-moc")).toMatchObject({ status: "pending" });
+    await ingestLog(env.DB, log({ id: "sau-moc", at: "2026-10-15T15:30:00.000Z", refCode: "EAN", content: "EAN AN TRUA" }), "webhook", later());
+    expect(bankLog("sau-moc")).toMatchObject({ status: "assigned" });
+    expect(txOf("sau-moc")).toHaveLength(1);
+    expect((await listPendingLogs(env.DB, 50)).map((l) => l.id)).toEqual(["dung-moc"]);
+  });
+
+  it("UC-302 AC-12: log lịch sử trước mốc lỡ còn 'pending' không làm ứng viên ghép cặp tự động", async () => {
+    raw.prepare(
+      `INSERT INTO bank_logs (id, at, amount, direction, account_id, account_no, source, status, received_at)
+       VALUES ('cu-cho', '2026-10-15T15:20:00.000Z', 300000, 'out', 'vcb-husband', '0011xxxxxxx', 'backfill', 'pending', '2026-10-15 15:20:00')`,
+    ).run();
+    await ingestLog(env.DB, log({ id: "tcb-in", at: "2026-10-15T15:22:00.000Z", direction: "in", amount: 300_000, accountNo: "1903xxxxxxx" }), "webhook", later());
+    expect(bankLog("tcb-in")).toMatchObject({ status: "pending" });
+    expect(bankLog("cu-cho")).toMatchObject({ status: "pending" });
+    expect(raw.prepare("SELECT COUNT(*) n FROM transactions").get()).toEqual({ n: 0 });
+  });
+
+  it("UC-302 AC-12: webhook về trễ mang giờ trước mốc (bật 22:24, chi 22:20) vẫn chờ gán và đối soát khớp sau khi gán; cùng giờ đó qua rà soát thì bỏ qua", async () => {
+    const late = await ingestLog(env.DB, log({ id: "tre", at: "2026-10-15T15:20:00.000Z", content: "linh tinh" }), "webhook", new Date("2026-10-15T15:25:00.000Z"));
+    expect(late).toEqual({ created: true, logId: "tre" });
+    expect(bankLog("tre")).toMatchObject({ status: "pending" });
+    await assignLog(env.DB, "tre", [{ meaning: "spend", amount: 100_000, category_id: "groceries" }], "husband", later());
+    expect(raw.prepare("SELECT book_balance, feed_balance, book_drift, pending_count FROM v_reconcile WHERE account_id = 'vcb-husband'").get()).toEqual({
+      book_balance: -100_000,
+      feed_balance: -100_000,
+      book_drift: 0,
+      pending_count: 0,
+    });
+    // Cùng log qua rà soát: đã có. Log khác cùng khoảng giờ chỉ có ở rà soát: trước mốc → bỏ qua.
+    expect(await ingestLog(env.DB, log({ id: "tre" }), "backfill", later())).toEqual({ created: false, logId: "tre" });
+    expect(await ingestLog(env.DB, log({ id: "ls-22-21", at: "2026-10-15T15:21:00.000Z", amount: 70_000 }), "backfill", later())).toEqual({ created: true, logId: "ls-22-21", beforeFeed: true });
+    expect(bankLog("ls-22-21")).toMatchObject({ status: "ignored" });
+  });
+
+  it("UC-506 AC-27: bật sepay_out 20/10; log ra 18/10 về khi rà soát → pending, không tự gán theo rule (gợi ý kèm lời nhắc); log ra 21/10 → tự gán như cũ", async () => {
+    raw.prepare("UPDATE accounts SET sepay_out = 1, sepay_out_from = '2026-10-20T03:00:00.000Z' WHERE id = 'vcb-husband'").run();
+    await ingestLog(env.DB, log({ id: "ra-18-10", at: "2026-10-18T05:00:00.000Z", refCode: "EAN", content: "EAN AN TRUA" }), "backfill", later());
+    expect(bankLog("ra-18-10")).toMatchObject({ status: "pending" });
+    expect(txOf("ra-18-10")).toEqual([]);
+    const [pending] = await listPendingLogs(env.DB, 50);
+    expect(pending).toMatchObject({ id: "ra-18-10", suggestion: { meaning: "spend", category_id: "groceries", note: expect.stringContaining("Bỏ qua") } });
+
+    await ingestLog(env.DB, log({ id: "ra-21-10", at: "2026-10-21T05:00:00.000Z", refCode: "EAN", content: "EAN AN TRUA" }), "webhook", later());
+    expect(bankLog("ra-21-10")).toMatchObject({ status: "assigned" });
+    expect(txOf("ra-21-10")).toHaveLength(1);
+  });
+});
+
 describe("chân thứ hai đến sau gắn vào chuyển nội bộ đã ghi (ADR-81)", () => {
   // Như prod 3/10/2026: hai tài khoản thuộc hai kết nối SePay khác nhau (ADR-75). Một chân đã thành chuyển nội bộ
   // (gán tay) thì chân kia về sau không còn log 'pending' nào để ghép cặp — trước đây gán nó là ghi lần hai.

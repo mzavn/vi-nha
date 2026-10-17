@@ -76,8 +76,9 @@ async function patchRow(db: D1Database, table: string, id: string | number, cols
 }
 
 // ── Đọc ─────────────────────────────────────────────────────────────
+// `first_log_at`: log SePay sớm nhất của tài khoản — sheet tài khoản gợi ý đặt mốc theo dõi khi log này sau ngày số dư đầu (ADR-113).
 const ACCOUNT_SQL =
-  "SELECT id, name, kind, bank, account_no, sub_account, sepay_enabled, sepay_out, sepay_connection_id, owner_member_id, opening_balance, opened_at, active, deactivated_at, locked, spendable, role, (SELECT b.book_balance FROM v_account_book b WHERE b.account_id = accounts.id) AS book_balance FROM accounts";
+  "SELECT id, name, kind, bank, account_no, sub_account, sepay_enabled, sepay_out, sepay_connection_id, owner_member_id, opening_balance, opened_at, feed_from, sepay_out_from, active, deactivated_at, locked, spendable, role, (SELECT b.book_balance FROM v_account_book b WHERE b.account_id = accounts.id) AS book_balance, (SELECT MIN(l.at) FROM bank_logs l WHERE l.account_id = accounts.id) AS first_log_at FROM accounts";
 const toAccount = (r: Row) => ({
   ...r,
   id: String(r.id),
@@ -87,6 +88,12 @@ const toAccount = (r: Row) => ({
   locked: Boolean(r.locked),
   spendable: Boolean(r.spendable),
 });
+
+/** Một tài khoản như màn Cài đặt thấy; không có → null. */
+export async function readAccount(db: D1Database, id: string) {
+  const row = await db.prepare(`${ACCOUNT_SQL} WHERE id = ?`).bind(id).first<Row>();
+  return row ? toAccount(row) : null;
+}
 
 const WALLET_SQL = `SELECT w.id, w.name, w.tier, w.must_group, w.kind, w.scope, w.member_id, w.account_id, w.private, w.sort, w.active,
   a.mode, a.period, a.amount, a.percent, a.target_amount, a.target_date, a.floor_amount, a.priority, a.split_weekly
@@ -250,6 +257,22 @@ async function sepayConnectionId(db: D1Database, enabled: boolean, requested: st
   return id;
 }
 
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * Mốc theo dõi SePay gửi lên (ADR-113): `null` = từ ngày số dư đầu; còn lại là thời điểm ISO có múi giờ, không ở tương lai,
+ * không trước 00:00 giờ VN của ngày số dư đầu. Lưu dạng `toISOString()` — cùng dạng `bank_logs.at`, log đúng bằng mốc
+ * nằm trong phạm vi.
+ */
+function feedFromValue(v: unknown, openedAt: string | null, now: Date): string | null {
+  if (v === null) return null;
+  const t = typeof v === "string" && ISO_INSTANT.test(v) ? Date.parse(v) : NaN;
+  if (Number.isNaN(t)) return fail("invalid_input", "Mốc theo dõi SePay là thời điểm có múi giờ, vd 2026-10-15T15:25:00.000Z.", 400, "feed_from");
+  if (t > now.getTime()) fail("invalid_input", "Mốc theo dõi SePay không được ở tương lai.", 400, "feed_from");
+  if (openedAt && t < Date.parse(`${openedAt}T00:00:00+07:00`)) fail("invalid_input", "Mốc theo dõi SePay không được trước ngày số dư đầu.", 400, "feed_from");
+  return new Date(t).toISOString();
+}
+
 export async function createAccount(db: D1Database, b: Input) {
   const name = text(b, "name", { required: true, max: 60 })!;
   const id = newId(b, name);
@@ -281,7 +304,7 @@ export async function createAccount(db: D1Database, b: Input) {
   return toAccount((await db.prepare(`${ACCOUNT_SQL} WHERE id = ?`).bind(id).first<Row>())!);
 }
 
-export async function updateAccount(db: D1Database, id: string, b: Input) {
+export async function updateAccount(db: D1Database, id: string, b: Input, now: Date = new Date()) {
   const current = await db.prepare(`${ACCOUNT_SQL} WHERE id = ?`).bind(id).first<Row>();
   if (!current) fail("not_found", "Không có tài khoản này.", 404);
   const f = await accountFields(db, b, id);
@@ -311,6 +334,42 @@ export async function updateAccount(db: D1Database, id: string, b: Input) {
     sepay_out: Boolean(current!.sepay_out),
   });
   const connectionId = await sepayConnectionId(db, sepayOn, f.sepay_connection_id, (current!.sepay_connection_id as string | null) ?? null);
+  const turningOn = sepayOn && !current!.sepay_enabled;
+  if (turningOn) {
+    // Log chờ gán cũ (nối rồi tắt) sẽ nằm trước mốc mới: không còn trong "chưa gán" ở tab Tài khoản mà vẫn ở màn Gán.
+    const pending = await db.prepare("SELECT COUNT(*) AS n FROM bank_logs WHERE account_id = ? AND status = 'pending'").bind(id).first<{ n: number }>();
+    if (Number(pending?.n ?? 0) > 0) {
+      fail("pending_logs", `${current!.name} còn ${pending!.n} giao dịch chưa gán. Gán hoặc bỏ qua hết rồi mới bật SePay.`, 409);
+    }
+  }
+  const openedAt = f.opened_at === undefined ? ((current!.opened_at as string | null) ?? null) : f.opened_at;
+  // Mốc theo dõi SePay (ADR-113): gửi lên thì lấy; không gửi mà vừa bật SePay cho tài khoản đã có dữ liệu trong sổ
+  // (giao dịch từ ngày số dư đầu, hoặc đã Nhập số dư) thì là lúc bật — SePay gửi lại lịch sử trước đó là đếm hai lần.
+  // Tài khoản chưa dùng thì để trống: Đồng bộ lại vẫn lấy được lịch sử từ ngày số dư đầu.
+  let feed_from = has(b, "feed_from") ? feedFromValue(b.feed_from, openedAt, now) : undefined;
+  if (feed_from === undefined && turningOn) {
+    const used = await db
+      .prepare(
+        `SELECT EXISTS (SELECT 1 FROM transactions WHERE status = 'active' AND (account_id = ?1 OR counter_account_id = ?1)
+                          AND (?2 IS NULL OR date(at, '+7 hours') >= ?2))
+             OR EXISTS (SELECT 1 FROM cash_counts WHERE account_id = ?1) AS used`,
+      )
+      .bind(id, openedAt)
+      .first<{ used: number }>();
+    if (used?.used) feed_from = now.toISOString();
+  }
+  // Mốc mới không được vượt qua log lịch sử đã nhận (chờ gán / đã gán): dời mốc như vậy là giấu log khỏi đối soát, hay để
+  // khoản đó ghi tay lần nữa. Dời sớm hơn luôn được. Log webhook luôn trong phạm vi nên không tính.
+  if (feed_from && feed_from !== current!.feed_from) {
+    const crossed = await db
+      .prepare("SELECT 1 FROM bank_logs WHERE account_id = ? AND status IN ('pending', 'assigned') AND source <> 'webhook' AND julianday(at) < julianday(?) LIMIT 1")
+      .bind(id, feed_from)
+      .first();
+    if (crossed) fail("feed_from_after_logs", "Đã có giao dịch ngân hàng của tài khoản này trước mốc này — chọn mốc sớm hơn.", 409, "feed_from");
+  }
+  // Bật "báo cả tiền ra" trên tài khoản đã nối: khoản chi trước lúc đó nhập tay, log ra cũ SePay gửi lại không tự gán.
+  // Vừa bật SePay thì mốc theo dõi đã lo phần trước đó.
+  const sepay_out_from = turningOn ? null : sepay_out && !current!.sepay_out ? now.toISOString() : undefined;
   if (f.spendable && current!.locked) fail("locked_account", LOCKED_SPENDABLE);
   // Chỉ đổi qua lại tài khoản thường ↔ phao (không khóa); heo đất và sổ tiết kiệm giữ vai trò từ lúc tạo (ADR-88).
   const roleChanged = f.role !== undefined && f.role !== current!.role;
@@ -330,7 +389,7 @@ export async function updateAccount(db: D1Database, id: string, b: Input) {
   const opening = becomesOutside ? await wealthBuildingOpeningEntry(db, { id, name: f.name ?? String(current!.name), balance }, new Date()) : null;
   // Tắt ghi ngày tắt (giờ VN) để bảng cân đối vẫn tính tài khoản ở các tháng trước đó; bật lại xoá ngày tắt.
   const deactivated_at = f.active === false && current!.active ? dayKey(new Date()) : f.active === true ? null : undefined;
-  const patch = patchStatement(db, "accounts", id, { ...f, spendable, sepay_out, sepay_connection_id: connectionId, deactivated_at });
+  const patch = patchStatement(db, "accounts", id, { ...f, spendable, sepay_out, sepay_connection_id: connectionId, deactivated_at, feed_from, sepay_out_from });
   const writes = [patch, opening].filter((s): s is D1PreparedStatement => s !== null);
   if (writes.length > 0) await db.batch(writes);
   return toAccount((await db.prepare(`${ACCOUNT_SQL} WHERE id = ?`).bind(id).first<Row>())!);

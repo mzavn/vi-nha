@@ -121,6 +121,7 @@ Status: `accepted` (đang có hiệu lực) · `superseded by ADR-xx` · `propos
 | ADR-110 | 2026-10-13 | Che số tiền và mã PIN là việc của từng máy: che ở chỗ định dạng tiền, PIN cục bộ không qua server, quên PIN đăng xuất máy này cả khi offline | accepted | pwa |
 | ADR-111 | 2026-10-15 | Chốt tháng là quyết định của người: bù ví chi lố trước, phần dư chia Tích sản / Ví Thưởng theo tỷ lệ chọn mỗi tháng; cron ngày 1 chỉ mời | accepted | allocation (+ notify, access, pwa) |
 | ADR-112 | 2026-10-15 | Khi chia: Có Tích sản (kéo 1–100%, mặc định 10%) hoặc Không Tích sản (bắt buộc lý do) | accepted | allocation (+ pwa) |
+| ADR-113 | 2026-10-17 | Mốc theo dõi SePay (theo giờ) cho tài khoản đã dùng: log lịch sử trước mốc như log trước ngày mở sổ (webhook luôn tính); số theo ngân hàng tính động | accepted | access (+ ingest, ledger, pwa) |
 
 ---
 
@@ -2012,3 +2013,22 @@ Phương án bị loại: **mặc định theo % luật nạp** — chủ nhà m
 Lần chia tay ở PWA luôn gửi `wealth_amount`, nên % luật nạp Tích sản chỉ còn là số cho chia tự động và MCP. MCP `allocate_income` không áp mức 1% và không bắt lý do (cố ý). Settings không bắt bội số; thanh kẹp 1% chỉ khi rời ô.
 ### Verified in code
 `src/domain/allocation.ts` › `wealthOverride`, `isFullLock` · `src/services/ledger.ts` › `previewAllocation`, `allocateIncome` (`wealth_note_required`) · `src/routes/v1.ts` › `wealthAmount`, `/allocate` (`income.allocate`) · `migrations/0034_month_closes.sql` (`allocation_runs.wealth_note`) · `web/src/lib/wealth-slider.ts`, `web/src/screens/other-entry-sheet.tsx` › `useAllocationPreview` · `web/src/lib/wealth-building.ts` › `skippedRunLines` — commit `0528219`
+
+## ADR-113: Mốc theo dõi SePay (theo giờ) cho tài khoản đã dùng — log lịch sử trước mốc như log trước ngày mở sổ, webhook luôn tính, số theo ngân hàng tính động
+- Date: 2026-10-17 · Status: accepted · Mở rộng ADR-76 (số dư đầu là mốc); tinh chỉnh ADR-66 / D14 (khoản trước mốc nhập tay được); dùng cảnh báo cả nhà của ADR-90
+- Plan ID: — · Context: access (UC-506, UC-509) + ingest (UC-302, UC-303, UC-304, UC-305, UC-306) + ledger (UC-101, UC-102, UC-106) + pwa (UC-707, UC-709)
+- Source: chủ nhà 2026-10-17, chat — "fix triệt để vấn đề này, vì nếu ta lỗi thì khách của ta cũng lỗi"; change [261017-noi-sepay-sau](changes/archive/261017-noi-sepay-sau/proposal.md)
+### Context
+Bật SePay cho tài khoản đã có giao dịch: mốc nhận log là `opened_at`, nên rà soát tuần / tháng hay Đồng bộ lại đưa log tiền vào trước lúc nối về `pending` dù các khoản đó đã vào sổ (ghi từ log của tài khoản gửi, nhập tay khi chưa nối) — gán là đếm hai lần, đối soát không thấy. Số "theo ngân hàng" = số dư đầu + log từ `opened_at` thành vô nghĩa (−97.536 cạnh sổ 11.502.464, kiểm live 2026-10-16). Khoản nhập tay trước lúc nối và log gửi lại cùng khoản cũng đếm hai lần.
+### Decision
+- `accounts.feed_from` (ISO, giờ chính xác; NULL = từ ngày mở sổ): log **lịch sử** (`backfill`) có `at` < mốc ghi `ignored` như log trước ngày mở sổ, nằm ngoài phạm vi đối soát và ứng viên ghép cặp. **Webhook không bao giờ bị bỏ vì mốc** (về trễ mang giờ trước mốc vẫn là SePay báo lúc đó).
+- **Tự đặt** = lúc bật SePay, chỉ khi tài khoản đã có giao dịch active từ ngày mở sổ hoặc đã Nhập số dư — tài khoản mới không mất lịch sử. Sửa qua PATCH (không tương lai, không trước ngày mở sổ); **không vượt log lịch sử đã nhận** (chờ gán / đã gán, `backfill`) → 409 `feed_from_after_logs`; bật SePay khi còn log chờ gán → 409 `pending_logs`.
+- Đổi mốc ghi nhật ký `account.update` cũ → mới (cùng `sepay_out_from`, `opened_at`, `opening_balance`) và báo cả nhà.
+- Khoản trước mốc nhập tay được (bỏ `fed_account`); tiền ra có mốc riêng `sepay_out_from` khi bật "báo cả tiền ra" sau — log ra trước đó không tự gán, khoản chi trước đó nhập tay được.
+- `feed_balance` tính động: số dư đầu + giao dịch active trước mốc không mang log của tài khoản trong phạm vi + log trong phạm vi; so giờ bằng `julianday` trong SQL. Không điền mốc cho tài khoản có sẵn (migration 0036 giữ nguyên mọi số).
+
+Phương án bị loại: **chụp số dư lúc bật** — lệch dần khi sửa / huỷ khoản cũ; **dặn đừng đồng bộ lại** — không chặn được rà soát tuần / tháng tự chạy; **gắn chân hai rộng hơn** (ADR-81) — dễ gắn nhầm; **áp mốc cho cả webhook** — rà bảo mật: webhook trễ bị bỏ lặng lẽ; **cho dời mốc tự do** — rà bảo mật (High): giấu log đã nhận khỏi đối soát.
+### Consequences
+Nhà cài bản công khai có tài khoản nối SePay sau phải tự đặt mốc (gợi ý trong sheet tài khoản; CHANGELOG hướng dẫn). Nhà mình: MB tiết kiệm (vợ) đặt `feed_from` = 2026-10-15T15:25:00.000Z sau deploy 2026-10-17. Còn lại: webhook trễ mang giờ trước mốc + khoản đó đã nhập tay trước mốc → gán là đếm hai lần (hiếm); PWA màn Nhập chưa cho chọn tài khoản đã nối cho khoản trước mốc; ghép tay không xét mốc; subquery `feed_balance` chưa đo CPU — các [OPEN] ở access UC-506, ledger UC-101, UC-106, ingest UC-306.
+### Verified in code
+`src/services/settings.ts` › `updateAccount`, `feedFromValue`, `readAccount` · `src/routes/settings.ts` › `.patch("/accounts/:id")` (`ACCOUNT_TRACKED`, cảnh báo) · `src/services/ingest.ts` › `ingestLog` (`beforeFeed`), `outNotFed`, ứng viên ghép cặp · `src/cron/backfill.ts` › `syncSepay` (`beforeFeed`) · `src/services/ledger.ts` › `fedAccount`, `loadRefs` · `migrations/0036_feed_from.sql` · `web/src/screens/settings-sheets.tsx` › `AccountSheet`; `web/src/lib/settings.ts` › `feedFromSuggestion`, `sepaySyncText` — commit `cb54dd7`

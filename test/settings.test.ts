@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import { app } from "../src/index";
 import { notifyMembers } from "../src/notify/telegram";
-import { testSepay, testTelegram } from "../src/services/settings";
+import { testSepay, testTelegram, updateAccount } from "../src/services/settings";
 import { asD1, openDb } from "./helpers/d1-sqlite";
 
 let env: Env;
@@ -425,5 +425,114 @@ describe("nguồn thu và chia phong bì theo tuần", () => {
     // Đổi về phong bì tuần thì tự tắt chia tuần.
     const back = await call("PATCH", "/v1/settings/wallets/food", { allocation: { period: "week", amount: 625_000 } });
     expect(back.json.data.allocation.splitWeekly).toBe(false);
+  });
+});
+
+describe("mốc theo dõi SePay của tài khoản đã dùng (ADR-113)", () => {
+  const ON_AT = new Date("2026-10-15T15:24:00.000Z"); // 22:24 ngày 15/10 giờ VN
+  // MB (Thuế) chưa nối SePay, mở sổ 1/10.
+  beforeEach(() => {
+    raw.prepare("UPDATE accounts SET sepay_enabled = 0, sepay_out = 0, sepay_connection_id = NULL, opened_at = '2026-10-01' WHERE id = 'mb-husband'").run();
+  });
+  const spend = (at: string, status = "active") =>
+    raw.prepare(
+      `INSERT INTO transactions (at, amount, meaning, counter_wallet_id, account_id, category_id, week_key, month_key, status)
+       VALUES (?, 50000, 'spend', 'food', 'mb-husband', 'groceries', '2026-W41', '2026-10', ?)`,
+    ).run(at, status);
+  const stored = () => raw.prepare("SELECT sepay_enabled, feed_from, sepay_out_from FROM accounts WHERE id = 'mb-husband'").get();
+  const bankLog = (id: string, at: string, source: string, status = "assigned") =>
+    raw.prepare(
+      `INSERT INTO bank_logs (id, at, amount, direction, account_id, source, status, received_at)
+       VALUES (?, ?, 100000, 'in', 'mb-husband', ?, ?, '2026-10-10 03:00:00')`,
+    ).run(id, at, source, status);
+
+  it("UC-506 AC-25: dời mốc qua log đã nhận (chờ gán / đã gán) của tài khoản → 409 feed_from_after_logs; mốc đúng bằng `at` của log, dời sớm hơn thì được", async () => {
+    raw.prepare("UPDATE accounts SET sepay_enabled = 1, sepay_connection_id = 'default' WHERE id = 'mb-husband'").run();
+    bankLog("ls-10-10", "2026-10-10T03:00:00.000Z", "backfill");
+    bankLog("wh-10-11", "2026-10-11T03:00:00.000Z", "webhook");
+    const later = new Date("2026-10-17T03:00:00.000Z");
+    await expect(updateAccount(env.DB, "mb-husband", { feed_from: "2026-10-12T00:00:00.000Z" }, later)).rejects.toMatchObject({
+      code: "feed_from_after_logs",
+      status: 409,
+      field: "feed_from",
+      message: "Đã có giao dịch ngân hàng của tài khoản này trước mốc này — chọn mốc sớm hơn.",
+    });
+    expect(stored()).toMatchObject({ feed_from: null });
+    expect(await updateAccount(env.DB, "mb-husband", { feed_from: "2026-10-10T03:00:00.000Z" }, later)).toMatchObject({ feed_from: "2026-10-10T03:00:00.000Z" });
+    expect(await updateAccount(env.DB, "mb-husband", { feed_from: "2026-10-05T00:00:00.000Z" }, later)).toMatchObject({ feed_from: "2026-10-05T00:00:00.000Z" });
+    // Log webhook (thời gian thực) luôn trong phạm vi dù trước mốc, nên không chặn; log đã bỏ qua cũng không.
+    raw.prepare("UPDATE bank_logs SET status = 'ignored' WHERE id = 'ls-10-10'").run();
+    expect(await updateAccount(env.DB, "mb-husband", { feed_from: "2026-10-12T00:00:00.000Z" }, later)).toMatchObject({ feed_from: "2026-10-12T00:00:00.000Z" });
+  });
+
+  it("UC-506 AC-25: bật lại SePay mà lịch sử SePay gửi lại đã gán từ lần nối trước → mốc tự đặt bị từ chối 409 feed_from_after_logs; chọn mốc sớm hơn thì bật được", async () => {
+    spend("2026-10-05T03:00:00.000Z");
+    bankLog("ls-10-10", "2026-10-10T03:00:00.000Z", "backfill");
+    await expect(updateAccount(env.DB, "mb-husband", { sepay_enabled: true }, ON_AT)).rejects.toMatchObject({ code: "feed_from_after_logs" });
+    expect(stored()).toMatchObject({ sepay_enabled: 0, feed_from: null });
+    expect(await updateAccount(env.DB, "mb-husband", { sepay_enabled: true, feed_from: "2026-10-10T03:00:00.000Z" }, ON_AT)).toMatchObject({ sepay_enabled: true, feed_from: "2026-10-10T03:00:00.000Z" });
+  });
+
+  it("UC-506 AC-25: tài khoản đã có giao dịch tháng 10, bật SePay lúc 22:24 15/10 → feed_from đúng lúc đó (dạng toISOString)", async () => {
+    spend("2026-10-05T03:00:00.000Z");
+    const a = await updateAccount(env.DB, "mb-husband", { sepay_enabled: true }, ON_AT);
+    expect(a).toMatchObject({ sepay_enabled: true, feed_from: "2026-10-15T15:24:00.000Z", sepay_out_from: null });
+  });
+
+  it("UC-506 AC-25: tài khoản chưa có giao dịch nào (chỉ khoản đã huỷ, khoản trước ngày mở sổ) bật SePay → feed_from NULL, Đồng bộ lại vẫn lấy được lịch sử", async () => {
+    spend("2026-10-05T03:00:00.000Z", "void");
+    spend("2026-09-30T10:00:00.000Z"); // 17:00 ngày 30/9 giờ VN — trước ngày mở sổ
+    const a = await updateAccount(env.DB, "mb-husband", { sepay_enabled: true }, ON_AT);
+    expect(a).toMatchObject({ sepay_enabled: true, feed_from: null });
+  });
+
+  it("UC-506 AC-25: đã có lần Nhập số dư (chưa có giao dịch) → bật SePay cũng đặt mốc lúc bật", async () => {
+    raw.prepare("INSERT INTO cash_counts (at, account_id, counted, book) VALUES ('2026-10-10 03:00:00', 'mb-husband', 500000, 500000)").run();
+    const a = await updateAccount(env.DB, "mb-husband", { sepay_enabled: true }, ON_AT);
+    expect(a).toMatchObject({ feed_from: "2026-10-15T15:24:00.000Z" });
+  });
+
+  it("UC-506 AC-25: bật SePay kèm feed_from gửi lên thì lấy giá trị đó (null = từ ngày số dư đầu); sửa tên không đổi mốc", async () => {
+    spend("2026-10-05T03:00:00.000Z");
+    expect(await updateAccount(env.DB, "mb-husband", { sepay_enabled: true, feed_from: null }, ON_AT)).toMatchObject({ feed_from: null });
+    const later = new Date("2026-10-16T03:00:00.000Z");
+    await updateAccount(env.DB, "mb-husband", { feed_from: "2026-10-15T22:25:00+07:00" }, later);
+    expect(await updateAccount(env.DB, "mb-husband", { name: "MB" }, later)).toMatchObject({ name: "MB", feed_from: "2026-10-15T15:25:00.000Z" });
+  });
+
+  it("UC-506 AC-25: PATCH feed_from tương lai / trước 00:00 giờ VN ngày mở sổ / sai dạng → 400 invalid_input; hợp lệ lưu dạng toISOString; null bỏ mốc", async () => {
+    const patch = (feed_from: unknown) => call("PATCH", "/v1/settings/accounts/mb-husband", { feed_from });
+    for (const bad of [new Date(Date.now() + 3_600_000).toISOString(), "2026-09-30T16:59:59.999Z", "2026-10-15", "15/10/2026 22:24", "khong-phai-ngay", 1760541840000, true]) {
+      const res = await patch(bad);
+      expect(res.status).toBe(400);
+      expect(res.json.error).toMatchObject({ code: "invalid_input" });
+    }
+    expect(stored()).toMatchObject({ feed_from: null });
+    // Đúng 00:00 ngày mở sổ (giờ VN) là biên dưới, vẫn hợp lệ.
+    expect((await patch("2026-09-30T17:00:00Z")).json.data).toMatchObject({ feed_from: "2026-09-30T17:00:00.000Z" });
+    expect((await patch("2026-10-15T22:25:00+07:00")).json.data).toMatchObject({ feed_from: "2026-10-15T15:25:00.000Z" });
+    expect((await patch(null)).json.data).toMatchObject({ feed_from: null });
+  });
+
+  it("UC-506 AC-25: bật SePay khi tài khoản còn log pending → 409 pending_logs, tài khoản giữ nguyên", async () => {
+    spend("2026-10-05T03:00:00.000Z");
+    raw.prepare(
+      `INSERT INTO bank_logs (id, at, amount, direction, account_id, source, status, received_at)
+       VALUES ('cho-1', '2026-10-03T02:00:00.000Z', 100000, 'in', 'mb-husband', 'webhook', 'pending', '2026-10-03 02:00:00')`,
+    ).run();
+    await expect(updateAccount(env.DB, "mb-husband", { sepay_enabled: true }, ON_AT)).rejects.toMatchObject({ code: "pending_logs", status: 409 });
+    expect(stored()).toEqual({ sepay_enabled: 0, feed_from: null, sepay_out_from: null });
+  });
+
+  it("UC-506 AC-27: bật sepay_out trên tài khoản đã có SePay → sepay_out_from = lúc bật; tắt rồi bật SePay kèm tiền ra cùng lúc thì không đặt mốc tiền ra", async () => {
+    spend("2026-10-05T03:00:00.000Z");
+    await updateAccount(env.DB, "mb-husband", { sepay_enabled: true }, ON_AT);
+    const out = await updateAccount(env.DB, "mb-husband", { sepay_out: true }, new Date("2026-10-20T03:00:00.000Z"));
+    expect(out).toMatchObject({ sepay_out: true, sepay_out_from: "2026-10-20T03:00:00.000Z", feed_from: "2026-10-15T15:24:00.000Z" });
+    // Lưu lại sheet (sepay_out vẫn bật) không dời mốc.
+    expect(await updateAccount(env.DB, "mb-husband", { sepay_out: true }, new Date("2026-10-21T03:00:00.000Z"))).toMatchObject({ sepay_out_from: "2026-10-20T03:00:00.000Z" });
+    await updateAccount(env.DB, "mb-husband", { sepay_enabled: false }, new Date("2026-10-22T03:00:00.000Z"));
+    const again = await updateAccount(env.DB, "mb-husband", { sepay_enabled: true, sepay_out: true }, new Date("2026-10-23T03:00:00.000Z"));
+    expect(again).toMatchObject({ sepay_out: true, sepay_out_from: null, feed_from: "2026-10-23T03:00:00.000Z" });
   });
 });

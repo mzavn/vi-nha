@@ -4,7 +4,7 @@
 > `[DIVERGENCE]` = tài liệu/plan nói một đằng, code làm một nẻo — **chưa quyết bên nào đúng**. `[OPEN]` = câu hỏi chưa có câu trả lời trong repo.
 > Danh sách đã lọc theo mức ảnh hưởng nằm ở `README.md` § "Hàng đợi quyết định".
 
-## Sổ cái (ledger) — 13 divergence, 44 open
+## Sổ cái (ledger) — 13 divergence, 45 open
 
 ### [ledger/README.md](ledger/README.md)
 - [DIVERGENCE] `migrations/0001_schema.sql` dòng 270, `docs/core_design_rules.md` §10, `plans/.../phase-01-worker-d1.md` dòng 27, `phase-03-api.md` dòng 47: SQL tập trung ở `src/db/queries.ts` — thư mục `src/db/` **rỗng**; SQL nằm trong `src/services/ledger.ts` (và một phần ở `src/cron/weekly.ts`).
@@ -53,6 +53,7 @@
 - [OPEN] Hai lần đếm song song cùng tài khoản đọc cùng `book`, cả hai đều ghi `adjust` → chênh lệch bị ghi hai lần (không có khoá; `[INFERENCE]` từ `countAccount` đọc-rồi-ghi ngoài batch).
 
 ### [ledger/UC-106-doi-soat-tai-khoan.md](ledger/UC-106-doi-soat-tai-khoan.md)
+- [OPEN] `feed_balance` của TK có `feed_from` tính bằng subquery tương quan trên `transactions` (kèm `NOT EXISTS` trên `bank_logs`) mỗi lần đọc `v_reconcile` — chưa đo CPU Worker khi sổ lớn (rà bảo mật / triển khai change 261017-noi-sepay-sau để lại).
 - [DIVERGENCE] `docs/core_design_rules.md` §7: "tổng các `transactions` tách ra từ một log phải **bằng đúng** `log.amount`" — `v_reconcile` so theo **tổng tài khoản**, không theo từng log; mọi giao dịch không sinh từ log (nhập tay, `adjust`, `buy_asset`, hệ thống có `account_id`) nằm ngoài phép so `book_drift` (red-team #3, `plans/reports/redteam-260922-0100-money-correctness.md`). D14 chặn nhập tay trên TK có feed.
 - [DIVERGENCE] `phase-03-api.md` dòng 32: `GET/POST /accounts` "thêm TK" — `/v1/accounts` chỉ có GET; thêm TK ở Cài đặt (access UC-506).
 - [OPEN] TK chưa có log nào có `book_drift = NULL`, snapshot coi NULL như 0 (`src/domain/snapshot.ts` › `attention.drift`) — red-team #4 chỉ ra TK bị trừ oan không có log thì không lộ ra.
@@ -139,7 +140,7 @@
 - [OPEN] Chỉ ví **active** tham gia; phong bì chung đã tắt mà còn dư không bao giờ được chốt.
 - [OPEN] Mọi lỗi `UNIQUE` / `PRIMARY KEY` trong batch chốt đều thành 409 `already_closed` (thực tế chỉ `month_closes` có khoá trùng được).
 
-## Bank feed (ingest) — 11 divergence, 38 open
+## Bank feed (ingest) — 11 divergence, 39 open
 
 ### [ingest/UC-301-nhan-webhook-sepay.md](ingest/UC-301-nhan-webhook-sepay.md)
 - [DIVERGENCE] `phase-04-ingest-sepay.md` §"Hợp đồng webhook" nói `transactionDate` đổi sang ISO `+07:00`; code lưu ISO UTC `…Z` (`src/services/ingest.ts` › `vnDateTimeToIso`). Cùng một thời điểm, khác biểu diễn.
@@ -189,6 +190,7 @@
 - [OPEN] Heo trả về nhiều hơn sổ heo (lãi, hoặc tiền heo có từ trước khi dùng app vì heo mở sổ `opening_balance = 0`): gán cả số tiền là Chuyển nội bộ thì sổ heo âm đúng phần đó; không còn lời nhắc tách lãi — người gán tự tách dòng Thu nhập, hoặc nhập số dư đầu thật / đếm số dư heo (ledger UC-105) (ADR-82).
 
 ### [ingest/UC-306-ghep-cap-tay-va-go-gan.md](ingest/UC-306-ghep-cap-tay-va-go-gan.md)
+- [OPEN] Ghép tay không xét mốc theo dõi SePay (`feed_from`, ADR-113) — chỉ xét `opened_at`. Log lịch sử trước mốc được ghi thẳng `ignored` nên không ghép được; log lịch sử trước mốc lỡ còn `pending` (nhận trước khi có mốc — thực tế bị chặn vì bật SePay khi còn log chờ gán là 409 `pending_logs`, mốc không vượt được log chờ gán) thì ghép tay vẫn được. Ghép tự động (UC-303 bước 2) đã bỏ log như vậy.
 - [OPEN] Ghép tay không giới hạn khoảng cách thời gian và không kiểm memo `PF`; `at` của transfer lấy theo chân ra.
 - [OPEN] Gỡ gán một giao dịch PF chỉ một chân: lệnh về `pending`, log về `pending`; nếu chân kia về sau, UC-303 bước 1.1 ghép lại cả hai (AC-5 của UC-303). Nếu chân kia **không** bao giờ về, log chân đầu nằm chờ không gợi ý gì (nội dung `PF …` không phải rút tiền — UC-305 v15; trước đó bị gợi ý "Rút tiền mặt") — người gán phải tự nhận ra đây là chuyển nội bộ.
 
@@ -264,7 +266,7 @@
 - [OPEN] Không có thời hạn lưu / dọn dòng `zalo_help` và dòng `zalo:<id>` của `notifications` (như UC-410).
 - [OPEN] Chưa thử với bot Zalo thật (đặt webhook, nhận `result.verification`, nhắn mã, nhận tin) — test dùng `fetch` giả theo tài liệu Zalo.
 
-## Truy cập & cấu hình (access) — 4 divergence, 29 open
+## Truy cập & cấu hình (access) — 4 divergence, 31 open
 
 ### [access/UC-501-dang-nhap-mat-khau-chung.md](access/UC-501-dang-nhap-mat-khau-chung.md)
 - [OPEN] Trần chung 30 lần sai (AC-9) là cái giá chấp nhận (ADR-89): kẻ dò từ nhiều IP chặn được cả nhà đăng nhập **mới** trong 15 phút; phiên đang có vẫn dùng bình thường. Chưa có cảnh báo cho người nhà khi trần chung bị chạm.
@@ -285,6 +287,8 @@
 - [OPEN] `config.salary_min_amount` ở màn Cài đặt dùng `configNumber` (mọi số nguyên, mặc định 1.000.000), còn ingest dùng `ledger.salaryMinAmount` (chỉ số nguyên ≥ 0, mặc định 1.000.000). Hai hàm đọc cùng khoá với luật hơi khác; API ghi chỉ cho 0..1e12 nên hiện chưa lệch được qua app.
 
 ### [access/UC-506-cau-hinh-tai-khoan-vi-luat-nap.md](access/UC-506-cau-hinh-tai-khoan-vi-luat-nap.md)
+- [OPEN] Webhook về trễ mang giờ trước mốc luôn được nhận (ADR-113), mà khoản trước mốc lại nhập tay được: nếu người nhà đã nhập tay khoản đó rồi gán luôn log webhook trễ thì tiền vào sổ hai lần (báo cáo triển khai LateSepayImpl — trường hợp hiếm, chưa chặn).
+- [OPEN] `sepay_out_from` áp cho cả log webhook: log ra từ webhook mang giờ trước lúc bật "báo cả tiền ra" chỉ giữ `pending` (không tự gán, không mất).
 - [OPEN] `updateWallet` ghi các cột của ví (`patchRow(db, "wallets", …)`) **trước** khi kiểm tra `allocation`; nếu cùng request sửa `name` và gửi luật nạp sai, tên đã được lưu nhưng request trả lỗi (`src/services/settings.ts` › `updateWallet`). `createWallet` thì nguyên tử (`db.batch`). Chưa có test cho trường hợp trộn.
 - [OPEN] Server nhận `private: true` cho ví `shared` (`member_id = null`); với luật ẩn `private && member_id !== viewerId`, ví đó bị ẩn số với **mọi** người. PWA chỉ gửi `private` khi `scope = personal` (`web/src/lib/settings.ts` › `walletPayload`), nhưng API không chặn.
 - [OPEN] Không có API xoá tài khoản/ví — chỉ tắt (`active: false`).

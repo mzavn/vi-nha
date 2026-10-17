@@ -74,10 +74,32 @@ settingsRoutes.post("/accounts", async (c) => {
   await recordChange(c, "account.create", `account:${account.id}`, { fields: fieldNames(b) });
   return ok(c, account, 201);
 });
+
+/** Trường tài khoản đụng tới số tiền / phạm vi đối soát: nhật ký ghi cũ → mới khi đổi (ADR-90, ADR-113). */
+const ACCOUNT_TRACKED = ["feed_from", "sepay_out_from", "opened_at", "opening_balance"] as const;
+
+/** Mốc theo dõi SePay để người đọc: "22:25:00 15/10/2026" giờ VN; null = từ ngày số dư đầu. */
+function feedFromLabel(iso: unknown): string {
+  if (typeof iso !== "string") return "ngày số dư đầu";
+  const [day, time] = new Date(Date.parse(iso) + 7 * 3600_000).toISOString().slice(0, 19).split("T");
+  const [y, m, d] = day!.split("-").map(Number);
+  return `${time} ${d}/${m}/${y}`;
+}
+
 settingsRoutes.patch("/accounts/:id", async (c) => {
   const b = await body(c);
+  // Đọc theo tên cột như API trả (snake_case); toAccount không khai báo từng cột.
+  const before: Record<string, unknown> | null = await settings.readAccount(c.env.DB, c.req.param("id"));
   const account = await settings.updateAccount(c.env.DB, c.req.param("id"), b);
-  await recordChange(c, "account.update", `account:${account.id}`, { fields: fieldNames(b) });
+  const after: Record<string, unknown> = account;
+  const changes = Object.fromEntries(
+    ACCOUNT_TRACKED.filter((k) => before && before[k] !== after[k]).map((k) => [k, { from: before![k] ?? null, to: after[k] ?? null }]),
+  );
+  // Dời mốc là đổi phần nào của ngân hàng được tính vào đối soát: báo cả nhà như gỡ kết nối Claude.
+  const alert: Alert | undefined = changes.feed_from
+    ? { what: `đổi mốc theo dõi SePay của ${String(after.name)}: ${feedFromLabel(before?.feed_from)} → ${feedFromLabel(after.feed_from)}` }
+    : undefined;
+  await recordChange(c, "account.update", `account:${account.id}`, { fields: fieldNames(b), ...(Object.keys(changes).length ? { changes } : {}) }, alert);
   return ok(c, account);
 });
 

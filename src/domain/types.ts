@@ -38,6 +38,10 @@ export interface AccountRef {
   sepayOut: boolean;
   /** Ngày mở sổ "YYYY-MM-DD" giờ VN (ADR-76): số dư đầu tính tới đầu ngày này; NULL = không có mốc. */
   openedAt: string | null;
+  /** Mốc theo dõi SePay (ISO, ADR-113): khoản trước mốc nhập tay được dù tài khoản đã nối; NULL = từ ngày mở sổ. */
+  feedFrom: string | null;
+  /** Lúc bật "SePay báo cả tiền ra" (ISO): khoản chi trước mốc nhập tay được; NULL = không có mốc. */
+  sepayOutFrom: string | null;
   /** Heo đất, sổ tiết kiệm (ADR-77, ADR-88): tiền thật nhưng chưa rút ngay được. */
   locked: boolean;
   /** Tài khoản Tích sản (ADR-88); null = tài khoản thường. Không bao giờ là tài khoản mặc định khi nhập tay. */

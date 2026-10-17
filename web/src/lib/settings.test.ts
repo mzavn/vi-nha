@@ -13,9 +13,11 @@ import {
   clearSecretPayload,
   connectionPicker,
   configPayload,
+  feedFromSuggestion,
   followsCodeConvention,
   formatPercent,
   groupWallets,
+  isoFromVnInput,
   memberPayload,
   normalizePattern,
   notifyPayload,
@@ -23,6 +25,7 @@ import {
   rulePayload,
   ruleToForm,
   secretLabel,
+  sepaySyncText,
   secretPayload,
   scheduleRows,
   streamPayload,
@@ -31,6 +34,7 @@ import {
   syncRangeError,
   walletPayload,
   walletToForm,
+  vnDateTimeInput,
 } from "./settings";
 import type { Allocation, AuditEntry, NotifySchedule, SepayConnection, SettingsAccount, SettingsWallet } from "./types";
 
@@ -249,6 +253,9 @@ describe("tài khoản", () => {
     owner_member_id: null,
     opening_balance: 0,
     opened_at: null,
+    feed_from: null,
+    sepay_out_from: null,
+    first_log_at: null,
     active: true,
     locked: false,
     spendable: true,
@@ -328,6 +335,57 @@ describe("tài khoản", () => {
     const msg = "Tài khoản đã có giao dịch từ 15/9/2026 — huỷ hoặc sửa các giao dịch trước 1/10/2026 trước, hoặc chọn ngày mở sổ từ 15/9/2026 trở về trước.";
     expect(accountSubmitError(new ApiError(409, "opening_after_entries", msg))).toEqual({ field: "opened_at", message: msg });
     expect(accountSubmitError(new ApiError(400, "invalid_input", "Tên trống."))).toEqual({ field: null, message: "Tên trống." });
+  });
+
+  it("UC-506 AC-25: sheet tài khoản 'SePay theo dõi từ' — vừa bật SePay mặc định Lúc bật (không gửi, server tự đặt); Ngày số dư đầu gửi null; giờ tuỳ chọn gửi ISO; tài khoản mới không gửi", () => {
+    const off = existing({ sepay_enabled: false, bank: "MBBank" });
+    const on = { ...accountToForm(off), sepay_enabled: true };
+    expect(on.feed_mode).toBe("enabled");
+    const atEnable = accountPayload(on, off);
+    expect(atEnable.ok && "feed_from" in atEnable.value).toBe(false);
+    const opening = accountPayload({ ...on, feed_mode: "opening" }, off);
+    expect(opening.ok && opening.value.feed_from).toBeNull();
+    const custom = accountPayload({ ...on, feed_mode: "time", feed_from: isoFromVnInput("2026-10-15T22:25") }, off);
+    expect(custom.ok && custom.value.feed_from).toBe("2026-10-15T15:25:00.000Z");
+    const missing = accountPayload({ ...on, feed_mode: "time", feed_from: "" }, off);
+    expect(!missing.ok && missing.errors.feed_from).toBe("Chọn giờ bắt đầu theo dõi.");
+    // Tài khoản đã nối: có mốc thì hiện giờ đó, chưa có thì là Ngày số dư đầu.
+    expect(accountToForm(existing({ feed_from: "2026-10-15T15:25:00.000Z" }))).toMatchObject({ feed_mode: "time", feed_from: "2026-10-15T15:25:00.000Z" });
+    expect(accountToForm(existing()).feed_mode).toBe("opening");
+    const fresh = accountPayload({ ...accountToForm(null), name: "MB", bank: "MBBank", account_no: "1", sepay_enabled: true }, null);
+    expect(fresh.ok && "feed_from" in fresh.value).toBe(false);
+    const sepayOff = accountPayload({ ...accountToForm(existing()), sepay_enabled: false }, existing());
+    expect(sepayOff.ok && "feed_from" in sepayOff.value).toBe(false);
+  });
+
+  it("UC-506 AC-25: giờ tuỳ chọn đọc / ghi theo giờ VN, giữ giây; lỗi mốc từ server hiện dưới ô mốc", () => {
+    expect(vnDateTimeInput("2026-10-15T15:25:07.000Z")).toBe("2026-10-15T22:25:07");
+    expect(isoFromVnInput("2026-10-15T22:25:07")).toBe("2026-10-15T15:25:07.000Z");
+    expect(isoFromVnInput("")).toBe("");
+    expect(isoFromVnInput("15/10/2026")).toBe("");
+    expect(accountSubmitError(new ApiError(400, "invalid_input", "Mốc theo dõi SePay không được ở tương lai.", "feed_from"))).toEqual({
+      field: "feed_from",
+      message: "Mốc theo dõi SePay không được ở tương lai.",
+    });
+  });
+
+  it("UC-506 AC-25: gợi ý đặt mốc khi tài khoản đã nối, chưa có mốc mà log SePay sớm nhất sau ngày số dư đầu", () => {
+    const late = existing({ opened_at: "2026-10-01", first_log_at: "2026-10-15T15:25:00.000Z" });
+    expect(feedFromSuggestion(late)).toBe("2026-10-15T15:25:00.000Z");
+    // 06:00 ngày 1/10 giờ VN vẫn là ngày số dư đầu.
+    expect(feedFromSuggestion(existing({ opened_at: "2026-10-01", first_log_at: "2026-09-30T23:00:00.000Z" }))).toBeNull();
+    expect(feedFromSuggestion({ ...late, feed_from: "2026-10-15T15:25:00.000Z" })).toBeNull();
+    expect(feedFromSuggestion({ ...late, sepay_enabled: false })).toBeNull();
+    expect(feedFromSuggestion(existing({ opened_at: "2026-10-01" }))).toBeNull();
+    expect(feedFromSuggestion(null)).toBeNull();
+  });
+
+  it("UC-302 AC-12: câu báo sau Đồng bộ lại đếm riêng giao dịch trước mốc theo dõi SePay", () => {
+    const base = { from: "2026-10-01", to: "2026-10-17", added: 2, duplicates: 5, beforeOpening: 0, beforeFeed: 0, perConnection: [], errors: [] };
+    expect(sepaySyncText(base)).toBe("Đã lấy thêm 2 giao dịch, 5 đã có sẵn.");
+    expect(sepaySyncText({ ...base, beforeOpening: 1, beforeFeed: 3, errors: ["SePay chính: lỗi"] })).toBe(
+      "Đã lấy thêm 2 giao dịch, 5 đã có sẵn. 1 giao dịch trước ngày mở sổ — đã có trong số dư đầu, không ghi lại. 3 giao dịch trước mốc theo dõi SePay — đã có trong sổ, không ghi lại. Có chỗ chưa lấy được — xem lý do dưới nút Đồng bộ.",
+    );
   });
 });
 

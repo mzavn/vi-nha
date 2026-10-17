@@ -19,7 +19,7 @@ const wallet = (id: string, over: Partial<Wallet> = {}): Wallet => ({
   ...over,
 });
 
-const acct = (id: string, kind: AccountRef["kind"], ownerMemberId: string | null, over: Partial<Pick<AccountRef, "sepayEnabled" | "sepayOut" | "locked" | "role">> = {}): AccountRef => ({
+const acct = (id: string, kind: AccountRef["kind"], ownerMemberId: string | null, over: Partial<Pick<AccountRef, "sepayEnabled" | "sepayOut" | "locked" | "role" | "feedFrom" | "sepayOutFrom">> = {}): AccountRef => ({
   id,
   name: id,
   kind,
@@ -27,6 +27,8 @@ const acct = (id: string, kind: AccountRef["kind"], ownerMemberId: string | null
   sepayEnabled: false,
   sepayOut: false,
   openedAt: null,
+  feedFrom: null,
+  sepayOutFrom: null,
   locked: false,
   role: null,
   ...over,
@@ -106,6 +108,15 @@ describe("tài khoản nhập tay được", () => {
     ];
     expect(manualAccounts(accounts, "in").map((a) => a.id)).toEqual(["bidv-husband"]);
     expect(manualAccounts(accounts, "out").map((a) => a.id)).toEqual(["mb-husband", "bidv-husband"]);
+    // UC-506 AC-26: khoản trước mốc theo dõi SePay nhập tay được — chọn ngày trước mốc thì tài khoản đã nối hiện lại.
+    const late = [acct("mb-wife", "bank", "wife", { sepayEnabled: true, sepayOut: true, feedFrom: "2026-10-15T15:25:00.000Z", sepayOutFrom: null })];
+    expect(manualAccounts(late, "in", "2026-10-12").map((a) => a.id)).toEqual(["mb-wife"]);
+    expect(manualAccounts(late, "out", "2026-10-12").map((a) => a.id)).toEqual(["mb-wife"]);
+    expect(manualAccounts(late, "in", "2026-10-15").map((a) => a.id)).toEqual([]);
+    expect(manualAccounts(late, "in").map((a) => a.id)).toEqual([]);
+    const outLater = [acct("mb-wife", "bank", "wife", { sepayEnabled: true, sepayOut: true, feedFrom: null, sepayOutFrom: "2026-10-20T03:00:00.000Z" })];
+    expect(manualAccounts(outLater, "out", "2026-10-18").map((a) => a.id)).toEqual(["mb-wife"]);
+    expect(manualAccounts(outLater, "in", "2026-10-18").map((a) => a.id)).toEqual([]);
     // mặc định không bao giờ rơi vào tài khoản mà chiều đó tự về
     expect(defaultAccountFor({ wallets: [], categories: [], accounts }, "wife", "in")).toBe("bidv-husband");
     expect(defaultAccountFor({ wallets: [], categories: [], accounts: accounts.slice(1) }, "wife", "out")).toBe("bidv-husband");

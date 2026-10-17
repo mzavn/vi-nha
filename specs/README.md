@@ -3,11 +3,11 @@
 > Bản công khai: hash commit trong History, Status và các dòng "Cập nhật / Hợp nhất" là của repo gốc (private) nơi phát triển — repo này nhận từng bản phát hành qua script, nên không có các commit đó. Link tới `plans/` và test migration cũ của repo gốc đã thành chữ thường.
 
 > Dựng lại ngày 2026-10-01 từ code, test, `docs/`, `plans/`, báo cáo và `git log` (tới commit `a68c9d6`).
-> Hợp nhất change [`261008-bang-can-doi`](changes/archive/261008-bang-can-doi/proposal.md) ngày 2026-10-08 (code commit `8cd48b8`, `31e3505`, `d4f0ab3` — ba lát, migration 0031…0033): **bảng cân đối, tháp tài sản, lãi vay hằng tháng, lưu chuyển tiền, kết quả thu chi, Mốc tự do, kế hoạch thu nhập, Thử số** — context mới [balance](balance/README.md) UC-1101…UC-1107, BR-15, ADR-99…ADR-107; màn `#net-worth` Tài sản & tự do (pwa UC-717 mới; UC-707, UC-711, UC-712); lãi vay tách lãi / gốc, ví hệ thống "Lãi vay" (debt UC-901…UC-903, ledger UC-101, UC-103, UC-104, allocation UC-201); phân loại lại báo cáo (ledger UC-102); `deactivated_at`, chặn lùi ngày mở sổ, khoá `fi_*` (access UC-506, UC-507); kỳ hạn phải thu, `balanceItems` (receivable UC-1001, UC-1005 — đóng [OPEN] thiếu tool MCP); MCP `get_balance_sheet`, `get_reports`, `record_asset_value` (mcp UC-601, UC-602, UC-603, UC-606 mới).
 > Hợp nhất change [`261012-tu-chia`](changes/archive/261012-tu-chia/proposal.md) ngày 2026-10-13 (code commit `a8b43f7`): **Tự chia một khoản thu** (ADR-108) — `POST /v1/allocate` và `/allocate/preview` nhận `amounts` (số tay từng ví, bỏ luật nạp và phần khóa; tổng lệch → `amounts_mismatch`, ví sai → `invalid_amounts`) (allocation UC-203 AC-11, AC-12); sheet Chia thử có nút Tự chia ở nhập thu nhập, màn Gán (chỉ dòng thu nhập đầu), chi tiết khoản thu; Tích sản đứng đầu, Tích sản 0 chỉ nhắc (allocation UC-202 AC-6, AC-7; pwa UC-705, UC-706, UC-715). Không migration.
 > Hợp nhất change [`261013-cap-nhat-tu-app`](changes/archive/261013-cap-nhat-tu-app/proposal.md) ngày 2026-10-13 (code commit `ae0f0b5`): **Cập nhật Ví nhà từ trong app** (ADR-109) — Cài đặt › Nâng cao › Cập nhật Ví nhà hỏi GitHub bản mới khi bấm, chỉ cách cập nhật theo cách cài (pwa UC-709 AC-30, AC-31); CSP `connect-src` thêm `https://api.github.com` (access UC-503); bản công khai có workflow `update.yml` + `scripts/update-from-upstream.mjs` (chép đè bản phát hành mới nhất, giữ cấu hình Cloudflare của nhà), phát hành tạo GitHub Release. Không migration.
 > Hợp nhất change [`261013-an-so-va-ma-pin`](changes/archive/261013-an-so-va-ma-pin/proposal.md) ngày 2026-10-13 (code commit `f7cf796`): **che số tiền trên máy này và khóa app bằng mã PIN** (ADR-110) — nút con mắt ở thanh tiêu đề / thanh bên, số tiền thành "•••• ₫", số đang gõ và phần trăm giữ nguyên, lưu theo từng máy (pwa UC-718 mới); mã PIN 6 số cục bộ trên máy, hỏi khi mở app hoặc quay lại sau ≥ 60 giây, sai 5 lần / Quên PIN thì đăng xuất máy này cả khi offline (pwa UC-719 mới); hàng Mã PIN ở Cài đặt › Máy này (UC-709), nút con mắt và màn khóa ở khung (UC-711). Không đổi server, không migration.
 > Hợp nhất change [`261015-chot-thang-va-keo-tich-san`](changes/archive/261015-chot-thang-va-keo-tich-san/proposal.md) ngày 2026-10-16 (code commit `0528219`, migration 0034, schema v1.34): **chốt tháng là quyết định của người** (ADR-111) — cron ngày 1 chỉ mời (📌), thẻ Chốt tháng ở Hôm nay; bù ví chi lố trước, phần dư chia Tích sản / Ví Thưởng theo % chọn mỗi tháng; bảng `month_closes` chặn chốt hai lần — và **Có / Không Tích sản khi chia** (ADR-112): thanh 1–100% mặc định 10%, Tích sản 0 cần lý do. Đụng allocation UC-202, UC-203, UC-204, UC-207 · notify UC-401, UC-402, UC-403 · access UC-507, UC-509 · pwa UC-702, UC-705, UC-706, UC-707, UC-709, UC-715.
+> Hợp nhất change [`261017-noi-sepay-sau`](changes/archive/261017-noi-sepay-sau/proposal.md) ngày 2026-10-17 (code commit `cb54dd7`, migration 0036, schema v1.36): **mốc theo dõi SePay cho tài khoản đã dùng** (ADR-113) — `accounts.feed_from` tự đặt lúc bật SePay khi sổ đã có dữ liệu, sửa được nhưng không vượt log đã nhận; log lịch sử trước mốc `ignored` (webhook luôn tính); số theo ngân hàng tính động, khớp sổ; khoản trước mốc nhập tay được; mốc tiền ra `sepay_out_from`. Đụng access UC-506, UC-509 · ingest UC-302…UC-306 · ledger UC-101, UC-102, UC-106 · pwa UC-707, UC-709.
 > Từ nay **spec đứng trước code**: mọi thay đổi hành vi bắt đầu bằng sửa spec, rồi test, rồi code.
 
 ## 1. Spec là gì ở repo này
@@ -32,7 +32,7 @@ Code lệch spec = bug **hoặc** spec chưa cập nhật — không có trườ
 | Entity Model | Hệ thống nói về những danh từ nào? | `specs/<context>/entities.md` |
 | Acceptance Criteria | Làm sao biết đúng? | Mục `## Acceptance Criteria` trong từng UC, mỗi AC trỏ tới test |
 
-Quyết định (vì sao chọn cách này, không chọn cách kia): [decisions.md](decisions.md) — ADR-01…ADR-112, theo thứ tự thời gian.
+Quyết định (vì sao chọn cách này, không chọn cách kia): [decisions.md](decisions.md) — ADR-01…ADR-113, theo thứ tự thời gian.
 
 ## 3. Bounded context và dải ID
 
@@ -56,8 +56,8 @@ ID là vĩnh viễn: không đánh số lại, không dùng lại ID đã xoá. 
 
 ## 4. Chỉ mục Use Case
 
-93 UC · 1010 AC · 801 AC có test · **209 AC chưa có test** (chi tiết: [traceability.md](traceability.md)).
-Chỉ số: AC Coverage 79,3% · Spec Coverage 97,8% (90/92 UC) · Trace Ratio 87,5% (56/64 commit từ 2026-10-07) — định nghĩa ở `.claude/skills/mk-specs/references/traceability.md` §4.
+93 UC · 1021 AC · 812 AC có test · **209 AC chưa có test** (chi tiết: [traceability.md](traceability.md)).
+Chỉ số: AC Coverage 79,5% · Spec Coverage 97,8% (90/92 UC) · Trace Ratio 88,6% (62/70 commit từ 2026-10-07) — định nghĩa ở `.claude/skills/mk-specs/references/traceability.md` §4.
 
 ### [Sổ cái (ledger)](ledger/README.md)
 
@@ -217,7 +217,7 @@ Spec context trích `D#` theo `plans/260921-2228-profit-first-pwa/context.md`; b
 
 ## 6. Hàng đợi quyết định cho chủ nhà
 
-Toàn bộ 79 divergence và 284 câu hỏi mở nằm ở [open-issues.md](open-issues.md). Dưới đây là những mục **ảnh hưởng tới tiền, tới lời hứa trong BR, hoặc tới bảo mật** — cần chủ nhà chọn bên đúng rồi sửa spec/code theo quy trình ở §7.
+Toàn bộ 79 divergence và 288 câu hỏi mở nằm ở [open-issues.md](open-issues.md). Dưới đây là những mục **ảnh hưởng tới tiền, tới lời hứa trong BR, hoặc tới bảo mật** — cần chủ nhà chọn bên đúng rồi sửa spec/code theo quy trình ở §7.
 
 **Tiền và sổ**
 1. **Nhập tay khoản thu không tự chia ở server** — `docs` §4 nói "chạy ngay khi income được xác nhận"; REST/MCP chỉ ghi, PWA tự gọi `/v1/allocate` tiếp theo, còn Claude phải tự gọi. → [UC-203](allocation/UC-203-chia-mot-khoan-thu-nhap.md), [UC-605](mcp/UC-605-chia-thu-nhap-qua-mcp.md)
