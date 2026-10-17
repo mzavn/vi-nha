@@ -4,7 +4,7 @@
 > `[DIVERGENCE]` = tài liệu/plan nói một đằng, code làm một nẻo — **chưa quyết bên nào đúng**. `[OPEN]` = câu hỏi chưa có câu trả lời trong repo.
 > Danh sách đã lọc theo mức ảnh hưởng nằm ở `README.md` § "Hàng đợi quyết định".
 
-## Sổ cái (ledger) — 13 divergence, 45 open
+## Sổ cái (ledger) — 13 divergence, 47 open
 
 ### [ledger/README.md](ledger/README.md)
 - [DIVERGENCE] `migrations/0001_schema.sql` dòng 270, `docs/core_design_rules.md` §10, `plans/.../phase-01-worker-d1.md` dòng 27, `phase-03-api.md` dòng 47: SQL tập trung ở `src/db/queries.ts` — thư mục `src/db/` **rỗng**; SQL nằm trong `src/services/ledger.ts` (và một phần ở `src/cron/weekly.ts`).
@@ -15,6 +15,7 @@
 - [OPEN] `transactions.source` mặc định DB là `'sepay'`, và giá trị `'import'` được CHECK cho phép nhưng không có code nào ghi.
 
 ### [ledger/UC-101-nhap-tay-khoan-tien.md](ledger/UC-101-nhap-tay-khoan-tien.md)
+- [OPEN] Nhập tay mà có hai log chờ lệch giờ bằng nhau thì ghi khoản, không gắn log nào và không báo — hai log vẫn ở màn Gán (mục "Đã nhập tay?", ingest UC-305 2c) (quyết định của bản triển khai).
 - [DIVERGENCE] `plans/.../phase-03-api.md` dòng 21: "Gọi bằng bearer token thì truyền `by_member_id` trong body" — REST không đọc `by_member_id`; người ghi lấy từ `X-Member-Id` hoặc owner mặc định (`src/routes/auth.ts`). Chỉ MCP nhận `by_member_id`.
 - [OPEN] D14 ghi "đề xuất sau red team 22/9, **chờ chủ nhà xác nhận**" (`plans/.../context.md` D14) nhưng code đã áp dụng.
 - [OPEN] `refund` không bị chặn vào ví `holding`/`wealth_building`, và không bị giới hạn bởi số tiền khoản gốc (`buildEntry` nhánh `refund`).
@@ -25,6 +26,7 @@
 - [OPEN] `taxable: true` kèm nguồn thu thì không trích Thuế (allocation UC-201 bước 2b) mà nhập tay không báo gì.
 
 ### [ledger/UC-102-huy-giao-dich.md](ledger/UC-102-huy-giao-dich.md)
+- [OPEN] Sửa khoản (`replaceTransaction`) bị 409 `bank_log_exists`: PWA chỉ hiện câu lỗi trong sheet, không có nút Vẫn ghi như khoản nhập mới qua hàng đợi (pwa UC-704) — muốn ghi hai khoản thì phải gọi API kèm `confirm_duplicate` (báo cáo triển khai change 261017-webhook-truoc-moc).
 - [OPEN] Huỷ một `adjust` không đụng dòng `cash_counts` trỏ về nó.
 - [OPEN] Sửa không ghi ai sửa **trong sổ**: khoản mới mang người ghi của khoản cũ, không có cột "người sửa", và liên hệ cũ → mới chỉ có trong phản hồi (`replaced`), không lưu trong sổ. Từ v6 ai sửa / huỷ, lúc nào, qua đâu nằm ở `audit_log` (`tx.replace`, `tx.void` — ADR-90), không gắn vào dòng giao dịch.
 
@@ -140,7 +142,7 @@
 - [OPEN] Chỉ ví **active** tham gia; phong bì chung đã tắt mà còn dư không bao giờ được chốt.
 - [OPEN] Mọi lỗi `UNIQUE` / `PRIMARY KEY` trong batch chốt đều thành 409 `already_closed` (thực tế chỉ `month_closes` có khoá trùng được).
 
-## Bank feed (ingest) — 11 divergence, 39 open
+## Bank feed (ingest) — 11 divergence, 40 open
 
 ### [ingest/UC-301-nhan-webhook-sepay.md](ingest/UC-301-nhan-webhook-sepay.md)
 - [DIVERGENCE] `phase-04-ingest-sepay.md` §"Hợp đồng webhook" nói `transactionDate` đổi sang ISO `+07:00`; code lưu ISO UTC `…Z` (`src/services/ingest.ts` › `vnDateTimeToIso`). Cùng một thời điểm, khác biểu diễn.
@@ -152,6 +154,7 @@
 - [OPEN] Log mang số TK của kết nối khác (AC-10) nằm chờ gán như log tài khoản lạ, không có cảnh báo riêng "khoá SePay này gửi giao dịch của tài khoản không thuộc nó" — thường là cấu hình nhầm (tài khoản chưa chọn đúng kết nối ở Cài đặt).
 
 ### [ingest/UC-302-ghi-log-chong-trung.md](ingest/UC-302-ghi-log-chong-trung.md)
+- [OPEN] Webhook trước mốc tự nối vào khoản tay chỉ trả `linkedTo` trong kết quả — không có tin báo "SePay báo khoản … — đã có trong sổ (nhập tay), đã nối" như proposal viết, vì log ngân hàng chưa có kênh báo riêng (báo cáo triển khai). Log nghi trùng (song sinh) không tự nối, để người xem.
 - [DIVERGENCE] `phase-04-ingest-sepay.md` §"Rà soát 02:00" bước 2–3: trùng (TK, số tiền, hướng, thời điểm) → "Đã có → bỏ qua"; code (`43baea1`) vẫn ghi log và chỉ đánh dấu "có thể trùng". `docs/core_design_rules.md` §9 đã cập nhật theo code.
 - [OPEN] Log `account_id NULL`: bước 3 vẫn chống trùng tuần tự (so bằng `IS`), nhưng unique index coi các `NULL` là khác nhau nên hai request chạy chen cho TK lạ cùng mã FT không bị DB chặn. Không có test.
 - [OPEN] `findPossibleTwin` không lọc trạng thái log kia (log `ignored` cũng được tính) và so `at` bằng `BETWEEN` chuỗi — đúng khi mọi `at` cùng khuôn ISO `…Z` như `vnDateTimeToIso` sinh.
@@ -266,7 +269,7 @@
 - [OPEN] Không có thời hạn lưu / dọn dòng `zalo_help` và dòng `zalo:<id>` của `notifications` (như UC-410).
 - [OPEN] Chưa thử với bot Zalo thật (đặt webhook, nhận `result.verification`, nhắn mã, nhận tin) — test dùng `fetch` giả theo tài liệu Zalo.
 
-## Truy cập & cấu hình (access) — 4 divergence, 31 open
+## Truy cập & cấu hình (access) — 4 divergence, 30 open
 
 ### [access/UC-501-dang-nhap-mat-khau-chung.md](access/UC-501-dang-nhap-mat-khau-chung.md)
 - [OPEN] Trần chung 30 lần sai (AC-9) là cái giá chấp nhận (ADR-89): kẻ dò từ nhiều IP chặn được cả nhà đăng nhập **mới** trong 15 phút; phiên đang có vẫn dùng bình thường. Chưa có cảnh báo cho người nhà khi trần chung bị chạm.
@@ -287,7 +290,6 @@
 - [OPEN] `config.salary_min_amount` ở màn Cài đặt dùng `configNumber` (mọi số nguyên, mặc định 1.000.000), còn ingest dùng `ledger.salaryMinAmount` (chỉ số nguyên ≥ 0, mặc định 1.000.000). Hai hàm đọc cùng khoá với luật hơi khác; API ghi chỉ cho 0..1e12 nên hiện chưa lệch được qua app.
 
 ### [access/UC-506-cau-hinh-tai-khoan-vi-luat-nap.md](access/UC-506-cau-hinh-tai-khoan-vi-luat-nap.md)
-- [OPEN] Webhook về trễ mang giờ trước mốc luôn được nhận (ADR-113), mà khoản trước mốc lại nhập tay được: nếu người nhà đã nhập tay khoản đó rồi gán luôn log webhook trễ thì tiền vào sổ hai lần (báo cáo triển khai LateSepayImpl — trường hợp hiếm, chưa chặn).
 - [OPEN] `sepay_out_from` áp cho cả log webhook: log ra từ webhook mang giờ trước lúc bật "báo cả tiền ra" chỉ giữ `pending` (không tự gán, không mất).
 - [OPEN] `updateWallet` ghi các cột của ví (`patchRow(db, "wallets", …)`) **trước** khi kiểm tra `allocation`; nếu cùng request sửa `name` và gửi luật nạp sai, tên đã được lưu nhưng request trả lỗi (`src/services/settings.ts` › `updateWallet`). `createWallet` thì nguyên tử (`db.batch`). Chưa có test cho trường hợp trộn.
 - [OPEN] Server nhận `private: true` cho ví `shared` (`member_id = null`); với luật ẩn `private && member_id !== viewerId`, ví đó bị ẩn số với **mọi** người. PWA chỉ gửi `private` khi `scope = personal` (`web/src/lib/settings.ts` › `walletPayload`), nhưng API không chặn.

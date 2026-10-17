@@ -61,4 +61,4 @@ Reviewer agent (2026-10-17) — bản đầu chưa duyệt; đã sửa: không t
 - [x] Test đỏ → code; rà bảo mật (1 High, 2 Medium đã sửa: mốc không vượt log đã nhận, nhật ký cũ → mới + báo thành viên, webhook không bị bỏ vì mốc)
 - [x] Sao lưu D1 (`before-0036`), diễn tập trên bản sao (view không đổi khi mốc NULL; đặt mốc MB tiết kiệm → theo ngân hàng = sổ 11.502.464, lệch 0), deploy prod 2026-10-17 16:23 giờ VN (version `ef10e7c8`, migration 0036); sửa mốc nhà mình (`PATCH feed_from = 2026-10-15T15:25:00.000Z`); kiểm live: ba tài khoản SePay theo ngân hàng = sổ, lệch 0; Đồng bộ lại 11–15/10 kết nối SePay của MB tiết kiệm → added 0, màn Gán trống
 - [x] Hợp nhất specs (+ ADR-113)
-- [ ] CHANGELOG; phát hành v1.4.0; GitBook (nối SePay cho tài khoản đang dùng)
+- [x] CHANGELOG; phát hành v1.4.0 (CI xanh); GitBook (trang "Nối SePay cho tài khoản đang dùng")

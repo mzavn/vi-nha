@@ -28,13 +28,14 @@
 - v20 (2026-10-08, commit `21b9db0`): migration 0029 (ADR-94 — mã hệ thống tiếng Anh: kết nối SePay `default`, danh mục `debt-payment` / `lending`, nguồn `rental`, icon danh mục) đưa `schema_version` lên `1.29` — health trả `v1.29` (change [261007-ma-tieng-anh-an-danh](../changes/archive/261007-ma-tieng-anh-an-danh/proposal.md))
 - v21 (2026-10-08, commit `1ed22e1`): migration 0030 (ADR-95 — `members.password_hash`, `members.session_gen`, `config.setup_done`) đưa `schema_version` lên `1.30` — health trả `v1.30` (change [261007-thiet-lap-lan-dau](../changes/archive/261007-thiet-lap-lan-dau/proposal.md))
 - v22 (2026-10-17, commit `cb54dd7`): migration 0036 (ADR-113 — `accounts.feed_from`, `accounts.sepay_out_from`, phạm vi đối soát theo mốc) đưa `schema_version` lên `1.36` — health trả `v1.36` (0035 trước đó: `1.35`) (change [261017-noi-sepay-sau](../changes/archive/261017-noi-sepay-sau/proposal.md))
+- v23 (2026-10-17, commit `e207802`): migration 0037 (trigger `trg_tx_log_id_needs_pending_log` — nối log vào khoản tay chỉ khi log còn chờ) đưa `schema_version` lên `1.37` — health trả `v1.37` (change [261017-webhook-truoc-moc](../changes/archive/261017-webhook-truoc-moc/proposal.md))
 
 ## Preconditions
 - Không cần xác thực (mount trước `requireAuth`, UC-503).
 
 ## Main Flow
 1. Đọc `config` khoá `schema_version`.
-2. Có → `200 { ok: true, db: "v<schema_version>" }` (hiện `v1.36`). Không trả thông tin nào khác.
+2. Có → `200 { ok: true, db: "v<schema_version>" }` (hiện `v1.37`). Không trả thông tin nào khác.
 
 ## Alternative Flows
 - Không có.
@@ -57,7 +58,7 @@
 
 ## Traceability
 - Code: `src/routes/health.ts` › `health.get("/")`; `src/index.ts` › `app.route("/v1/health", health)`
-- Migrations/DB: `config('schema_version')` — `migrations/0001_schema.sql` (`1.3`), cập nhật ở `0003` (`1.4`), `0005` (`1.5`), `0006` (`1.6`), `0007` (`1.7`), `0008` (`1.8`), `0009` (`1.9`), `0010` (`1.10`), `0011` (`1.11`), `0012` (`1.12`), `0013` (`1.13`), `0014` (`1.14`), `0015` (`1.15`), `0016` (`1.16`), `0017` (`1.17`), `0018` (`1.18`), `0019` (`1.19`), `0020` (`1.20`), `0021` (`1.21`), `0022` (`1.22`), `0023` (`1.23`), `0024` (`1.24`), `0025` (`1.25`), `0026` (`1.26`), `0027` (`1.27`), `0028` (`1.28`), `0029` (`1.29`), `0030` (`1.30`), `0031` (`1.31`), `0032` (`1.32`), `0033` (`1.33`), `0034` (`1.34`), `0035` (`1.35`), `0036` (`1.36`)
+- Migrations/DB: `config('schema_version')` — `migrations/0001_schema.sql` (`1.3`), cập nhật ở `0003` (`1.4`), `0005` (`1.5`), `0006` (`1.6`), `0007` (`1.7`), `0008` (`1.8`), `0009` (`1.9`), `0010` (`1.10`), `0011` (`1.11`), `0012` (`1.12`), `0013` (`1.13`), `0014` (`1.14`), `0015` (`1.15`), `0016` (`1.16`), `0017` (`1.17`), `0018` (`1.18`), `0019` (`1.19`), `0020` (`1.20`), `0021` (`1.21`), `0022` (`1.22`), `0023` (`1.23`), `0024` (`1.24`), `0025` (`1.25`), `0026` (`1.26`), `0027` (`1.27`), `0028` (`1.28`), `0029` (`1.29`), `0030` (`1.30`), `0031` (`1.31`), `0032` (`1.32`), `0033` (`1.33`), `0034` (`1.34`), `0035` (`1.35`), `0036` (`1.36`), `0037` (`1.37`)
 
 ## Divergences & Open Questions
 - [DIVERGENCE] `phase-01-worker-d1.md` ghi `{ok:true, db:"v1.3"}` — là giá trị lúc lập plan; code đọc động, hiện là `v1.30` (`migrations/0030_setup_and_member_passwords.sql`). Không phải lỗi, chỉ là plan cũ.

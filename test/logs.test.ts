@@ -518,3 +518,61 @@ describe("GET/POST /v1/rules", () => {
     expect(json.error?.code).toBe("invalid_match_type");
   });
 });
+
+describe("Gán: nối log vào khoản đã nhập tay (261017-webhook-truoc-moc)", () => {
+  const manual = (amount: number, at: string, meaning = "spend", note: string | null = "đi chợ") =>
+    (
+      raw
+        .prepare(
+          `INSERT INTO transactions (at, amount, meaning, counter_wallet_id, account_id, category_id, week_key, month_key, source, note)
+           VALUES (?, ?, ?, 'food', 'vcb-husband', 'groceries', '2026-W39', '2026-09', 'manual', ?) RETURNING id`,
+        )
+        .get(at, amount, meaning, note) as { id: number }
+    ).id;
+  const txRow = (id: number) => raw.prepare("SELECT status, log_id, log_id_2, counter_wallet_id, category_id, source, note FROM transactions WHERE id = ?").get(id);
+  const logStatus = (id: string) => (raw.prepare("SELECT status FROM bank_logs WHERE id = ?").get(id) as { status: string }).status;
+
+  it("UC-305 AC-27: log chờ 500.000, khoản tay khớp → hiện trong 'Đã nhập tay?'; Nối → log đã gán, giao dịch giữ ví / hạng mục; gỡ gán → giao dịch còn, log chờ lại", async () => {
+    const hit = manual(500_000, "2026-09-21T13:00:00.000Z");
+    const other = manual(300_000, "2026-09-22T01:00:00.000Z");
+    manual(500_000, "2026-09-18T01:00:00.000Z"); // quá 1 ngày
+    raw.prepare(
+      `INSERT INTO transactions (at, amount, meaning, account_id, week_key, month_key, source)
+       VALUES ('2026-09-22T01:00:00.000Z', 500000, 'adjust', 'vcb-husband', '2026-W39', '2026-09', 'manual')`,
+    ).run();
+    seedLog("m1", "out", 500_000, "vcb-husband");
+
+    const list = await call("GET", "/v1/logs?status=pending");
+    expect(list.json.data[0].manual_matches).toEqual([
+      expect.objectContaining({ id: hit, at: "2026-09-21T13:00:00.000Z", amount: 500_000, meaning: "spend", category_id: "groceries", note: "đi chợ" }),
+    ]);
+
+    const wrong = await call("POST", "/v1/logs/m1/link", { transaction_id: other });
+    expect(wrong.status).toBe(409);
+    expect(wrong.json.error?.code).toBe("link_mismatch");
+    expect(logStatus("m1")).toBe("pending");
+
+    const linked = await call("POST", "/v1/logs/m1/link", { transaction_id: hit });
+    expect(linked.status).toBe(200);
+    expect(linked.json.data).toMatchObject({ log: { id: "m1", status: "assigned" }, transaction: { id: hit, log_id: "m1" } });
+    expect(txRow(hit)).toEqual({ status: "active", log_id: "m1", log_id_2: null, counter_wallet_id: "food", category_id: "groceries", source: "manual", note: "đi chợ" });
+    expect((await call("GET", "/v1/logs?status=pending")).json.data).toEqual([]);
+    // Nối lần hai: log không còn chờ.
+    expect((await call("POST", "/v1/logs/m1/link", { transaction_id: hit })).status).toBe(409);
+
+    const undone = await call("POST", `/v1/logs/transactions/${hit}/void`, {});
+    expect(undone.status).toBe(200);
+    expect(undone.json.data).toEqual({ voided: [], logs: ["m1"] });
+    expect(txRow(hit)).toMatchObject({ status: "active", log_id: null });
+    expect(logStatus("m1")).toBe("pending");
+  });
+
+  it("UC-305 AC-27: khoản tay tách dòng (500.000 + 300.000 cho log 800.000) không nằm trong 'Đã nhập tay?' và không nối được", async () => {
+    const a = manual(500_000, "2026-09-22T01:00:00.000Z");
+    manual(300_000, "2026-09-22T01:00:00.000Z");
+    seedLog("m2", "out", 800_000, "vcb-husband");
+    expect((await call("GET", "/v1/logs?status=pending")).json.data[0].manual_matches).toEqual([]);
+    expect((await call("POST", "/v1/logs/m2/link", { transaction_id: a })).json.error?.code).toBe("link_mismatch");
+    expect((await call("POST", "/v1/logs/m2/link", { transaction_id: "x" })).status).toBe(400);
+  });
+});

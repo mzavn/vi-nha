@@ -20,11 +20,13 @@
 - v12 (2026-10-06, commit `9c265ee`): change [`261006-tai-khoan-phao`](../changes/archive/261006-tai-khoan-phao/proposal.md), ADR-88 — chuyển nội bộ do **ghép cặp** (bước 2, cả ghép tay UC-306) và do **rule `transfer` không mang ví** mà tài khoản đích là tài khoản Tích sản (heo, phao, sổ tiết kiệm), nguồn là tài khoản thường → mang chuyển ví Có thì tốt → Tích sản như nhập tay (`tichsanMove`). Lệnh chuyển tiền `PF` không đổi (ví đã nạp lúc chia). Chủ nhà: "Tiền vào phao tự vào Tích sản (như heo đất)". AC-22.
 - v13 (2026-10-07, commit `7424f26`): đổi tên tiếng Anh (ADR-92, migration 0028): hàm chuyển ví vào Tích sản `tichsanMove` → `wealthBuildingMove` (cùng `isWealthBuildingDeposit`), ví Tích sản tìm theo `tier = 'wealth_building'`; vai tài khoản phao dự phòng lưu `role = 'buffer'`. Logic khớp không đổi. Sửa bước 2a, AC-22, Traceability (change [261007-doi-ten-tieng-anh](../changes/archive/261007-doi-ten-tieng-anh/proposal.md))
 - v14 (2026-10-17, commit `cb54dd7`): ứng viên ghép cặp bỏ log lịch sử trước mốc theo dõi SePay của tài khoản nó (webhook vẫn được); log ra trước `sepay_out_from` không tự gán theo rule (ADR-113). Sửa 2, 3.0a; thêm AC-23 (change [261017-noi-sepay-sau](../changes/archive/261017-noi-sepay-sau/proposal.md))
+- v15 (2026-10-17, commit `e207802`): bước 0: log webhook trước mốc nối được vào khoản tay thì không tới UC này (nối chạy trước khớp memo PF, ghép cặp, rule — UC-302 5c). Thêm AC-24 (change [261017-webhook-truoc-moc](../changes/archive/261017-webhook-truoc-moc/proposal.md))
 
 ## Preconditions
 - Log vừa được ghi, `status='pending'`, `account_id` khác NULL, không có song sinh, không trước ngày mở sổ của tài khoản (UC-302).
 
 ## Main Flow
+0. (Ở `ingestLog`, trước UC này — UC-302 5c) Log webhook trước mốc theo dõi SePay mà nối được vào khoản đã nhập tay thì dừng ở đó: không khớp memo PF, không ghép cặp, không rule — ghép với chân kia đang chờ hay rule tự gán là ghi lần hai (change 261017-webhook-truoc-moc).
 Thử lần lượt; bước đầu tiên ghi được thì dừng.
 1. **Memo lệnh chuyển `PF XXXXXX`** (`extractTransferMemo`: `PF` + 6 ký tự `[0-9A-Z]`, dung sai khoảng trắng/hoa thường, trên nội dung đã chuẩn hoá). Tìm `transfer_orders` có `memo` đó, `amount` bằng log, và TK của log là nguồn hoặc đích. Hướng phải đúng vai: log ở TK nguồn phải `out`, ở TK đích phải `in`.
    - 1.1 Lệnh `pending`: tìm chân kia đang `pending` (TK còn lại của lệnh, cùng số tiền, ngược hướng, cùng memo). Một batch: `UPDATE transfer_orders SET status='done', matched_log_id=<log>` (đặt đầu batch) → một `transfer` (`account_id` = TK nguồn, `counter_account_id` = TK đích, `batch_id` = của lệnh, `log_id` = chân ra nếu có, `log_id_2` = chân vào nếu cả hai đã về) → `markAssigned` các log liên quan.
@@ -180,6 +182,12 @@ Mọi giao dịch sinh ở đây có `source='sepay'`, `week_key`/`month_key` t�
 - When rà soát trả log ra 18/10 và 21/10 khớp rule `spend`
 - Then 18/10 `pending`, không tự gán (màn Gán gợi ý kèm lời nhắc khoản chi trước lúc bật); 21/10 tự gán như cũ
 - Tests: [`test/ingest.test.ts`](../../test/ingest.test.ts) › "mốc theo dõi SePay: log trước mốc như log trước ngày mở sổ (ADR-113) › UC-506 AC-27: bật sepay_out 20/10; log ra 18/10 về khi rà soát → pending, không tự gán theo rule (gợi ý kèm lời nhắc); log ra 21/10 → tự gán như cũ"
+
+### AC-24: Khoản tay trước mốc đi trước ghép cặp (mở rộng ADR-113)
+- Given khoản tay chuyển TCB → VCB trước mốc của VCB; log ra của TCB đang chờ
+- When webhook log vào của VCB (trước mốc) về
+- Then log nối vào khoản tay (chân nhận), không ghép cặp với log TCB ra giao dịch mới
+- Tests: [`test/ingest.test.ts`](../../test/ingest.test.ts) › "webhook trước mốc nối vào khoản đã nhập tay (261017-webhook-truoc-moc) › UC-302 AC-13: khoản tay là chuyển TCB → VCB, log ra của TCB đang chờ → log vào của VCB vẫn nối vào khoản tay (chân nhận), không ghép cặp ra giao dịch mới"
 
 ## Traceability
 - Code: `src/services/ingest.ts` › `matchLog`, `pairLogs`, `findSingleLegTransfer`, `attachSecondLeg`, `outNotFed`, `commit`, `logTxStmt`, `markAssigned`, `loadRuleRows`, `LoadedRule`, `cashAccountFor`; `src/domain/rules.ts` › `extractTransferMemo`, `normalizeContent`, `matchRule`, `canPair`, `PAIR_WINDOW_MS`; `src/domain/entry.ts` › `wealthBuildingMove`, `isWealthBuildingDeposit` (ADR-88); `src/services/ledger.ts` › `salaryMinAmount`, `allocateIncome`, `loadRefs`

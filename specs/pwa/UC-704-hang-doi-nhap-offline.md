@@ -18,6 +18,7 @@
 - v10 (2026-10-03, commit `3bc597c`): khoản mà dòng "vừa ghi" đang báo chờ đồng bộ lên sổ ở lượt gửi sau → dòng thành câu đã ghi (cùng câu như khi lưu có mạng, số còn lại tính lúc lưu); bỏ hẳn khoản đó → dòng bị xoá (`queuedLineAfter`).
 - v11 (2026-10-07, commit `7424f26`): badge tab Nhập theo tên tab `entry` (thay `nhap`) — ADR-92 (change [261007-doi-ten-tieng-anh](../changes/archive/261007-doi-ten-tieng-anh/proposal.md))
 - v12 (2026-10-08, commit `21b9db0`): không đổi hành vi — id card hàng đợi ở màn Nhập đổi `hang-doi` → `queue` (định danh code tiếng Anh, ADR-92/ADR-94). (change [261007-ma-tieng-anh-an-danh](../changes/archive/261007-ma-tieng-anh-an-danh/proposal.md))
+- v13 (2026-10-17, commit `e207802`): 409 `bank_log_exists` (SePay đã báo khoản trước mốc): khoản nằm lại hàng đợi, nút **Vẫn ghi** bấm hai bước gửi lại kèm `confirm_duplicate`. Thêm 4b, AC-17 (change [261017-webhook-truoc-moc](../changes/archive/261017-webhook-truoc-moc/proposal.md))
 
 ## Preconditions
 - Khoản đã vào hàng đợi (trạng thái S1 trong `entities.md` › `QueuedEntry`).
@@ -47,6 +48,7 @@
 - 1b. `visibilitychange` → đồng bộ **xong** mới tải số, và chỉ tải nếu lần tải trước đã quá 30 giây.
 - 1c. Sự kiện `online` → `online = true`, đồng bộ rồi tải số.
 - 4a. Khoản `rejected` không được lượt tự động gửi lại. Người bấm **Gửi lại** (`retryEntry`) → về `pending` (bỏ lý do, giữ `attempts`) → đồng bộ ngay → toast theo kết quả của chính khoản đó: "Đã đồng bộ khoản này." · "Vẫn bị từ chối: {lý do}" · "Chưa tới được máy chủ. Khoản này vẫn chờ đồng bộ." (401 → màn đăng nhập) → tải số.
+- 4b. **SePay đã báo khoản này** (409 `bank_log_exists` — ledger UC-101 5b, change 261017-webhook-truoc-moc): khoản thành `rejected` như mọi 4xx, không tự gửi lại; toast lúc ghi "Chưa ghi: {lý do} Đúng là hai khoản khác nhau thì bấm Vẫn ghi ở mục Chưa lên sổ; không thì Bỏ khoản này.". Ở card Chưa lên sổ, khoản này có nút **Vẫn ghi** thay Gửi lại, bấm **hai bước**: lần đầu chỉ hiện lời "Ghi thêm là hai khoản cùng số tiền trong sổ. Chỉ bấm khi đúng là hai giao dịch thật khác nhau; còn đây chính là khoản SePay đã báo thì Bỏ khoản này." và nút đỏ **Vẫn ghi — là hai khoản**; bấm nút đó → `syncer.retry(id, { confirmDuplicate: true })` gửi lại kèm `confirm_duplicate: true` (`confirmDuplicateEntry`) → toast "Đã ghi thêm khoản này." · "Vẫn bị từ chối: {lý do}" · "Chưa tới được máy chủ. Khoản này vẫn chờ đồng bộ.". Nút **Bỏ** như cũ.
 - 4b. **Bỏ khoản này** → nút đổi thành **Bỏ hẳn khoản này** → bấm lần hai mới xoá.
 - 4d. Khoản đã lên sổ không nằm ở đây: sửa / xoá nó ở sheet chi tiết giao dịch (UC-715), cần mạng; sửa / xoá không bao giờ vào hàng đợi.
 - 4c. Khoản của người khác: không gửi; hiện "của {tên} — gửi khi người này đăng nhập"; không có nút Gửi lại/Bỏ.
@@ -158,7 +160,14 @@
 - Then dòng dưới ô số trống; đầu màn có chip "1 bị từ chối" + "Xem lý do", thẻ Chưa lên sổ có lý do và Gửi lại / Bỏ. Nếu server ghi được khoản đó thì dòng thành "Đã ghi 40.000 ₫. Ăn uống còn 360.000 ₫ tuần này."
 - Tests: `web/src/lib/pending.test.ts` › "dòng 'vừa ghi' của khoản chờ đồng bộ khi hàng đợi đổi › còn chờ thì giữ; bị từ chối thì xoá; lên sổ (rời hàng đợi) thì thành câu đã ghi"; nối vào `syncer.onChange`: ⚠ Chưa có test
 
+### AC-17: Khoản SePay đã báo (409 `bank_log_exists`) chờ người quyết; Vẫn ghi gửi kèm xác nhận
+- Given khoản nhập tay trước mốc mà SePay đã báo và đã vào sổ
+- When đồng bộ; bấm Vẫn ghi rồi Vẫn ghi — là hai khoản
+- Then khoản nằm lại hàng đợi (`rejected`), không tự gửi lại; lần gửi sau kèm `confirm_duplicate`
+- Tests: [`web/src/offline/queue.test.ts`](../../web/src/offline/queue.test.ts) › "hàng đợi nhập offline › UC-101 AC-26: 409 bank_log_exists nằm lại chờ người quyết, không tự gửi lại; bấm Vẫn ghi → gửi lại kèm confirm_duplicate"; nút hai bước và toast trên màn: ⚠ Chưa có test (giao diện — xem tay 390px / 1280px cục bộ)
+
 ## Traceability
+- Code (Vẫn ghi, change 261017-webhook-truoc-moc): `web/src/offline/queue.ts` › `retry` (`confirmDuplicate`); `web/src/state/store.ts` › `confirmDuplicateEntry`, toast `bank_log_exists`; `web/src/screens/entry.tsx` (nút Vẫn ghi hai bước ở card Chưa lên sổ)
 - Code: `web/src/offline/queue.ts` › `createSyncer`, `flushOnce`, `flush`, `classify`, `byCreated`, `memoryStore`; `web/src/offline/idb.ts` › `queueStore`, `lsQueue`, `StorageUnavailableError`; `web/src/state/store.ts` › `syncer`, `flushAndRefresh`, `syncNow`, `retryEntry`, `discardEntry`, `saveEntry` (`lastEntryQueued`), `start`; `web/src/lib/pending.ts` › `queuedLineAfter`; `web/src/lib/api.ts` › `httpTransport`; `web/src/lib/pending.ts` › `effectsOf`, `applyQueue`, `applyQueueToBudget`, `spendableAmount`; `web/src/screens/entry.tsx` › `QueueStatus`, `QueueList`; `web/src/app.tsx` › badge `entry`; `web/src/ui/shell.tsx` › `Sidebar`.
 - Backend: ledger UC-101 Nhập tay một khoản tiền (`transactions.client_id`, index `idx_tx_client`).
 

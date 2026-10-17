@@ -6,6 +6,7 @@ import { dayKey, minuteOfDay, monthKey, weekKey } from "../domain/period";
 import { canPair, extractCode, extractTransferMemo, looksLikeCashWithdrawal, matchRule, type PairCandidate, type RuleRow } from "../domain/rules";
 import { DomainError } from "../domain/types";
 import { allocateIncome, getTransaction, loadRefs, resolveLink, runUndo, salaryMinAmount, undoAllocationStatements } from "./ledger";
+import { closest, feedMark, linkColumn, linkLogToTx, manualMatches } from "./manual-links";
 
 type Row = Record<string, unknown>;
 const rows = <T = Row>(r: D1Result) => (r.results ?? []) as T[];
@@ -577,15 +578,20 @@ export async function ingestLog(
   source: "webhook" | "backfill",
   now: Date,
   connectionId?: string,
-): Promise<{ created: boolean; logId: string; beforeOpening?: boolean; beforeFeed?: boolean }> {
+): Promise<{ created: boolean; logId: string; beforeOpening?: boolean; beforeFeed?: boolean; linkedTo?: number }> {
   const byId = await db.prepare("SELECT id FROM bank_logs WHERE id = ?").bind(parsed.id).first<{ id: string }>();
   if (byId) return { created: false, logId: parsed.id };
 
   // Tài khoản ảo (VA) của SePay mang subAccount riêng: khớp nó trước, rồi mới tới số tài khoản chính.
   const scope = connectionId === undefined ? "" : " AND sepay_connection_id = ?";
   const lookup = (col: "sub_account" | "account_no", value: string) => {
-    const st = db.prepare(`SELECT id, opened_at, feed_from FROM accounts WHERE ${col} = ?${scope}`);
-    return (connectionId === undefined ? st.bind(value) : st.bind(value, connectionId)).first<{ id: string; opened_at: string | null; feed_from: string | null }>();
+    const st = db.prepare(`SELECT id, opened_at, feed_from, sepay_out_from FROM accounts WHERE ${col} = ?${scope}`);
+    return (connectionId === undefined ? st.bind(value) : st.bind(value, connectionId)).first<{
+      id: string;
+      opened_at: string | null;
+      feed_from: string | null;
+      sepay_out_from: string | null;
+    }>();
   };
   const account =
     (parsed.subAccount ? await lookup("sub_account", parsed.subAccount) : null) ?? (parsed.accountNo ? await lookup("account_no", parsed.accountNo) : null);
@@ -637,6 +643,15 @@ export async function ingestLog(
 
   if (accountId && !twin) {
     try {
+      // Webhook về trễ mang giờ trước mốc (ADR-113): khoản đó có thể đã nhập tay trước lúc nối. Nối vào đúng khoản tay đó
+      // TRƯỚC ghép cặp và rule — ghép cặp với chân kia đang chờ hay rule tự gán là ghi lần hai.
+      const mark = source === "webhook" ? feedMark(parsed.direction, account!.feed_from, account!.sepay_out_from) : null;
+      if (mark && Date.parse(parsed.at) < Date.parse(mark)) {
+        const hit = closest(await manualMatches(db, { accountId, direction: parsed.direction, amount: parsed.amount, at: parsed.at }, mark), parsed.at);
+        if (hit && (await linkLogToTx(db, hit.id, parsed.id, linkColumn(parsed.direction, hit.meaning)))) {
+          return { created: true, logId: parsed.id, linkedTo: hit.id };
+        }
+      }
       await matchLog(db, { id: parsed.id, at: parsed.at, amount: parsed.amount, direction: parsed.direction, accountId, content: parsed.content, refCode: parsed.refCode });
     } catch (err) {
       // Log đã được ghi: gửi lại không chạy lại bước khớp (ingestLog dừng sớm khi log đã có), nên lỗi ở đây —
@@ -672,7 +687,12 @@ export async function listPendingLogs(db: D1Database, limit: number): Promise<Re
     return cashCache.get(accountId)!;
   };
   return Promise.all(
-    list.map(async (log) => {
+    list.map(async (row) => {
+      // "Đã nhập tay?" ở màn Gán: khoản tay khớp log (không riêng log trước mốc) — Nối là gắn log vào đó, không ghi thêm.
+      const manual_matches = row.account_id
+        ? await manualMatches(db, { accountId: row.account_id as string, direction: row.direction as "in" | "out", amount: Number(row.amount), at: String(row.at) })
+        : [];
+      const log: Row = { ...row, manual_matches };
       const twin = log.account_id
         ? await findPossibleTwin(db, {
             accountId: log.account_id as string,
@@ -873,6 +893,27 @@ export async function assignLog(
   return { log: updatedLog, transactions: rows(created), attached: false };
 }
 
+/**
+ * Nút **Nối** ở màn Gán ("Đã nhập tay?"): gắn log đang chờ vào khoản nhập tay đã ghi đúng khoản đó — không tạo giao dịch,
+ * không đổi ví / danh mục / ghi chú. Giao dịch không phải khoản tay khớp log (sai chiều, sai số tiền, lệch quá 1 ngày,
+ * tách dòng, đã mang log của tài khoản này) → 409 `link_mismatch`.
+ */
+export async function linkLog(db: D1Database, logId: string, txId: number): Promise<{ log: Record<string, unknown>; transaction: Record<string, unknown> }> {
+  const log = await db.prepare("SELECT * FROM bank_logs WHERE id = ?").bind(logId).first<Row>();
+  if (!log) throw new DomainError("not_found", "Không có log này.", 404);
+  if (log.status !== "pending") throw new DomainError("not_pending", "Log này đã được xử lý.", 409);
+  const mismatch = () => new DomainError("link_mismatch", "Khoản này không khớp giao dịch ngân hàng (chiều tiền, số tiền, ngày) — không nối được.", 409);
+  if (!log.account_id) throw mismatch();
+  const direction = log.direction as "in" | "out";
+  const hit = (await manualMatches(db, { accountId: log.account_id as string, direction, amount: Number(log.amount), at: String(log.at) })).find((m) => m.id === txId);
+  if (!hit) throw mismatch();
+  if (!(await linkLogToTx(db, txId, logId, linkColumn(direction, hit.meaning)))) throw new DomainError("not_pending", "Log này vừa được xử lý ở nơi khác.", 409);
+  return {
+    log: (await db.prepare("SELECT * FROM bank_logs WHERE id = ?").bind(logId).first<Row>())!,
+    transaction: (await db.prepare("SELECT * FROM transactions WHERE id = ?").bind(txId).first<Row>())!,
+  };
+}
+
 /** Đánh dấu log là không cần ghi sổ (ví dụ giao dịch thử). */
 export async function ignoreLog(db: D1Database, logId: string): Promise<Record<string, unknown>> {
   const res = await db.prepare("UPDATE bank_logs SET status = 'ignored' WHERE id = ? AND status = 'pending'").bind(logId).run();
@@ -934,15 +975,23 @@ export async function pairLogs(db: D1Database, logAId: string, logBId: string): 
  * Gỡ cặp/gỡ gán sai: huỷ MỌI giao dịch còn hiệu lực sinh ra từ (các) log đó — một log có thể đã được tách
  * thành nhiều dòng — trả lệnh chuyển tiền đã khớp về 'pending', rồi đưa log về 'pending'. Tất cả trong một batch:
  * gỡ nửa chừng mà log đã về 'pending' thì lần gán sau sẽ đếm tiền hai lần.
+ * Khoản nhập tay đã nối log (261017-webhook-truoc-moc): chỉ gỡ log khỏi giao dịch, log về 'pending' — KHÔNG huỷ khoản tay.
  */
 export async function unassignTransaction(db: D1Database, txId: number): Promise<{ voided: number[]; logs: string[] }> {
   const tx = await getTransaction(db, txId);
   if (!tx) return fail("not_found", "Không có giao dịch này.");
-  if (!tx.log_id) return fail("not_from_log", "Giao dịch này không sinh ra từ log ngân hàng.");
+  if (!tx.log_id && !tx.log_id_2) return fail("not_from_log", "Giao dịch này không sinh ra từ log ngân hàng.");
   if (tx.status !== "active") throw new DomainError("already_void", "Giao dịch đã huỷ trước đó.", 409);
 
   const logIds = [tx.log_id, tx.log_id_2].filter((x): x is string => typeof x === "string" && x.length > 0);
   const marks = logIds.map(() => "?").join(", ");
+  if (tx.source === "manual") {
+    await db.batch([
+      db.prepare("UPDATE transactions SET log_id = NULL, log_id_2 = NULL WHERE id = ? AND status = 'active'").bind(txId),
+      db.prepare(`UPDATE bank_logs SET status = 'pending' WHERE status = 'assigned' AND id IN (${marks})`).bind(...logIds),
+    ]);
+    return { voided: [], logs: logIds };
+  }
   const siblings = rows<{ id: number; meaning: string }>(
     await db
       .prepare(`SELECT id, meaning FROM transactions WHERE status = 'active' AND (log_id IN (${marks}) OR log_id_2 IN (${marks}))`)

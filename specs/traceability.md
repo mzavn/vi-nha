@@ -5,18 +5,18 @@
 
 | Context | UC | AC | Có test | ⚠ Chưa có test |
 |---|---|---|---|---|
-| ledger | 11 | 124 | 100 | 24 |
+| ledger | 11 | 125 | 101 | 24 |
 | allocation | 7 | 71 | 62 | 9 |
-| ingest | 8 | 115 | 108 | 7 |
+| ingest | 8 | 119 | 112 | 7 |
 | notify | 11 | 122 | 110 | 12 |
 | access | 10 | 124 | 116 | 8 |
-| mcp | 6 | 44 | 29 | 15 |
-| pwa | 19 | 264 | 148 | 116 |
+| mcp | 6 | 45 | 30 | 15 |
+| pwa | 19 | 266 | 150 | 116 |
 | rental | 5 | 39 | 29 | 10 |
 | debt | 4 | 32 | 29 | 3 |
 | receivable | 5 | 43 | 38 | 5 |
 | balance | 7 | 43 | 43 | 0 |
-| **Tổng** | **93** | **1021** | **812** | **209** |
+| **Tổng** | **93** | **1029** | **820** | **209** |
 
 ## Sổ cái (ledger)
 
@@ -50,6 +50,7 @@ Status: `implemented` · BR: BR-03, BR-04, BR-01
 | ✅ AC-23: Nhận lại tiền cho vay chỉ đúng khoản cho vay gốc (`link_id`) | [`test/receivables.test.ts`](../test/receivables.test.ts) › "trả cho khoản cho vay khi nhập tay (change 261005-lien-ket-khoan-goc) › nhận lại có link_id về khoản cho vay: không chọn người thì lấy người của khoản cho vay; khác người, trỏ khoản chi hay khoản đã huỷ → invalid_link; sửa giữ liên kết" |
 | ✅ AC-24: Chuyển vào tài khoản Tích sản từ tài khoản thường là bỏ tiền vào Tích sản (ADR-88) | [`test/buffer.test.ts`](../test/buffer.test.ts) › "chuyển nội bộ vào tài khoản Tích sản (ADR-88) › từ tài khoản thường vào phao, không chọn ví: ví Có thì tốt → Tích sản; rút ra, phao → sổ, sổ → tài khoản thường: chỉ đổi chỗ; chọn ví thì theo ví đã chọn" |
 | ✅ AC-25: Trả lãi: khoản chi nhận `interest_debt_id`, mặc định danh mục `loan-interest`, còn nợ không đổi; gắn sai thì bị từ chối | [`test/balance.test.ts`](../test/balance.test.ts) › "debt, ledger, allocation: lãi vay hằng tháng (ADR nháp H) › UC-101 AC-25: spend trả lãi không danh mục → loan-interest, ví Lãi vay, còn nợ không đổi; income kèm lãi → interest_spend_only; cả debt_id → debt_and_interest; khoản không có / đã tắt" |
+| ✅ AC-26: Nhập tay khoản SePay đã báo trước mốc: nối log đang chờ, chặn ghi hai lần khi log đã vào sổ | [`test/ingest-integrity.test.ts`](../test/ingest-integrity.test.ts) › "mốc theo dõi SePay: khoản trước mốc nhập tay được (ADR-113) › UC-101 AC-26: log trước mốc đang chờ 1.500.000 → nhập tay đúng khoản đó → log nối vào khoản tay, màn Gán trống" · "… › UC-101 AC-26: log trước mốc đã gán → nhập tay khoản đó → 409 bank_log_exists, không ghi; gửi lại confirm_duplicate → ghi" · "… › UC-101 AC-26: sửa khoản tay trước mốc thành đúng số tiền / ngày của log trước mốc đang chờ → khoản mới nối log"; [`test/mcp.test.ts`](../test/mcp.test.ts) › "add_transaction › UC-101 AC-26: khoản trước mốc mà SePay đã báo và đã gán → tool lỗi bank_log_exists; gửi kèm confirm_duplicate thì ghi"; [`web/src/offline/queue.test.ts`](../web/src/offline/queue.test.ts) › "hàng đợi nhập offline › UC-101 AC-26: 409 bank_log_exists nằm lại chờ người quyết, không tự gửi lại; bấm Vẫn ghi → gửi lại kèm confirm_duplicate" |
 
 ### [UC-102](ledger/UC-102-huy-giao-dich.md) Huỷ / sửa giao dịch ghi tay
 Status: `implemented` · BR: BR-04, BR-02, BR-03
@@ -361,6 +362,7 @@ Status: `implemented` · BR: BR-04, BR-03
 | ✅ AC-10: Log đúng ngày mở sổ đi luồng thường | `test/ingest.test.ts` › "số dư đầu là mốc: log trước ngày mở sổ không vào sổ (ADR-76) › log đúng ngày mở sổ đi luồng thường: khớp rule, vào sổ, vào số dư theo log" |
 | ✅ AC-11: Tài khoản không có ngày mở sổ — như trước | `test/ingest.test.ts` › "số dư đầu là mốc: log trước ngày mở sổ không vào sổ (ADR-76) › tài khoản không có ngày mở sổ: log cũ bao lâu vẫn chờ gán và vào số dư theo log như trước" |
 | ✅ AC-12: Log lịch sử trước mốc theo dõi SePay → `ignored`; webhook không áp mốc (ADR-113) | [`test/ingest.test.ts`](../test/ingest.test.ts) › "mốc theo dõi SePay: log trước mốc như log trước ngày mở sổ (ADR-113) › UC-302 AC-12: rà soát trả log vào 11/10 9.000.000 → ignored, không ở màn Gán; log 15/10 22:30 xử lý bình thường; log đúng bằng mốc nằm trong phạm vi" · "… › UC-302 AC-12: log lịch sử trước mốc lỡ còn 'pending' không làm ứng viên ghép cặp tự động" · "… › UC-302 AC-12: webhook về trễ mang giờ trước mốc (bật 22:24, chi 22:20) vẫn chờ gán và đối soát khớp sau khi gán; cùng giờ đó qua rà soát thì bỏ qua"; [`test/cron-sepay.test.ts`](../test/cron-sepay.test.ts) › "nhiều kết nối SePay — mỗi kết nối một token (ADR-75) › đồng bộ lại theo khoảng ngày (POST /v1/settings/sepay/sync) › UC-302 AC-12: Đồng bộ lại vắt qua mốc theo dõi SePay: giao dịch trước mốc lưu 'ignored', đếm riêng beforeFeed (đã có trong sổ), không về màn Gán"; [`web/src/lib/settings.test.ts`](../web/src/lib/settings.test.ts) › "tài khoản › UC-302 AC-12: câu báo sau Đồng bộ lại đếm riêng giao dịch trước mốc theo dõi SePay" |
+| ✅ AC-13: Webhook trước mốc nối vào khoản đã nhập tay, không ghi lần hai (mở rộng ADR-113) | [`test/ingest.test.ts`](../test/ingest.test.ts) › "webhook trước mốc nối vào khoản đã nhập tay (261017-webhook-truoc-moc) › UC-302 AC-13: khoản tay 'thu 500.000' 22:20, webhook vào 500.000 giờ 22:20 về lúc 22:25 → log nối vào khoản tay, số giao dịch không đổi, lệch 0" · "… › UC-302 AC-13: không có khoản tay khớp (khác số tiền, quá 1 ngày, hay là điều chỉnh) → log chờ gán như cũ" · "… › UC-302 AC-13: khoản tay là chuyển TCB → VCB, log ra của TCB đang chờ → log vào của VCB vẫn nối vào khoản tay (chân nhận), không ghép cặp ra giao dịch mới" · "… › UC-302 AC-13: hai khoản tay khớp cách đều giờ log → không đoán, để chờ gán" |
 
 ### [UC-303](ingest/UC-303-tu-khop-log-vao-so.md) Tự khớp log vào sổ
 Status: `implemented` · BR: BR-04, BR-02, BR-03
@@ -390,6 +392,7 @@ Status: `implemented` · BR: BR-04, BR-02, BR-03
 | ✅ AC-21: Chân thứ hai đến sau gắn vào chuyển nội bộ đã ghi, không ghi lần hai (ADR-81) | [`test/ingest.test.ts`](../test/ingest.test.ts) › "chân thứ hai đến sau gắn vào chuyển nội bộ đã ghi (ADR-81) › chân ra đã gán tay, chân vào về sau qua kết nối khác → gắn vào đúng giao dịch đó; mỗi tài khoản đúng 250.000"; [`test/ingest.test.ts`](../test/ingest.test.ts) › "chân thứ hai đến sau gắn vào chuyển nội bộ đã ghi (ADR-81) › chân vào đã gán tay trước, chân ra về sau → cũng gắn, không ghi thêm"; [`test/ingest.test.ts`](../test/ingest.test.ts) › "chân thứ hai đến sau gắn vào chuyển nội bộ đã ghi (ADR-81) › lệch số tiền, lệch quá 10 phút, hay đầu kia khác tài khoản → không gắn: chờ gán, gán thì ghi giao dịch riêng"; [`test/ingest.test.ts`](../test/ingest.test.ts) › "chân thứ hai đến sau gắn vào chuyển nội bộ đã ghi (ADR-81) › giao dịch đã đủ hai chân thì không gắn thêm chân nào" |
 | ✅ AC-22: Ghép cặp hay rule vào tài khoản Tích sản mang chuyển ví Có thì tốt → Tích sản (ADR-88) | [`test/buffer.test.ts`](../test/buffer.test.ts) › "tự khớp vào tài khoản Tích sản (ADR-88) › ghép cặp hai log VCB → phao: chuyển nội bộ mang ví Có thì tốt → Tích sản; phao → VCB chỉ đổi chỗ"; [`test/buffer.test.ts`](../test/buffer.test.ts) › "tự khớp vào tài khoản Tích sản (ADR-88) › rule chuyển nội bộ sang phao không mang ví: tự gán cũng chuyển ví Có thì tốt → Tích sản" |
 | ✅ AC-23: Log ra trước lúc bật "báo cả tiền ra" không tự gán (ADR-113) | [`test/ingest.test.ts`](../test/ingest.test.ts) › "mốc theo dõi SePay: log trước mốc như log trước ngày mở sổ (ADR-113) › UC-506 AC-27: bật sepay_out 20/10; log ra 18/10 về khi rà soát → pending, không tự gán theo rule (gợi ý kèm lời nhắc); log ra 21/10 → tự gán như cũ" |
+| ✅ AC-24: Khoản tay trước mốc đi trước ghép cặp (mở rộng ADR-113) | [`test/ingest.test.ts`](../test/ingest.test.ts) › "webhook trước mốc nối vào khoản đã nhập tay (261017-webhook-truoc-moc) › UC-302 AC-13: khoản tay là chuyển TCB → VCB, log ra của TCB đang chờ → log vào của VCB vẫn nối vào khoản tay (chân nhận), không ghép cặp ra giao dịch mới" |
 
 ### [UC-304](ingest/UC-304-ra-soat-0200-backfill.md) Rà soát 02:00 & đồng bộ lại theo khoảng ngày qua API SePay
 Status: `implemented` · BR: BR-03, BR-04
@@ -442,6 +445,7 @@ Status: `implemented` · BR: BR-03, BR-04, BR-02
 | ✅ AC-24: Log tiền ra không khớp rule mà không phải rút tiền → không gợi ý Rút tiền mặt | `test/ingest.test.ts` › "gợi ý Rút tiền mặt chỉ cho log `out` trông như rút tiền › trả QR, hoá đơn, chuyển khoản không khớp rule → không gợi ý Rút tiền mặt (màn Gán mặc định Chi tiêu)"; `test/rules.test.ts` › "looksLikeCashWithdrawal › nội dung rút tiền mặt (ATM, RUT TIEN, RUT TM, CASH WITHDRAWAL) — có dấu, thường hay hoa đều nhận"; `test/rules.test.ts` › "looksLikeCashWithdrawal › trả QR, hoá đơn, chuyển khoản, tên quán chứa ATM giữa chữ → không phải rút tiền" |
 | ✅ AC-25: Gán log tiền vào là hoàn tiền nối về khoản chi gốc (`link_id`) | [`test/logs.test.ts`](../test/logs.test.ts) › "trả lại cho khoản chi khi gán (change 261004-gan-tham-chieu) › gán log tiền vào là hoàn tiền có link_id: nối khoản chi gốc, danh mục theo khoản gốc; phần chênh nằm lại trong ví của danh mục"; [`test/logs.test.ts`](../test/logs.test.ts) › "trả lại cho khoản chi khi gán (change 261004-gan-tham-chieu) › link_id phải trỏ về khoản chi còn hiệu lực: không thì invalid_link (như nhập tay), log vẫn chờ, không ghi gì" |
 | ✅ AC-26: Gán log tiền vào là nhận lại tiền cho vay nối về khoản cho vay gốc (`link_id`) | [`test/logs.test.ts`](../test/logs.test.ts) › "trả cho khoản cho vay, xem hai chiều (change 261005-lien-ket-khoan-goc) › gán log tiền vào là nhận lại có link_id về khoản cho vay: lấy người của khoản cho vay; khác người hay trỏ khoản chi → invalid_link, log vẫn chờ" |
+| ✅ AC-27: Gán — nối log vào khoản đã nhập tay (mở rộng ADR-113) | [`test/logs.test.ts`](../test/logs.test.ts) › "Gán: nối log vào khoản đã nhập tay (261017-webhook-truoc-moc) › UC-305 AC-27: log chờ 500.000, khoản tay khớp → hiện trong 'Đã nhập tay?'; Nối → log đã gán, giao dịch giữ ví / hạng mục; gỡ gán → giao dịch còn, log chờ lại" · "… › UC-305 AC-27: khoản tay tách dòng (500.000 + 300.000 cho log 800.000) không nằm trong 'Đã nhập tay?' và không nối được"; [`web/src/lib/splits.test.ts`](../web/src/lib/splits.test.ts) › "Gán: nối vào khoản đã nhập tay › UC-305 AC-27: dòng 'Đã nhập tay?' nói giờ VN, danh mục (hoặc loại) và ghi chú; toast nói không ghi thêm" |
 
 ### [UC-306](ingest/UC-306-ghep-cap-tay-va-go-gan.md) Ghép cặp tay & gỡ gán
 Status: `implemented` · BR: BR-04
@@ -459,6 +463,7 @@ Status: `implemented` · BR: BR-04
 | ✅ AC-9: Gỡ gán là đường duy nhất cho giao dịch ngân hàng | `test/api.test.ts` › "sửa / xoá giao dịch (UC-102) › giao dịch từ ngân hàng không xoá được ở sổ cái (bank_tx), log vẫn đã gán; gỡ gán thì được" |
 | ✅ AC-10: Gỡ giao dịch có chân thứ hai gắn sau → huỷ giao dịch, cả hai log về chờ (ADR-81) | [`test/ingest.test.ts`](../test/ingest.test.ts) › "chân thứ hai đến sau gắn vào chuyển nội bộ đã ghi (ADR-81) › gỡ gán giao dịch đã gắn chân thứ hai → huỷ giao dịch, cả hai log về chờ" |
 | ✅ AC-11: Gỡ gán ghi nhật ký (ADR-90) | `test/audit.test.ts` › "nhật ký thay đổi › huỷ, sửa, gỡ gán giao dịch đều ghi một dòng: ai, qua đâu, giao dịch nào" |
+| ✅ AC-12: Gỡ gán khoản nhập tay đã nối log chỉ gỡ log, không huỷ khoản tay | [`test/logs.test.ts`](../test/logs.test.ts) › "Gán: nối log vào khoản đã nhập tay (261017-webhook-truoc-moc) › UC-305 AC-27: log chờ 500.000, khoản tay khớp → hiện trong 'Đã nhập tay?'; Nối → log đã gán, giao dịch giữ ví / hạng mục; gỡ gán → giao dịch còn, log chờ lại" |
 
 ### [UC-307](ingest/UC-307-quan-ly-rule-tu-gan.md) Quản lý rule tự gán
 Status: `implemented` · BR: BR-08, BR-02, BR-04
@@ -916,6 +921,7 @@ Status: `implemented` · BR: BR-05, BR-03
 | ✅ AC-9: Nhận lại tiền cho vay qua MCP: `add_transaction` nhận `collect` + `receivable_id` | [`test/mcp.test.ts`](../test/mcp.test.ts) › "sổ phải thu › add_transaction nhận collect + receivable_id; assign_log nhận split collect" |
 | ✅ AC-10: Ghi cần quyền Ghi; mỗi lần ghi có nhật ký `via = mcp` mang người uỷ quyền | [`test/mcp-oauth.test.ts`](../test/mcp-oauth.test.ts) › "UC-601 AC-6, AC-11: quyền xem / ghi › token chỉ Xem gọi tool ghi → HTTP 403 insufficient_scope, challenge ghi đủ mcp:read mcp:write; không ghi gì" · "… › token có Ghi → tool ghi chạy"; [`test/mcp-oauth.test.ts`](../test/mcp-oauth.test.ts) › "UC-602, UC-603: tool nhìn và ghi như người đã uỷ quyền › add_transaction không gửi by_member_id → người ghi là người uỷ quyền; nhật ký via=mcp kèm người đó" |
 | ✅ AC-11: Trả lãi qua MCP: `add_transaction` nhận `interest_debt_id` | [`test/mcp-oauth.test.ts`](../test/mcp-oauth.test.ts) › "UC-602, UC-603: tool nhìn và ghi như người đã uỷ quyền › UC-603 AC-11: add_transaction nhận interest_debt_id — ghi khoản trả lãi (danh mục Lãi vay), còn nợ không đổi; cùng luật ledger UC-101 AC-25" |
+| ✅ AC-12: Khoản SePay đã báo trước mốc: lỗi `bank_log_exists`, xác nhận thì ghi | [`test/mcp.test.ts`](../test/mcp.test.ts) › "add_transaction › UC-101 AC-26: khoản trước mốc mà SePay đã báo và đã gán → tool lỗi bank_log_exists; gửi kèm confirm_duplicate thì ghi" |
 
 ### [UC-604](mcp/UC-604-gan-log-qua-mcp.md) Gán log ngân hàng qua MCP
 Status: `implemented` · BR: BR-05, BR-04
@@ -1024,6 +1030,7 @@ Status: `implemented` · BR: BR-03, BR-04, BR-01
 | ⚠ AC-14: Quay lại app không trừ hai lần | ⚠ Chưa có test (chỉ đọc mã: `start` trong `web/src/state/store.ts:311`) |
 | ⚠ AC-15: Toast nút Đồng bộ nói đúng kết quả | ⚠ Chưa có test |
 | ⚠ AC-16: Dòng "vừa ghi" không còn nói "chờ đồng bộ" khi khoản đó bị từ chối hay đã lên sổ | `web/src/lib/pending.test.ts` › "dòng 'vừa ghi' của khoản chờ đồng bộ khi hàng đợi đổi › còn chờ thì giữ; bị từ chối thì xoá; lên sổ (rời hàng đợi) thì thành câu đã ghi"; nối vào `syncer.onChange`: ⚠ Chưa có test |
+| ✅ AC-17: Khoản SePay đã báo (409 `bank_log_exists`) chờ người quyết; Vẫn ghi gửi kèm xác nhận | [`web/src/offline/queue.test.ts`](../web/src/offline/queue.test.ts) › "hàng đợi nhập offline › UC-101 AC-26: 409 bank_log_exists nằm lại chờ người quyết, không tự gửi lại; bấm Vẫn ghi → gửi lại kèm confirm_duplicate"; nút hai bước và toast trên màn: ⚠ Chưa có test (giao diện — xem tay 390px / 1280px cục bộ) |
 
 ### [UC-705](pwa/UC-705-nhap-loai-khac.md) Nhập loại khác — thu nhập, hoàn tiền, mua tài sản, cho vay, chuyển nội bộ
 Status: `implemented` · BR: BR-02, BR-03, BR-07
@@ -1087,6 +1094,7 @@ Status: `implemented` · BR: BR-03, BR-04, BR-02
 | ✅ AC-27: Ghi chú riêng cho từng dòng gán | `test/logs.test.ts` › "POST /v1/logs/:id/assign › mỗi dòng gán mang ghi chú riêng; ghi chú lưu vào giao dịch, dòng không ghi thì để trống"; ô trên màn: ⚠ Chưa có test (kiểm tay 390px 2026-10-06) |
 | ✅ AC-28: Chia bill — khoản bill vẫn chọn được dù có nhiều khoản chi gần số tiền trả | `web/src/lib/refunds.test.ts` › "trả lại cho khoản chi › chia bill: bill 800.000 vẫn có trong danh sách khi người ta trả 200.000 dù có nhiều khoản chi quanh 200.000" |
 | ✅ AC-29: Gán chuyển nội bộ vào tài khoản Tích sản nhắc tiền thành Tích sản (ADR-88) | [`web/src/lib/wealth-building-accounts.test.ts`](../web/src/lib/wealth-building-accounts.test.ts) › "chuyển nội bộ vào tài khoản Tích sản (ADR-88) › từ tài khoản thường vào phao / sổ / heo: nhắc tiền vào là Tích sản, ví Có thì tốt chuyển sang Tích sản"; [`web/src/lib/wealth-building-accounts.test.ts`](../web/src/lib/wealth-building-accounts.test.ts) › "chuyển nội bộ vào tài khoản Tích sản (ADR-88) › rút ra, gửi phao → sổ, tất toán sổ → phao, chuyển giữa hai tài khoản thường, chưa chọn tài khoản: không nhắc (chỉ đổi chỗ)"; [`test/buffer.test.ts`](../test/buffer.test.ts) › "chuyển nội bộ vào tài khoản Tích sản (ADR-88) › từ tài khoản thường vào phao, không chọn ví: ví Có thì tốt → Tích sản; rút ra, phao → sổ, sổ → tài khoản thường: chỉ đổi chỗ; chọn ví thì theo ví đã chọn" (server, cùng `buildEntry` mà gán dùng); dòng nhắc trên màn Gán: ⚠ Chưa có test (cần log ngân hàng thật; repo chưa có test giao diện) |
+| ✅ AC-30: Đã nhập tay? — Nối log vào khoản đã ghi | [`web/src/lib/splits.test.ts`](../web/src/lib/splits.test.ts) › "Gán: nối vào khoản đã nhập tay › UC-305 AC-27: dòng 'Đã nhập tay?' nói giờ VN, danh mục (hoặc loại) và ghi chú; toast nói không ghi thêm"; [`test/logs.test.ts`](../test/logs.test.ts) › "Gán: nối log vào khoản đã nhập tay (261017-webhook-truoc-moc) › UC-305 AC-27: log chờ 500.000, khoản tay khớp → hiện trong 'Đã nhập tay?'; Nối → log đã gán, giao dịch giữ ví / hạng mục; gỡ gán → giao dịch còn, log chờ lại"; banner chỉ khi có khoản khớp và nút Nối trên màn: ⚠ Chưa có test (giao diện — xem tay 390px / 1280px cục bộ) |
 
 ### [UC-707](pwa/UC-707-xem-vi-va-quy.md) Xem Ví & Quỹ và làm chuyển tiền cần làm
 Status: `partial` · BR: BR-01, BR-07, BR-04, BR-02, BR-12, BR-13

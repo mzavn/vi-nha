@@ -11,7 +11,7 @@ describe("GET /v1/health", () => {
   it("trả phiên bản schema, không cần token", async () => {
     const res = await app.request("/v1/health", {}, env());
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, db: "v1.36" });
+    expect(await res.json()).toEqual({ ok: true, db: "v1.37" });
   });
 
   it("báo 503 khi D1 chưa chạy migration", async () => {

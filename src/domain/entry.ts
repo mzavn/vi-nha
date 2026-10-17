@@ -40,6 +40,8 @@ export interface EntryInput {
   receivable_id?: string | null;
   /** Chỉ dùng cho `spend`, không cùng `debt_id`: trả LÃI cho khoản nợ (chi phí, không giảm nợ). Không chọn danh mục thì lấy "Lãi vay". */
   interest_debt_id?: string | null;
+  /** Khoản trước mốc mà SePay đã báo và đã vào sổ (409 `bank_log_exists`): người ghi xác nhận đây là khoản thật thứ hai. */
+  confirm_duplicate?: boolean;
 }
 
 export interface TxRow {

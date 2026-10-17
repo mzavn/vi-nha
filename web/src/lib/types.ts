@@ -86,6 +86,8 @@ export interface EntryBody {
   receivable_id?: string;
   /** Khoản chi trả LÃI cho một khoản nợ (chỉ spend, không cùng debt_id); thiếu category_id thì server lấy "loan-interest". */
   interest_debt_id?: string;
+  /** Người nhập xác nhận khoản SePay đã báo (409 `bank_log_exists`) là khoản thật thứ hai. */
+  confirm_duplicate?: boolean;
 }
 
 /** `wallet` trong phản hồi POST /v1/transactions (ledger.walletStatus). */
@@ -116,6 +118,8 @@ export interface TxRow {
   by_member_id?: string | null;
   source?: string | null;
   log_id?: string | null;
+  /** Log tiền vào (chân nhận) của chuyển khoản — cả khoản nhập tay đã nối log (ADR-113). */
+  log_id_2?: string | null;
   link_id?: number | null;
   taxable?: number | null;
   income_stream_id?: string | null;
@@ -420,6 +424,18 @@ export interface BankLog {
     /** Chân còn lại của chuyển nội bộ đã ghi (ADR-81): gán Chuyển nội bộ với `other_account_id` là gắn vào giao dịch này. */
     attach_to_tx?: number | null;
   } | null;
+  /** "Đã nhập tay?": khoản nhập tay khớp log (chiều, số tiền, ngày lệch ≤ 1) — Nối là gắn log vào đó, không ghi thêm. */
+  manual_matches?: ManualMatch[];
+}
+
+/** Một khoản nhập tay khớp log chờ gán (GET /v1/logs, `manual_matches`). */
+export interface ManualMatch {
+  id: number;
+  at: string;
+  amount: number;
+  meaning: string;
+  category_id: string | null;
+  note: string | null;
 }
 
 // ── Cài đặt (/v1/settings) ─────────────────────────────────────────

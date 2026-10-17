@@ -6,6 +6,19 @@ bản cài cũ vẫn lên được bình thường (kể cả nâng database t�
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
 trước (xem README › Cập nhật bản mới).
 
+## v1.5.0 — 17/10/2026
+
+Có nâng cấp database: `0037` (chốt chặn thêm để một giao dịch ngân hàng không gắn vào hai khoản — không đổi số liệu).
+
+**Sửa**
+
+- Tài khoản vừa nối SePay: giao dịch SePay báo trễ mang giờ trước lúc nối mà bạn đã nhập tay trước đó thì app tự nối vào
+  khoản đã nhập, không ghi lần hai. Nhập tay một khoản mà SePay vừa báo thì app nối luôn; SePay đã báo và khoản đã có trong
+  sổ thì app hỏi lại trước khi ghi thêm (**Vẫn ghi** ở mục Chưa lên sổ nếu đúng là hai khoản).
+- Màn Gán có mục **Đã nhập tay?**: khoản nhập tay cùng số tiền, cùng chiều, cách không quá 1 ngày hiện ra kèm nút **Nối** —
+  gắn giao dịch ngân hàng vào khoản đó thay vì ghi thêm. Gỡ gán một khoản nhập tay đã nối chỉ gỡ giao dịch ngân hàng ra,
+  khoản nhập tay vẫn giữ.
+
 ## v1.4.0 — 17/10/2026
 
 Có nâng cấp database: `0035` (chỉ sửa cách tính đối soát — không đổi số liệu), `0036` (thêm mốc theo dõi SePay cho từng tài

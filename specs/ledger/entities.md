@@ -74,7 +74,7 @@ Nhãn phân tích, **không có ngân sách riêng**. Chọn danh mục thì ví
 Seed danh mục `debt-payment` "Trả nợ" (ví mặc định `rental-income`, `migrations/0007_income_streams_rental.sql`): trả nợ = `spend` từ ví giữ riêng. Danh mục hệ thống `loan-interest` "Lãi vay" (ví mặc định `loan-interest`, icon `percent`, `migrations/0031_balance_sheet.sql`): khoản trả lãi (`interest_debt_id`) không chọn danh mục thì vào đây (UC-101 4k).
 
 ## Transaction — giao dịch đã diễn giải (bảng `transactions`, 0001 mục 7; `client_id` ở 0003)
-Lớp 2 của sổ. **Chỉ ghi thêm**: code chỉ đổi `status` `active → void` và gắn `log_id_2` (ingest, khi còn NULL); không có `DELETE` nào (`src/services/*.ts`). Không có trigger DB cấm UPDATE/DELETE — bất biến chỉ giữ bằng code.
+Lớp 2 của sổ. **Chỉ ghi thêm**: code chỉ đổi `status` `active → void`, gắn `log_id_2` (ingest, khi còn NULL), gắn `log_id` / `log_id_2` vào khoản `source='manual'` khi nối log (khi còn NULL — change 261017-webhook-truoc-moc) và gỡ hai cột đó khi gỡ gán khoản tay đã nối (ingest UC-306 4a); không có `DELETE` nào (`src/services/*.ts`). Không có trigger DB cấm UPDATE/DELETE — bất biến chỉ giữ bằng code.
 
 ### Quy ước dấu — một luật, không ngoại lệ (0001 dòng 17–24; `docs/core_design_rules.md` §1.4)
 - `wallet_id` = ví **được cộng** (+) · `counter_wallet_id` = ví **bị trừ** (−).
@@ -116,7 +116,7 @@ Lớp 2 của sổ. **Chỉ ghi thêm**: code chỉ đổi `status` `active → 
 | `source` | `manual` \| `system` \| `sepay` \| `import` (CHECK, 0001; **mặc định DB là `sepay`**). `system` không huỷ lẻ được. `import` không có code nào ghi. |
 | `status` | `active` \| `void` (CHECK). Mọi view chỉ đếm `active`. |
 | `client_id` | Sinh ở máy (D12); duy nhất khi khác NULL (`idx_tx_client`, `migrations/0003_offline_entry_and_allocation_runs.sql`); route chỉ nhận `[A-Za-z0-9_-]{8,64}`. Server chống trùng: gửi lại trả bản đã ghi. |
-| `log_id`, `log_id_2` | Log ngân hàng sinh ra giao dịch (ingest). Trigger `trg_tx_needs_pending_log`, `trg_tx_second_leg_needs_pending_log` (`migrations/0005_ingest_integrity_guards.sql`). |
+| `log_id`, `log_id_2` | Log ngân hàng sinh ra giao dịch (ingest), hoặc log được **nối** vào khoản nhập tay đã ghi đúng khoản đó (`source` vẫn `manual`; tiền ra / tiền vào không phải chuyển → `log_id`, tiền vào của chuyển khoản → `log_id_2` — ingest UC-302 5c, UC-305 2c, UC-101 5b). Khoản tay có một trong hai cột là giao dịch ngân hàng: huỷ / sửa → `bank_tx`, lọc nguồn `bank`. Trigger `trg_tx_needs_pending_log` (INSERT), `trg_tx_second_leg_needs_pending_log` (UPDATE `log_id_2`) (`migrations/0005_ingest_integrity_guards.sql`), `trg_tx_log_id_needs_pending_log` (UPDATE `log_id`: log mới gắn phải còn `pending`, `log_not_pending` — `migrations/0037_log_id_trigger.sql`, schema v1.37). |
 | `note` | Nhập tay: trim, cắt 500 ký tự. |
 
 ### Trạng thái

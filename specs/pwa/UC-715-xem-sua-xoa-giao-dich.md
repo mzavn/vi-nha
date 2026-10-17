@@ -16,6 +16,7 @@
 - v8 (2026-10-07, commit `7424f26`): định danh `WealthBuildingTab` (thay `TichsanTab`) — ADR-92 (change [261007-doi-ten-tieng-anh](../changes/archive/261007-doi-ten-tieng-anh/proposal.md))
 - v9 (2026-10-12, commit `a8b43f7`): chi tiết khoản thu chưa chia có nút **Tự chia** ở bảng Chia thử (allocation UC-202 5b, UC-203; ADR-108) (change [261012-tu-chia](../changes/archive/261012-tu-chia/proposal.md))
 - v10 (2026-10-16, commit `0528219`): bảng Chia có **Có / Không Tích sản** (ADR-112); khoản thu đã chia không Tích sản có hàng "Tích sản: Không trả cho mình lần này: {lý do}"; toast nói số Tích sản. Thêm 2a, AC-10 (change [261015-chot-thang-va-keo-tich-san](../changes/archive/261015-chot-thang-va-keo-tich-san/proposal.md))
+- v11 (2026-10-17, commit `e207802`): không đổi code PWA; khoản tay đã nối log là giao dịch ngân hàng ở server (`bank_tx`), Gán lại chỉ gỡ log; ghi [DIVERGENCE] PWA chưa xét `log_id_2` khi chọn việc làm được (change [261017-webhook-truoc-moc](../changes/archive/261017-webhook-truoc-moc/proposal.md))
 
 ## Preconditions
 - Đã có `bootstrap`. Xem được khi mất mạng nếu dòng đã có trong danh sách; Sửa / Xoá / Gán lại / Chia cần mạng.
@@ -124,5 +125,6 @@
 - Backend: ledger [UC-102](../ledger/UC-102-huy-giao-dich.md) (`/void`, `/replace`), [UC-111](../ledger/UC-111-so-giao-dich-va-du-lieu-nen.md) (`GET /v1/transactions`, `GET /v1/transactions/:id` kèm `link`, `linked_from`), ingest [UC-306](../ingest/UC-306-ghep-cap-tay-va-go-gan.md) (gỡ gán), allocation [UC-202](../allocation/UC-202-xem-truoc-phuong-an-chia.md), [UC-203](../allocation/UC-203-chia-mot-khoan-thu-nhap.md) (`/v1/allocate/preview`, `/v1/allocate`).
 
 ## Divergences & Open Questions
+- Đã sửa 2026-10-17: `web/src/lib/transactions.ts` › `txOrigin` coi cả `log_id_2` là giao dịch ngân hàng — khoản chuyển nhập tay đã nối log tiền vào chỉ còn Gán lại, không Sửa / Xoá; test `web/src/lib/transactions.test.ts` › "việc làm được với một giao dịch › từ ngân hàng: không sửa không xoá, chỉ gán lại — kể cả khi chỉ có log_id".
 - [OPEN] Không có "Hoàn tác" trên toast sau khi lưu (toast chỉ là chữ); xoá nhầm thì nhập lại.
 - [OPEN] Sửa khoản chi ở màn Nhập chọn danh mục mới thì ví tự điền theo người đang sửa (như khi nhập), còn server đổi ví cá nhân theo người ghi khoản cũ — vợ sửa khoản của chồng mà chọn danh mục trỏ ví cá nhân sẽ thấy ví của mình trên form nhưng sổ ghi ví của chồng.

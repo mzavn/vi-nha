@@ -15,6 +15,7 @@
 - v7 (2026-10-07, commit `7424f26`): mô tả tool `add_transaction` viết tiếng Anh (ADR-92), chỉ id người thuê lấy từ tool mới `list_tenants` (trước là `get_tenants`); chuỗi thay khi chưa có thành viên là "no active members yet". Tham số, hành vi không đổi (change [261007-doi-ten-tieng-anh](../changes/archive/261007-doi-ten-tieng-anh/proposal.md)).
 - v8 (2026-10-08, commit `e5ecf41`): `by_member_id` thành **không bắt buộc** — bỏ trống thì người ghi là người đã uỷ quyền kết nối (UC-601); có gửi thì phải là thành viên đang hoạt động. Cần quyền `mcp:write` (thiếu → HTTP 403 trước khi tool chạy). Mỗi lần ghi thêm nhật ký `tx.create` `via = mcp` mang người uỷ quyền. Sửa AC-1 (trích test mới thay test "thiếu by_member_id → tool error" đã bỏ), AC-2; thêm AC-10 (change [261008-mcp-oauth](../changes/archive/261008-mcp-oauth/proposal.md)).
 - v9 (2026-10-08, commit `8cd48b8`): nhận thêm **`interest_debt_id`** — khoản chi trả **lãi** cho một khoản nợ (id từ `get_debts`; chỉ `spend`, không đi cùng `debt_id`; bỏ trống `category_id` thì lấy danh mục "Lãi vay" `loan-interest`, ví "Lãi vay"; còn nợ không đổi) — cùng luật ledger [UC-101](../ledger/UC-101-nhap-tay-khoan-tien.md) AC-25 (ADR-106). Mô tả tool hướng dẫn Claude trả khoản có lãi bằng **hai** khoản: lãi = min(số tiền, `interestThisMonth − interestPaidThisMonth` của `get_debts`) với `interest_debt_id`, phần còn lại là gốc với `debt_id`. `assign_log` cũng nhận `interest_debt_id` trên từng dòng tách (UC-604, debt [UC-903](../debt/UC-903-gan-giao-dich-ngan-hang-la-tra-no.md) AC-4). Thêm bước 4.5, E3a, AC-11 (change [261008-bang-can-doi](../changes/archive/261008-bang-can-doi/proposal.md))
+- v10 (2026-10-17, commit `e207802`): `add_transaction` nhận `confirm_duplicate`; lỗi `bank_log_exists` khi SePay đã báo khoản trước mốc (ledger UC-101 5b), mô tả tool dặn chỉ gửi lại khi người dùng xác nhận. Thêm E3b, AC-12 (change [261017-webhook-truoc-moc](../changes/archive/261017-webhook-truoc-moc/proposal.md))
 
 ## Preconditions
 - Đã qua UC-601: token của kết nối có quyền `mcp:write` (Ghi). Mô tả tool (tiếng Anh, ADR-92) liệt kê sẵn id + tên thành viên active (`memberHint`) để Claude chọn `by_member_id` khi ghi thay người khác.
@@ -22,7 +23,7 @@
 ## Main Flow
 1. SDK kiểm input theo zod: `meaning` ∈ `MANUAL_MEANINGS` (`spend`, `income`, `refund`, `transfer`, `buy_asset`, `lend`, `collect`), `amount` nguyên dương; `by_member_id` tuỳ chọn (có thì là chuỗi không rỗng); còn lại tuỳ chọn (bảng `README.md`).
 2. Người ghi = `by_member_id` nếu có, không thì người đã uỷ quyền kết nối; handler kiểm người ghi thuộc tập thành viên `active` đã tải lúc `registerTools`.
-3. Dựng `EntryInput`: trường thiếu → `null`, `taxable` thiếu → `false`, `at` giữ nguyên để `buildEntry` chuẩn hoá (`normalizeAt`). Không có `client_id`.
+3. Dựng `EntryInput`: trường thiếu → `null`, `taxable` thiếu → `false`, `confirm_duplicate` = `true` chỉ khi gửi `true` (change 261017-webhook-truoc-moc), `at` giữ nguyên để `buildEntry` chuẩn hoá (`normalizeAt`). Không có `client_id`.
 4. Gọi `ledger.createEntry(db, input, người ghi, now)` — cùng luật nhập tay với REST: suy ví từ danh mục (đổi sang ví cá nhân cùng tầng của người ghi nếu danh mục trỏ ví cá nhân người khác), suy tài khoản tiền mặt của người ghi, `by_member_id` = người ghi, `source = 'manual'`.
    - 4.1 `income` kèm `tenant_id` (id lấy từ `list_tenants`): người thuê phải có và còn ở; bỏ trống `income_stream_id` thì tự lấy nguồn cho thuê cấu hình (`rental_income_stream_id`); số dư người thuê giảm đúng số tiền (rental [UC-805](../rental/UC-805-nhan-tien-nguoi-thue-tra.md)). `income_stream_id` chọn nguồn thu → lần chia theo phần khóa của nguồn (ADR-59).
    - 4.2 `transfer` **không** có `account_id`/`to_account_id` mà có `from_wallet_id` + `wallet_id` → chuyển ngân sách giữa hai ví, tiền không rời tài khoản (ledger UC-101); `wallet` trong kết quả là trạng thái của **ví nhận**.
@@ -40,6 +41,7 @@
 - E1. Thiếu/sai kiểu trường bắt buộc → tool error do SDK tạo; handler không chạy, không ghi gì.
 - E2. `by_member_id` không phải thành viên active (không có thật hoặc đã tắt) → tool error `Không có thành viên đang hoạt động với id "<id>".`, không ghi gì.
 - E3. Lỗi nghiệp vụ từ `createEntry` → tool error với thông điệp của `DomainError`, ví dụ tài khoản đã nối bank feed (`fed_account`), Tích sản không đủ tiền mặt cho `buy_asset` (`insufficient_cash`), `link_id` hoàn tiền không trỏ về khoản chi còn hiệu lực (`invalid_link`), nguồn/người thuê trên khoản không phải thu nhập (`income_only`), người thuê không có/đã ra (`unknown_tenant`/`inactive_tenant`), nguồn thu không có/đã tắt (`unknown_income_stream`/`inactive_income_stream`), chuyển ngân sách sai ví (`missing_wallet`, `unknown_wallet`, `same_wallet`, `locked_wallet`), khoản nợ trên khoản không phải chi (`debt_spend_only`), khoản nợ không có/đã tắt (`unknown_debt`/`inactive_debt`), khoản phải thu trên khoản không phải `lend`/`collect` (`receivable_only`), khoản phải thu không có/đã tắt (`unknown_receivable`/`inactive_receivable`).
+- E3b. Khoản trước mốc theo dõi SePay mà SePay đã báo và đã vào sổ → tool error `bank_log_exists` (ledger UC-101 5b). Mô tả tool dặn: không gửi lại trừ khi người dùng xác nhận đó là hai giao dịch thật khác nhau — khi đó gửi `confirm_duplicate=true`.
 - E3a. `interest_debt_id` trên khoản không phải `spend` → tool error `interest_spend_only` "Trả lãi chỉ gắn được với khoản chi."; gửi cả `interest_debt_id` lẫn `debt_id` → `debt_and_interest` "Một khoản chi không vừa trả gốc vừa trả lãi — ghi hai khoản: lãi (interest_debt_id) và gốc (debt_id)."; khoản nợ của `interest_debt_id` không có / đã tắt → `unknown_debt` / `inactive_debt`. Không ghi gì.
 
 ## Acceptance Criteria
@@ -109,6 +111,12 @@
 - When `add_transaction { meaning: "spend", amount: 300000, interest_debt_id: "vay-tieu-dung" }` (không danh mục); rồi `add_transaction { meaning: "spend", amount: 1000, interest_debt_id: "vay-tieu-dung", debt_id: "vay-tieu-dung" }`
 - Then lần đầu không lỗi, `tx` có `category_id = "loan-interest"`, `counter_wallet_id = "loan-interest"`, `interest_debt_id = "vay-tieu-dung"`; lần hai tool error (`debt_and_interest`); `GET /v1/debts` vẫn còn nợ 20.000.000 (lãi không giảm nợ)
 - Tests: [`test/mcp-oauth.test.ts`](../../test/mcp-oauth.test.ts) › "UC-602, UC-603: tool nhìn và ghi như người đã uỷ quyền › UC-603 AC-11: add_transaction nhận interest_debt_id — ghi khoản trả lãi (danh mục Lãi vay), còn nợ không đổi; cùng luật ledger UC-101 AC-25"
+
+### AC-12: Khoản SePay đã báo trước mốc: lỗi `bank_log_exists`, xác nhận thì ghi
+- Given log webhook trước mốc đã gán
+- When `add_transaction` đúng khoản đó; rồi kèm `confirm_duplicate: true`
+- Then tool lỗi `bank_log_exists`, không ghi; lần hai ghi
+- Tests: [`test/mcp.test.ts`](../../test/mcp.test.ts) › "add_transaction › UC-101 AC-26: khoản trước mốc mà SePay đã báo và đã gán → tool lỗi bank_log_exists; gửi kèm confirm_duplicate thì ghi"
 
 ## Traceability
 - Code: `src/mcp/tools.ts` › `registerTools` (tool `add_transaction`, `memberIds`, `memberHint`, `actor` `{ memberId, via: "mcp" }`, mô tả hướng dẫn tách lãi / gốc), `WRITE_TOOLS`; `src/routes/mcp.ts` › `mcpHandler` (kiểm `mcp:write` ở tầng HTTP); `src/services/audit.ts` › `audit`; `src/services/ledger.ts` › `createEntry`, `walletStatus`; `src/domain/entry.ts` › `MANUAL_MEANINGS`, `EntryInput`, `buildEntry` (`interest_debt_id`: `interest_spend_only`, `debt_and_interest`, danh mục mặc định `LOAN_INTEREST_ID`), `normalizeAt`, `walletFor`, `cashAccountOf`; `src/domain/system-ids.ts` › `LOAN_INTEREST_ID`

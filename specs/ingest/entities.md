@@ -31,7 +31,7 @@ lưu nguyên payload, không diễn giải. Giao dịch sổ sách (Transaction)
 stateDiagram-v2
   [*] --> pending: ingestLog (webhook/backfill)
   [*] --> ignored: ingestLog, log trước ngày mở sổ của TK (UC-302 2b, ADR-76) hay log lịch sử trước mốc theo dõi SePay (UC-302 2c, ADR-113)
-  pending --> assigned: tự khớp (UC-303) / gán tay (UC-305) / ghép tay (UC-306)
+  pending --> assigned: tự khớp (UC-303) / gán tay (UC-305) / ghép tay (UC-306) / nối vào khoản đã nhập tay (UC-302 5c, UC-305 2c, ledger UC-101 5b)
   pending --> ignored: bỏ qua (UC-305)
   assigned --> pending: gỡ gán (UC-306, unassignTransaction)
 ```
@@ -39,6 +39,7 @@ stateDiagram-v2
 
 ### Quan hệ
 - 1 BankLog → 0..N Transaction `active` qua `transactions.log_id` (tách nhiều dòng khi gán tay).
+- 1 BankLog → 0..1 Transaction `source='manual'` khi **nối** vào khoản đã nhập tay (`log_id`, hoặc `log_id_2` cho chân nhận của chuyển khoản — UC-302 5c, UC-305 2c; change 261017-webhook-truoc-moc). Gỡ gán chỉ gỡ log, không huỷ khoản tay (UC-306 4a).
 - 1 Transaction `transfer` ghép cặp → 2 BankLog (`log_id` = chân ra hoặc chân về / được ghi trước, `log_id_2` = chân còn lại — kể cả chân gắn sau vào chuyển nội bộ đã ghi, ADR-81).
 - 0..1 TransferOrder trỏ tới log đã hoàn tất nó (`transfer_orders.matched_log_id`).
 - N BankLog → 0..1 Account (`account_id`).
@@ -48,7 +49,7 @@ stateDiagram-v2
 |---|---|---|
 | I1 | Một id SePay → một log | PK `bank_logs.id` + `INSERT OR IGNORE` (`ingestLog`) |
 | I2 | Một `(account_id, reference_number)` khác rỗng → một log | Kiểm trước trong `ingestLog`; `UNIQUE INDEX idx_logs_ref … WHERE reference_number IS NOT NULL AND reference_number <> ''` (`migrations/0005_ingest_integrity_guards.sql`) |
-| I3 | Chỉ log `pending` mới sinh được giao dịch; cả hai chân của cặp đều phải `pending` | Trigger `trg_tx_needs_pending_log` (INSERT), `trg_tx_second_leg_needs_pending_log` (UPDATE `log_id_2`) — migration 0005 |
+| I3 | Chỉ log `pending` mới sinh được giao dịch hay được nối vào giao dịch có sẵn; cả hai chân của cặp đều phải `pending` | Trigger `trg_tx_needs_pending_log` (INSERT), `trg_tx_second_leg_needs_pending_log` (UPDATE `log_id_2`) — migration 0005; `trg_tx_log_id_needs_pending_log` (UPDATE `log_id`) — migration 0037 |
 | I4 | Ghi giao dịch và đổi log sang `assigned` là một khối nguyên tử | `commit()` = một `db.batch([... , markAssigned])` (`src/services/ingest.ts`) |
 | I5 | Tổng các giao dịch tách từ một log = `log.amount` | `assignLog` (`split_mismatch`) |
 | I6 | Nội dung log (mọi cột trừ `status`) không bị sửa | Chỉ theo quy ước: `src/` chỉ có `UPDATE bank_logs SET status …`; **không có trigger DB** chặn |

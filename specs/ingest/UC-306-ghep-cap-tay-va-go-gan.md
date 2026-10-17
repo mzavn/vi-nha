@@ -16,6 +16,7 @@
 - v8 (2026-10-03, commit `2608b66`): không đổi code — theo ingest UC-305 v15, log chân đầu mồ côi của lệnh `PF` (nội dung `PF …`, không phải rút tiền) không còn bị gợi ý "Rút tiền mặt"; cập nhật [OPEN] gỡ gán một chân.
 - v9 (2026-10-06, commit `d059eaa`): change [`261006-bao-mat-kenh-bao-tin`](../changes/archive/261006-bao-mat-kenh-bao-tin/proposal.md) (ADR-90, red-team INSIDER-04) — gỡ gán thành công ghi nhật ký `tx.unassign` (`target = tx:<id>`, `detail = { voided, logs }`, người gọi + `via`); lỗi không ghi. Thêm AC-11.
 - v10 (2026-10-17, commit `cb54dd7`): không đổi code ghép tay; ghi [OPEN] ghép tay không xét mốc theo dõi SePay (ADR-113) (change [261017-noi-sepay-sau](../changes/archive/261017-noi-sepay-sau/proposal.md))
+- v11 (2026-10-17, commit `e207802`): gỡ gán khoản `source='manual'` đã nối log chỉ gỡ `log_id` / `log_id_2` (log về `pending`), không huỷ khoản tay; `not_from_log` xét cả `log_id_2`. Thêm 4a, AC-12 (change [261017-webhook-truoc-moc](../changes/archive/261017-webhook-truoc-moc/proposal.md))
 
 ## Preconditions
 - Ghép tay: cả hai log `pending`. Gỡ gán: giao dịch `active`, sinh từ log (`log_id` khác NULL).
@@ -27,7 +28,8 @@
 3. Trả 201 `{transactionId}`.
 
 **Gỡ gán (`unassignTransaction`)**
-4. Lấy giao dịch; tập log = `{log_id, log_id_2}` (bỏ rỗng).
+4. Lấy giao dịch; tập log = `{log_id, log_id_2}` (bỏ rỗng); cả hai rỗng → E4 `not_from_log`.
+4a. **Khoản nhập tay đã nối log** (`source='manual'`, change 261017-webhook-truoc-moc — UC-302 5c, UC-305 2c, ledger UC-101 5b): một batch đặt `log_id = log_id_2 = NULL` (giao dịch vẫn `active`) và đưa các log `assigned` trong tập về `pending`; trả 200 `{voided: [], logs: [logId…]}` — **không huỷ** khoản tay, không chạy bước 5–7.
 5. Tìm mọi giao dịch `active` có `log_id` hoặc `log_id_2` thuộc tập log (một log có thể đã tách nhiều dòng).
 6. Với các dòng `income` trong đó: lấy lệnh gỡ lần chia (`undoAllocationStatements`, allocation "Gỡ lần chia").
 7. Một batch (`runUndo`): gỡ lần chia → `void` mọi dòng ở bước 5 → `transfer_orders` có `matched_log_id` thuộc tập log về `pending`, `matched_log_id = NULL` → log `assigned` thuộc tập log về `pending`.
@@ -92,6 +94,12 @@
 - When "husband" gỡ gán P (API token)
 - Then `audit_log` có `{ member_id: "husband", via: "token", action: "tx.unassign", target: "tx:<P>", detail: {"voided":[P],"logs":["va","vb"]} }`
 - Tests: `test/audit.test.ts` › "nhật ký thay đổi › huỷ, sửa, gỡ gán giao dịch đều ghi một dòng: ai, qua đâu, giao dịch nào"
+
+### AC-12: Gỡ gán khoản nhập tay đã nối log chỉ gỡ log, không huỷ khoản tay
+- Given khoản tay đã được Nối với log 500.000
+- When gỡ gán (`POST /v1/logs/transactions/:txId/void`)
+- Then giao dịch còn `active`, giữ ví / hạng mục; log về `pending`
+- Tests: [`test/logs.test.ts`](../../test/logs.test.ts) › "Gán: nối log vào khoản đã nhập tay (261017-webhook-truoc-moc) › UC-305 AC-27: log chờ 500.000, khoản tay khớp → hiện trong 'Đã nhập tay?'; Nối → log đã gán, giao dịch giữ ví / hạng mục; gỡ gán → giao dịch còn, log chờ lại"
 
 ## Traceability
 - Code: `src/routes/logs.ts` › `logs.post("/logs/pair")`, `logs.post("/logs/transactions/:txId/void")`; `src/services/audit.ts` › `recordChange`; `src/services/ingest.ts` › `pairLogs`, `unassignTransaction`, `commit`, `logTxStmt`, `markAssigned`; `src/services/ledger.ts` › `getTransaction`, `undoAllocationStatements`, `runUndo`, `manualTxOrThrow` (chặn `bank_tx` ở sổ cái)

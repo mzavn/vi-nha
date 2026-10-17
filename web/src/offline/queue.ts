@@ -66,7 +66,8 @@ export interface SyncerDeps {
 export interface Syncer {
   enqueue(body: EntryBody, memberId: string): Promise<QueuedEntry>;
   flush(): Promise<FlushReport>;
-  retry(clientId: string): Promise<FlushReport>;
+  /** Gửi lại một khoản. `confirmDuplicate`: người nhập xác nhận khoản SePay đã báo là khoản thật thứ hai (409 `bank_log_exists`). */
+  retry(clientId: string, opts?: { confirmDuplicate?: boolean }): Promise<FlushReport>;
   discard(clientId: string): Promise<void>;
   list(): Promise<QueuedEntry[]>;
 }
@@ -148,11 +149,12 @@ export function createSyncer(deps: SyncerDeps): Syncer {
       return item;
     },
     flush,
-    async retry(clientId) {
+    async retry(clientId, opts = {}) {
       const item = (await deps.store.list()).find((i) => i.clientId === clientId);
       if (item) {
         const { error: _drop, ...rest } = item;
-        await deps.store.put({ ...rest, status: "pending" });
+        const body = opts.confirmDuplicate ? { ...item.body, confirm_duplicate: true } : item.body;
+        await deps.store.put({ ...rest, body, status: "pending" });
       }
       return flush();
     },

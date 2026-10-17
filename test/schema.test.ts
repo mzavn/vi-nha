@@ -31,7 +31,7 @@ describe("migrations", () => {
     const views = db.prepare("SELECT name FROM sqlite_master WHERE type='view'").all() as { name: string }[];
     expect(views.length).toBeGreaterThan(0);
     for (const v of views) db.prepare(`SELECT * FROM ${v.name} LIMIT 1`).all();
-    expect(db.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.36" });
+    expect(db.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.37" });
   });
 
   it("đã bỏ hai view ngân sách mù kỳ", () => {
