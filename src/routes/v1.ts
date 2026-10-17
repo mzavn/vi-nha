@@ -160,6 +160,7 @@ function entryInput(b: Record<string, unknown>): EntryInput {
     debt_id: str(b.debt_id, "debt_id"),
     receivable_id: str(b.receivable_id, "receivable_id"),
     interest_debt_id: str(b.interest_debt_id, "interest_debt_id"),
+    confirm_duplicate: b.confirm_duplicate === true,
   };
   if (input.client_id && !/^[A-Za-z0-9_-]{8,64}$/.test(input.client_id)) bad("client_id phải là chuỗi 8–64 ký tự chữ, số, gạch.");
   return input;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ASSIGN_CHOICES, assignToast, deferredIncomeToast, validateSplits, type SplitMeaning } from "./splits";
+import { formatVnd } from "./money";
+import { ASSIGN_CHOICES, assignToast, deferredIncomeToast, linkToast, manualMatchLabel, validateSplits, type SplitMeaning } from "./splits";
 
 describe("tách log: tổng phải khớp số tiền log", () => {
   it("khớp đúng thì cho gán", () => {
@@ -108,5 +109,14 @@ describe("chữ nhắc dưới hàng chip 'Gán thành'", () => {
       expect(hint(dir, v)).toMatch(/bill/);
       expect(hint(dir, v)).not.toMatch(/mua hộ/i);
     }
+  });
+});
+
+describe("Gán: nối vào khoản đã nhập tay", () => {
+  it("UC-305 AC-27: dòng 'Đã nhập tay?' nói giờ VN, danh mục (hoặc loại) và ghi chú; toast nói không ghi thêm", () => {
+    const m = { id: 7, at: "2026-10-15T15:20:00.000Z", amount: 500_000, meaning: "spend", category_id: "groceries", note: "đi chợ" };
+    expect(manualMatchLabel(m, "Đi chợ")).toBe("15/10 22:20 · Đi chợ · đi chợ");
+    expect(manualMatchLabel({ ...m, meaning: "income", category_id: null, note: null }, null)).toBe("15/10 22:20 · Thu nhập");
+    expect(linkToast(500_000)).toBe(`Đã nối ${formatVnd(500_000)} vào khoản đã nhập tay — không ghi thêm.`);
   });
 });

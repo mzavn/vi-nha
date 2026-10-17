@@ -39,7 +39,7 @@ export function txSign(tx: Pick<TxRow, "meaning" | "counter_account_id">): "+" |
 export type TxOrigin = "manual" | "bank" | "system";
 
 export function txOrigin(tx: TxRow): TxOrigin {
-  if (tx.source === "sepay" || tx.log_id) return "bank";
+  if (tx.source === "sepay" || tx.log_id || tx.log_id_2) return "bank";
   if (tx.source === "system" || tx.meaning === "fund") return "system";
   return "manual";
 }

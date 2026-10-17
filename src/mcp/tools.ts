@@ -196,7 +196,9 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
         "When paying a debt with interestRate > 0, record TWO transactions: interest = min(amount, interestThisMonth − interestPaidThisMonth from get_debts) " +
         "with interest_debt_id, and the rest as principal with debt_id. " +
         "lend / collect: receivable_id = the receivable (id from get_receivables); account_id = account money leaves (lend) / arrives in (collect). " +
-        "buy_asset needs asset_kind (stock|gold|re|fund). Get category_id/wallet_id/account_id from list_categories or get_snapshot.",
+        "buy_asset needs asset_kind (stock|gold|re|fund). Get category_id/wallet_id/account_id from list_categories or get_snapshot. " +
+        "If the error code is bank_log_exists, the bank already reported this exact transaction and it is already in the books: do NOT retry " +
+        "unless the user confirms these are two separate real transactions — then send confirm_duplicate=true.",
       inputSchema: {
         meaning: z.enum(MANUAL_MEANINGS),
         amount: z.number().int().positive(),
@@ -216,6 +218,7 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
         debt_id: z.string().optional(),
         interest_debt_id: z.string().optional(),
         receivable_id: z.string().optional(),
+        confirm_duplicate: z.boolean().optional(),
       },
     },
     async (args) => {
@@ -242,6 +245,7 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
           debt_id: args.debt_id ?? null,
           interest_debt_id: args.interest_debt_id ?? null,
           receivable_id: args.receivable_id ?? null,
+          confirm_duplicate: args.confirm_duplicate === true,
         };
         const result = await ledger.createEntry(db, input, by, now());
         // Không trùng thì tx là dòng vừa ghi.

@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Env } from "../src/env";
 import { assignLog, createRule, ignoreLog, ingestLog, listPendingLogs, pairLogs, unassignTransaction, type ParsedBankLog } from "../src/services/ingest";
-import { allocateIncome } from "../src/services/ledger";
+import { allocateIncome, createEntry } from "../src/services/ledger";
 import { asD1, openDb } from "./helpers/d1-sqlite";
 
 let env: Env;
@@ -439,6 +439,59 @@ describe("mốc theo dõi SePay: log trước mốc như log trước ngày mở
     await ingestLog(env.DB, log({ id: "ra-21-10", at: "2026-10-21T05:00:00.000Z", refCode: "EAN", content: "EAN AN TRUA" }), "webhook", later());
     expect(bankLog("ra-21-10")).toMatchObject({ status: "assigned" });
     expect(txOf("ra-21-10")).toHaveLength(1);
+  });
+});
+
+describe("webhook trước mốc nối vào khoản đã nhập tay (261017-webhook-truoc-moc)", () => {
+  // VCB và TCB mở sổ 1/10; VCB nối SePay sau, theo dõi từ 22:24 ngày 15/10 giờ VN; khoản trước mốc nhập tay được.
+  const MARK = "2026-10-15T15:24:00.000Z";
+  const AT = "2026-10-15T15:20:00.000Z"; // 22:20 giờ VN
+  const arrived = () => new Date("2026-10-15T15:25:00.000Z");
+  beforeEach(() => {
+    raw.prepare("UPDATE accounts SET opened_at = '2026-10-01', opening_balance = 0 WHERE id IN ('vcb-husband', 'tcb-husband')").run();
+    raw.prepare("UPDATE accounts SET feed_from = ? WHERE id = 'vcb-husband'").run(MARK);
+  });
+  const txCount = () => (raw.prepare("SELECT COUNT(*) n FROM transactions WHERE status = 'active' AND meaning <> 'fund'").get() as { n: number }).n;
+  const reconcile = () => raw.prepare("SELECT book_balance, feed_balance, book_drift, pending_count FROM v_reconcile WHERE account_id = 'vcb-husband'").get();
+
+  it("UC-302 AC-13: khoản tay 'thu 500.000' 22:20, webhook vào 500.000 giờ 22:20 về lúc 22:25 → log nối vào khoản tay, số giao dịch không đổi, lệch 0", async () => {
+    const { tx } = await createEntry(env.DB, { meaning: "income", amount: 500_000, account_id: "vcb-husband", at: AT, note: "tiền nhà" }, "husband", arrived());
+    const r = await ingestLog(env.DB, log({ id: "tre", at: AT, direction: "in", amount: 500_000 }), "webhook", arrived());
+    expect(r).toEqual({ created: true, logId: "tre", linkedTo: Number(tx!.id) });
+    expect(bankLog("tre")).toMatchObject({ status: "assigned" });
+    expect(txCount()).toBe(1);
+    expect(raw.prepare("SELECT log_id, log_id_2, source, note FROM transactions WHERE id = ?").get(Number(tx!.id))).toEqual({ log_id: "tre", log_id_2: null, source: "manual", note: "tiền nhà" });
+    expect(reconcile()).toEqual({ book_balance: 500_000, feed_balance: 500_000, book_drift: 0, pending_count: 0 });
+  });
+
+  it("UC-302 AC-13: không có khoản tay khớp (khác số tiền, quá 1 ngày, hay là điều chỉnh) → log chờ gán như cũ", async () => {
+    await createEntry(env.DB, { meaning: "income", amount: 400_000, account_id: "vcb-husband", at: AT }, "husband", arrived());
+    await createEntry(env.DB, { meaning: "income", amount: 500_000, account_id: "vcb-husband", at: "2026-10-13T10:00:00.000Z" }, "husband", arrived());
+    raw.prepare(
+      `INSERT INTO transactions (at, amount, meaning, wallet_id, counter_account_id, week_key, month_key, source)
+       VALUES (?, 500000, 'adjust', 'income', 'vcb-husband', '2026-W42', '2026-10', 'manual')`,
+    ).run(AT);
+    await ingestLog(env.DB, log({ id: "tre", at: AT, direction: "in", amount: 500_000 }), "webhook", arrived());
+    expect(bankLog("tre")).toMatchObject({ status: "pending" });
+  });
+
+  it("UC-302 AC-13: khoản tay là chuyển TCB → VCB, log ra của TCB đang chờ → log vào của VCB vẫn nối vào khoản tay (chân nhận), không ghép cặp ra giao dịch mới", async () => {
+    raw.prepare("UPDATE accounts SET sepay_out = 0 WHERE id = 'tcb-husband'").run();
+    const { tx } = await createEntry(env.DB, { meaning: "transfer", amount: 500_000, account_id: "tcb-husband", to_account_id: "vcb-husband", at: AT }, "husband", arrived());
+    await ingestLog(env.DB, log({ id: "tcb-ra", at: "2026-10-15T15:19:00.000Z", amount: 500_000, accountNo: "1903xxxxxxx" }), "webhook", arrived());
+    expect(bankLog("tcb-ra")).toMatchObject({ status: "pending" });
+    await ingestLog(env.DB, log({ id: "vcb-vao", at: AT, direction: "in", amount: 500_000 }), "webhook", arrived());
+    expect(bankLog("vcb-vao")).toMatchObject({ status: "assigned" });
+    expect(txCount()).toBe(1);
+    expect(raw.prepare("SELECT log_id, log_id_2 FROM transactions WHERE id = ?").get(Number(tx!.id))).toEqual({ log_id: null, log_id_2: "vcb-vao" });
+    expect(bankLog("tcb-ra")).toMatchObject({ status: "pending" });
+  });
+
+  it("UC-302 AC-13: hai khoản tay khớp cách đều giờ log → không đoán, để chờ gán", async () => {
+    await createEntry(env.DB, { meaning: "income", amount: 500_000, account_id: "vcb-husband", at: "2026-10-15T15:10:00.000Z" }, "husband", arrived());
+    await createEntry(env.DB, { meaning: "income", amount: 500_000, account_id: "vcb-husband", at: "2026-10-15T15:22:00.000Z" }, "husband", arrived());
+    await ingestLog(env.DB, log({ id: "tre", at: "2026-10-15T15:16:00.000Z", direction: "in", amount: 500_000 }), "webhook", arrived());
+    expect(bankLog("tre")).toMatchObject({ status: "pending" });
   });
 });
 

@@ -10,7 +10,7 @@ import { localWalletStatus } from "../lib/pending";
 import { atForDay, dayKey, shortDate, timeHM } from "../lib/period";
 import { draftFromTx, editedAt, withChosen } from "../lib/transactions";
 import type { Bootstrap, CategoryRef, EntryBody } from "../lib/types";
-import { discardEntry, getState, go, refresh, replaceEntry, retryEntry, saveEntry, setState, syncNow, toast, useApp, viewSnapshot, type AppState } from "../state/store";
+import { confirmDuplicateEntry, discardEntry, getState, go, refresh, replaceEntry, retryEntry, saveEntry, setState, syncNow, toast, useApp, viewSnapshot, type AppState } from "../state/store";
 import { AccountSelect, amountExprHint, newClientId, useAmountField, WalletSelect } from "../ui/fields";
 import { CategoryIcon, Icon } from "../ui/icons";
 import { Money } from "../ui/money";
@@ -441,6 +441,8 @@ function QueueStatus() {
 function QueueList({ boot }: { boot: Bootstrap }) {
   const { queue, member, syncing } = useApp();
   const [confirm, setConfirm] = useState<string | null>(null);
+  // "Vẫn ghi" cho khoản SePay đã báo (409 bank_log_exists): bấm lần đầu chỉ mở lời xác nhận, không gửi.
+  const [dup, setDup] = useState<string | null>(null);
   if (queue.length === 0) return null;
   const name = (list: { id: string; name: string }[], id?: string) => list.find((x) => x.id === id)?.name;
   const memberName = (id: string) => boot.members.find((m) => m.id === id)?.name ?? id;
@@ -479,10 +481,27 @@ function QueueList({ boot }: { boot: Bootstrap }) {
             )}
           </span>
           {(q.status === "rejected" || (q.attempts >= 3 && q.error)) && q.memberId === member?.id && (
-            <span class="g flex gap-2" style={{ gridColumn: "1 / -1", justifySelf: "stretch", marginTop: "6px" }}>
-              <button type="button" class="btn" style={{ flex: 1 }} onClick={() => void retryEntry(q.clientId)}>
-                Gửi lại
-              </button>
+            <span class="g flex gap-2" style={{ gridColumn: "1 / -1", justifySelf: "stretch", marginTop: "6px", flexWrap: "wrap" }}>
+              {q.error?.code === "bank_log_exists" ? (
+                dup === q.clientId ? (
+                  <>
+                    <span class="fhint" style={{ flexBasis: "100%" }}>
+                      Ghi thêm là hai khoản cùng số tiền trong sổ. Chỉ bấm khi đúng là hai giao dịch thật khác nhau; còn đây chính là khoản SePay đã báo thì Bỏ khoản này.
+                    </span>
+                    <button type="button" class="btn btn-bad" style={{ flex: 1 }} onClick={() => void confirmDuplicateEntry(q.clientId)}>
+                      Vẫn ghi — là hai khoản
+                    </button>
+                  </>
+                ) : (
+                  <button type="button" class="btn" style={{ flex: 1 }} onClick={() => setDup(q.clientId)}>
+                    Vẫn ghi
+                  </button>
+                )
+              ) : (
+                <button type="button" class="btn" style={{ flex: 1 }} onClick={() => void retryEntry(q.clientId)}>
+                  Gửi lại
+                </button>
+              )}
               {confirm === q.clientId ? (
                 <button type="button" class="btn btn-bad" style={{ flex: 1 }} onClick={() => void discardEntry(q.clientId)}>
                   Bỏ hẳn khoản này

@@ -145,6 +145,20 @@ describe("hàng đợi nhập offline", () => {
     expect(server.rows.size).toBe(2);
   });
 
+  it("UC-101 AC-26: 409 bank_log_exists nằm lại chờ người quyết, không tự gửi lại; bấm Vẫn ghi → gửi lại kèm confirm_duplicate", async () => {
+    const { server, store, syncer } = setup();
+    const dup = body(500_000);
+    await syncer.enqueue(dup, "wife");
+    server.failNextWith({ status: 409, payload: { ok: false, error: { code: "bank_log_exists", message: "SePay đã báo khoản này và đã có trong sổ — ghi nữa là hai lần." } } });
+    await syncer.flush();
+    expect(await store.list()).toEqual([expect.objectContaining({ status: "rejected", error: expect.objectContaining({ code: "bank_log_exists" }) })]);
+    await syncer.flush();
+    expect(server.calls).toEqual([dup.client_id]);
+    await syncer.retry(dup.client_id, { confirmDuplicate: true });
+    expect(await store.list()).toEqual([]);
+    expect(server.rows.get(dup.client_id)).toMatchObject({ amount: 500_000, confirm_duplicate: true });
+  });
+
   it("lỗi 5xx: giữ lại để thử sau nhưng không chặn khoản phía sau; mất mạng thì dừng cả loạt", async () => {
     const { server, store, syncer } = setup();
     const a = body(1);

@@ -13,6 +13,7 @@ import { DomainError, type AccountRef, type AccountRole, type Refs, type WalletR
 import { formatMoney } from "../notify/format";
 import { itemsTotal } from "./balance";
 import { debtInterest, expectedInterestTotal, type DebtInterest } from "./debts";
+import { closest, feedMark, linkColumn } from "./manual-links";
 
 type Row = Record<string, unknown>;
 const rows = <T = Row>(r: D1Result) => (r.results ?? []) as T[];
@@ -90,10 +91,63 @@ const TX_COLUMNS = [
   "income_stream_id", "tenant_id", "debt_id", "receivable_id", "interest_debt_id",
 ] as const;
 
-export function insertTx(db: D1Database, row: TxRow): D1PreparedStatement {
+/** Log ngân hàng gắn vào khoản tay lúc ghi (261017-webhook-truoc-moc): `log_id` chân ra / khoản một chiều, `log_id_2` chân nhận. */
+export interface TxLogs {
+  log_id: string | null;
+  log_id_2: string | null;
+}
+const NO_LOGS: TxLogs = { log_id: null, log_id_2: null };
+
+export function insertTx(db: D1Database, row: TxRow, logs: TxLogs = NO_LOGS): D1PreparedStatement {
   return db
-    .prepare(`INSERT INTO transactions (${TX_COLUMNS.join(", ")}) VALUES (${TX_COLUMNS.map(() => "?").join(", ")})`)
-    .bind(...TX_COLUMNS.map((c) => row[c] ?? null));
+    .prepare(`INSERT INTO transactions (log_id, log_id_2, ${TX_COLUMNS.join(", ")}) VALUES (?, ?, ${TX_COLUMNS.map(() => "?").join(", ")})`)
+    .bind(logs.log_id, logs.log_id_2, ...TX_COLUMNS.map((c) => row[c] ?? null));
+}
+
+const linkedIds = (logs: TxLogs) => [logs.log_id, logs.log_id_2].filter((x): x is string => x !== null);
+
+/** Đổi các log vừa gắn vào khoản tay sang 'assigned' — cùng batch với lệnh ghi khoản đó, và chỉ khi khoản đó thật sự được ghi. */
+const markLinked = (db: D1Database, ids: string[]) =>
+  db
+    .prepare(
+      `UPDATE bank_logs SET status = 'assigned' WHERE status = 'pending' AND id IN (${ids.map(() => "?").join(", ")})
+         AND EXISTS (SELECT 1 FROM transactions t WHERE t.status = 'active' AND bank_logs.id IN (t.log_id, t.log_id_2))`,
+    )
+    .bind(...ids);
+
+const BANK_LOG_EXISTS = "SePay đã báo khoản này và đã có trong sổ — ghi nữa là hai lần.";
+
+/**
+ * Khoản tay trước mốc theo dõi SePay của một tài khoản (ADR-113) mà SePay đã báo bằng log webhook trước mốc khớp (cùng chiều,
+ * cùng số tiền, ngày VN lệch ≤ 1 ngày): log còn chờ → gắn luôn vào khoản này (gần giờ nhất; hoà thì không đoán); log đã gán
+ * (đã vào sổ) → 409 `bank_log_exists`, trừ khi người ghi xác nhận là hai khoản thật (`confirm_duplicate`).
+ */
+async function bankLogsFor(db: D1Database, refs: Refs, row: TxRow, confirmDuplicate: boolean): Promise<TxLogs> {
+  const logs: TxLogs = { ...NO_LOGS };
+  const sides = [
+    { accountId: row.account_id, direction: "out" as const },
+    { accountId: row.counter_account_id, direction: "in" as const },
+  ];
+  for (const side of sides) {
+    const account = side.accountId ? refs.accounts.find((a) => a.id === side.accountId && a.sepayEnabled) : undefined;
+    const mark = account ? feedMark(side.direction, account.feedFrom, account.sepayOutFrom) : null;
+    if (!account || !mark || Date.parse(row.at) >= Date.parse(mark)) continue;
+    const found = rows<{ id: string; at: string; status: string }>(
+      await db
+        .prepare(
+          `SELECT id, at, status FROM bank_logs
+           WHERE account_id = ?1 AND source = 'webhook' AND direction = ?2 AND amount = ?3 AND status IN ('pending', 'assigned')
+             AND julianday(at) < julianday(?4)
+             AND abs(julianday(date(at, '+7 hours')) - julianday(date(?5, '+7 hours'))) <= 1`,
+        )
+        .bind(account.id, side.direction, row.amount, mark, row.at)
+        .all(),
+    );
+    const hit = closest(found.filter((l) => l.status === "pending"), row.at);
+    if (hit) logs[linkColumn(side.direction, row.meaning)] = hit.id;
+    else if (!confirmDuplicate && found.some((l) => l.status === "assigned")) throw new DomainError("bank_log_exists", BANK_LOG_EXISTS, 409);
+  }
+  return logs;
 }
 
 export const getTransaction = (db: D1Database, id: number) => db.prepare("SELECT * FROM transactions WHERE id = ?").bind(id).first<Row>();
@@ -154,7 +208,7 @@ export async function createEntry(db: D1Database, input: EntryInput, memberId: s
     clientId ? db.prepare("SELECT * FROM transactions WHERE client_id = ?").bind(clientId).first<Row>() : null;
 
   const already = await existing();
-  if (already) return { tx: already, duplicate: true, wallet: null };
+  if (already) return { tx: already, duplicate: true, wallet: null, linkedLogs: [] as string[] };
 
   const refs = await loadRefs(db);
   const row = buildEntry(input, refs, memberId, now);
@@ -173,15 +227,19 @@ export async function createEntry(db: D1Database, input: EntryInput, memberId: s
     if (row.amount > cash) throw new DomainError("insufficient_cash", "Tích sản không đủ tiền mặt để mua khoản này.", 409);
   }
   await resolveLink(db, row);
+  const logs = await bankLogsFor(db, refs, row, input.confirm_duplicate === true);
+  const linked = linkedIds(logs);
 
   let id: number;
   try {
-    const res = await insertTx(db, row).run();
-    id = Number(res.meta.last_row_id);
+    const [res] = await db.batch([insertTx(db, row, logs), ...(linked.length ? [markLinked(db, linked)] : [])]);
+    id = Number(res!.meta.last_row_id);
   } catch (err) {
     // Hai lần gửi cùng client_id chạy song song: lần thua đọc lại bản đã ghi.
     const raced = await existing();
-    if (raced) return { tx: raced, duplicate: true, wallet: null };
+    if (raced) return { tx: raced, duplicate: true, wallet: null, linkedLogs: [] as string[] };
+    // Log định gắn vừa được gán ở request khác: khoản này giờ đã có trong sổ.
+    if (/log_not_pending/.test(String(err))) throw new DomainError("bank_log_exists", BANK_LOG_EXISTS, 409);
     throw err;
   }
   // Chuyển ngân sách (không có tài khoản): báo ví nhận, thường là ví vừa được bù.
@@ -190,6 +248,7 @@ export async function createEntry(db: D1Database, input: EntryInput, memberId: s
     tx: await getTransaction(db, id),
     duplicate: false,
     wallet: walletId ? await walletStatus(db, walletId, memberId, now) : null,
+    linkedLogs: linked,
   };
 }
 
@@ -220,7 +279,7 @@ async function manualTxOrThrow(db: D1Database, id: number) {
   if (tx.source === "system" || tx.meaning === "fund") {
     throw new DomainError("system_tx", "Bút toán do hệ thống sinh ra không huỷ lẻ được.", 409);
   }
-  if (tx.source === "sepay" || tx.log_id) {
+  if (tx.source === "sepay" || tx.log_id || tx.log_id_2) {
     throw new DomainError("bank_tx", "Giao dịch từ ngân hàng không xoá được — gỡ gán để gán lại.", 409);
   }
   return tx;
@@ -243,7 +302,7 @@ export async function replaceTransaction(db: D1Database, id: number, input: Entr
   // Trả về dạng dòng sổ (kèm tên danh mục…) để PWA nói được "Đã sửa thành 120.000 ₫ Xăng xe".
   const existing = async () => (clientId ? db.prepare(`${TX_VIEW} WHERE t.client_id = ?`).bind(clientId).first<Row>() : null);
   const already = await existing();
-  if (already) return { tx: already, replaced: id, duplicate: true, wallet: null };
+  if (already) return { tx: already, replaced: id, duplicate: true, wallet: null, linkedLogs: [] as string[] };
 
   const old = await manualTxOrThrow(db, id);
   if (!(MANUAL_MEANINGS as readonly unknown[]).includes(old.meaning)) {
@@ -279,15 +338,17 @@ export async function replaceTransaction(db: D1Database, id: number, input: Entr
   if (returns.length > 0 && (row.meaning !== old.meaning || otherPerson)) {
     throw new DomainError("invalid_link", "Khoản này đang có khoản trả lại trỏ về — gỡ liên kết trước.");
   }
+  const logs = await bankLogsFor(db, refs, row, input.confirm_duplicate === true);
+  const linked = linkedIds(logs);
 
   const undo = old.meaning === "income" ? await undoAllocationStatements(db, id) : [];
   // Khoản mới chỉ được ghi khi khoản cũ còn hiệu lực ngay trong batch: huỷ chen ở request khác thì không ghi gì mới.
   const insert = db
     .prepare(
-      `INSERT INTO transactions (${TX_COLUMNS.join(", ")}) SELECT ${TX_COLUMNS.map(() => "?").join(", ")}
+      `INSERT INTO transactions (log_id, log_id_2, ${TX_COLUMNS.join(", ")}) SELECT ?, ?, ${TX_COLUMNS.map(() => "?").join(", ")}
        WHERE EXISTS (SELECT 1 FROM transactions WHERE id = ? AND status = 'active')`,
     )
-    .bind(...TX_COLUMNS.map((c) => row[c] ?? null), id);
+    .bind(logs.log_id, logs.log_id_2, ...TX_COLUMNS.map((c) => row[c] ?? null), id);
   // Ngay sau INSERT cùng điều kiện: last_insert_rowid() là khoản mới; khoản cũ đã huỷ chen thì không ghi, không trỏ.
   const relink = db
     .prepare(
@@ -312,11 +373,19 @@ export async function replaceTransaction(db: D1Database, id: number, input: Entr
     : [];
   let results: D1Result[];
   try {
-    results = await runUndo(db, [...undo, insert, relink, ...copyClass, db.prepare("UPDATE transactions SET status = 'void' WHERE id = ? AND status = 'active'").bind(id)]);
+    results = await runUndo(db, [
+      ...undo,
+      insert,
+      relink,
+      ...copyClass,
+      ...(linked.length ? [markLinked(db, linked)] : []),
+      db.prepare("UPDATE transactions SET status = 'void' WHERE id = ? AND status = 'active'").bind(id),
+    ]);
   } catch (err) {
     // Hai lần gửi cùng client_id chạy song song: lần thua đọc lại bản đã ghi.
     const raced = await existing();
-    if (raced) return { tx: raced, replaced: id, duplicate: true, wallet: null };
+    if (raced) return { tx: raced, replaced: id, duplicate: true, wallet: null, linkedLogs: [] as string[] };
+    if (/log_not_pending/.test(String(err))) throw new DomainError("bank_log_exists", BANK_LOG_EXISTS, 409);
     throw err;
   }
   const written = results[undo.length]!.meta;
@@ -328,6 +397,7 @@ export async function replaceTransaction(db: D1Database, id: number, input: Entr
     replaced: id,
     duplicate: false,
     wallet: walletId ? await walletStatus(db, walletId, memberId, now) : null,
+    linkedLogs: linked,
   };
 }
 
@@ -424,8 +494,8 @@ function txWhere(f: TxFilter): { sql: string; binds: unknown[] } {
     parts.push("t.by_member_id = ?");
     binds.push(f.memberId);
   }
-  if (f.source === "bank") parts.push("(t.source = 'sepay' OR t.log_id IS NOT NULL)");
-  if (f.source === "manual") parts.push("(t.source = 'manual' AND t.log_id IS NULL)");
+  if (f.source === "bank") parts.push("(t.source = 'sepay' OR t.log_id IS NOT NULL OR (t.source = 'manual' AND t.log_id_2 IS NOT NULL))");
+  if (f.source === "manual") parts.push("(t.source = 'manual' AND t.log_id IS NULL AND t.log_id_2 IS NULL)");
   if (f.q) {
     // LIKE so chữ đã lưu (không phân biệt hoa thường với chữ không dấu); % và _ người gõ là chữ thường. Thêm dạng bỏ dấu
     // của chữ tìm (`normalizeContent`) để "thuốc" khớp nội dung ngân hàng không dấu "CHUYEN TIEN THUOC".

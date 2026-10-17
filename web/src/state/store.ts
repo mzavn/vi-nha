@@ -191,6 +191,16 @@ export async function retryEntry(clientId: string): Promise<void> {
   else toast("Chưa tới được máy chủ. Khoản này vẫn chờ đồng bộ.");
   await refresh();
 }
+/** "Vẫn ghi" của khoản bị 409 `bank_log_exists`: người nhập xác nhận đây là khoản thật thứ hai, gửi lại kèm confirm_duplicate. */
+export async function confirmDuplicateEntry(clientId: string): Promise<void> {
+  const report = await syncer.retry(clientId, { confirmDuplicate: true });
+  if (report.stopped === "auth") return toLogin();
+  const r = report.results[clientId];
+  if (r?.kind === "ok") toast("Đã ghi thêm khoản này.");
+  else if (r?.kind === "rejected") toast(`Vẫn bị từ chối: ${r.message}`);
+  else toast("Chưa tới được máy chủ. Khoản này vẫn chờ đồng bộ.");
+  await refresh();
+}
 /** Bỏ hẳn một khoản: dòng "vừa ghi" đang nói về nó (chờ đồng bộ) thì xoá luôn — khoản không bao giờ lên sổ. */
 export function discardEntry(clientId: string) {
   if (lastEntryQueued?.clientId === clientId) {
@@ -239,7 +249,11 @@ export async function saveEntry(body: EntryBody, okText?: string): Promise<boole
   if (result?.kind === "ok") {
     text = okText ?? (counted ? entryToast(body.amount, result.data.wallet ?? local, false) : doneText(body, false));
   } else if (result?.kind === "rejected") {
-    text = `Chưa ghi được: ${result.message} Khoản này nằm trong hàng đợi để sửa.`;
+    // SePay đã báo đúng khoản này và nó đã vào sổ: không tự gửi lại — người nhập chọn Vẫn ghi hay Bỏ ở hàng đợi.
+    text =
+      result.code === "bank_log_exists"
+        ? `Chưa ghi: ${result.message} Đúng là hai khoản khác nhau thì bấm Vẫn ghi ở mục Chưa lên sổ; không thì Bỏ khoản này.`
+        : `Chưa ghi được: ${result.message} Khoản này nằm trong hàng đợi để sửa.`;
   } else {
     text = counted ? entryToast(body.amount, local, true) : doneText(body, true);
   }

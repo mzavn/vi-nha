@@ -267,6 +267,42 @@ describe("mốc theo dõi SePay: khoản trước mốc nhập tay được (ADR
       replaceTransaction(env.DB, movedId, { meaning: "income", amount: 1_400_000, account_id: "mb-husband", at: "2026-10-16T10:00:00+07:00" }, "husband", today),
     ).rejects.toMatchObject({ code: "fed_account" });
   });
+
+  const webhookIn = (id: string, at: string, amount = 1_500_000) =>
+    ingestLog(env.DB, log({ id, at, amount, direction: "in", accountNo: "0888xxxxxxx" }), "webhook", today);
+
+  it("UC-101 AC-26: log trước mốc đang chờ 1.500.000 → nhập tay đúng khoản đó → log nối vào khoản tay, màn Gán trống", async () => {
+    await webhookIn("tre", "2026-10-15T15:20:00.000Z");
+    expect(raw.prepare("SELECT status FROM bank_logs WHERE id = 'tre'").get()).toEqual({ status: "pending" });
+    const r = await income("2026-10-15T22:21:00+07:00");
+    expect(r.linkedLogs).toEqual(["tre"]);
+    expect(raw.prepare("SELECT log_id, source FROM transactions WHERE id = ?").get(Number(r.tx!.id))).toEqual({ log_id: "tre", source: "manual" });
+    expect(raw.prepare("SELECT status FROM bank_logs WHERE id = 'tre'").get()).toEqual({ status: "assigned" });
+    expect(await listPendingLogs(env.DB, 50)).toEqual([]);
+  });
+
+  it("UC-101 AC-26: log trước mốc đã gán → nhập tay khoản đó → 409 bank_log_exists, không ghi; gửi lại confirm_duplicate → ghi", async () => {
+    await webhookIn("tre", "2026-10-15T15:20:00.000Z");
+    await assignLog(env.DB, "tre", [{ meaning: "income", amount: 1_500_000 }], "husband", today);
+    const before = count("SELECT COUNT(*) n FROM transactions WHERE status = 'active'");
+    await expect(income("2026-10-15T22:20:00+07:00")).rejects.toMatchObject({
+      code: "bank_log_exists",
+      status: 409,
+      message: "SePay đã báo khoản này và đã có trong sổ — ghi nữa là hai lần.",
+    });
+    expect(count("SELECT COUNT(*) n FROM transactions WHERE status = 'active'")).toBe(before);
+    const again = await createEntry(env.DB, { meaning: "income", amount: 1_500_000, account_id: "mb-husband", at: "2026-10-15T22:20:00+07:00", confirm_duplicate: true }, "husband", today);
+    expect(again).toMatchObject({ duplicate: false, linkedLogs: [] });
+    expect(count("SELECT COUNT(*) n FROM transactions WHERE status = 'active'")).toBe(before + 1);
+  });
+
+  it("UC-101 AC-26: sửa khoản tay trước mốc thành đúng số tiền / ngày của log trước mốc đang chờ → khoản mới nối log", async () => {
+    const { tx } = await income("2026-10-12T10:00:00+07:00");
+    await webhookIn("tre-13", "2026-10-13T03:00:00.000Z", 1_400_000);
+    const moved = await replaceTransaction(env.DB, Number(tx!.id), { meaning: "income", amount: 1_400_000, account_id: "mb-husband", at: "2026-10-13T10:00:00+07:00" }, "husband", today);
+    expect(moved.linkedLogs).toEqual(["tre-13"]);
+    expect(raw.prepare("SELECT status FROM bank_logs WHERE id = 'tre-13'").get()).toEqual({ status: "assigned" });
+  });
 });
 
 describe("rà lại các bản sửa (reviewer cuối)", () => {

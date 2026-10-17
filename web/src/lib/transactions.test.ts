@@ -33,6 +33,8 @@ describe("việc làm được với một giao dịch", () => {
   it("từ ngân hàng: không sửa không xoá, chỉ gán lại — kể cả khi chỉ có log_id", () => {
     expect(txActions(tx({ source: "sepay", log_id: "L1" }))).toMatchObject({ edit: false, remove: false, reassign: true, note: expect.stringContaining("chỉ gán lại") });
     expect(txActions(tx({ source: "manual", log_id: "L1" })).reassign).toBe(true);
+    // UC-305 AC-27: khoản chuyển nhập tay đã nối log tiền vào (chân nhận, log_id_2) cũng là giao dịch ngân hàng
+    expect(txActions(tx({ source: "manual", meaning: "transfer", log_id: null, log_id_2: "L2" }))).toMatchObject({ edit: false, remove: false, reassign: true });
   });
 
   it("hệ thống (chốt tháng, nạp ví của lần chia): chỉ xem, nói vì sao", () => {

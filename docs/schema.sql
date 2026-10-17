@@ -1,5 +1,5 @@
 -- ============================================================
---  PROFIT FIRST — HỘ GIA ĐÌNH · SCHEMA (D1 / SQLite)  v1.36
+--  PROFIT FIRST — HỘ GIA ĐÌNH · SCHEMA (D1 / SQLite)  v1.37
 --  v1.2 (20/9/2026): danh mục · tiền mặt · đa TK · thuế taxable ·
 --  lệnh chuyển tiền · thông báo
 --  v1.3 (21/9/2026): ngân sách theo kỳ chuyển sang query có tham số ·
@@ -68,6 +68,8 @@
 --  v1.36 (17/10/2026): mốc theo dõi SePay cho tài khoản đã dùng — accounts.feed_from (log lịch sử trước mốc như log trước
 --                     ngày mở sổ; log webhook không bao giờ bị bỏ vì mốc) · accounts.sepay_out_from (log ra trước lúc bật
 --                     "báo cả tiền ra" không tự gán); số theo ngân hàng tính động: sổ trước mốc + log trong phạm vi (ADR-113)
+--  v1.37 (17/10/2026): nối log vào khoản nhập tay (UPDATE log_id) chỉ khi log còn 'pending' — trigger
+--                     trg_tx_log_id_needs_pending_log, như chân thứ hai (ADR-113, webhook trước mốc)
 -- ============================================================
 --  NGUYÊN TẮC ENCODE:
 --   1. Hai lớp: bank_logs (thô, BẤT BIẾN) vs transactions (đã diễn giải)
@@ -735,6 +737,14 @@ BEGIN
   SELECT RAISE(ABORT, 'log_not_pending');
 END;
 
+-- Nối log vào giao dịch có sẵn (khoản nhập tay đã ghi, v1.37): log gắn vào log_id cũng phải còn 'pending'.
+CREATE TRIGGER trg_tx_log_id_needs_pending_log BEFORE UPDATE OF log_id ON transactions
+WHEN NEW.log_id IS NOT NULL AND NEW.log_id IS NOT OLD.log_id
+  AND (SELECT status FROM bank_logs WHERE id = NEW.log_id) IS NOT 'pending'
+BEGIN
+  SELECT RAISE(ABORT, 'log_not_pending');
+END;
+
 -- Một lệnh chuyển tiền chỉ được hoàn tất một lần (trả về 'pending' khi gỡ gán thì vẫn được).
 CREATE TRIGGER trg_transfer_order_settles_once BEFORE UPDATE OF status ON transfer_orders
 WHEN NEW.status <> 'pending' AND OLD.status <> 'pending'
@@ -978,4 +988,4 @@ CREATE TABLE month_closes (
 );
 
 -- Phiên bản schema — /v1/health đọc từ đây
-INSERT INTO config (k,v) VALUES ('schema_version','1.36');
+INSERT INTO config (k,v) VALUES ('schema_version','1.37');

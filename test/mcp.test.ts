@@ -182,6 +182,20 @@ describe("add_transaction", () => {
     expect(raw.prepare("SELECT COUNT(*) n FROM transactions WHERE counter_wallet_id = 'transport'").get()).toEqual({ n: 1 });
   });
 
+  it("UC-101 AC-26: khoản trước mốc mà SePay đã báo và đã gán → tool lỗi bank_log_exists; gửi kèm confirm_duplicate thì ghi", async () => {
+    raw.prepare("UPDATE accounts SET sepay_enabled = 1, opened_at = '2026-10-01', feed_from = '2026-10-15T15:24:00.000Z' WHERE id = 'vcb-husband'").run();
+    raw.prepare(
+      `INSERT INTO bank_logs (id, at, amount, direction, account_id, source, status) VALUES ('tre', '2026-10-15T15:20:00.000Z', 500000, 'in', 'vcb-husband', 'webhook', 'assigned')`,
+    ).run();
+    const args = { meaning: "income", amount: 500_000, account_id: "vcb-husband", at: "2026-10-15T15:20:00.000Z", by_member_id: "husband" };
+    const first = await mcp(call("add_transaction", args));
+    expect(first.json?.result.isError).toBe(true);
+    expect(first.json?.result.content[0].text).toContain("SePay đã báo khoản này");
+    const again = await mcp(call("add_transaction", { ...args, confirm_duplicate: true }));
+    expect(again.json?.result.isError).toBeFalsy();
+    expect(toolData(again.json!).tx).toMatchObject({ amount: 500_000, counter_account_id: "vcb-husband", source: "manual" });
+  });
+
   it("income kèm tenant_id → gắn người thuê, tự lấy nguồn thu cho thuê", async () => {
     raw.prepare("INSERT INTO tenants (id, name) VALUES ('tenant-binh', 'Anh Bình')").run();
     const { json } = await mcp(call("add_transaction", { meaning: "income", amount: 5_191_667, account_id: "vcb-husband", tenant_id: "tenant-binh", by_member_id: "husband" }));

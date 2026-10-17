@@ -13,7 +13,7 @@ import { formatVnd, moneyDigits } from "../lib/money";
 import { localWalletStatus } from "../lib/pending";
 import { dayKey, shortDate, timeHM } from "../lib/period";
 import { defaultReceivableId } from "../lib/receivables";
-import { ASSIGN_CHOICES, assignToast, deferredIncomeToast, GUIDE_PICK_KIND_URL, validateSplits, type AssignChoice, type Split, type SplitMeaning } from "../lib/splits";
+import { ASSIGN_CHOICES, assignToast, deferredIncomeToast, GUIDE_PICK_KIND_URL, linkToast, manualMatchLabel, validateSplits, type AssignChoice, type Split, type SplitMeaning } from "../lib/splits";
 import { MEANING_LABEL } from "../lib/transactions";
 import { wealthBuildingMoveHint } from "../lib/wealth-building-accounts";
 import type { AccountRef, AllocationPlan, BankLog, Bootstrap, Rental, SettingsData } from "../lib/types";
@@ -297,6 +297,21 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
     }
   }
 
+  // "Đã nhập tay?": gắn log vào khoản nhập tay đã ghi đúng khoản này — không tạo giao dịch, giữ nguyên ví / danh mục.
+  async function link(txId: number) {
+    setBusy(true);
+    try {
+      await api.post(`/v1/logs/${encodeURIComponent(log.id)}/link`, { transaction_id: txId });
+      await refresh();
+      toast(linkToast(log.amount));
+      onDone();
+    } catch (err) {
+      setError(errorText(err));
+      setBusy(false);
+    }
+  }
+  const matches = log.manual_matches ?? [];
+
   const title = `${log.direction === "in" ? "Tiền vào" : "Tiền ra"} ${formatVnd(log.amount)}`;
   const body = (
     <>
@@ -327,6 +342,21 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
           <Banner tone="info" mark="=">
             <strong>{log.suggestion.label ?? "Khớp chuyển nội bộ đã ghi"}</strong> từ tài khoản kia. Gán Chuyển nội bộ với đúng tài khoản đó là gắn vào giao dịch đã ghi — không ghi thêm, không đếm hai lần.
           </Banner>
+        </div>
+      )}
+      {log.account_id && matches.length > 0 && (
+        <div style={{ padding: "4px 16px 0" }}>
+          <Banner tone="info" mark="=">
+            <strong>Đã nhập tay?</strong> Có khoản nhập tay cùng số tiền, cùng chiều, cách không quá 1 ngày. Đúng là khoản này thì bấm Nối — gắn giao dịch ngân hàng vào đó, không ghi thêm. Đã ghi tay thành nhiều dòng (tách khoản) thì bấm <strong>Bỏ qua</strong> để khỏi ghi hai lần.
+          </Banner>
+          {matches.map((m) => (
+            <div key={m.id} class="g flex gap-2" style={{ alignItems: "center", marginTop: "6px" }}>
+              <span style={{ flex: 1, fontSize: "13px" }}>{manualMatchLabel(m, boot.categories.find((c) => c.id === m.category_id)?.name ?? null)}</span>
+              <button type="button" class="btn" disabled={busy} onClick={() => void link(m.id)}>
+                Nối
+              </button>
+            </div>
+          ))}
         </div>
       )}
       {log.direction === "in" && log.suggestion?.tenant_id && (

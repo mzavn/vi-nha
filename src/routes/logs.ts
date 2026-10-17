@@ -106,6 +106,15 @@ logs.post("/logs/:id/assign", async (c) => {
 
 logs.post("/logs/:id/ignore", async (c) => ok(c, await ingest.ignoreLog(c.env.DB, c.req.param("id"))));
 
+// "Đã nhập tay?" ở màn Gán: nối log vào khoản nhập tay đã ghi đúng khoản đó (không ghi thêm giao dịch).
+logs.post("/logs/:id/link", async (c) => {
+  const txId = (await body(c)).transaction_id;
+  if (typeof txId !== "number" || !Number.isInteger(txId) || txId <= 0) bad("transaction_id phải là số nguyên dương.");
+  const result = await ingest.linkLog(c.env.DB, c.req.param("id"), txId as number);
+  await recordChange(c, "log.link", `tx:${txId}`, { log: c.req.param("id") });
+  return ok(c, result);
+});
+
 logs.post("/logs/pair", async (c) => {
   const b = await body(c);
   const logA = b.log_a;

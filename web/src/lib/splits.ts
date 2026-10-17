@@ -3,7 +3,9 @@
 
 import { formatVnd } from "./money";
 import { ordersLeft, walletRemain } from "./pending";
-import type { WalletStatus } from "./types";
+import { shortDate, timeHM } from "./period";
+import { MEANING_LABEL } from "./transactions";
+import type { ManualMatch, WalletStatus } from "./types";
 
 export type SplitMeaning = "spend" | "transfer" | "income" | "refund" | "lend" | "collect" | "buy_asset";
 
@@ -129,3 +131,12 @@ export function assignToast(splits: Split[], o: { label: string; status: WalletS
 export function deferredIncomeToast(amount: number): string {
   return `Đã ghi ${formatVnd(amount)} vào ví Thu nhập, chưa chia. Chia ở Giao dịch gần đây › khoản này › Chia.`;
 }
+
+/** Một dòng "Đã nhập tay?" ở màn Gán: giờ VN, danh mục (không có thì loại giao dịch), ghi chú. */
+export function manualMatchLabel(m: ManualMatch, categoryName: string | null): string {
+  const what = categoryName ?? MEANING_LABEL[m.meaning] ?? m.meaning;
+  return `${shortDate(m.at)} ${timeHM(m.at)} · ${what}${m.note ? ` · ${m.note}` : ""}`;
+}
+
+/** Toast sau khi Nối log vào khoản đã nhập tay. */
+export const linkToast = (amount: number): string => `Đã nối ${formatVnd(amount)} vào khoản đã nhập tay — không ghi thêm.`;
