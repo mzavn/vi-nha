@@ -576,3 +576,24 @@ describe("Gán: nối log vào khoản đã nhập tay (261017-webhook-truoc-moc
     expect((await call("POST", "/v1/logs/m2/link", { transaction_id: "x" })).status).toBe(400);
   });
 });
+
+describe("Gán lãi tiền gửi qua REST (261018-lai-tien-gui)", () => {
+  it("UC-305: split { meaning: income, interest: true, wallet_id } → 201, khoản thu + một fund vào ví đó, 0 lệnh chuyển; ví Thu nhập → 400 invalid_wallet; log tiền ra → 400 invalid_input; không ghi gì khi lỗi", async () => {
+    seedLog("li", "in", 37, "vcb-husband", { content: "BankAPINotify" });
+    seedLog("lo", "out", 37, "vcb-husband");
+    const bad = await call("POST", "/v1/logs/li/assign", { splits: [{ meaning: "income", amount: 37, interest: true, wallet_id: "income" }] });
+    expect(bad.status).toBe(400);
+    expect(bad.json.error?.code).toBe("invalid_wallet");
+    const out = await call("POST", "/v1/logs/lo/assign", { splits: [{ meaning: "income", amount: 37, interest: true, wallet_id: "nice-to-have" }] });
+    expect(out.status).toBe(400);
+    expect(out.json.error?.code).toBe("invalid_input");
+    expect(raw.prepare("SELECT COUNT(*) n FROM transactions").get()).toEqual({ n: 0 });
+
+    const { status, json } = await call("POST", "/v1/logs/li/assign", { splits: [{ meaning: "income", amount: 37, interest: true, wallet_id: "nice-to-have" }] });
+    expect(status).toBe(201);
+    const id = json.data.transactions[0].id;
+    expect(raw.prepare("SELECT wallet_id, amount FROM transactions WHERE meaning = 'fund' AND link_id = ?").all(id)).toEqual([{ wallet_id: "nice-to-have", amount: 37 }]);
+    expect(raw.prepare("SELECT COUNT(*) n FROM transfer_orders").get()).toEqual({ n: 0 });
+    expect(raw.prepare("SELECT report_class FROM transaction_report_classes WHERE transaction_id = ?").get(id)).toEqual({ report_class: "passive_income" });
+  });
+});

@@ -13,7 +13,7 @@ import { formatVnd, moneyDigits } from "../lib/money";
 import { localWalletStatus } from "../lib/pending";
 import { dayKey, shortDate, timeHM } from "../lib/period";
 import { defaultReceivableId } from "../lib/receivables";
-import { ASSIGN_CHOICES, assignToast, deferredIncomeToast, GUIDE_PICK_KIND_URL, linkToast, manualMatchLabel, validateSplits, type AssignChoice, type Split, type SplitMeaning } from "../lib/splits";
+import { ASSIGN_CHOICES, assignToast, deferredIncomeToast, GUIDE_PICK_KIND_URL, interestHint, interestToast, linkToast, logChip, manualMatchLabel, validateSplits, type AssignChoice, type Split, type SplitMeaning } from "../lib/splits";
 import { MEANING_LABEL } from "../lib/transactions";
 import { wealthBuildingMoveHint } from "../lib/wealth-building-accounts";
 import type { AccountRef, AllocationPlan, BankLog, Bootstrap, Rental, SettingsData } from "../lib/types";
@@ -54,7 +54,7 @@ export function Assign() {
   };
 
   const list = (
-    <Card title="Chưa gán" right={logs.data ? <span class="hint">{count} giao dịch</span> : undefined} flush note="Tiền vào không bao giờ tự gán, trừ khoản khớp mẫu lương.">
+    <Card title="Chưa gán" right={logs.data ? <span class="hint">{count} giao dịch</span> : undefined} flush note="Tiền vào không bao giờ tự gán, trừ khoản khớp mẫu lương và lãi tiền gửi nhỏ.">
       {logs.loading && !logs.data ? (
         <Skeleton rows={3} />
       ) : notReady ? (
@@ -100,17 +100,15 @@ export function LogRow({ log, boot, onOpen, current }: { log: BankLog; boot: Boo
   const acct = boot?.accounts.find((a) => a.id === log.account_id)?.name ?? log.account_id ?? "";
   const isToday = dayKey(log.at) === dayKey(new Date());
   const s = log.suggestion;
-  const hint = s?.possible_duplicate_of
-    ? { cls: "chip warn", text: "có thể trùng — xem trước khi gán" }
-    : s?.is_salary && !s.tenant_id
-    ? { cls: "chip ok", text: "khớp mẫu lương" }
-    : log.direction === "in" && !s
-      ? { cls: "chip warn", text: "tiền vào — phải hỏi" }
-      : s?.tenant_id
-        ? { cls: "chip", text: `gợi ý: ${s.label ?? "thu từ người thuê"}` }
-        : s?.meaning
-          ? { cls: "chip", text: `gợi ý: ${s.label ?? boot?.categories.find((c) => c.id === s.category_id)?.name ?? boot?.wallets.find((w) => w.id === s.wallet_id)?.name ?? [...ASSIGN_CHOICES.out, ...ASSIGN_CHOICES.in].find((o) => o.value === s.meaning)?.label.toLowerCase() ?? "có luật"}` }
-          : { cls: "chip", text: "chưa có luật" };
+  const hint = logChip(
+    log,
+    () =>
+      s?.label ??
+      boot?.categories.find((c) => c.id === s?.category_id)?.name ??
+      boot?.wallets.find((w) => w.id === s?.wallet_id)?.name ??
+      [...ASSIGN_CHOICES.out, ...ASSIGN_CHOICES.in].find((o) => o.value === s?.meaning)?.label.toLowerCase() ??
+      "có luật",
+  );
   return (
     <button type="button" class="log" onClick={onOpen} aria-current={current ? "true" : undefined}>
       <span class="t">
@@ -132,7 +130,7 @@ function WealthBuildingMoveHint({ accounts, from, to }: { accounts: AccountRef[]
   return text ? <p class="fhint">{text}</p> : null;
 }
 
-type Row = Split & { key: number; tenantMode?: boolean };
+type Row = Split & { key: number; tenantMode?: boolean; interestMode?: boolean };
 let rowSeq = 0;
 
 function initialRows(log: BankLog, boot: Bootstrap, memberId: string | null): Row[] {
@@ -140,6 +138,8 @@ function initialRows(log: BankLog, boot: Bootstrap, memberId: string | null): Ro
   if (log.direction === "in" && s?.tenant_id) {
     return [{ key: ++rowSeq, meaning: "income", tenantMode: true, tenant_id: s.tenant_id, amount: log.amount, taxable: false }];
   }
+  // Lãi tiền gửi (UC-706): một dòng, ví điền sẵn ví nhận lãi.
+  if (log.direction === "in" && s?.interest) return [{ key: ++rowSeq, meaning: "income", interestMode: true, amount: log.amount, wallet_id: s.wallet_id ?? null }];
   const allowed = ASSIGN_CHOICES[log.direction === "in" ? "in" : "out"].map((o) => o.value);
   const meaning = (s?.meaning && allowed.includes(s.meaning as SplitMeaning) ? s.meaning : log.direction === "in" ? "income" : "spend") as SplitMeaning;
   const cat = boot.categories.find((c) => c.id === s?.category_id);
@@ -183,10 +183,15 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
   const noTenant = rows.some((r) => r.tenantMode && !r.tenant_id);
   // Dòng đang hỏi tên người mới (ô Ai trả / Cho ai vay): gán lúc này là gán khi chưa có người — chờ Thêm người.
   const [naming, setNaming] = useState<number[]>([]);
-  const blocked = noTenant || naming.length > 0;
+  const interestRow = rows.find((r) => r.interestMode) ?? null;
+  const blocked = noTenant || naming.length > 0 || (!!interestRow && !interestRow.wallet_id);
+  // Ví nhận lãi: ví đang dùng, không phải ví Thu nhập hay ví quỹ (như server).
+  const interestWallets = boot.wallets.filter((w) => w.tier !== "holding");
+  const interestWalletName = boot.wallets.find((w) => w.id === interestRow?.wallet_id)?.name ?? null;
   // Như server (routes/logs.ts): chỉ tạo rule khi gán đúng một dòng chi tiêu hoặc chuyển nội bộ; tiền vào luôn phải hỏi.
   const ruleAllowed = rows.length === 1 && (rows[0]!.meaning === "spend" || rows[0]!.meaning === "transfer");
-  const income = rows.find((r) => r.meaning === "income");
+  // Dòng lãi không chia thử, không "để chia sau": máy chia trọn vào ví nhận lãi.
+  const income = rows.find((r) => r.meaning === "income" && !r.interestMode);
   // Người thuê trả mà không chọn nguồn: server tự gán nguồn cho thuê — chia thử cũng theo nguồn đó.
   const previewStream = income?.income_stream_id || (income?.tenant_id ? rental?.incomeStreamId : null) || null;
   // Bảng chia thử (Có / Không Tích sản, Tự chia) là của dòng thu nhập đầu tiên.
@@ -200,11 +205,15 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
   const update = (key: number, patch: Partial<Row>) => setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
 
   function choose(r: Row, c: AssignChoice) {
-    if (c === "tenant") update(r.key, { meaning: "income", tenantMode: true, tenant_id: r.tenant_id ?? tenants[0]?.id ?? null, income_stream_id: null });
+    if (c === "tenant") update(r.key, { meaning: "income", tenantMode: true, interestMode: false, tenant_id: r.tenant_id ?? tenants[0]?.id ?? null, income_stream_id: null });
+    // Lãi tiền gửi luôn một dòng trọn số tiền log (không tách).
+    else if (c === "interest")
+      setRows([{ key: ++rowSeq, meaning: "income", interestMode: true, amount: log.amount, wallet_id: log.suggestion?.interest ? (log.suggestion.wallet_id ?? null) : null, note: r.note ?? null }]);
     else
       update(r.key, {
         meaning: c,
         tenantMode: false,
+        interestMode: false,
         tenant_id: null,
         // Khoản gốc chỉ thuộc dòng Hoàn tiền / Nhận lại, và đi cùng danh mục, ví hay người của nó: đổi loại là bỏ, quay lại thì chọn lại.
         link_id: null,
@@ -226,7 +235,9 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
     setBusy(true);
     setError(null);
     try {
-      const splits = rows.map(({ key: _k, tenantMode: _t, tenant_id, income_stream_id, from_wallet_id, debt_id, interest_debt_id, receivable_id, link_id, ...s }) => ({
+      const splits = interestRow
+        ? [{ meaning: "income" as const, amount: interestRow.amount, wallet_id: interestRow.wallet_id, interest: true, ...(interestRow.note ? { note: interestRow.note } : {}) }]
+        : rows.map(({ key: _k, tenantMode: _t, interestMode: _i, tenant_id, income_stream_id, from_wallet_id, debt_id, interest_debt_id, receivable_id, link_id, ...s }) => ({
         ...s,
         ...(s.meaning === "income" && tenant_id ? { tenant_id } : {}),
         ...(s.meaning === "income" && income_stream_id ? { income_stream_id } : {}),
@@ -243,6 +254,13 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
       if (res.attached) {
         await refresh();
         toast(`Đã khớp vào chuyển nội bộ đã ghi ${formatVnd(log.amount)} — không ghi thêm.`);
+        onDone();
+        return;
+      }
+      // Lãi: server đã ghi khoản thu và chia trọn vào ví nhận lãi — không gọi /v1/allocate.
+      if (interestRow) {
+        await refresh();
+        toast(interestToast(log.amount, interestWalletName ?? "ví đã chọn"));
         onDone();
         return;
       }
@@ -366,7 +384,7 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
           </Banner>
         </div>
       )}
-      {log.direction === "in" && !log.suggestion?.is_salary && !log.suggestion?.possible_duplicate_of && !log.suggestion?.tenant_id && !log.suggestion?.attach_to_tx && (
+      {log.direction === "in" && !log.suggestion?.is_salary && !log.suggestion?.possible_duplicate_of && !log.suggestion?.tenant_id && !log.suggestion?.attach_to_tx && !log.suggestion?.interest && (
         <div style={{ padding: "4px 16px 0" }}>
           <Banner tone="warn" mark="?">
             Tiền vào <strong>luôn phải hỏi</strong>. Máy không đoán được đây là thu nhập hay người ta trả lại tiền. Không chắc chọn loại nào?{" "}
@@ -395,10 +413,16 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
               </button>
             )}
           </div>
-          <Seg class="px-4 pb-2" label={`Loại dòng ${i + 1}`} value={r.tenantMode ? "tenant" : r.meaning} options={options} onChange={(c) => choose(r, c)} />
+          <Seg class="px-4 pb-2" label={`Loại dòng ${i + 1}`} value={r.tenantMode ? "tenant" : r.interestMode ? "interest" : r.meaning} options={options} onChange={(c) => choose(r, c)} />
           <p class="fhint" style={{ padding: "0 16px 8px" }}>
-            {options.find((o) => o.value === (r.tenantMode ? "tenant" : r.meaning))?.hint}
+            {r.interestMode ? interestHint(interestWalletName ?? "ví chọn bên dưới") : options.find((o) => o.value === (r.tenantMode ? "tenant" : r.meaning))?.hint}
           </p>
+          {r.interestMode && (
+            <div class="field">
+              <label for={`s-iw-${r.key}`}>Ví</label>
+              <WalletSelect id={`s-iw-${r.key}`} wallets={interestWallets} value={r.wallet_id ?? null} onChange={(id) => update(r.key, { wallet_id: id || null })} placeholder="Chọn ví nhận lãi" />
+            </div>
+          )}
           <div class="field">
             <label for={`s-amt-${r.key}`}>Số tiền</label>
             <AmountInput id={`s-amt-${r.key}`} value={r.amount} onChange={(n) => update(r.key, { amount: n })} invalid={!r.amount} />
@@ -535,7 +559,7 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
               </select>
             </div>
           )}
-          {r.meaning === "income" && !r.tenantMode && (
+          {r.meaning === "income" && !r.tenantMode && !r.interestMode && (
             <>
               {streams.length > 0 && (
                 <div class="field">
@@ -585,16 +609,18 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
       ))}
 
       <div class="field" style={{ justifyContent: "space-between" }}>
-        <button
-          type="button"
-          class="btn"
-          onClick={() => setRows((rs) => [...rs, { key: ++rowSeq, meaning: isIn ? "income" : "spend", amount: Math.max(0, check.diff), category_id: null, wallet_id: null }])}
-        >
-          <Icon name="plus" size={16} />
-          Tách thêm dòng
-        </button>
+        {!interestRow && (
+          <button
+            type="button"
+            class="btn"
+            onClick={() => setRows((rs) => [...rs, { key: ++rowSeq, meaning: isIn ? "income" : "spend", amount: Math.max(0, check.diff), category_id: null, wallet_id: null }])}
+          >
+            <Icon name="plus" size={16} />
+            Tách thêm dòng
+          </button>
+        )}
         <span class={check.ok && !blocked ? "sub-line" : "err"} role="status" style={{ textAlign: "right" }}>
-          {noTenant ? "Chọn người thuê." : naming.length > 0 ? "Bấm Thêm người trước khi gán." : check.ok ? `Khớp ${formatVnd(log.amount)}` : check.message}
+          {noTenant ? "Chọn người thuê." : naming.length > 0 ? "Bấm Thêm người trước khi gán." : interestRow && !interestRow.wallet_id ? "Chọn ví nhận lãi." : check.ok ? `Khớp ${formatVnd(log.amount)}` : check.message}
         </span>
       </div>
       {ruleAllowed && (

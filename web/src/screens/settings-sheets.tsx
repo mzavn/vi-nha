@@ -1303,6 +1303,8 @@ export function SepayConnectionSheet({ item, onClose, onSaved }: { item: SepayCo
 
 export function ConfigSheet({ config, wallets, onClose, onSaved }: { config: SettingsConfig; wallets: SettingsWallet[]; onClose: () => void; onSaved: Saved }) {
   const [salary, setSalary] = useState(config.salary_min_amount);
+  // Bản cài đặt lưu offline từ trước bản lãi tiền gửi thiếu khoá này: mặc định như server.
+  const [interest, setInterest] = useState(config.interest_max_amount ?? 10_000);
   const [months, setMonths] = useState(String(config.safety_fund_months));
   const [closePct, setClosePct] = useState(String(config.month_close_wealth_pct ?? 50));
   const [reward, setReward] = useState(config.month_close_reward_wallet ?? "");
@@ -1316,6 +1318,10 @@ export function ConfigSheet({ config, wallets, onClose, onSaved }: { config: Set
         <AmountInput id="c-salary" value={salary} onChange={setSalary} />
       </Field>
       <Hint>Khoản khớp mẫu lương từ mức này trở lên thì tự ghi và tự chia; nhỏ hơn thì chờ ở màn Gán như mọi tiền vào khác. Để 0 là không có ngưỡng.</Hint>
+      <Field id="c-interest" label="Lãi tiền gửi: tự ghi khoản dưới" error={errors.interest_max_amount}>
+        <AmountInput id="c-interest" value={interest} onChange={setInterest} />
+      </Field>
+      <Hint>Tiền vào nhỏ hơn mức này mà nội dung trống, chỉ "BankAPINotify" hay có "lãi tiền gửi" thì máy tự ghi là lãi, cộng thẳng vào ví của chính tài khoản nhận (không chia lương). Để 0 là tắt.</Hint>
       <Field id="c-months" label="Quỹ an tâm (số tháng)" error={errors.safety_fund_months}>
         <input id="c-months" class="ctl money" inputMode="numeric" pattern="[0-9]*" autocomplete="off" value={months} onInput={(ev) => setMonths(ev.currentTarget.value)} {...invalid(errors, "safety_fund_months", "c-months")} />
       </Field>
@@ -1351,7 +1357,7 @@ export function ConfigSheet({ config, wallets, onClose, onSaved }: { config: Set
         label="Lưu tham số"
         onSubmit={() =>
           void run(
-            configPayload({ salary_min_amount: salary, safety_fund_months: months, month_close_wealth_pct: closePct, month_close_reward_wallet: reward }),
+            configPayload({ salary_min_amount: salary, interest_max_amount: interest, safety_fund_months: months, month_close_wealth_pct: closePct, month_close_reward_wallet: reward }),
             (body) => api.put("/v1/settings/config", body),
             "Đã lưu tham số. Áp dụng từ khoản thu tới.",
           )

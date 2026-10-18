@@ -1,20 +1,21 @@
 # UC-1106: Báo cáo kết quả thu chi theo tháng / năm
 - Status: implemented
 - BR: BR-15, BR-02, BR-12
-- Decisions: ADR-104 (suy nhóm từ dữ liệu có sẵn — trả nợ gốc, mua tài sản, khoản xếp lại Đầu tư / Tài chính không phải chi tiêu / thu nhập); ADR-106 (lãi vay là chi phí Must, có dòng con Lãi vay); ADR-100 (tính ra từ sổ bằng một câu SQL gộp theo tháng, không lưu)
+- Decisions: ADR-104 (suy nhóm từ dữ liệu có sẵn — trả nợ gốc, mua tài sản, khoản xếp lại Đầu tư / Tài chính không phải chi tiêu / thu nhập); ADR-106 (lãi vay là chi phí Must, có dòng con Lãi vay); ADR-100 (tính ra từ sổ bằng một câu SQL gộp theo tháng, không lưu); ADR-114 (lãi tiền gửi luôn là Thu nhập thụ động)
 - Actor: người trong hộ (màn Tài sản & tự do › Thu chi, [UC-717](../pwa/UC-717-man-tai-san-va-tu-do.md)); Claude (MCP `get_reports`, [UC-602](../mcp/UC-602-doc-so-lieu-qua-mcp.md))
 - Trigger: mở phần Thu chi (`#net-worth/income`) hoặc đổi kỳ; `GET /v1/reports/income-statement?period=YYYY-MM|YYYY`
 
 ## History
 - v1 (2026-10-08, commit `31e3505`): khởi tạo — Kết quả thu chi tháng / năm: Thu nhập (ba dòng) − Chi tiêu (theo phe ví, Must có dòng con Lãi vay) = Để dành, tỷ lệ để dành, chân "Không tính"; kỳ năm có từng tháng; MCP `get_reports` (change [261008-bang-can-doi](../changes/archive/261008-bang-can-doi/proposal.md))
 - v2 (2026-10-08, commit `d4f0ab3`): hàng gộp của báo cáo (`statementRows`) dùng chung cho Mốc tự do — là nguồn E, E_must, I ([UC-1103](UC-1103-moc-tu-do.md)) và tỷ lệ để dành mặc định của Thử số ([UC-1107](UC-1107-thu-so-du-phong.md)); số của báo cáo không đổi (change [261008-bang-can-doi](../changes/archive/261008-bang-can-doi/proposal.md))
+- v3 (2026-10-18, commit `6afc8c8`): khoản thu **lãi tiền gửi** (ADR-114 — máy tự ghi hay gán loại Lãi tiền gửi) mang report class `passive_income` do máy ghi lúc chia lãi, nên luôn ở **Thu nhập thụ động**, cả tài khoản thường; phân loại lại tay vẫn thắng. Sửa 2; thêm AC-4 (change [261018-lai-tien-gui](../changes/archive/261018-lai-tien-gui/proposal.md))
 
 ## Preconditions
 - Đã đăng nhập. Kỳ theo `month_key` của giao dịch — cùng kỳ với Ngân sách và Lưu chuyển tiền ([UC-1105](UC-1105-luu-chuyen-tien.md)); hàng chọn kỳ dùng chung với phần Lưu chuyển tiền.
 
 ## Main Flow
 1. Người dùng mở **Thu chi**, chọn kỳ (Tháng / Năm, "‹ kỳ ›" — [UC-717](../pwa/UC-717-man-tai-san-va-tu-do.md) AC-3).
-2. **Thu nhập** = Σ khoản thu còn hiệu lực trong kỳ, ba dòng: **Lương và thu khác** · **Cho thuê lại** (khoản thu có người thuê) · **Thu nhập thụ động** (khoản thu vào tài khoản phao / sổ tiết kiệm chưa phân loại lại, hoặc đã phân loại lại Thu nhập thụ động). Khoản thu phân loại lại Đầu tư / Tài chính **không** là thu nhập ([Công thức 15](README.md#công-thức)).
+2. **Thu nhập** = Σ khoản thu còn hiệu lực trong kỳ, ba dòng: **Lương và thu khác** · **Cho thuê lại** (khoản thu có người thuê) · **Thu nhập thụ động** (khoản thu vào tài khoản phao / sổ tiết kiệm chưa phân loại lại, hoặc đã phân loại lại Thu nhập thụ động — gồm mọi khoản lãi tiền gửi, vì máy ghi sẵn phân loại này khi chia lãi, ADR-114). Khoản thu phân loại lại Đầu tư / Tài chính **không** là thu nhập ([Công thức 15](README.md#công-thức)).
 3. **Chi tiêu** = Σ khoản chi − Σ hoàn tiền, theo phe của ví bị trừ (hoàn tiền: ví được hoàn): **Must** (có dòng con **Lãi vay** = khoản chi trả lãi `interest_debt_id`) · **Có thì tốt** · **Hưởng thụ** · **Thuế đã nộp** (ví Thuế) · **Chi từ Tích sản** · **Khác**. **Không** gồm trả nợ gốc (khoản chi mang khoản nợ — Tài chính) và khoản chi phân loại lại Đầu tư / Tài chính.
 4. **Để dành** = Thu nhập − Chi tiêu; **tỷ lệ để dành** = Để dành ÷ Thu nhập, cắt về một chữ số lẻ (Thu nhập 0 → "—").
 5. **Chân "Không tính"**: trả nợ gốc, mua tài sản qua app, phân loại lại Đầu tư, phân loại lại Tài chính, điều chỉnh khi đếm số dư (có dấu) — mỗi khoản kèm số, ẩn khi 0: "Không tính: trả nợ gốc 5.000.000 ₫, mua tài sản 6.000.000 ₫, phân loại lại Tài chính 50.000.000 ₫, điều chỉnh −100.000 ₫ — xem Lưu chuyển tiền."
@@ -49,6 +50,12 @@
 - When xem tháng 11
 - Then Chi tiêu › Must có dòng con "Lãi vay 300.000"; 2.000.000 gốc chỉ ở chân "không tính trả nợ gốc"
 - Tests: [`test/reports.test.ts`](../../test/reports.test.ts) › "UC-1106 kết quả thu chi › UC-1106 AC-3 (lãi vay là chi phí): tháng 11 Must có dòng con Lãi vay 300.000; 2.000.000 gốc chỉ ở chân"; [`web/src/lib/reports.test.ts`](../../web/src/lib/reports.test.ts) › "kết quả thu chi › UC-1106 AC-2, AC-3: chi tiêu ẩn dòng 0; Thuế đã nộp hiện khi có; Must có dòng con Lãi vay 300.000 khi có lãi"
+
+### AC-4: Lãi tiền gửi ở Thu nhập thụ động, cả tài khoản thường
+- Given tháng 10 có lương 30.000.000 và ba khoản lãi 68 + 50 + 37 ghi loại Lãi tiền gửi ở tài khoản thường
+- When `GET /v1/reports/income-statement?period=2026-10`
+- Then Lương và thu khác 30.000.000, Thu nhập thụ động 155, Thu nhập 30.000.155
+- Tests: [`test/reports.test.ts`](../../test/reports.test.ts) › "lãi tiền gửi ở Kết quả thu chi (261018-lai-tien-gui) › UC-1106: tháng có lương 30.000.000 và ba khoản lãi 68 + 50 + 37 (tài khoản thường) → Lương và thu khác 30.000.000, Thu nhập thụ động 155"
 
 ## Dependencies
 - Upstream UC: [UC-1105](UC-1105-luu-chuyen-tien.md) (kỳ, phân loại lại), [UC-902](../debt/UC-902-tra-no.md) (tách lãi / gốc)

@@ -16,7 +16,7 @@
 4. **Một quy ước dấu, không ngoại lệ:** `wallet_id` = ví **được cộng**, `counter_wallet_id` = ví **bị trừ**.
    Nên `spend` ghi ví vào `counter_wallet_id`. `spend` **bắt buộc có `category_id`** (CHECK ở DB).
 5. **Số tổng hợp thì tính ra, không lưu.** Số dư, đã tiêu, tiến độ, cash/assets — đều là view.
-6. **Máy chỉ được đoán `spend` và `transfer`.** Tiền vào **luôn phải hỏi**, trừ khoản khớp mẫu lương.
+6. **Máy chỉ được đoán `spend` và `transfer`.** Tiền vào **luôn phải hỏi**, trừ khớp mẫu lương **hoặc log lãi** (dưới ngưỡng lãi).
    *Để rule tự gán tiền vào thành thu nhập = thu nhập ảo + chia lương hai lần.*
 
 ---

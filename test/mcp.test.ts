@@ -313,3 +313,15 @@ describe("chi phí CPU ước lượng", () => {
     expect(avg).toBeLessThan(1000);
   });
 });
+
+describe("assign_log nhận dòng lãi tiền gửi (261018-lai-tien-gui)", () => {
+  it("UC-604: assign_log split { meaning: income, interest: true, wallet_id } → khoản thu + một fund vào ví đó, 0 lệnh chuyển, Thu nhập thụ động", async () => {
+    raw.prepare("INSERT INTO bank_logs (id, at, amount, direction, account_id, content, status) VALUES ('I1', '2026-10-01T00:07:00.000Z', 50, 'in', 'vcb-wife', 'BankAPINotify', 'pending')").run();
+    const res = await mcp(call("assign_log", { log_id: "I1", splits: [{ meaning: "income", amount: 50, interest: true, wallet_id: "fun-wife" }] }));
+    expect(res.json?.result.isError).toBeFalsy();
+    const id = toolData(res.json!).transactions[0].id as number;
+    expect(raw.prepare("SELECT wallet_id, amount FROM transactions WHERE meaning = 'fund' AND link_id = ?").all(id)).toEqual([{ wallet_id: "fun-wife", amount: 50 }]);
+    expect(raw.prepare("SELECT COUNT(*) n FROM transfer_orders").get()).toEqual({ n: 0 });
+    expect(raw.prepare("SELECT report_class FROM transaction_report_classes WHERE transaction_id = ?").get(id)).toEqual({ report_class: "passive_income" });
+  });
+});

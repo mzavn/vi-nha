@@ -526,7 +526,7 @@
 - [OPEN] Không có tool MCP cho bức tranh này: Claude trả lời "nhà có bao nhiêu tiền" phải tự cộng tool `get_reconciliation` (`bookBalance`) — dễ cộng nhầm sổ ghi nhớ vào.
 - [OPEN] Heo đất là tiền gửi có kỳ hạn (sổ tích lũy); VAS 24 §04 chỉ coi là tương đương tiền khi kỳ hạn ≤ 3 tháng. App vẫn để nó trong `cash` theo cách nhìn của chủ nhà (gốc chắc chắn, của nhà) và chỉ gắn nhãn "đã khóa" (ADR-77); từ ADR-82 nó còn là Tích sản tiền mặt (`wealthBuildingCash`, phao). Lãi chưa về tài khoản thì không có trong `cash`.
 
-## Bảng cân đối, mốc tự do & báo cáo (balance) — 3 divergence, 4 open
+## Bảng cân đối, mốc tự do & báo cáo (balance) — 3 divergence, 5 open
 
 ### [balance/UC-1102-xem-bang-can-doi.md](balance/UC-1102-xem-bang-can-doi.md)
 - [DIVERGENCE] ADR-12 đặt trần 10 ms CPU mỗi request (Workers Free) và UC-1102 AC-9 đòi đo CPU khi apply; đo trên prod lát 1 (7 request đầu của `/v1/balance-sheet`, `/v1/balance-sheet/history?months=12`, `/v1/debts`, `/v1/networth`) ra P50 11,0 ms, max 14,8 ms — vượt trần dù số câu SQL đã gom đúng (≤ 11). Request vượt trần có thể bị chặn nếu tài khoản còn ở gói Free; ADR-54 (lên Workers Paid) vẫn chờ chủ nhà. → Chủ nhà: xác nhận gói / lên Workers Paid (ADR-54), hoặc giao việc giảm CPU của bảng cân đối và lịch sử.
@@ -538,6 +538,7 @@
 ### [balance/UC-1105-luu-chuyen-tien.md](balance/UC-1105-luu-chuyen-tien.md)
 - [OPEN] CPU của báo cáo năm chưa đo trên Workers: AC-7 mới đếm câu SQL (4 câu) và đo 12,1 ms chạy trên Node với DB mẫu 24 tháng × 300 giao dịch; lát 2 lên prod (2026-10-08 17:02) chỉ ghi hai báo cáo trả 200 và bất biến đúng trên số thật tháng 10. Trần Workers Free 10 ms (ADR-12; lịch sử bảng cân đối lát 1 đo trên prod P50 11,0 ms, max 14,8 ms) — cần đo `wrangler dev` / prod rồi quyết theo ADR-54.
 - [OPEN] Kỳ đang xem không giữ khi tải lại (F5 về tháng hiện tại; chỉ phần `#net-worth/cash-flow` được giữ). Có cần ghi kỳ vào hash không — chủ nhà.
+- [OPEN] Phân loại `passive_income` do máy ghi cho lãi tiền gửi (ADR-114) hiện như phân loại tay ("đã xếp lại") và không có dòng nhật ký `report_class.set`; bấm "Về mặc định" thì lãi ở tài khoản thường về "Lương và thu khác". Có cần tách phân loại máy với phân loại tay không — chủ nhà.
 
 ### [balance/UC-1106-ket-qua-thu-chi.md](balance/UC-1106-ket-qua-thu-chi.md)
 - [OPEN] Phần Thu chi không có lối phân loại lại: muốn đưa một khoản ra khỏi thu nhập / chi tiêu phải sang Lưu chuyển tiền, chạm dòng rồi Xếp vào nhóm… ([UC-1105](balance/UC-1105-luu-chuyen-tien.md)). Có cần chạm dòng ở Thu chi không — chủ nhà.

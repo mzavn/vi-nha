@@ -1,7 +1,7 @@
 # UC-604: Gán log ngân hàng qua MCP
 - Status: implemented
 - BR: BR-05, BR-04
-- Decisions: `plans/260921-2228-profit-first-pwa/phase-06-mcp.md` bảng Tools (`list_pending_logs`, `assign_log` "cần phase 04"); commit `bc0d2a2`; commit `8c319c1` (cập nhật test MCP khi bank feed đã có); ADR-60 (tiền vào từ người thuê chỉ gợi ý — gợi ý `tenant_id` hiện trong `list_pending_logs`); ADR-71 (trả nợ = khoản chi có `debt_id`); ADR-72 (tiền cho vay về = split `collect`, không bao giờ là thu nhập); ADR-92 (mô tả tool tiếng Anh); ADR-97 (MCP dùng OAuth 2.1 — người gán là người đã uỷ quyền); ADR-98 (quyền Ghi tick sẵn, bỏ được); ADR-90 (nhật ký thay đổi chỉ thêm)
+- Decisions: `plans/260921-2228-profit-first-pwa/phase-06-mcp.md` bảng Tools (`list_pending_logs`, `assign_log` "cần phase 04"); commit `bc0d2a2`; commit `8c319c1` (cập nhật test MCP khi bank feed đã có); ADR-60 (tiền vào từ người thuê chỉ gợi ý — gợi ý `tenant_id` hiện trong `list_pending_logs`); ADR-71 (trả nợ = khoản chi có `debt_id`); ADR-72 (tiền cho vay về = split `collect`, không bao giờ là thu nhập); ADR-92 (mô tả tool tiếng Anh); ADR-97 (MCP dùng OAuth 2.1 — người gán là người đã uỷ quyền); ADR-98 (quyền Ghi tick sẵn, bỏ được); ADR-90 (nhật ký thay đổi chỉ thêm); ADR-114 (split lãi tiền gửi `interest`)
 - Actor: Claude (hoặc ứng dụng AI đã nối — UC-601), thay mặt người đã uỷ quyền kết nối
 - Trigger: MCP `tools/call` `list_pending_logs`, `assign_log`
 
@@ -14,6 +14,7 @@
 - v6 (2026-10-05, commit `d7992d1`): change [`261005-lien-ket-khoan-goc`](../changes/archive/261005-lien-ket-khoan-goc/proposal.md) — split của `assign_log` nhận `link_id` (số nguyên dương; `refund` → khoản chi gốc, `collect` → khoản cho vay gốc) — cùng `resolveLink` với REST (ingest UC-305 bước 6.7). Trước đó zod bỏ qua trường này: gán qua Claude không nối được khoản tiền về với khoản gốc.
 - v7 (2026-10-07, commit `7424f26`): mô tả hai tool viết tiếng Anh (ADR-92), bỏ câu sai "Cần bank feed (phase 04) — hiện chưa triển khai…" — đóng [DIVERGENCE] mô tả tool nói chưa triển khai (mcp UC-602 AC-5 kiểm qua `tools/list`). Hành vi không đổi (change [261007-doi-ten-tieng-anh](../changes/archive/261007-doi-ten-tieng-anh/proposal.md)).
 - v8 (2026-10-08, commit `e5ecf41`): `assign_log` ghi người gán là **người đã uỷ quyền kết nối** (UC-601) thay cho `null` — giao dịch tạo ra mang `by_member_id` của người đó và luật đổi sang ví cá nhân của người gán áp dụng như REST; cần quyền `mcp:write` (thiếu → HTTP 403); gán xong ghi nhật ký `log.assign` `via = mcp`. Sửa AC-3, AC-4 (bỏ "trừ `by_member_id = null`"); thêm AC-7. Đóng [OPEN] `assign_log` truyền người gán `null` (change [261008-mcp-oauth](../changes/archive/261008-mcp-oauth/proposal.md)).
+- v9 (2026-10-18, commit `6afc8c8`): split của `assign_log` nhận `interest: boolean` — **lãi tiền gửi** (ADR-114, ingest UC-305 5c): đúng một split `{ meaning: "income", interest: true, wallet_id }` → ghi khoản thu rồi chia trọn vào `wallet_id`, không lệnh chuyển, Thu nhập thụ động; `list_pending_logs` trả gợi ý `interest`; mô tả tool nói cách dùng. Thêm AC-8 (change [261018-lai-tien-gui](../changes/archive/261018-lai-tien-gui/proposal.md))
 
 ## Preconditions
 - Đã qua UC-601 (`list_pending_logs` cần quyền Xem `mcp:read`; `assign_log` cần quyền Ghi `mcp:write`). Có log `bank_logs.status = 'pending'` (từ webhook hoặc rà soát — `specs/ingest/`).
@@ -83,7 +84,14 @@
 - Then không lỗi; giao dịch của `L9` có `by_member_id = "wife"`; nhật ký `log.assign` với người làm `wife`, `via = mcp`, đích `log:L9`
 - Tests: [`test/mcp-oauth.test.ts`](../../test/mcp-oauth.test.ts) › "UC-601 AC-6, AC-11: quyền xem / ghi › token chỉ Xem gọi tool ghi → HTTP 403 insufficient_scope, challenge ghi đủ mcp:read mcp:write; không ghi gì"; [`test/mcp-oauth.test.ts`](../../test/mcp-oauth.test.ts) › "UC-602, UC-603: tool nhìn và ghi như người đã uỷ quyền › assign_log ghi người làm là người uỷ quyền, nhật ký via=mcp"
 
+### AC-8: Gán lãi tiền gửi qua Claude
+- Given log `I1` `pending` +50 `BankAPINotify` ở `vcb-wife`; kết nối có quyền Ghi
+- When `assign_log { log_id: "I1", splits: [{ meaning: "income", amount: 50, interest: true, wallet_id: "fun-wife" }] }`
+- Then không lỗi; khoản thu 50 + một fund 50 vào `fun-wife`, 0 lệnh chuyển, report class `passive_income`. Split sai (ví Thu nhập, nhiều dòng…) → tool error như ingest UC-305 E8
+- Tests: [`test/mcp.test.ts`](../../test/mcp.test.ts) › "assign_log nhận dòng lãi tiền gửi (261018-lai-tien-gui) › UC-604: assign_log split { meaning: income, interest: true, wallet_id } → khoản thu + một fund vào ví đó, 0 lệnh chuyển, Thu nhập thụ động"
+
 ## Traceability
+- Code (lãi tiền gửi, ADR-114): `src/mcp/tools.ts` › `assign_log` (zod `interest`, map `interest`, mô tả tool)
 - Code: `src/mcp/tools.ts` › `registerTools` (tool `list_pending_logs`, `assign_log`, `actor` `{ memberId, via: "mcp" }`), `WRITE_TOOLS`; `src/routes/mcp.ts` › `mcpHandler` (kiểm `mcp:write` ở tầng HTTP); `src/services/audit.ts` › `audit`; `src/services/ingest.ts` › `listPendingLogs`, `assignLog`, `Split`; `src/routes/logs.ts` (REST tương đương)
 - Liên quan: `specs/ingest/` (UC-305 Gán log chưa gán)
 

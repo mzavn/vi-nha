@@ -39,6 +39,8 @@ Giá trị lưu DB / API dùng `snake_case`; trường JSON và tên TypeScript 
 | Ví Thưởng | reward wallet (`config.month_close_reward_wallet`) |
 | Lợi nhuận thêm (phần dư khi chốt tháng) | `profit`; % vào Tích sản `config.month_close_wealth_pct` |
 | Có / Không Tích sản (khi chia), lý do | `wealth_amount`, `wealth_note` (`allocation_runs.wealth_note`) |
+| Lãi tiền gửi (loại gán, log lãi) | split `{ meaning: "income", interest: true, wallet_id }`; `suggestion.interest`; `isInterestLog`, `interestWallet` (`src/domain/interest-deposit.ts`) |
+| Lãi tiền gửi: tự ghi khoản dưới (Tham số) | `config.interest_max_amount` (mặc định 10.000, 0 = tắt) |
 
 ## Địa chỉ màn PWA
 

@@ -423,6 +423,8 @@ export interface BankLog {
     from_wallet_id?: string | null;
     /** Chân còn lại của chuyển nội bộ đã ghi (ADR-81): gán Chuyển nội bộ với `other_account_id` là gắn vào giao dịch này. */
     attach_to_tx?: number | null;
+    /** Log lãi tiền gửi (change 261018-lai-tien-gui): gán Lãi tiền gửi, `wallet_id` = ví nhận lãi (null = chưa chọn được). */
+    interest?: boolean | null;
   } | null;
   /** "Đã nhập tay?": khoản nhập tay khớp log (chiều, số tiền, ngày lệch ≤ 1) — Nối là gắn log vào đó, không ghi thêm. */
   manual_matches?: ManualMatch[];
@@ -551,6 +553,8 @@ export interface Secret {
 
 export interface SettingsConfig {
   salary_min_amount: number;
+  /** Lãi tiền gửi: log tiền vào nhỏ hơn số này (nội dung rỗng / BankAPINotify / "lãi tiền gửi") thì máy tự ghi; 0 = tắt. */
+  interest_max_amount: number;
   safety_fund_months: number;
   /** Tham số bảng cân đối / Mốc tự do (phần vạn: 350 = 3,5%). */
   fi_swr_bps: number;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatVnd } from "./money";
-import { ASSIGN_CHOICES, assignToast, deferredIncomeToast, linkToast, manualMatchLabel, validateSplits, type SplitMeaning } from "./splits";
+import { ASSIGN_CHOICES, assignToast, deferredIncomeToast, interestHint, interestToast, linkToast, logChip, manualMatchLabel, validateSplits, type AssignChoice, type SplitMeaning } from "./splits";
 
 describe("tách log: tổng phải khớp số tiền log", () => {
   it("khớp đúng thì cho gán", () => {
@@ -86,10 +86,27 @@ describe("gán thu nhập, để chia sau", () => {
   });
 });
 
+describe("Gán lãi tiền gửi (261018-lai-tien-gui)", () => {
+  const label = () => "chưa có luật";
+  it("UC-706: log có gợi ý lãi → chip xanh 'gợi ý: Lãi tiền gửi', sau 'có thể trùng', thay 'tiền vào — phải hỏi'", () => {
+    const lai = { meaning: "income", interest: true, wallet_id: "wb", label: "Lãi tiền gửi" };
+    expect(logChip({ direction: "in", suggestion: lai }, label)).toEqual({ cls: "chip ok", text: "gợi ý: Lãi tiền gửi" });
+    expect(logChip({ direction: "in", suggestion: null }, label)).toEqual({ cls: "chip warn", text: "tiền vào — phải hỏi" });
+    expect(logChip({ direction: "in", suggestion: { possible_duplicate_of: "x", label: "Có thể trùng" } }, label)).toEqual({ cls: "chip warn", text: "có thể trùng — xem trước khi gán" });
+  });
+
+  it("UC-706: loại Lãi tiền gửi có ở tiền vào, không có ở tiền ra; dòng giải thích nói ví nhận; toast 'Đã ghi lãi 37 ₫ vào Tích sản'", () => {
+    expect(ASSIGN_CHOICES.in.find((c) => c.value === "interest")?.label).toBe("Lãi tiền gửi");
+    expect(ASSIGN_CHOICES.out.some((c) => c.value === "interest")).toBe(false);
+    expect(interestHint("Tích sản")).toBe("Lãi ngân hàng trả — cộng thẳng vào Tích sản, không chia lương, báo cáo xếp Thu nhập thụ động.");
+    expect(interestToast(37, "Tích sản")).toBe(`Đã ghi lãi ${formatVnd(37)} vào Tích sản`);
+  });
+});
+
 describe("chữ nhắc dưới hàng chip 'Gán thành'", () => {
   it("mỗi loại của mỗi chiều có đúng một dòng giải thích riêng; tiền vào có Thu từ người thuê", () => {
-    const meanings: Record<"in" | "out", (SplitMeaning | "tenant")[]> = {
-      in: ["income", "tenant", "refund", "collect", "transfer"],
+    const meanings: Record<"in" | "out", AssignChoice[]> = {
+      in: ["income", "interest", "tenant", "refund", "collect", "transfer"],
       out: ["spend", "transfer", "lend", "buy_asset"],
     };
     for (const dir of ["in", "out"] as const) {

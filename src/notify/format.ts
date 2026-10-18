@@ -115,6 +115,8 @@ export interface DailyMessageInput {
   debts?: { balance: number; count: number } | null;
   /** Sổ phải thu: tổng người khác còn nợ và số khoản (đang theo dõi, còn phải thu > 0). Không có hoặc tổng 0 thì không hiện dòng. */
   receivables?: { balance: number; count: number } | null;
+  /** Lãi tiền gửi máy tự ghi hôm qua (change 261018-lai-tien-gui): tổng, số khoản, tên ví nhận. Không có hoặc 0 khoản thì không hiện dòng. */
+  interestYesterday?: { total: number; count: number; wallets: string[] } | null;
 }
 
 /**
@@ -202,6 +204,11 @@ export function dailyMessage(input: DailyMessageInput): NotifyMessage {
 
   if (input.pairedTransfersYesterday > 0) {
     lines.push(`🔗 Hôm qua tự ghép ${input.pairedTransfersYesterday} cặp chuyển nội bộ`);
+  }
+
+  const lai = input.interestYesterday;
+  if (lai && lai.count > 0) {
+    lines.push(`💰 Lãi tiền gửi: +${formatMoney(lai.total)} (${lai.count} khoản) — vào ${lai.wallets.map(escapeHtml).join(", ")}`);
   }
 
   if (input.backfillAddedLastNight > 0) {

@@ -1,7 +1,7 @@
 # UC-303: Tự khớp log vào sổ
 - Status: implemented
 - BR: BR-04, BR-02, BR-03
-- Decisions: D2 (chia ngay income đã xác nhận), D4; luật 6 (`docs/core_design_rules.md` §1); §6 "Luật khớp cặp chuyển nội bộ"; §9 "Mẫu lương"; commit `c3ab508` (ghi nguyên tử + trigger), `8ef7a99` (memo ngẫu nhiên riêng từng lệnh), `099e54f` (ngưỡng lương chống giả mạo), `eb7846e` (chân đầu bị gỡ vẫn được ghép lại); `plans/reports/code-reviewer-260922-0330-redteam-fixes-review.md` #1; ADR-59 (phần khóa theo nguồn thu của mẫu lương); ADR-60 (rule người thuê chỉ gợi ý, không tự gán); ADR-66 (log tiền ra của tài khoản "chỉ tiền vào" không tự gán theo rule); ADR-76 (số dư đầu là mốc); ADR-77 (rule gắn tài khoản; rule chuyển nội bộ tới tài khoản đầu kia kèm chuyển ví — bỏ heo đất); ADR-81 (chân thứ hai đến sau gắn vào chuyển nội bộ đã ghi); ADR-82 (heo đất là Tích sản: bỏ heo chuyển ví Có thì tốt → Tích sản); ADR-92 (tên hàm và giá trị `role` tiếng Anh); ADR-113 (ứng viên ghép cặp và log ra theo mốc)
+- Decisions: D2 (chia ngay income đã xác nhận), D4; luật 6 (`docs/core_design_rules.md` §1); §6 "Luật khớp cặp chuyển nội bộ"; §9 "Mẫu lương"; commit `c3ab508` (ghi nguyên tử + trigger), `8ef7a99` (memo ngẫu nhiên riêng từng lệnh), `099e54f` (ngưỡng lương chống giả mạo), `eb7846e` (chân đầu bị gỡ vẫn được ghép lại); `plans/reports/code-reviewer-260922-0330-redteam-fixes-review.md` #1; ADR-59 (phần khóa theo nguồn thu của mẫu lương); ADR-60 (rule người thuê chỉ gợi ý, không tự gán); ADR-66 (log tiền ra của tài khoản "chỉ tiền vào" không tự gán theo rule); ADR-76 (số dư đầu là mốc); ADR-77 (rule gắn tài khoản; rule chuyển nội bộ tới tài khoản đầu kia kèm chuyển ví — bỏ heo đất); ADR-81 (chân thứ hai đến sau gắn vào chuyển nội bộ đã ghi); ADR-82 (heo đất là Tích sản: bỏ heo chuyển ví Có thì tốt → Tích sản); ADR-92 (tên hàm và giá trị `role` tiếng Anh); ADR-113 (ứng viên ghép cặp và log ra theo mốc); ADR-114 (lãi tiền gửi tự ghi vào ví của chính tài khoản)
 - Actor: hệ thống — chạy ngay sau khi UC-302 ghi được log mới có `account_id` và không có song sinh
 - Trigger: `matchLog(db, log)` (nội bộ `src/services/ingest.ts`), cho cả nguồn `webhook` lẫn `backfill`
 
@@ -21,6 +21,7 @@
 - v13 (2026-10-07, commit `7424f26`): đổi tên tiếng Anh (ADR-92, migration 0028): hàm chuyển ví vào Tích sản `tichsanMove` → `wealthBuildingMove` (cùng `isWealthBuildingDeposit`), ví Tích sản tìm theo `tier = 'wealth_building'`; vai tài khoản phao dự phòng lưu `role = 'buffer'`. Logic khớp không đổi. Sửa bước 2a, AC-22, Traceability (change [261007-doi-ten-tieng-anh](../changes/archive/261007-doi-ten-tieng-anh/proposal.md))
 - v14 (2026-10-17, commit `cb54dd7`): ứng viên ghép cặp bỏ log lịch sử trước mốc theo dõi SePay của tài khoản nó (webhook vẫn được); log ra trước `sepay_out_from` không tự gán theo rule (ADR-113). Sửa 2, 3.0a; thêm AC-23 (change [261017-noi-sepay-sau](../changes/archive/261017-noi-sepay-sau/proposal.md))
 - v15 (2026-10-17, commit `e207802`): bước 0: log webhook trước mốc nối được vào khoản tay thì không tới UC này (nối chạy trước khớp memo PF, ghép cặp, rule — UC-302 5c). Thêm AC-24 (change [261017-webhook-truoc-moc](../changes/archive/261017-webhook-truoc-moc/proposal.md))
+- v16 (2026-10-18, commit `6afc8c8`, `eebb011`, `2d63892`): bước 4 mới **log lãi tiền gửi** (ADR-114) — bước cuối trước `pending`: log `in` dưới ngưỡng lãi, nội dung rỗng / `BankAPINotify` / "lãi tiền gửi" / "lãi không kỳ hạn" → máy tự ghi khoản thu và chia trọn vào ví nhận lãi của chính tài khoản, không lệnh chuyển, Thu nhập thụ động. Luật 6 thêm ngoại lệ này. Thêm AC-25 … AC-31 (change [261018-lai-tien-gui](../changes/archive/261018-lai-tien-gui/proposal.md))
 
 ## Preconditions
 - Log vừa được ghi, `status='pending'`, `account_id` khác NULL, không có song sinh, không trước ngày mở sổ của tài khoản (UC-302).
@@ -42,7 +43,10 @@ Thử lần lượt; bước đầu tiên ghi được thì dừng.
      - có `counter_account_id` (tài khoản đầu kia, ADR-77) → batch: `transfer` TK log → tài khoản đó (`by_member_id` của rule) + `markAssigned`; rule có cả `from_wallet_id` và `wallet_id` thì dòng mang chuyển ví (`counter_wallet_id` = `from_wallet_id`, `wallet_id` = `wallet_id` của rule) — ví dụ bỏ heo đất: `mb-main-husband` → `piggy-husband`, Có thì tốt → Tích sản (ADR-82: tiền bỏ heo là Tích sản tiền mặt nằm ở tài khoản khóa). Ghi thẳng bằng `logTxStmt`, không qua `buildEntry`;
      - rule không mang ví mà tài khoản đầu kia là tài khoản Tích sản (phao, sổ tiết kiệm — ADR-88) → chuyển ví Có thì tốt → Tích sản như 2a;
      - không có → tìm TK tiền mặt (`cashAccountFor`: TK `cash` `active` của `by_member_id` rule, không có thì của chủ TK nguồn) → batch: `transfer` TK log → TK tiền mặt + `markAssigned`, không chuyển ví.
-4. **Còn lại: giữ `pending`** (mặc định lúc ghi). Không báo trong request; lượt cron kế tiếp (mỗi 15 phút, đêm mỗi giờ) báo khi log đã chờ ≥ 60 giây, ngoài giờ yên lặng (notify UC-407) để chân thứ hai của chuyển nội bộ kịp về.
+4. **Log lãi tiền gửi** (ADR-114, `isInterestLog`): log `in`, `0 < amount < interest_max_amount` (Tham số, mặc định 10.000; `0` = tắt — access UC-507), nội dung chuẩn hoá (bỏ dấu, viết hoa, gộp khoảng trắng) **rỗng**, **đúng** `BANKAPINOTIFY`, hoặc **chứa** `LAI TIEN GUI` / `LAI KHONG KY HAN`. Không xét chữ `LAI` / `TRA LAI` đơn ("trả lại", "cho thuê lại"). Không xét ngưỡng lương.
+   - 4.1 **Ví nhận lãi** của tài khoản A (`interestWallet`): A có `role` (`buffer`, `term_deposit`, `piggy_bank`) → ví Tích sản; đúng một ví đang bật trú ở A, trừ mọi ví `holding` (ví Thu nhập, ví quỹ) và mọi ví của một nguồn thu đang bật khóa trọn 100% (tổng phần khóa của nguồn = 1, vd Thu cho thuê, hay 70/30 hai ví; khóa một phần như Tích sản 45% của lương không loại) → ví đó; còn lại (không ví nào, hoặc nhiều ví) → ví Có thì tốt (luật nạp `remainder`).
+   - 4.2 **Ghi lãi** (`recordInterest`): một batch — `income` (ví Thu nhập, `counter_account_id` = A, `taxable = 0`, không người ghi, `log_id`) + `markAssigned`; rồi **chia lãi** (allocation UC-203 alt 5d): một `fund` trọn số vào ví nhận lãi, không lệnh chuyển, report class `passive_income`.
+5. **Còn lại: giữ `pending`** (mặc định lúc ghi). Không báo trong request; lượt cron kế tiếp (mỗi 15 phút, đêm mỗi giờ) báo khi log đã chờ ≥ 60 giây, ngoài giờ yên lặng (notify UC-407) để chân thứ hai của chuyển nội bộ kịp về.
 
 Mọi giao dịch sinh ở đây có `source='sepay'`, `week_key`/`month_key` tính từ `at`.
 
@@ -54,9 +58,11 @@ Mọi giao dịch sinh ở đây có `source='sepay'`, `week_key`/`month_key` t�
 - 3.2a. Rule `spend` thiếu `category_id` → `pending`; màn Gán gợi ý ví (UC-305).
 - 3.3a. Rule `transfer` không có tài khoản đầu kia và không tìm được TK tiền mặt → `pending`.
 - 3.3b. Rule `transfer` có tài khoản đầu kia mà ngày VN của log (`dayKey(log.at)`) trước `opened_at` của tài khoản đó (ADR-76 — số dư đầu của nó đã gồm khoản này) → không tự gán, `pending`.
+- 4a. Log lãi mà không chọn được ví nhận lãi (không có ví Có thì tốt, tài khoản Tích sản mà nhà chưa có ví Tích sản, tài khoản đã tắt) → không tự ghi, `pending`; màn Gán gợi ý Lãi tiền gửi, người chọn ví (UC-305 2d).
+- 4b. Chia lãi lỗi sau khi khoản thu đã ghi → khoản thu nằm ở ví Thu nhập, log `assigned`, lỗi ném ra (UC-302 ghi `ingest_error`, tin sáng báo "cần xem tay"). Lối sửa: gỡ gán khoản đó (UC-306) rồi gán lại loại Lãi tiền gửi — không dùng nút Chia ở chi tiết giao dịch (nút đó chạy dòng thác thường).
 
 ## Exceptions
-- E1. Lỗi không phải trigger chống trùng trong `commit`, hoặc lỗi chia lương khác `already_allocated` → ném ra; UC-302 bắt và ghi `ingest_error`.
+- E1. Lỗi không phải trigger chống trùng trong `commit`, hoặc lỗi chia lương / chia lãi khác `already_allocated` (lãi: mọi lỗi) → ném ra; UC-302 bắt và ghi `ingest_error`.
 
 ## Acceptance Criteria
 ### AC-1: Thứ tự ưu tiên — mã rule đứng sau memo PF và ghép cặp; trong rule, `code` thắng `content`
@@ -189,7 +195,50 @@ Mọi giao dịch sinh ở đây có `source='sepay'`, `week_key`/`month_key` t�
 - Then log nối vào khoản tay (chân nhận), không ghép cặp với log TCB ra giao dịch mới
 - Tests: [`test/ingest.test.ts`](../../test/ingest.test.ts) › "webhook trước mốc nối vào khoản đã nhập tay (261017-webhook-truoc-moc) › UC-302 AC-13: khoản tay là chuyển TCB → VCB, log ra của TCB đang chờ → log vào của VCB vẫn nối vào khoản tay (chân nhận), không ghép cặp ra giao dịch mới"
 
+### AC-25: Lãi +37 vào tài khoản phao tự ghi vào Tích sản (ADR-114)
+- Given tài khoản MB là phao (`role = buffer`)
+- When webhook +37, nội dung `BankAPINotify`
+- Then 1 khoản thu 37 ở ví Thu nhập (`taxable = 0`) + 1 fund 37 vào Tích sản cùng đợt chia, 0 lệnh chuyển tiền, report class Thu nhập thụ động, log `assigned`; số dư ví Thu nhập không đổi
+- Tests: [`test/ingest.test.ts`](../../test/ingest.test.ts) › "lãi tiền gửi: máy tự ghi vào ví của chính tài khoản (261018-lai-tien-gui) › UC-303: log +37 BankAPINotify tài khoản phao → 1 khoản thu 37 + 1 fund 37 vào Tích sản, 0 lệnh chuyển, Thu nhập thụ động, log đã gán; ví Thu nhập không đổi"
+
+### AC-26: Ví nhận lãi là ví của chính tài khoản
+- Given tài khoản thường có đúng một ví "Chơi (vợ)"; tài khoản chứa Thu nhập, Thu cho thuê và nhiều ví; tài khoản chỉ chứa một ví quỹ `holding`; tài khoản chỉ chứa Tích sản (khóa 45% của lương vợ)
+- When mỗi tài khoản nhận một khoản lãi
+- Then lãi vào lần lượt Chơi (vợ), Có thì tốt, Có thì tốt, Tích sản
+- Tests: [`test/ingest.test.ts`](../../test/ingest.test.ts) › "lãi tiền gửi: máy tự ghi vào ví của chính tài khoản (261018-lai-tien-gui) › UC-303: +50 tài khoản thường có đúng một ví → fund vào ví đó; +68 tài khoản chứa Thu nhập, Thu cho thuê và nhiều ví → Có thì tốt; tài khoản chỉ có một ví quỹ holding → Có thì tốt"; [`test/interest-deposit.test.ts`](../../test/interest-deposit.test.ts) › "interestWallet: ví nhận lãi của chính tài khoản › UC-303: tài khoản Tích sản (role) → Tích sản; đúng một ví → ví đó; nhiều ví, chỉ ví quỹ, chỉ ví khóa 100% của nguồn thu → Có thì tốt; không có Có thì tốt → null"
+
+### AC-27: Nguồn khóa trọn 100% loại mọi ví của nó; khóa một phần không loại
+- Given nguồn thu đang bật khóa 70% / 30% vào hai ví, mỗi ví trú ở một tài khoản riêng; Tích sản khóa 45% của lương; nguồn đã tắt khóa 100%
+- When chọn ví nhận lãi cho các tài khoản đó
+- Then hai ví của nguồn 70/30 bị loại (lãi vào Có thì tốt); Tích sản vẫn được chọn; nguồn đã tắt không tính
+- Tests: [`test/interest-deposit.test.ts`](../../test/interest-deposit.test.ts) › "interestWallet: ví nhận lãi của chính tài khoản › UC-303: nguồn khóa trọn 100% chia hai ví 70/30 → loại cả hai ví; khóa một phần (Tích sản 45% của lương) → vẫn chọn; nguồn đã tắt không tính"
+
+### AC-28: Nhận diện log lãi chặt — ngưỡng và cụm chữ
+- Given ngưỡng 10.000
+- When +50.000 `BankAPINotify`; +5.000 "CHO THUE LAI P2"; +5.000 "HOAN TRA LAI TIEN THUA"; +5.000 "Lãi tiền gửi tháng 10"; ngưỡng đặt 0 rồi +37 `BankAPINotify`
+- Then ba khoản đầu `pending`, khoản thứ tư ghi lãi; ngưỡng 0 → `pending`. Biên: 9.999 là lãi, 10.000 không
+- Tests: [`test/ingest.test.ts`](../../test/ingest.test.ts) › "lãi tiền gửi: máy tự ghi vào ví của chính tài khoản (261018-lai-tien-gui) › UC-303: +50.000 BankAPINotify, +5.000 'CHO THUE LAI P2', +5.000 'HOAN TRA LAI TIEN THUA' → chờ gán; +5.000 'LAI TIEN GUI THANG 10' → ghi lãi; ngưỡng 0 → +37 BankAPINotify chờ gán"; [`test/interest-deposit.test.ts`](../../test/interest-deposit.test.ts) › "isInterestLog: log lãi = tiền vào dưới ngưỡng, nội dung rỗng / BankAPINotify / cụm lãi › UC-303: rỗng, BankAPINotify (mọi kiểu hoa thường, khoảng trắng), 'LAI TIEN GUI', 'Lãi không kỳ hạn', 'TRA LAI TIEN GUI' dưới 10.000 → lãi" · "… › UC-303: 'CHO THUE LAI P2', 'HOAN TRA LAI TIEN THUA', 'trả lại tiền', tiền ra, 10.000 trở lên, ngưỡng 0 → không phải lãi"
+
+### AC-29: Memo PF và ghép cặp đi trước lãi
+- Given lệnh chuyển 37 `PF K7Q3F2` đang chờ; một log ra 37 ở tài khoản khác 2 phút trước
+- When log +37 mang memo PF về; log +37 `BankAPINotify` về
+- Then cái đầu khớp lệnh chuyển, cái sau ghép cặp thành chuyển nội bộ; không có khoản thu hay fund nào
+- Tests: [`test/ingest.test.ts`](../../test/ingest.test.ts) › "lãi tiền gửi: máy tự ghi vào ví của chính tài khoản (261018-lai-tien-gui) › UC-303: log +37 khớp memo PF hay ghép được chuyển nội bộ → xử lý như cũ, không thành lãi"
+
+### AC-30: Chia lãi lỗi giữ khoản thu ở ví Thu nhập và báo
+- Given đợt chia bị chặn ở DB
+- When log lãi +37 về
+- Then khoản thu 37 ở ví Thu nhập, log `assigned`, 0 fund, có một `ingest_error`
+- Tests: [`test/ingest.test.ts`](../../test/ingest.test.ts) › "lãi tiền gửi: máy tự ghi vào ví của chính tài khoản (261018-lai-tien-gui) › UC-303: chia lãi lỗi → khoản thu nằm ở ví Thu nhập, log đã gán, có ingest_error cho tin sáng"
+
+### AC-31: Lãi không ghi hai lần — nghi trùng và gửi lại
+- Given log lãi +37 webhook đã tự ghi
+- When log rà soát đêm cùng tài khoản, số tiền, lệch 1 phút, thiếu mã; webhook gửi lại cùng id; rà soát mang id khác cùng mã tham chiếu
+- Then log nghi trùng `pending`, không tự ghi; gửi lại / cùng mã → vẫn chỉ 1 khoản thu, 1 fund
+- Tests: [`test/ingest.test.ts`](../../test/ingest.test.ts) › "lãi tiền gửi: máy tự ghi vào ví của chính tài khoản (261018-lai-tien-gui) › UC-303: log lãi nghi trùng (log khác nguồn cùng tài khoản, số tiền, lệch ≤ 3 phút) → không tự ghi, chờ gán" · "… › UC-303: webhook gửi lại cùng id, rồi rà soát đêm cùng mã tham chiếu → chỉ một khoản thu, một fund"
+
 ## Traceability
+- Code (lãi tiền gửi, ADR-114): `src/domain/interest-deposit.ts` › `isInterestLog`, `interestWallet`; `src/services/ingest.ts` › `matchLog` (bước 6 trong code), `interestWalletFor`, `recordInterest`; `src/services/ledger.ts` › `interestMaxAmount`, `allocateIncome` (`interest`)
 - Code: `src/services/ingest.ts` › `matchLog`, `pairLogs`, `findSingleLegTransfer`, `attachSecondLeg`, `outNotFed`, `commit`, `logTxStmt`, `markAssigned`, `loadRuleRows`, `LoadedRule`, `cashAccountFor`; `src/domain/rules.ts` › `extractTransferMemo`, `normalizeContent`, `matchRule`, `canPair`, `PAIR_WINDOW_MS`; `src/domain/entry.ts` › `wealthBuildingMove`, `isWealthBuildingDeposit` (ADR-88); `src/services/ledger.ts` › `salaryMinAmount`, `allocateIncome`, `loadRefs`
 - Migrations/DB: triggers `trg_tx_needs_pending_log`, `trg_tx_second_leg_needs_pending_log`, `trg_transfer_order_settles_once` (`migrations/0005_ingest_integrity_guards.sql`); `transfer_orders`; `rules` CHECK; `rules.income_stream_id`, `rules.tenant_id`, `transactions.income_stream_id` (`migrations/0007_income_streams_rental.sql`); `accounts.sepay_out` (`migrations/0010_bank_catalog.sql`); `rules.account_id`, `rules.counter_account_id`, `rules.from_wallet_id`, rule heo đất (`migrations/0017_heo_dat.sql`, mẫu `TICH LUY` ở `migrations/0019_heo_settlement_rule.sql`, ví đích Tích sản ở `migrations/0020_heo_tich_san.sql`)
 

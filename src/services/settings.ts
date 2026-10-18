@@ -4,6 +4,7 @@
 
 import { bankByCode } from "../domain/banks";
 import { DEFAULT_MONTH_CLOSE_WEALTH_PCT, isRewardWalletCandidate } from "../domain/close";
+import { INTEREST_MAX_AMOUNT_LIMIT } from "../domain/interest-deposit";
 import { clockMinutes, NOTIFY_CONFIG_KEYS, parseNotifySchedule, type NotifySchedule } from "../domain/notify-schedule";
 import { dayKey } from "../domain/period";
 import { DomainError, type WalletRef } from "../domain/types";
@@ -12,7 +13,7 @@ import { escapeHtml, sendTelegram } from "../notify/telegram";
 import { syncSepay } from "../cron/backfill";
 import { DEFAULT_SEPAY_CONNECTION_ID } from "../domain/system-ids";
 import { describeSecret, getSecret, loadSepayConnections, SECRET_NAMES, setSecret, type SecretName, type SepayConnection } from "./secrets";
-import { wealthBuildingOpeningEntry } from "./ledger";
+import { interestMaxAmount, wealthBuildingOpeningEntry } from "./ledger";
 import { hashPassword, PASSWORD_MAX, PASSWORD_MIN } from "./passwords";
 import { listBankAccounts, listTransactions, sepayErrorText, type SepayBankAccount } from "./sepay-api";
 
@@ -785,6 +786,7 @@ async function readConfig(db: D1Database) {
   const reward = await db.prepare("SELECT v FROM config WHERE k = 'month_close_reward_wallet'").first<{ v: string }>();
   return {
     salary_min_amount: await configNumber(db, "salary_min_amount", 1_000_000),
+    interest_max_amount: await interestMaxAmount(db),
     safety_fund_months: await configNumber(db, "safety_fund_months", 6),
     ...(await readFiConfig(db)),
     month_close_wealth_pct: await configNumber(db, "month_close_wealth_pct", DEFAULT_MONTH_CLOSE_WEALTH_PCT),
@@ -865,9 +867,14 @@ async function fiConfigWrites(db: D1Database, b: Input, now: Date): Promise<D1Pr
 export async function updateConfig(db: D1Database, b: Input, now: Date = new Date()) {
   const salary = integer(b, "salary_min_amount", { min: 0, max: 1e12 });
   const months = integer(b, "safety_fund_months", { min: 1, max: 36 });
+  const interest = b.interest_max_amount;
+  if (has(b, "interest_max_amount") && (typeof interest !== "number" || !Number.isInteger(interest) || interest < 0 || interest > INTEREST_MAX_AMOUNT_LIMIT)) {
+    fail("invalid_input", "Ngưỡng lãi tiền gửi là số nguyên từ 0 đến 10.000.000 (0 = tắt).", 400, "interest_max_amount");
+  }
   const upsert = (k: string, v: number) => db.prepare("INSERT INTO config (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v").bind(k, String(v));
   const statements = [
     ...(salary !== null ? [upsert("salary_min_amount", salary)] : []),
+    ...(has(b, "interest_max_amount") ? [upsert("interest_max_amount", interest as number)] : []),
     ...(months !== null ? [upsert("safety_fund_months", months)] : []),
     ...(await fiConfigWrites(db, b, now)),
     ...(await monthCloseConfigWrites(db, b)),

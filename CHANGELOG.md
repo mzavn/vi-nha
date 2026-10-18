@@ -6,6 +6,20 @@ bản cài cũ vẫn lên được bình thường (kể cả nâng database t�
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
 trước (xem README › Cập nhật bản mới).
 
+## v1.6.0 — 18/10/2026
+
+**Mới**
+
+- **Lãi tiền gửi tự vào sổ:** ngân hàng trả lãi không kỳ hạn vài chục đồng (nội dung trống, chỉ "BankAPINotify" hay có "lãi
+  tiền gửi") thì app tự ghi, không còn nằm ở màn Gán. Lãi cộng thẳng vào ví của chính tài khoản nhận: tài khoản phao / sổ
+  tiết kiệm / heo đất → Tích sản; tài khoản chỉ có một ví → ví đó; còn lại → Có thì tốt. Không chia lương, không sinh lệnh
+  chuyển tiền; báo cáo Thu chi xếp vào **Thu nhập thụ động**. Tin sáng có một dòng tổng lãi đã tự ghi hôm qua.
+- Mức "tự ghi khoản dưới" đặt ở Cài đặt › Nâng cao › Tham số › **Lãi tiền gửi: tự ghi khoản dưới** (mặc định 10.000 ₫, tối
+  đa 10.000.000 ₫, để 0 là tắt).
+- Màn Gán có loại **Lãi tiền gửi** cho tiền vào: chọn ví nhận lãi rồi Gán — không chia, không lệnh chuyển tiền. Khoản lãi
+  còn chờ gán (về trước bản này) được gợi ý sẵn "Lãi tiền gửi" kèm ví. Ghi nhầm thì gỡ gán khoản đó như mọi giao dịch ngân
+  hàng.
+
 ## v1.5.0 — 17/10/2026
 
 Có nâng cấp database: `0037` (chốt chặn thêm để một giao dịch ngân hàng không gắn vào hai khoản — không đổi số liệu).

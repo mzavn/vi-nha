@@ -431,15 +431,21 @@ describe("thành viên, tham số", () => {
     expect(memberPayload({ name: "Chồng", tg_chat_id: "" }, { ...me, tg_chat_id: "123456" })).toEqual({ ok: true, value: { tg_chat_id: null } });
   });
 
-  const config = { salary_min_amount: 0, safety_fund_months: "6", month_close_wealth_pct: "50", month_close_reward_wallet: "" };
+  const config = { salary_min_amount: 0, interest_max_amount: 10_000, safety_fund_months: "6", month_close_wealth_pct: "50", month_close_reward_wallet: "" };
 
   it("số tháng phao 1–24, ngưỡng lương không âm", () => {
     expect(configPayload(config)).toEqual({
       ok: true,
-      value: { salary_min_amount: 0, safety_fund_months: 6, month_close_wealth_pct: 50, month_close_reward_wallet: null },
+      value: { salary_min_amount: 0, interest_max_amount: 10_000, safety_fund_months: 6, month_close_wealth_pct: 50, month_close_reward_wallet: null },
     });
     expect(configPayload({ ...config, salary_min_amount: 5_000_000, safety_fund_months: "0" }).ok).toBe(false);
     expect(configPayload({ ...config, salary_min_amount: 5_000_000, safety_fund_months: "3,5" }).ok).toBe(false);
+  });
+
+  it("UC-507: ngưỡng lãi tiền gửi 0..10.000.000 (0 = tắt); quá trần → lỗi ở ô interest_max_amount", () => {
+    expect(configPayload({ ...config, interest_max_amount: 0 })).toMatchObject({ ok: true, value: { interest_max_amount: 0 } });
+    expect(configPayload({ ...config, interest_max_amount: 10_000_000 })).toMatchObject({ ok: true, value: { interest_max_amount: 10_000_000 } });
+    expect(configPayload({ ...config, interest_max_amount: 10_000_001 })).toMatchObject({ ok: false, errors: { interest_max_amount: expect.any(String) } });
   });
 
   it("UC-507: tham số chốt tháng — tỷ lệ 0–100 số nguyên, Ví Thưởng rỗng → null", () => {

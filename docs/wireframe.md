@@ -83,7 +83,7 @@ Chạm → sheet gán:
 - ☑ "Tạo rule từ nội dung này" → lần sau tự gán
 - Tiền vào chọn `income` → hỏi **taxable?** → hiện **preview waterfall** → xác nhận chia
 
-> Tiền vào không bao giờ tự gán, trừ khớp mẫu lương. Log đã ghép cặp transfer nội bộ thì không hiện ở đây.
+> Tiền vào không bao giờ tự gán, trừ khớp mẫu lương và lãi tiền gửi nhỏ (ADR-114). Log đã ghép cặp transfer nội bộ thì không hiện ở đây.
 
 ---
 

@@ -122,6 +122,7 @@ Status: `accepted` (đang có hiệu lực) · `superseded by ADR-xx` · `propos
 | ADR-111 | 2026-10-15 | Chốt tháng là quyết định của người: bù ví chi lố trước, phần dư chia Tích sản / Ví Thưởng theo tỷ lệ chọn mỗi tháng; cron ngày 1 chỉ mời | accepted | allocation (+ notify, access, pwa) |
 | ADR-112 | 2026-10-15 | Khi chia: Có Tích sản (kéo 1–100%, mặc định 10%) hoặc Không Tích sản (bắt buộc lý do) | accepted | allocation (+ pwa) |
 | ADR-113 | 2026-10-17 | Mốc theo dõi SePay (theo giờ) cho tài khoản đã dùng: log lịch sử trước mốc như log trước ngày mở sổ (webhook luôn tính); số theo ngân hàng tính động | accepted | access (+ ingest, ledger, pwa) |
+| ADR-114 | 2026-10-18 | Lãi tiền gửi: máy tự ghi khoản thu + chia một fund vào ví của chính tài khoản nhận (role → Tích sản; một ví → ví đó; còn lại → Có thì tốt), không lệnh chuyển, Thu nhập thụ động; ngoại lệ thứ hai của luật 6, chặn bởi ngưỡng ở Tham số | accepted | ingest (+ allocation, balance, access, notify, pwa, mcp) |
 
 ---
 
@@ -152,7 +153,7 @@ Sổ tiền phải đối soát được với tiền thật; sai một quy ư�
 3. `meaning` quyết định, không phải hướng tiền.
 4. Một quy ước dấu: `wallet_id` = ví được cộng, `counter_wallet_id` = ví bị trừ; `spend` ghi ví ở `counter_wallet_id` và bắt buộc `category_id`.
 5. Số tổng hợp tính ra (view/hàm), không lưu.
-6. Máy chỉ được đoán `spend` và `transfer`; tiền vào luôn phải hỏi, trừ khoản khớp mẫu lương.
+6. Máy chỉ được đoán `spend` và `transfer`; tiền vào luôn phải hỏi, trừ khoản khớp mẫu lương — và từ ADR-114, log lãi tiền gửi (dưới ngưỡng lãi).
 ### Consequences
 Huỷ/gỡ đều là `UPDATE ... SET status='void'`; số dư ví/tài khoản là view (`v_wallet_balance`, `v_account_book`); rule `income` chỉ tồn tại khi `is_salary=1`.
 ### Verified in code
@@ -2038,3 +2039,22 @@ Nhà cài bản công khai có tài khoản nối SePay sau phải tự đặt m
 - Phương án bị loại: bỏ hẳn log webhook trước mốc — mất tiền khi chưa ai ghi; cấm nhập tay trước mốc — mất cách ghi bù.
 - Consequences: đóng rủi ro "webhook trễ + khoản đã nhập tay trước mốc → đếm hai lần" ở Consequences trên. Còn lại: tự nối không gửi tin báo (chỉ `linkedTo`); sửa khoản bị 409 ở PWA chỉ hiện câu lỗi; PWA coi khoản tay nối ở `log_id_2` là ghi tay — [OPEN] / [DIVERGENCE] ở ingest UC-302, ledger UC-102, pwa UC-715.
 - Verified in code: `src/services/manual-links.ts` › `feedMark`, `manualMatches`, `closest`, `linkColumn`, `linkLogToTx` · `src/services/ingest.ts` › `ingestLog` (`linkedTo`), `listPendingLogs` (`manual_matches`), `linkLog`, `unassignTransaction` · `src/services/ledger.ts` › `bankLogsFor`, `createEntry`, `replaceTransaction` · `src/routes/logs.ts` › `/logs/:id/link` · `src/mcp/tools.ts` (`confirm_duplicate`) · `migrations/0037_log_id_trigger.sql` · `web/src/screens/assign.tsx`, `web/src/state/store.ts` › `confirmDuplicateEntry`
+
+## ADR-114: Lãi tiền gửi — máy tự ghi khoản thu + chia một fund vào ví của chính tài khoản nhận, không lệnh chuyển, Thu nhập thụ động
+- Date: 2026-10-18 · Status: accepted · Sửa ADR-02 luật 6 (ngoại lệ thứ hai: log lãi dưới ngưỡng); ngoại lệ của ADR-43 (không qua ngưỡng lương) và ADR-112 (chia lãi không đòi Tích sản / lý do); dùng đường `amounts` của ADR-108
+- Plan ID: — · Context: ingest (UC-303, UC-305, UC-306) + allocation (UC-203) + balance (UC-1105, UC-1106) + access (UC-507) + notify (UC-402) + pwa (UC-706) + mcp (UC-604)
+- Source: chủ nhà 2026-10-18, chat — "lãi của tk nào thì cộng vào tk đó, tuỳ mục đích là tích sản, chi tiêu,..." · "vấn đề là k cần đẻ tk nhận lãi nữa, mà nó về đúng tk đó rồi nè" · "ngưỡng tối đa để 10tr đi, còn lại oke rồi"; change [261018-lai-tien-gui](changes/archive/261018-lai-tien-gui/proposal.md)
+### Context
+Ngân hàng trả lãi không kỳ hạn hằng tháng vài chục đồng, nội dung chỉ `BankAPINotify`. Theo luật 6 log nằm `pending`: gán Thu nhập thì chạy cả dòng thác và lệnh chuyển tiền cho vài chục đồng; "để chia sau" thì nằm mãi ở ví Thu nhập; báo cáo chỉ xếp Thu nhập thụ động khi tài khoản là phao / sổ.
+### Decision
+- **Log lãi** = log `in`, `0 < amount < interest_max_amount` (Config, mặc định 10.000, trần 10.000.000, `0` = tắt), nội dung chuẩn hoá (bỏ dấu, hoa, gộp khoảng trắng) rỗng, đúng `BANKAPINOTIFY`, hoặc chứa `LAI TIEN GUI` / `LAI KHONG KY HAN`. Không khớp `LAI` / `TRA LAI` đơn.
+- **Ví nhận lãi** của tài khoản A: A có `role` → Tích sản; đúng một ví đang bật trú ở A, trừ mọi ví `holding` và mọi ví của nguồn thu đang bật khóa trọn 100% (tổng phần khóa = 1; khóa một phần không loại) → ví đó; còn lại → Có thì tốt; không có Có thì tốt → không tự ghi, màn Gán gợi ý.
+- **Ghi lãi** = bước cuối của tự khớp (sau memo PF, ghép cặp, chân thứ hai, rule): khoản thu `income` vào ví Thu nhập (`taxable = 0`) + log `assigned` nguyên tử, rồi `allocateIncome` với `amounts` trọn số vào ví nhận lãi và cờ nội bộ `interest`: một fund, không `transfer_orders`, không luật Tích sản, report class `passive_income` cùng batch. Fund tính vào "đã rót tháng này" như mọi fund.
+- Gán tay: split `{ meaning: "income", interest: true, wallet_id }` (REST và MCP), đúng một dòng của log `in`; ví phải đang bật, không phải ví `holding` — kiểm trước khi ghi. Gỡ gán như khoản thu đã chia.
+- Tin sáng có một dòng tổng lãi tự ghi hôm trước kèm ví nhận.
+
+Phương án bị loại: (a) chỉ gợi ý, bấm tay mỗi tháng — chủ nhà: "k cần … nó về đúng tk đó rồi"; (b) rule lãi trong bảng `rules` — phải dựng lại bảng, đổi CHECK, lẫn với rule lương ở form Cài đặt; (c) cột "ví nhận lãi" trên tài khoản — thêm việc đặt cho người dùng; (d) nghĩa mới `interest` — mọi báo cáo, view, MCP học thêm nghĩa; (e) ghi `income` thẳng vào ví đích — phá bất biến "income vào ví Thu nhập rồi mới chia"; (f) khớp `LAI` / `TRA LAI` đơn — "trả lại", "cho thuê lại".
+### Consequences
+Khoản chuyển nhỏ dưới ngưỡng có nội dung rỗng hoặc "LAI TIEN GUI" của người lạ cũng thành lãi (mặc định dưới 10.000 ₫ mỗi khoản, báo ở tin sáng, gỡ gán được). Lãi không qua Thuế (`taxable = 0`). Lãi làm lần chia lương sau rót cho ví nhận ít đi đúng số lãi. Report class do máy ghi hiện như phân loại tay ("đã xếp lại") ở Lưu chuyển tiền. Tin sáng nhận lãi tự ghi bằng dấu hiệu đợt chia (không người ghi, một fund trọn số, không lệnh chuyển, `passive_income`) — khoản gán tay qua token không gắn thành viên có cùng dấu hiệu cũng được đếm.
+### Verified in code
+`src/domain/interest-deposit.ts` › `isInterestLog`, `interestWallet`, `INTEREST_MAX_AMOUNT_DEFAULT`, `INTEREST_MAX_AMOUNT_LIMIT` · `src/services/ingest.ts` › `matchLog` (bước 6), `recordInterest`, `interestWalletFor`, `listPendingLogs` / `suggestFor` (gợi ý Lãi tiền gửi), `assignLog` (split `interest`) · `src/services/ledger.ts` › `interestMaxAmount`, `previewAllocation` / `allocateIncome` (`interest`) · `src/services/settings.ts` › `readConfig`, `updateConfig` · `src/routes/logs.ts` › `parseSplit` · `src/mcp/tools.ts` › `assign_log` · `src/cron/daily.ts` (`interestYesterday`) · `src/notify/format.ts` › `dailyMessage` · `web/src/screens/assign.tsx`, `web/src/lib/splits.ts` › `logChip`, `interestHint`, `interestToast` · `web/src/screens/settings-sheets.tsx` › `ConfigSheet` — commit `6afc8c8`, `eebb011`, `2d63892`

@@ -7,6 +7,7 @@
 
 ## History
 - v1 (2026-10-08, commit `31e3505`): khởi tạo — báo cáo lưu chuyển tiền tháng / năm (Sinh hoạt · Đầu tư · Tài chính), bảng phân loại mặc định chạy trong SQL, phân loại lại từng giao dịch (`transaction_report_classes`, migration 0032, schema v1.32), dòng "Tài khoản mở / tắt trong kỳ", chú thẻ tín dụng, ghi chú lô, danh sách giao dịch của một dòng; MCP `get_reports` (change [261008-bang-can-doi](../changes/archive/261008-bang-can-doi/proposal.md))
+- v2 (2026-10-18, commit `6afc8c8`): không đổi code báo cáo — khoản thu **lãi tiền gửi** (ADR-114) mang report class `passive_income` do máy ghi lúc chia lãi, nên nằm ở dòng Thu nhập thụ động (Sinh hoạt) cả với tài khoản thường; gỡ gán khoản đó thì phân loại nằm lại với dòng đã huỷ như luật hiện có (change [261018-lai-tien-gui](../changes/archive/261018-lai-tien-gui/proposal.md))
 
 ## Preconditions
 - Đã đăng nhập. Báo cáo chỉ đọc sổ (tài khoản, giao dịch, phân loại lại, lô tài sản); không ghi gì.
@@ -126,6 +127,7 @@
 ## Divergences & Open Questions
 - [OPEN] CPU của báo cáo năm chưa đo trên Workers: AC-7 mới đếm câu SQL (4 câu) và đo 12,1 ms chạy trên Node với DB mẫu 24 tháng × 300 giao dịch; lát 2 lên prod (2026-10-08 17:02) chỉ ghi hai báo cáo trả 200 và bất biến đúng trên số thật tháng 10. Trần Workers Free 10 ms (ADR-12; lịch sử bảng cân đối lát 1 đo trên prod P50 11,0 ms, max 14,8 ms) — cần đo `wrangler dev` / prod rồi quyết theo ADR-54.
 - [OPEN] Kỳ đang xem không giữ khi tải lại (F5 về tháng hiện tại; chỉ phần `#net-worth/cash-flow` được giữ). Có cần ghi kỳ vào hash không — chủ nhà.
+- [OPEN] Phân loại `passive_income` do máy ghi cho lãi tiền gửi (ADR-114) hiện như phân loại tay ("đã xếp lại") và không có dòng nhật ký `report_class.set`; bấm "Về mặc định" thì lãi ở tài khoản thường về "Lương và thu khác". Có cần tách phân loại máy với phân loại tay không — chủ nhà.
 
 ## Traceability
 - Code: `src/routes/reports.ts` › `reportRoutes`; `src/services/reports.ts` › `getCashFlow`, `reportTransactions`, `setReportClass`, `clearReportClass`, `cashTx`, `DEFAULT_LINE`, `SPEND_LINE`, `cashFrom`; `src/domain/reports.ts` › `parsePeriod`, `monthRange`, `finalLine`, `buildCashFlow`, `LINE_LABEL`, `LINE_GROUP`, `REPORT_CLASSES`; `src/services/ledger.ts` › `replaceTransaction` (chép phân loại lại); `src/mcp/tools.ts` › `get_reports`

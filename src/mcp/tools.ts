@@ -123,7 +123,10 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
       description:
         "Assign one pending bank log (log_id from list_pending_logs) to 1..N transactions (splits); " +
         "the split amounts must add up to exactly the log amount. A payment on an interest-bearing debt is two splits: " +
-        "interest (spend, interest_debt_id) and principal (spend, debt_id).",
+        "interest (spend, interest_debt_id) and principal (spend, debt_id). " +
+        "Bank deposit interest (suggestion.interest from list_pending_logs) is ONE split { meaning: income, interest: true, wallet_id }: " +
+        "it records the income and puts all of it into wallet_id (no transfer orders, reported as passive income); wallet_id must be an active " +
+        "wallet that is not the Income holding wallet or a reserve.",
       inputSchema: {
         log_id: z.string().min(1),
         splits: z
@@ -143,6 +146,7 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
               link_id: z.number().int().positive().optional(),
               taxable: z.boolean().optional(),
               asset_kind: z.string().optional(),
+              interest: z.boolean().optional(),
               note: z.string().optional(),
             }),
           )
@@ -166,6 +170,7 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
           link_id: s.link_id ?? null,
           taxable: s.taxable,
           asset_kind: s.asset_kind ?? null,
+          interest: s.interest === true,
           note: s.note ?? null,
         }));
         const result = await ingest.assignLog(db, args.log_id, splits, memberId, now());

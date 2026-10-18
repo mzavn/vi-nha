@@ -1,7 +1,7 @@
 # UC-402: Tin sáng (giờ nhắc, mặc định 07:00)
 - Status: implemented
 - BR: BR-01, BR-04, BR-06, BR-07
-- Decisions: D2 (10/25 chỉ nhắc), D3 (chốt tháng), D11 (rà soát 02:00); ADR-68 (giờ nhắc chỉnh trong app); `docs/core_design_rules.md` §8 (dòng "7:00 sáng", "Vượt ngân sách: chỉ hiện mục ≥ 80%"), §7 ("Lệch ≠ 0 → … nhắc Telegram sáng hôm sau"); `docs/DESIGN.md` §5 (tiền, kỳ), §6 (giọng chữ); commits `a954744`, `eb7846e`; ADR-61 (chốt tay mỗi tháng với người thuê — tin sáng chỉ nhắc); ADR-71 (sổ nợ — dòng 💳); ADR-72 (sổ phải thu — dòng 🤝); ADR-78 (rà soát ba lớp — dòng 🩹 ghi rõ lượt soát tuần/tháng); ADR-79 (hai bản: ngắn cho thông báo đẩy, đầy đủ cho Telegram; việc cần làm trước); ADR-92 (tên trong code tiếng Anh); ADR-93 (Quỹ an tâm); ADR-111 (ngày 1 chỉ mời chốt tháng, dòng 📌)
+- Decisions: D2 (10/25 chỉ nhắc), D3 (chốt tháng), D11 (rà soát 02:00); ADR-68 (giờ nhắc chỉnh trong app); `docs/core_design_rules.md` §8 (dòng "7:00 sáng", "Vượt ngân sách: chỉ hiện mục ≥ 80%"), §7 ("Lệch ≠ 0 → … nhắc Telegram sáng hôm sau"); `docs/DESIGN.md` §5 (tiền, kỳ), §6 (giọng chữ); commits `a954744`, `eb7846e`; ADR-61 (chốt tay mỗi tháng với người thuê — tin sáng chỉ nhắc); ADR-71 (sổ nợ — dòng 💳); ADR-72 (sổ phải thu — dòng 🤝); ADR-78 (rà soát ba lớp — dòng 🩹 ghi rõ lượt soát tuần/tháng); ADR-79 (hai bản: ngắn cho thông báo đẩy, đầy đủ cho Telegram; việc cần làm trước); ADR-92 (tên trong code tiếng Anh); ADR-93 (Quỹ an tâm); ADR-111 (ngày 1 chỉ mời chốt tháng, dòng 📌); ADR-114 (dòng lãi tiền gửi tự ghi hôm qua)
 - Actor: lượt cron (UC-401: mỗi 15 phút, 01:00–03:59 VN mỗi giờ) từ giờ tin sáng `notify_daily_time` (mặc định 07:00 VN), khi `notify_daily_enabled` bật; người nhận: mọi thành viên đang hoạt động có `tg_chat_id`
 - Trigger: `runScheduledDigests` giành được mốc `daily_run` của hôm nay → `src/cron/daily.ts` › `daily(env, now)`
 
@@ -21,6 +21,7 @@
 - v12 (2026-10-06, commit `9c265ee`): **bỏ số lũy kế SePay** (ADR-87, change [`261006-bo-luy-ke-sepay`](../changes/archive/261006-bo-luy-ke-sepay/proposal.md)) — chủ nhà: "bỏ hẳn cái data mà sepay trả về đó, đừng quan tâm lũy kế của nó nữa nè". 🏦 Đối soát chỉ còn `bookDrift ≠ 0` (sổ khác giao dịch ngân hàng đã gán); AC-8 viết lại theo lệch sổ.
 - v13 (2026-10-07, commit `7424f26`): chip 🎯 "Phao x/y tháng" thành "Quỹ an tâm x/y tháng" (ADR-93 — "khẩn cấp" mang nghĩa tai hoạ; hết trùng chữ với tài khoản phao dự phòng); số đọc từ `snapshot.safetyFund` (trước là `emergency`), N = `config.safety_fund_months`, view `v_safety_fund`; trường `DailyMessageInput` thành `safetyFundMonthsCovered`, `safetyFundMonthsTarget`; push tin sáng mở `/#today` (ADR-92). AC-3, AC-5, AC-25, AC-28 sửa chữ theo (change [261007-doi-ten-tieng-anh](../changes/archive/261007-doi-ten-tieng-anh/proposal.md)).
 - v14 (2026-10-16, commit `0528219`): ngày 1 không còn chốt tháng trước khi dựng tin; dòng 🧹/🔁 thay bằng 📌 mời mở app chốt (UC-403, ADR-111); bản ngắn có mục `chốt tháng <m>`; tắt tin sáng thì ngày 1 không chạy gì. AC-26 sửa (change [261015-chot-thang-va-keo-tich-san](../changes/archive/261015-chot-thang-va-keo-tich-san/proposal.md))
+- v15 (2026-10-18, commit `6afc8c8`, `2d63892`): dòng thông tin **💰 Lãi tiền gửi: +X (N khoản) — vào {ví, …}** cho lãi máy tự ghi hôm qua (ADR-114), ngay sau 🔗; không lên bản ngắn, không gửi tin tức thì. Nhận lãi tự ghi bằng dấu hiệu đợt chia (không người ghi, một fund trọn số, không lệnh chuyển, Thu nhập thụ động) — lương bị xếp lại Thu nhập thụ động không lọt vào. Thêm AC-30, AC-31 (change [261018-lai-tien-gui](../changes/archive/261018-lai-tien-gui/proposal.md))
 
 ## Preconditions
 - Có bot token (`telegram_bot_token`, UC-508) và ≥ 1 thành viên có `tg_chat_id` — nếu không, tin được dựng nhưng không ai nhận (UC-408).
@@ -40,6 +41,7 @@
    - **🏦 Đối soát**: từ `reconcile(db)` (UC-106); tài khoản lệch khi `bookDrift ≠ 0` (sổ khác giao dịch ngân hàng đã gán — không có số ngân hàng báo, ADR-87); số hiển thị = **trị tuyệt đối** của `bookDrift` (tin không nói lệch lên hay xuống).
    - **🔁 N chuyển tiền cần làm (quá 3 ngày)** = `snapshot.attention.transferOrdersOverdue`: `transfer_orders` `pending` có `created_at < datetime('now','-3 days')` (UC-205).
    - **🔗 Hôm qua tự ghép N cặp chuyển nội bộ**: `transactions` `active`, `meaning='transfer'`, `log_id_2 IS NOT NULL`, lọc thô `at >= now − 2 ngày` rồi giữ những dòng có `dayKey(at)` = ngày VN hôm qua (theo thời điểm giao dịch, không theo lúc ghi sổ).
+   - **💰 Lãi tiền gửi: +X (N khoản) — vào {ví, …}** (ADR-114): khoản thu `active` có `log_id`, `by_member_id IS NULL`, report class `passive_income`, đợt chia (`allocation_runs`) có đúng một fund `active` bằng trọn số tiền và không `transfer_orders` nào; mỗi khoản thu đếm một lần; lọc thô `at >= now − 2 ngày` rồi giữ `dayKey(at)` = ngày VN hôm qua (như 🔗). X = tổng, N = số khoản, ví = tên ví nhận (không trùng, theo thứ tự ví). N = 0 → không có dòng. Chỉ ở bản đầy đủ.
    - **🩹 Đêm qua vá N giao dịch webhook bỏ sót** (+ " (soát lại cả tuần trước)" khi `scope='week'`, " (soát lại cả tháng trước)" khi `scope='month'`): N = `payload.added`, `scope` = `payload.scope` của `notifications(kind='backfill', day_key=today)` (UC-304 ghi, ADR-78); không có dòng → 0. `scope='day'` hoặc thiếu `scope` → không thêm gì.
    - **❗ N giao dịch ngân hàng cần xem tay**: `COUNT(*)` của `notifications(kind='ingest_error')` có `at >= datetime('now','-1 day')` (UC-308 ghi). Chi tiết (không đọc được, hay đã ghi nhưng xử lý tiếp bị lỗi) xem ở app ngân hàng / màn Gán; dòng không giải thích thêm để gọn.
    - Ngày 10/25: dòng 📅 (UC-405). Chủ nhật: dòng 🧮 (UC-404).
@@ -47,7 +49,7 @@
 5. `dailyMessage(input)` dựng **hai bản** `{ full, push }` (ADR-79); `notifyMembers(env, "daily", today, message)` gửi `full` qua Telegram và `push` tới từng máy đã bật (UC-408, UC-410).
 
 ### Luật định dạng (`src/notify/format.ts`)
-- Thứ tự dòng cố định — 💰, rồi **việc cần làm**: 📥 → ❗ → 🔁 (quá hạn) → ⚠️ → 📅 (ngày 10/25) → 🧮 (Chủ nhật) → 🏠 (ngày 1) → 📌 (ngày 1, mời chốt tháng); rồi **thông tin**: 🎯 → 💳 → 🤝 → 🏦 → 🔗 → 🩹. Chỉ 💰 và 🏦 luôn có; mọi dòng khác chỉ hiện khi số > 0 / danh sách khác rỗng.
+- Thứ tự dòng cố định — 💰, rồi **việc cần làm**: 📥 → ❗ → 🔁 (quá hạn) → ⚠️ → 📅 (ngày 10/25) → 🧮 (Chủ nhật) → 🏠 (ngày 1) → 📌 (ngày 1, mời chốt tháng); rồi **thông tin**: 🎯 → 💳 → 🤝 → 🏦 → 🔗 → 💰 Lãi tiền gửi → 🩹. Chỉ 💰 (còn để chi) và 🏦 luôn có; mọi dòng khác chỉ hiện khi số > 0 / danh sách khác rỗng.
 - Tiền: `formatMoney` — nhóm nghìn kiểu `vi-VN` (`1.250.000 ₫`), `₫` sau số cách một khoảng, số âm dùng dấu `−` U+2212, không rút gọn (`DESIGN.md` §5).
 - Phần trăm: làm tròn số nguyên (`92%`). Quỹ an tâm: số tháng một chữ số thập phân, dấu phẩy (`3,2`).
 - Mục trong cùng dòng nối bằng ` · `. Mọi tên ví/tài khoản/danh mục của bản đầy đủ đi qua `escapeHtml` (`&`, `<`, `>`) vì tin gửi `parse_mode=HTML`; bản ngắn giữ chữ thật.
@@ -234,7 +236,20 @@
 - Then dòng đầu bản đầy đủ "💰 Tuần này đã chi vượt 415.300 ₫ (còn 1 ngày)"; tiêu đề bản ngắn "Tuần này vượt 415.300 ₫"
 - Tests: `test/format.test.ts` › "dailyMessage — bản ngắn cho thông báo đẩy › còn để chi âm: không viết 'Còn −X' mà nói thẳng đã chi vượt, cả bản ngắn lẫn bản đầy đủ"
 
+### AC-30: Dòng lãi tiền gửi tự ghi hôm qua
+- Given hôm qua máy tự ghi 3 khoản lãi 68 (VCB chính → Có thì tốt), 50 (VCB vợ → Chơi (vợ)), 37 (MB phao → Tích sản); hôm kia một khoản 20
+- When `daily` chạy 07:00 VN; và khi không có lãi nào
+- Then đúng một dòng "💰 Lãi tiền gửi: +155 ₫ (3 khoản) — vào Tích sản, Chơi (vợ), Có thì tốt"; không có lãi → không có dòng. `dailyMessage`: dòng nằm sau 🏦, tên ví escape HTML, bản ngắn không đổi
+- Tests: [`test/cron-daily.test.ts`](../../test/cron-daily.test.ts) › "tin sáng: dòng lãi tiền gửi tự ghi hôm qua (261018-lai-tien-gui) › UC-402: hôm qua tự ghi 3 khoản lãi 68 + 50 + 37 → đúng một dòng lãi 155 ₫ (3 khoản) kèm ví; không có lãi → không có dòng"; [`test/format.test.ts`](../../test/format.test.ts) › "dailyMessage › UC-402: lãi tiền gửi tự ghi hôm qua → một dòng thông tin sau dòng đối soát, kèm ví (escape HTML); bản đẩy không đổi; không có lãi → không có dòng"
+
+### AC-31: Lương bị xếp lại Thu nhập thụ động không vào dòng lãi
+- Given lương 40.000.000 tự chia hôm qua (rule không người ghi) rồi được xếp lại Thu nhập thụ động; một khoản lãi tự ghi 68
+- When `daily` chạy
+- Then dòng lãi chỉ "+68 ₫ (1 khoản) — vào Có thì tốt"
+- Tests: [`test/cron-daily.test.ts`](../../test/cron-daily.test.ts) › "tin sáng: dòng lãi tiền gửi tự ghi hôm qua (261018-lai-tien-gui) › UC-402: lương tự chia hôm qua bị xếp lại Thu nhập thụ động → không vào dòng lãi"
+
 ## Traceability
+- Code (dòng lãi tiền gửi, ADR-114): `src/cron/daily.ts` › `daily` (`interestYesterday`); `src/notify/format.ts` › `DailyMessageInput.interestYesterday`, `dailyMessage`
 - Code: `src/cron/daily.ts` › `daily`, `closePreviousMonthOnDayOne`; `src/cron/schedule.ts` › `runScheduledDigests`; `src/domain/period.ts` › `isoWeekday`; `src/notify/format.ts` › `dailyMessage`, `DailyMessageInput` (`safetyFundMonthsCovered`, `safetyFundMonthsTarget`, `debts`, `receivables`, `backfillScope`), `NotifyMessage`, `PUSH_TITLE_MAX`, `PUSH_BODY_MAX`, `fitJoin`, `firstFit`, `formatMoney`, `formatDecimal1`, `formatPct`; `src/notify/telegram.ts` › `notifyMembers`, `escapeHtml`; `src/services/ledger.ts` › `getSnapshot`, `reconcile`, `loadRefs`; `src/domain/snapshot.ts` › `buildSnapshot`; `src/services/rental.ts` › `unsettledTenants`
 - Migrations/DB: `notifications` (đọc `backfill`, `ingest_error`; ghi `daily`); views `v_reconcile`, `v_goal_progress` (`migrations/0001_schema.sql`), `v_safety_fund` (gốc `v_emergency_fund` ở `migrations/0001_schema.sql`, đổi tên ở `migrations/0028_english_names.sql`), config `safety_fund_months`; view `v_tenant_balance`, `tenant_settlements` (`migrations/0007_income_streams_rental.sql`); view `v_debt_balance` (`migrations/0013_debts.sql`); view `v_receivable_balance` (`migrations/0014_receivables.sql`)
 

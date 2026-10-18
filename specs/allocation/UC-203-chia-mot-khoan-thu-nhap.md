@@ -1,7 +1,7 @@
 # UC-203: Chia một khoản thu nhập (ghi sổ)
 - Status: implemented
 - BR: BR-02, BR-04
-- Decisions: D2 (chia ngay từng income đã xác nhận; 10/25 chỉ là lời nhắc), D4 (lệnh chuyển xuất phát từ TK nhận lương); commits `b92fc0f`, `099e54f`, `eb7846e`; `plans/reports/redteam-260922-0100-money-correctness.md` (PoC 4: chia đua chỉ ghi một lần); `plans/reports/code-reviewer-260922-0330-redteam-fixes-review.md` #3, #4; ADR-59 (phần khóa theo nguồn thu), ADR-60 (tiền người thuê chỉ gợi ý, không tự gán), ADR-63 (tiền cho thuê vào ví giữ riêng); ADR-92 (tên tool MCP tiếng Anh `allocate_income`); ADR-108 (Tự chia: số tay thắng luật nạp và phần khóa cho một lần chia); ADR-112 (Có / Không Tích sản khi chia; Tích sản 0 cần lý do — thay một phần ADR-108)
+- Decisions: D2 (chia ngay từng income đã xác nhận; 10/25 chỉ là lời nhắc), D4 (lệnh chuyển xuất phát từ TK nhận lương); commits `b92fc0f`, `099e54f`, `eb7846e`; `plans/reports/redteam-260922-0100-money-correctness.md` (PoC 4: chia đua chỉ ghi một lần); `plans/reports/code-reviewer-260922-0330-redteam-fixes-review.md` #3, #4; ADR-59 (phần khóa theo nguồn thu), ADR-60 (tiền người thuê chỉ gợi ý, không tự gán), ADR-63 (tiền cho thuê vào ví giữ riêng); ADR-92 (tên tool MCP tiếng Anh `allocate_income`); ADR-108 (Tự chia: số tay thắng luật nạp và phần khóa cho một lần chia); ADR-112 (Có / Không Tích sản khi chia; Tích sản 0 cần lý do — thay một phần ADR-108); ADR-114 (chia lãi tiền gửi: một fund, không lệnh chuyển, Thu nhập thụ động)
 - Actor: thành viên hộ (PWA: sau khi ghi thu nhập tay hoặc gán log thành thu nhập); Claude (MCP `allocate_income`, UC-605); hệ thống (ingest tự chia lương khớp mẫu)
 - Trigger: `POST /v1/allocate { income_tx_id, amounts?, wealth_amount?, wealth_note? }`; MCP tool `allocate_income`; ingest `matchLog` khi log tiền vào khớp rule lương và đủ ngưỡng `salary_min_amount`
 
@@ -14,6 +14,7 @@
 - v6 (2026-10-07, commit `7424f26`): tool MCP `allocate` đổi tên `allocate_income` (ADR-92, mcp UC-601); tham số `income_tx_id` và kết quả không đổi; route `POST /v1/allocate` và hàm `allocateIncome` giữ tên (change [261007-doi-ten-tieng-anh](../changes/archive/261007-doi-ten-tieng-anh/proposal.md))
 - v7 (2026-10-12, commit `a8b43f7`): **Tự chia** (ADR-108): `POST /v1/allocate` nhận `amounts: [{ wallet_id, amount }]` — ghi đúng các số, bỏ luật nạp, phần khóa nguồn thu, sàn / bù thiếu; hợp đồng `amounts` (E6 `invalid_amounts`, E7 `amounts_mismatch`); chỉ khoản thu chưa chia (lương đã tự chia thì huỷ lần chia theo UC-206 rồi chia lại). Thêm 4b, E6, E7, AC-11, AC-12 (change [261012-tu-chia](../changes/archive/261012-tu-chia/proposal.md))
 - v8 (2026-10-16, commit `0528219`): **Tích sản người chọn** (ADR-112): `POST /v1/allocate` nhận `wealth_amount` (hợp đồng như UC-202 3b) và `wealth_note`; Tích sản 0 khi bản chia chỉnh được Tích sản cần lý do (400 `wealth_note_required`), lưu `allocation_runs.wealth_note` (migration 0034); nhật ký `income.allocate`; lý do lọc ký tự điều khiển. Lệch đề bài (D13): chỉ bắt lý do khi `adjustable` — nguồn khóa 100% không cần. Thêm 4c, 4d, E6b, E8, AC-13, AC-14 (change [261015-chot-thang-va-keo-tich-san](../changes/archive/261015-chot-thang-va-keo-tich-san/proposal.md))
+- v9 (2026-10-18, commit `6afc8c8`): **chia lãi tiền gửi** (ADR-114) — `allocateIncome` nhận cờ nội bộ `interest` (cùng `amounts`, không mở ở `/v1/allocate` hay MCP): một fund trọn số vào ví nhận lãi, không `transfer_orders`, không luật Tích sản / lý do (ADR-112), ghi report class `passive_income` cho khoản thu cùng batch. Thêm 5d, AC-15 (change [261018-lai-tien-gui](../changes/archive/261018-lai-tien-gui/proposal.md))
 
 ## Preconditions
 - `income_tx_id` là một `transactions` có `meaning='income'`, `status='active'`.
@@ -45,6 +46,7 @@ Kết quả: ví Thu nhập về đúng số dư trước khoản thu (Σ fund =
 - 4d. Mỗi lần `POST /v1/allocate` ghi nhật ký `income.allocate` (target `tx:<id>`, detail `wealth_amount`, `manual`, `no_wealth`) — biết ai bấm bỏ Tích sản.
 - 5a. `income.counter_account_id` NULL hoặc mọi ví đích trú cùng TK đó → không có lệnh chuyển tiền.
 - 5b. Hai request chia cùng một khoản đua nhau: cả hai qua bước 3, batch thứ hai vi phạm PRIMARY KEY `allocation_runs.income_tx_id` → **toàn bộ** batch thứ hai huỷ (không fund, không lệnh) → E4.
+- 5d. **Chia lãi tiền gửi** (ADR-114; ingest UC-303 bước 4, UC-305 5c — chỉ đường nội bộ): `allocateIncome(income, { amounts: [{ví nhận lãi, trọn số}], interest: true })` → `manualFunds` như Tự chia (ví phải đang dùng, không phải ví giữ tiền) nhưng **không** lệnh chuyển (tiền đã nằm ở tài khoản nhận), **không** xét Tích sản 0 / lý do; cùng batch ghi `transaction_report_classes (income, 'passive_income')` (giữ phân loại tay có trước). Fund tính vào "đã rót tháng này" của ví nhận như mọi fund — lần chia lương sau rót cho ví đó ít đi đúng số lãi. Gọi lại → 409 `already_allocated` như mọi khoản đã chia.
 
 ## Exceptions
 - E1. `income_tx_id` không phải số nguyên → 400 `invalid_input` "income_tx_id phải là số nguyên.".
@@ -143,7 +145,14 @@ Kết quả: ví Thu nhập về đúng số dư trước khoản thu (Σ fund =
 - Then 400 `wealth_note_required`; preview 200; có lý do → ghi
 - Tests: [`test/api.test.ts`](../../test/api.test.ts) › "Tích sản người chọn khi chia và lý do Tích sản 0 › UC-203 AC-14: Tự chia amounts không có Tích sản → 400 wealth_note_required; preview cùng body → 200; gửi kèm wealth_note → ghi"
 
+### AC-15: Chia lãi tiền gửi — một fund, không lệnh chuyển, Thu nhập thụ động
+- Given khoản thu lãi 37 ở ví Thu nhập, tài khoản phao (ví Tích sản trú ở tài khoản khác)
+- When chia lãi vào Tích sản (đường nội bộ của ingest)
+- Then đợt chia `A<id>` có đúng một fund 37 vào Tích sản, 0 lệnh chuyển tiền (dù ví đích trú ở tài khoản khác), report class `passive_income`, không đòi lý do Tích sản; số dư ví Thu nhập như trước
+- Tests: [`test/ingest.test.ts`](../../test/ingest.test.ts) › "lãi tiền gửi: máy tự ghi vào ví của chính tài khoản (261018-lai-tien-gui) › UC-303: log +37 BankAPINotify tài khoản phao → 1 khoản thu 37 + 1 fund 37 vào Tích sản, 0 lệnh chuyển, Thu nhập thụ động, log đã gán; ví Thu nhập không đổi"; [`test/mcp.test.ts`](../../test/mcp.test.ts) › "assign_log nhận dòng lãi tiền gửi (261018-lai-tien-gui) › UC-604: assign_log split { meaning: income, interest: true, wallet_id } → khoản thu + một fund vào ví đó, 0 lệnh chuyển, Thu nhập thụ động"
+
 ## Traceability
+- Code (chia lãi, ADR-114): `src/services/ledger.ts` › `previewAllocation` (`interest`: không `transferOrders`, `wealth: null`), `allocateIncome` (`interest`: report class `passive_income`)
 - Code: `src/routes/v1.ts` › `v1.post("/allocate")` (`amounts`); `src/domain/allocation.ts` › `ManualAmount`, `parseManualAmounts`, `manualFunds`, `wealthOverride`, `isFullLock`; `src/routes/v1.ts` › `wealthAmount`, `wealth_note` (lọc ký tự điều khiển), nhật ký `income.allocate`; `src/services/ledger.ts` › `allocateIncome`, `previewAllocation`, `insertTx`, `getTransaction`, `salaryMinAmount`; `src/services/ingest.ts` › `matchLog` (nhánh rule lương, `incomeStreamId`), `loadRuleRows`, `recordIngestError`; `src/mcp/tools.ts` › tool `allocate_income`; `src/domain/transfer-orders.ts` › `newTransferMemo`
 - Migrations/DB: `migrations/0003_offline_entry_and_allocation_runs.sql` (`allocation_runs`, `idx_tx_batch`); `allocation_runs.wealth_note` (`migrations/0034_month_closes.sql`, schema v1.34); CHECK fund ở `migrations/0001_schema.sql`; `transactions.income_stream_id`, `rules.income_stream_id`, `rules.tenant_id` (`migrations/0007_income_streams_rental.sql`)
 

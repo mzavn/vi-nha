@@ -536,3 +536,19 @@ describe("mốc theo dõi SePay của tài khoản đã dùng (ADR-113)", () => 
     expect(again).toMatchObject({ sepay_out: true, sepay_out_from: null, feed_from: "2026-10-23T03:00:00.000Z" });
   });
 });
+
+describe("tham số lãi tiền gửi (261018-lai-tien-gui)", () => {
+  it("UC-507: mặc định 10.000; { interest_max_amount: 0 } lưu được; 10000001 → 400, không ghi khoá nào; giá trị hỏng trong DB → 10.000", async () => {
+    expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ interest_max_amount: 10_000 });
+    const saved = await call("PUT", "/v1/settings/config", { interest_max_amount: 0 });
+    expect(saved.status).toBe(200);
+    expect(saved.json.data).toMatchObject({ interest_max_amount: 0 });
+    const tooBig = await call("PUT", "/v1/settings/config", { salary_min_amount: 5, interest_max_amount: 10_000_001 });
+    expect(tooBig.status).toBe(400);
+    expect(tooBig.json.error?.code).toBe("invalid_input");
+    expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ interest_max_amount: 0, salary_min_amount: 1_000_000 });
+    expect((await call("PUT", "/v1/settings/config", { interest_max_amount: 10_000_000 })).json.data).toMatchObject({ interest_max_amount: 10_000_000 });
+    raw.prepare("UPDATE config SET v = 'abc' WHERE k = 'interest_max_amount'").run();
+    expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ interest_max_amount: 10_000 });
+  });
+});

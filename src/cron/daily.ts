@@ -79,6 +79,30 @@ export async function daily(env: Env, now: Date): Promise<void> {
     .all<{ at: string }>();
   const pairedTransfersYesterday = (pairedRows.results ?? []).filter((r) => dayKey(r.at) === yesterdayKey).length;
 
+  // Hôm qua máy tự ghi lãi tiền gửi (change 261018-lai-tien-gui). Dấu hiệu tất định của Ghi lãi: khoản thu từ log, không người
+  // ghi, Thu nhập thụ động, đợt chia có đúng một fund bằng trọn số tiền và không lệnh chuyển nào (lương tự chia luôn qua dòng
+  // thác, nên lương bị xếp lại Thu nhập thụ động không lọt vào). Theo thời điểm giao dịch (`at`) như dòng tự ghép.
+  const interestRows = await db
+    .prepare(
+      `SELECT t.id, t.at, t.amount, MIN(w.name) AS wallet, MIN(w.sort) AS sort FROM transactions t
+       JOIN transaction_report_classes rc ON rc.transaction_id = t.id AND rc.report_class = 'passive_income'
+       JOIN allocation_runs ar ON ar.income_tx_id = t.id
+       JOIN transactions f ON f.batch_id = ar.batch_id AND f.meaning = 'fund' AND f.status = 'active' AND f.amount = t.amount
+       JOIN wallets w ON w.id = f.wallet_id
+       WHERE t.status = 'active' AND t.meaning = 'income' AND t.log_id IS NOT NULL AND t.by_member_id IS NULL AND t.at >= ?
+         AND (SELECT COUNT(*) FROM transactions x WHERE x.batch_id = ar.batch_id AND x.meaning = 'fund' AND x.status = 'active') = 1
+         AND NOT EXISTS (SELECT 1 FROM transfer_orders o WHERE o.batch_id = ar.batch_id)
+       GROUP BY t.id`,
+    )
+    .bind(new Date(now.getTime() - 2 * 86_400_000).toISOString())
+    .all<{ at: string; amount: number; wallet: string; sort: number }>();
+  const interest = (interestRows.results ?? []).filter((r) => dayKey(r.at) === yesterdayKey);
+  const interestYesterday = {
+    total: interest.reduce((s, r) => s + Number(r.amount), 0),
+    count: interest.length,
+    wallets: [...new Set(interest.sort((a, b) => a.sort - b.sort).map((r) => r.wallet))],
+  };
+
   // Đêm qua (cron 02:00 VN cùng ngày hôm nay — xem báo cáo phase cho quy ước day_key giữa hai cron).
   const backfillRow = await db.prepare("SELECT payload FROM notifications WHERE kind = 'backfill' AND day_key = ?").bind(today).first<{ payload: string }>();
   const backfillPayload = backfillRow ? (JSON.parse(backfillRow.payload) as { added?: number; scope?: "day" | "week" | "month" }) : null;
@@ -128,6 +152,7 @@ export async function daily(env: Env, now: Date): Promise<void> {
     rentalSettleReminder,
     debts,
     receivables,
+    interestYesterday,
   });
 
   await notifyMembers(env, "daily", today, message);

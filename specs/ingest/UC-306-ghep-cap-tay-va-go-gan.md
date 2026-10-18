@@ -17,6 +17,7 @@
 - v9 (2026-10-06, commit `d059eaa`): change [`261006-bao-mat-kenh-bao-tin`](../changes/archive/261006-bao-mat-kenh-bao-tin/proposal.md) (ADR-90, red-team INSIDER-04) — gỡ gán thành công ghi nhật ký `tx.unassign` (`target = tx:<id>`, `detail = { voided, logs }`, người gọi + `via`); lỗi không ghi. Thêm AC-11.
 - v10 (2026-10-17, commit `cb54dd7`): không đổi code ghép tay; ghi [OPEN] ghép tay không xét mốc theo dõi SePay (ADR-113) (change [261017-noi-sepay-sau](../changes/archive/261017-noi-sepay-sau/proposal.md))
 - v11 (2026-10-17, commit `e207802`): gỡ gán khoản `source='manual'` đã nối log chỉ gỡ `log_id` / `log_id_2` (log về `pending`), không huỷ khoản tay; `not_from_log` xét cả `log_id_2`. Thêm 4a, AC-12 (change [261017-webhook-truoc-moc](../changes/archive/261017-webhook-truoc-moc/proposal.md))
+- v12 (2026-10-18, commit `6afc8c8`): không đổi code gỡ gán — khoản thu **lãi tiền gửi** (ADR-114) gỡ như khoản thu đã chia: huỷ khoản thu và fund của đợt chia lãi (không có lệnh chuyển nên không bao giờ bị `allocation_settled`), log `pending`; report class nằm lại với dòng đã huỷ (balance UC-1105). Thêm AC-13 (change [261018-lai-tien-gui](../changes/archive/261018-lai-tien-gui/proposal.md))
 
 ## Preconditions
 - Ghép tay: cả hai log `pending`. Gỡ gán: giao dịch `active`, sinh từ log (`log_id` khác NULL).
@@ -100,6 +101,12 @@
 - When gỡ gán (`POST /v1/logs/transactions/:txId/void`)
 - Then giao dịch còn `active`, giữ ví / hạng mục; log về `pending`
 - Tests: [`test/logs.test.ts`](../../test/logs.test.ts) › "Gán: nối log vào khoản đã nhập tay (261017-webhook-truoc-moc) › UC-305 AC-27: log chờ 500.000, khoản tay khớp → hiện trong 'Đã nhập tay?'; Nối → log đã gán, giao dịch giữ ví / hạng mục; gỡ gán → giao dịch còn, log chờ lại"
+
+### AC-13: Gỡ gán khoản lãi tiền gửi huỷ khoản thu và fund
+- Given log lãi +37 đã gán loại Lãi tiền gửi vào Tích sản (khoản thu + một fund, 0 lệnh chuyển)
+- When gỡ gán khoản thu
+- Then khoản thu và fund `void`, log `pending`
+- Tests: [`test/ingest.test.ts`](../../test/ingest.test.ts) › "lãi tiền gửi: máy tự ghi vào ví của chính tài khoản (261018-lai-tien-gui) › UC-305: log lãi đang chờ (ngưỡng vừa hạ) → gợi ý Lãi tiền gửi kèm ví nhận lãi; gán → như ghi lãi; ví Thu nhập → invalid_wallet, không ghi gì; gỡ gán → huỷ khoản thu và fund, log chờ lại"
 
 ## Traceability
 - Code: `src/routes/logs.ts` › `logs.post("/logs/pair")`, `logs.post("/logs/transactions/:txId/void")`; `src/services/audit.ts` › `recordChange`; `src/services/ingest.ts` › `pairLogs`, `unassignTransaction`, `commit`, `logTxStmt`, `markAssigned`; `src/services/ledger.ts` › `getTransaction`, `undoAllocationStatements`, `runUndo`, `manualTxOrThrow` (chặn `bank_tx` ở sổ cái)

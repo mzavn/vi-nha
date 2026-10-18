@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { daily } from "../src/cron/daily";
 import type { Env } from "../src/env";
 import { monthKey, weekKey } from "../src/domain/period";
+import { ingestLog } from "../src/services/ingest";
 import { allocateIncome, createEntry, insertTx } from "../src/services/ledger";
 import { asD1, openDb } from "./helpers/d1-sqlite";
 
@@ -274,5 +275,38 @@ describe("Chủ nhật: nhắc đếm ví tiền mặt / nhập số dư TK ghi 
   it("không phải Chủ nhật thì không có dòng nhắc", async () => {
     await daily(env, new Date("2026-09-22T00:00:00Z"));
     expect(sentMessages()[0]!.text).not.toContain("🧮");
+  });
+});
+
+describe("tin sáng: dòng lãi tiền gửi tự ghi hôm qua (261018-lai-tien-gui)", () => {
+  const lai = (id: string, amount: number, accountNo: string, at: string) =>
+    ingestLog(env.DB, { id, at, amount, direction: "in", accountNo, content: "BankAPINotify", refCode: null, referenceNumber: null, raw: {} }, "webhook", new Date(at));
+
+  it("UC-402: hôm qua tự ghi 3 khoản lãi 68 + 50 + 37 → đúng một dòng lãi 155 ₫ (3 khoản) kèm ví; không có lãi → không có dòng", async () => {
+    const now = new Date("2026-10-18T00:00:00Z"); // 07:00 VN 18/10
+    await daily(env, now);
+    expect(sentMessages()[0]!.text.split("\n").filter((l) => l.includes("Lãi tiền gửi"))).toEqual([]);
+
+    raw.prepare("DELETE FROM notifications WHERE kind = 'daily'").run();
+    fetchMock.mockClear();
+    raw.prepare("UPDATE accounts SET role = 'buffer' WHERE id = 'mb-husband'").run();
+    await lai("y1", 68, "0011xxxxxxx", "2026-10-16T17:07:00.000Z");
+    await lai("y2", 50, "0011yyyyyyy", "2026-10-16T17:30:00.000Z");
+    await lai("y3", 37, "0888xxxxxxx", "2026-10-16T17:58:00.000Z");
+    await lai("old", 20, "0011yyyyyyy", "2026-10-15T17:00:00.000Z"); // hôm kia: không tính
+    await daily(env, now);
+    expect(sentMessages()[0]!.text.split("\n").filter((l) => l.includes("Lãi tiền gửi"))).toEqual(["💰 Lãi tiền gửi: +155 ₫ (3 khoản) — vào Tích sản, Chơi (vợ), Có thì tốt"]);
+  });
+
+  it("UC-402: lương tự chia hôm qua bị xếp lại Thu nhập thụ động → không vào dòng lãi", async () => {
+    const at = "2026-10-17T02:00:00.000Z";
+    raw.prepare("UPDATE rules SET by_member_id = NULL WHERE pattern = 'LUONG THANG'").run(); // khoản thu tự ghi không người ghi, như lãi
+    await ingestLog(env.DB, { id: "sal", at, amount: 40_000_000, direction: "in", accountNo: "0011xxxxxxx", content: "LUONG THANG 10", refCode: null, referenceNumber: null, raw: {} }, "webhook", new Date(at));
+    const income = raw.prepare("SELECT id FROM transactions WHERE log_id = 'sal' AND meaning = 'income'").get() as { id: number };
+    expect(raw.prepare("SELECT COUNT(*) n FROM allocation_runs WHERE income_tx_id = ?").get(income.id)).toEqual({ n: 1 });
+    raw.prepare("INSERT INTO transaction_report_classes (transaction_id, report_class) VALUES (?, 'passive_income')").run(income.id);
+    await lai("y1", 68, "0011xxxxxxx", "2026-10-16T17:07:00.000Z");
+    await daily(env, new Date("2026-10-18T00:00:00Z"));
+    expect(sentMessages()[0]!.text.split("\n").filter((l) => l.includes("Lãi tiền gửi"))).toEqual(["💰 Lãi tiền gửi: +68 ₫ (1 khoản) — vào Có thì tốt"]);
   });
 });
