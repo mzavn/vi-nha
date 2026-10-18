@@ -9,6 +9,7 @@ import { normalizeContent } from "../domain/rules";
 import { buildSnapshot, monthTarget, openingWealthBuildingCredit, weekTarget, type Snapshot, type SnapshotData } from "../domain/snapshot";
 import { monthCloseOrders, newTransferMemo, transferOrders, type TransferOrderDraft } from "../domain/transfer-orders";
 import { withInterestRule } from "../domain/interest";
+import { INTEREST_MAX_AMOUNT_DEFAULT, INTEREST_MAX_AMOUNT_LIMIT } from "../domain/interest-deposit";
 import { DomainError, type AccountRef, type AccountRole, type Refs, type WalletRef } from "../domain/types";
 import { formatMoney } from "../notify/format";
 import { itemsTotal } from "./balance";
@@ -426,6 +427,13 @@ export async function salaryMinAmount(db: D1Database): Promise<number> {
   return Number.isInteger(n) && n >= 0 ? n : 1_000_000;
 }
 
+/** Ngưỡng log lãi tiền gửi (config `interest_max_amount`, access UC-507): 0 = tắt; thiếu / hỏng → 10.000. */
+export async function interestMaxAmount(db: D1Database): Promise<number> {
+  const row = await db.prepare("SELECT v FROM config WHERE k = 'interest_max_amount'").first<{ v: string }>();
+  const n = row ? Number(row.v) : NaN;
+  return Number.isInteger(n) && n >= 0 && n <= INTEREST_MAX_AMOUNT_LIMIT ? n : INTEREST_MAX_AMOUNT_DEFAULT;
+}
+
 /** Các khoản hoàn tiền / nhận lại còn hiệu lực trỏ về một khoản gốc (`link_id` = ?, ledger UC-101 bước 4b). */
 const LINKED_RETURNS = `transactions WHERE link_id = ? AND status = 'active' AND meaning IN ('refund', 'collect')`;
 
@@ -672,16 +680,19 @@ export interface AllocationPlan extends AllocationResult {
 /**
  * `amounts`: Tự chia (UC-203) — ghi đúng các số đó, bỏ luật nạp và nguồn thu; lệnh chuyển tính như chia theo luật.
  * `wealthAmount`: Tích sản người chọn (ADR-112) thay khoản cắt % / phần khóa Tích sản; không đi cùng `amounts`.
+ * `interest` (chỉ nội bộ, đi cùng `amounts`): chia lãi tiền gửi — tiền đã nằm ở tài khoản nhận nên không lệnh chuyển,
+ * không xét Tích sản (ADR-112).
  */
 export async function previewAllocation(
   db: D1Database,
   income: { amount: number; taxable: boolean; at: string; accountId: string | null; incomeStreamId?: string | null },
-  opts: { amounts?: ManualAmount[]; wealthAmount?: number } = {},
+  opts: { amounts?: ManualAmount[]; wealthAmount?: number; interest?: boolean } = {},
 ): Promise<AllocationPlan> {
   if (opts.amounts && opts.wealthAmount !== undefined) {
     throw new DomainError("invalid_amounts", "Số tự chia không hợp lệ: không gửi wealth_amount cùng amounts — ô Tích sản nằm trong amounts.");
   }
   const { refs } = await withInterest(db, await loadRefs(db), monthKey(income.at));
+  if (opts.interest && opts.amounts) return { ...manualFunds(opts.amounts, income.amount, refs.wallets), transferOrders: [], wealth: null };
   const stream = income.incomeStreamId ? refs.incomeStreams.find((s) => s.id === income.incomeStreamId) : null;
   const wealthWallet = refs.wallets.find((w) => w.tier === "wealth_building");
   let result: AllocationResult;
@@ -706,11 +717,12 @@ export async function previewAllocation(
 /**
  * Ghi lần chia. Người chọn Tích sản (`wealthAmount`) hoặc tự chia (`amounts`) mà Tích sản ra 0 trên khoản thu chỉnh được
  * Tích sản thì phải có `wealthNote` (ADR-112). Chia tự động (ingest, MCP) không gửi hai trường đó nên không bị hỏi lý do.
+ * `interest` (chia lãi tiền gửi, change 261018-lai-tien-gui): ghi thêm report class `passive_income` cho khoản thu, cùng batch.
  */
 export async function allocateIncome(
   db: D1Database,
   incomeTxId: number,
-  opts: { amounts?: ManualAmount[]; wealthAmount?: number; wealthNote?: string | null } = {},
+  opts: { amounts?: ManualAmount[]; wealthAmount?: number; wealthNote?: string | null; interest?: boolean } = {},
 ) {
   const income = await getTransaction(db, incomeTxId);
   if (!income || income.meaning !== "income" || income.status !== "active") {
@@ -729,7 +741,7 @@ export async function allocateIncome(
       accountId: (income.counter_account_id as string | null) ?? null,
       incomeStreamId: (income.income_stream_id as string | null) ?? null,
     },
-    { amounts: opts.amounts, wealthAmount: opts.wealthAmount },
+    { amounts: opts.amounts, wealthAmount: opts.wealthAmount, interest: opts.interest },
   );
   const note = opts.wealthNote?.trim() || null;
   const noWealth = plan.wealth !== null && plan.wealth.amount === 0;
@@ -742,6 +754,14 @@ export async function allocateIncome(
   const statements = [
     // Trùng khoá chính ở đây làm cả batch huỷ: một khoản thu không bao giờ được chia hai lần.
     db.prepare("INSERT INTO allocation_runs (income_tx_id, batch_id, wealth_note) VALUES (?, ?, ?)").bind(incomeTxId, batchId, wealthNote),
+    // Lãi tiền gửi luôn là Thu nhập thụ động (balance UC-1106); phân loại lại tay có trước thì giữ.
+    ...(opts.interest
+      ? [
+          db
+            .prepare("INSERT OR IGNORE INTO transaction_report_classes (transaction_id, report_class, by_member_id) VALUES (?, 'passive_income', ?)")
+            .bind(incomeTxId, (income.by_member_id as string | null) ?? null),
+        ]
+      : []),
     ...plan.funds.map((f) =>
       insertTx(db, {
         at,

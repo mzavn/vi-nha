@@ -2,10 +2,11 @@
 // Chữ ký các hàm dưới đây là hợp đồng dùng chung với MCP (phase 06) — giữ nguyên tên và tham số.
 
 import { assertOpened, buildEntry, wealthBuildingMove, type EntryInput } from "../domain/entry";
+import { interestWallet, isInterestLog } from "../domain/interest-deposit";
 import { dayKey, minuteOfDay, monthKey, weekKey } from "../domain/period";
 import { canPair, extractCode, extractTransferMemo, looksLikeCashWithdrawal, matchRule, type PairCandidate, type RuleRow } from "../domain/rules";
-import { DomainError } from "../domain/types";
-import { allocateIncome, getTransaction, loadRefs, resolveLink, runUndo, salaryMinAmount, undoAllocationStatements } from "./ledger";
+import { DomainError, isIncomeHolding, type Refs } from "../domain/types";
+import { allocateIncome, getTransaction, interestMaxAmount, loadRefs, resolveLink, runUndo, salaryMinAmount, undoAllocationStatements } from "./ledger";
 import { closest, feedMark, linkColumn, linkLogToTx, manualMatches } from "./manual-links";
 
 type Row = Record<string, unknown>;
@@ -36,6 +37,8 @@ export interface Split {
   link_id?: number | null;
   taxable?: boolean;
   asset_kind?: string | null;
+  /** income: lãi tiền gửi (change 261018-lai-tien-gui) — một dòng, ghi khoản thu rồi chia trọn vào `wallet_id`, không lệnh chuyển. */
+  interest?: boolean;
   note?: string | null;
 }
 
@@ -305,7 +308,7 @@ interface LogCtx {
 
 /**
  * Luồng khớp log (phase-04 "Luồng"): PF memo → ghép cặp nội bộ → gắn làm chân thứ hai của chuyển nội bộ đã ghi
- * (ADR-81) → rule mã/từ khoá (spend/transfer) hoặc rule lương (income) → còn lại giữ 'pending'. Dùng chung cho
+ * (ADR-81) → rule mã/từ khoá (spend/transfer) hoặc rule lương (income) → log lãi tiền gửi → còn lại giữ 'pending'. Dùng chung cho
  * webhook lẫn backfill (cùng rule, cùng ghép cặp).
  */
 async function matchLog(db: D1Database, log: LogCtx): Promise<void> {
@@ -529,7 +532,53 @@ async function matchLog(db: D1Database, log: LogCtx): Promise<void> {
       return;
     }
   }
-  // 6. Còn lại: giữ 'pending' (giá trị mặc định lúc insert), không làm gì thêm — lượt cron kế tiếp (≤ 15 phút) sẽ báo.
+  // 6. Log lãi tiền gửi (bước cuối, change 261018-lai-tien-gui): tự ghi khoản thu và chia trọn vào ví của chính tài khoản;
+  // không chọn được ví thì giữ 'pending' (màn Gán gợi ý Lãi tiền gửi).
+  // 7. Còn lại: giữ 'pending' (giá trị mặc định lúc insert), không làm gì thêm — lượt cron kế tiếp (≤ 15 phút) sẽ báo.
+  if (isInterestLog(log, await interestMaxAmount(db))) {
+    const refs = await loadRefs(db);
+    const walletId = interestWalletFor(refs, log.accountId);
+    if (walletId) await recordInterest(db, log, walletId, refs);
+  }
+}
+
+/** Ví nhận lãi của tài khoản (đang bật) `accountId`; null khi tài khoản đã tắt hay không chọn được ví (để người gán). */
+function interestWalletFor(refs: Refs, accountId: string): string | null {
+  const account = refs.accounts.find((a) => a.id === accountId);
+  return account ? interestWallet(account, refs.wallets, refs.incomeStreams, refs.rules) : null;
+}
+
+/**
+ * Ghi lãi tự động: khoản thu vào ví Thu nhập + log 'assigned' (nguyên tử), rồi chia trọn vào `walletId` (không lệnh chuyển,
+ * Thu nhập thụ động). Chia lỗi thì ném lên `ingestLog` ghi `ingest_error` — khoản thu nằm ở ví Thu nhập như lương tự chia.
+ */
+async function recordInterest(db: D1Database, log: LogCtx, walletId: string, refs: Refs): Promise<void> {
+  const holding = refs.wallets.find(isIncomeHolding);
+  if (!holding) return;
+  const written = await commit(db, [
+    logTxStmt(
+      db,
+      {
+        at: log.at,
+        amount: log.amount,
+        meaning: "income",
+        walletId: holding.id,
+        counterWalletId: null,
+        accountId: null,
+        counterAccountId: log.accountId,
+        categoryId: null,
+        byMemberId: null,
+        batchId: null,
+        note: null,
+      },
+      log.id,
+      null,
+    ),
+    markAssigned(db, log.id),
+  ]);
+  if (!written) return;
+  const income = await db.prepare("SELECT id FROM transactions WHERE log_id = ? AND meaning = 'income' AND status = 'active'").bind(log.id).first<{ id: number }>();
+  if (income) await allocateIncome(db, income.id, { amounts: [{ walletId, amount: log.amount }], interest: true });
 }
 
 /**
@@ -686,6 +735,14 @@ export async function listPendingLogs(db: D1Database, limit: number): Promise<Re
     if (!cashCache.has(accountId)) cashCache.set(accountId, cashAccountFor(db, null, accountId));
     return cashCache.get(accountId)!;
   };
+  // Gợi ý Lãi tiền gửi (change 261018-lai-tien-gui): undefined = không phải log lãi; null = log lãi chưa chọn được ví.
+  const maxInterest = await interestMaxAmount(db);
+  let refs: Promise<Refs> | null = null;
+  const interestOf = async (row: Row): Promise<string | null | undefined> => {
+    if (!isInterestLog({ direction: String(row.direction), amount: Number(row.amount), content: (row.content as string | null) ?? null }, maxInterest)) return undefined;
+    refs ??= loadRefs(db);
+    return interestWalletFor(await refs, row.account_id as string);
+  };
   return Promise.all(
     list.map(async (row) => {
       // "Đã nhập tay?" ở màn Gán: khoản tay khớp log (không riêng log trước mốc) — Nối là gắn log vào đó, không ghi thêm.
@@ -718,7 +775,7 @@ export async function listPendingLogs(db: D1Database, limit: number): Promise<Re
       // Log ra không được coi là SePay báo (ADR-66), hay từ trước lúc bật "báo cả tiền ra" (ADR-113): nhắc có thể đã nhập tay.
       const out = sepayOut.get(log.account_id as string);
       const outNote = !out ? null : !out.fed ? OUT_NOT_FED_NOTE : out.since !== null && Date.parse(String(log.at)) < Date.parse(out.since) ? OUT_BEFORE_MARK_NOTE : null;
-      return { ...log, suggestion: await suggestFor(log, ruleRows, cashOf, outNote) };
+      return { ...log, suggestion: await suggestFor(log, ruleRows, cashOf, outNote, interestOf) };
     }),
   );
 }
@@ -732,7 +789,8 @@ const PIGGY_BANK_RETURN_NOTE = "Chỉ đổi chỗ tiền; tiền vẫn thuộc 
  * Gợi ý cho màn Gán: rule khớp mã nhưng thiếu danh mục → gợi ý ví; log `out` không khớp rule mà nội dung trông như
  * rút tiền mặt (`looksLikeCashWithdrawal` — ATM, RUT TIEN…) → gợi ý Rút tiền mặt; không khớp gì khác → không gợi ý
  * (trả QR, hoá đơn không phải rút tiền — màn Gán mặc định Chi tiêu);
- * log `in` khớp rule người thuê → gợi ý "Thu từ <tên>". Log `out` của tài khoản "chỉ tiền vào" (`outNotFed`, ADR-66) hay
+ * log `in` khớp rule người thuê → gợi ý "Thu từ <tên>"; log `in` là log lãi tiền gửi → gợi ý "Lãi tiền gửi" kèm ví nhận lãi.
+ * Log `out` của tài khoản "chỉ tiền vào" (`outNotFed`, ADR-66) hay
  * từ trước lúc bật "báo cả tiền ra" (ADR-113) không được tự gán, nên gợi ý luôn theo rule khớp và kèm lời nhắc `outNote`
  * (có thể đã nhập tay). Rule chuyển nội bộ có tài khoản
  * đầu kia (heo đất, ADR-77/ADR-82): tiền ra gợi ý chuyển sang đó kèm chuyển ví vào Tích sản; tiền vào khớp cùng rule là
@@ -743,6 +801,7 @@ async function suggestFor(
   allRules: LoadedRule[],
   cashOf: (accountId: string) => Promise<string | null>,
   outNote: string | null,
+  interestOf: (log: Row) => Promise<string | null | undefined>,
 ): Promise<Record<string, unknown> | null> {
   if (!log.account_id) return null;
   const outNotFed = outNote !== null;
@@ -754,8 +813,9 @@ async function suggestFor(
     if (hit) return { meaning: "income", tenant_id: hit.tenantId, label: `Thu từ ${hit.tenantName ?? hit.tenantId}` };
     const backRules = rules.filter((r) => r.meaning === "transfer" && r.counterAccountId).map((r) => ({ ...r, meaning: "income" as const, isSalary: true }));
     const back = matchRule(backRules, "in", log.content as string | null, log.ref_code as string | null) as LoadedRule | null;
-    if (!back) return null;
-    return { meaning: "transfer", other_account_id: back.counterAccountId, label: `Rút heo về ${log.account_name ?? log.account_id}`, note: PIGGY_BANK_RETURN_NOTE };
+    if (back) return { meaning: "transfer", other_account_id: back.counterAccountId, label: `Rút heo về ${log.account_name ?? log.account_id}`, note: PIGGY_BANK_RETURN_NOTE };
+    const walletId = await interestOf(log);
+    return walletId === undefined ? null : { meaning: "income", interest: true, wallet_id: walletId, label: "Lãi tiền gửi" };
   }
   const rule = matchRule(rules, "out", log.content as string | null, log.ref_code as string | null) as LoadedRule | null;
   let base: Record<string, unknown> | null = null;
@@ -807,7 +867,8 @@ function splitToEntryInput(log: Row, split: Split): EntryInput {
 /**
  * Gán một log thành 1..N giao dịch; tổng các split phải bằng đúng số tiền log. Gán đúng một dòng chuyển nội bộ trọn số
  * tiền mà log là chân còn lại của chuyển nội bộ đã ghi sang đúng tài khoản đó (ADR-81) → gắn vào giao dịch ấy
- * (`attached: true`, không ghi thêm; ví của giao dịch đã ghi giữ nguyên).
+ * (`attached: true`, không ghi thêm; ví của giao dịch đã ghi giữ nguyên). Dòng lãi tiền gửi (`interest`, change
+ * 261018-lai-tien-gui): ghi khoản thu như gán thường rồi chia trọn vào `wallet_id` — không lệnh chuyển, Thu nhập thụ động.
  */
 export async function assignLog(
   db: D1Database,
@@ -825,6 +886,14 @@ export async function assignLog(
   if (total !== Number(log.amount)) {
     fail("split_mismatch", `Tổng các dòng (${total}) phải bằng đúng số tiền log (${log.amount}).`);
   }
+  // Lãi tiền gửi: đúng một dòng thu nhập của tiền vào; ví nhận kiểm trước khi ghi (không ghi gì nếu sai).
+  const interest = splits.some((s) => s.interest);
+  if (interest) {
+    const s = splits[0]!;
+    if (log.direction !== "in" || splits.length !== 1 || s.meaning !== "income" || s.tenant_id || s.income_stream_id || s.link_id || s.taxable) {
+      fail("invalid_input", "Lãi tiền gửi là đúng một dòng thu nhập của tiền vào — không tách, không kèm người thuê, nguồn thu, khoản gốc hay thuế.");
+    }
+  }
 
   const only = splits.length === 1 ? splits[0]! : null;
   if (only?.meaning === "transfer" && only.other_account_id && log.account_id) {
@@ -841,6 +910,10 @@ export async function assignLog(
   }
 
   const refs = await loadRefs(db);
+  const interestWalletId = interest ? (splits[0]!.wallet_id ?? null) : null;
+  if (interest && !refs.wallets.some((w) => w.id === interestWalletId && w.tier !== "holding")) {
+    fail("invalid_wallet", "Ví nhận lãi phải là ví đang dùng, không phải ví Thu nhập hay ví quỹ.");
+  }
   const built = splits.map((s) => {
     const row = buildEntry(splitToEntryInput(log, s), refs, memberId, now);
     return { ...row, source: "sepay" as const };
@@ -890,6 +963,9 @@ export async function assignLog(
 
   const updatedLog = (await db.prepare("SELECT * FROM bank_logs WHERE id = ?").bind(logId).first<Row>())!;
   const created = await db.prepare("SELECT * FROM transactions WHERE log_id = ? ORDER BY id DESC LIMIT ?").bind(logId, splits.length).all<Row>();
+  if (interestWalletId) {
+    await allocateIncome(db, Number(rows(created)[0]!.id), { amounts: [{ walletId: interestWalletId, amount: Number(log.amount) }], interest: true });
+  }
   return { log: updatedLog, transactions: rows(created), attached: false };
 }
 

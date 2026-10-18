@@ -5,7 +5,7 @@ import { formatVnd } from "./money";
 import { ordersLeft, walletRemain } from "./pending";
 import { shortDate, timeHM } from "./period";
 import { MEANING_LABEL } from "./transactions";
-import type { ManualMatch, WalletStatus } from "./types";
+import type { BankLog, ManualMatch, WalletStatus } from "./types";
 
 export type SplitMeaning = "spend" | "transfer" | "income" | "refund" | "lend" | "collect" | "buy_asset";
 
@@ -31,10 +31,12 @@ export interface Split {
   receivable_id?: string | null;
   /** refund / collect: khoản gốc được trả (ô "Trả lại cho khoản chi" / "Trả cho khoản cho vay"). */
   link_id?: number | null;
+  /** income: lãi tiền gửi (change 261018-lai-tien-gui) — một dòng, chia trọn vào `wallet_id`. */
+  interest?: boolean;
 }
 
-/** "tenant" chỉ là lựa chọn trên màn hình: gửi lên thành income kèm tenant_id. */
-export type AssignChoice = SplitMeaning | "tenant";
+/** "tenant" và "interest" chỉ là lựa chọn trên màn hình: gửi lên thành income kèm tenant_id / interest. */
+export type AssignChoice = SplitMeaning | "tenant" | "interest";
 
 /**
  * Hàng chip "Gán thành" theo chiều tiền (UC-706), mỗi loại kèm đúng một dòng giải thích hiện dưới hàng chip.
@@ -43,6 +45,7 @@ export type AssignChoice = SplitMeaning | "tenant";
 export const ASSIGN_CHOICES: Record<"in" | "out", { value: AssignChoice; label: string; hint: string }[]> = {
   in: [
     { value: "income", label: "Thu nhập", hint: "Tiền mới của nhà (lương, thưởng, lãi, quà) — sẽ được chia vào các ví." },
+    { value: "interest", label: "Lãi tiền gửi", hint: "Lãi ngân hàng trả — cộng thẳng vào ví chọn bên dưới, không chia lương, báo cáo xếp Thu nhập thụ động." },
     { value: "tenant", label: "Thu từ người thuê", hint: "Người thuê trả tiền — trừ vào số họ còn nợ, chia theo nguồn cho thuê." },
     {
       value: "refund",
@@ -130,6 +133,31 @@ export function assignToast(splits: Split[], o: { label: string; status: WalletS
 /** Toast khi ghi khoản thu mà để chia sau (UC-706 "Gán, để chia sau", UC-705 "Ghi, để chia sau"): nói tiền đang ở đâu, chia ở đâu. */
 export function deferredIncomeToast(amount: number): string {
   return `Đã ghi ${formatVnd(amount)} vào ví Thu nhập, chưa chia. Chia ở Giao dịch gần đây › khoản này › Chia.`;
+}
+
+/** Dòng giải thích của loại Lãi tiền gửi ở sheet Gán (UC-706), theo ví đang chọn. */
+export function interestHint(walletName: string): string {
+  return `Lãi ngân hàng trả — cộng thẳng vào ${walletName}, không chia lương, báo cáo xếp Thu nhập thụ động.`;
+}
+
+/** Toast sau khi gán Lãi tiền gửi (UC-706): không chia lương, không lệnh chuyển. */
+export function interestToast(amount: number, walletName: string): string {
+  return `Đã ghi lãi ${formatVnd(amount)} vào ${walletName}`;
+}
+
+/**
+ * Chip của một log ở danh sách Gán (UC-706): có thể trùng → lãi tiền gửi → khớp mẫu lương → tiền vào phải hỏi → người thuê →
+ * gợi ý khác (`suggestionLabel` đọc tên danh mục / ví / loại) → chưa có luật.
+ */
+export function logChip(log: Pick<BankLog, "direction" | "suggestion">, suggestionLabel: () => string): { cls: string; text: string } {
+  const s = log.suggestion;
+  if (s?.possible_duplicate_of) return { cls: "chip warn", text: "có thể trùng — xem trước khi gán" };
+  if (s?.interest) return { cls: "chip ok", text: `gợi ý: ${s.label ?? "Lãi tiền gửi"}` };
+  if (s?.is_salary && !s.tenant_id) return { cls: "chip ok", text: "khớp mẫu lương" };
+  if (log.direction === "in" && !s) return { cls: "chip warn", text: "tiền vào — phải hỏi" };
+  if (s?.tenant_id) return { cls: "chip", text: `gợi ý: ${s.label ?? "thu từ người thuê"}` };
+  if (s?.meaning) return { cls: "chip", text: `gợi ý: ${suggestionLabel()}` };
+  return { cls: "chip", text: "chưa có luật" };
 }
 
 /** Một dòng "Đã nhập tay?" ở màn Gán: giờ VN, danh mục (không có thì loại giao dịch), ghi chú. */

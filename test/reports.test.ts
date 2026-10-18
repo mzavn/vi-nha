@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CashFlow, IncomeStatement } from "../src/domain/reports";
 import type { Env } from "../src/env";
 import { app } from "../src/index";
+import { assignLog } from "../src/services/ingest";
 import { getCashFlow } from "../src/services/reports";
 import type { ReportTransactions } from "../web/src/lib/types";
 import { asD1, readSql } from "./helpers/d1-sqlite";
@@ -280,5 +281,24 @@ describe("ledger UC-102, access UC-506: phân loại lại theo khoản sửa; n
     for (const d of ["2026-09-15", "2026-08-01", null]) expect((await patch(d)).json.data.opened_at, String(d)).toBe(d);
     raw.prepare("UPDATE transactions SET status = 'void' WHERE id = ?").run(early);
     expect((await patch("2026-10-01")).json.data.opened_at).toBe("2026-10-01");
+  });
+});
+
+describe("lãi tiền gửi ở Kết quả thu chi (261018-lai-tien-gui)", () => {
+  it("UC-1106: tháng có lương 30.000.000 và ba khoản lãi 68 + 50 + 37 (tài khoản thường) → Lương và thu khác 30.000.000, Thu nhập thụ động 155", async () => {
+    tx({ at: "2026-10-01T03:00:00.000Z", amount: 30_000_000, meaning: "income", wallet_id: "income", counter_account_id: "vcb" });
+    for (const [id, amount] of [["l1", 68], ["l2", 50], ["l3", 37]] as const) {
+      raw.prepare("INSERT INTO bank_logs (id, at, amount, direction, account_id, content, status) VALUES (?, '2026-10-17T17:07:00.000Z', ?, 'in', 'vcb', 'BankAPINotify', 'pending')").run(id, amount);
+      await assignLog(env.DB, id, [{ meaning: "income", amount, interest: true, wallet_id: "have" }], null, new Date());
+    }
+    const s = await statement("2026-10");
+    expect(s.income).toEqual({
+      total: 30_000_155,
+      lines: [
+        { line: "salary_other", label: "Lương và thu khác", total: 30_000_000 },
+        { line: "rental_income", label: "Cho thuê lại", total: 0 },
+        { line: "passive_income", label: "Thu nhập thụ động", total: 155 },
+      ],
+    });
   });
 });

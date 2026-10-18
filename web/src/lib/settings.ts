@@ -2,6 +2,7 @@
 // Không đụng DOM hay mạng để test được bằng vitest.
 
 import { bankByCode } from "../../../src/domain/banks";
+import { INTEREST_MAX_AMOUNT_LIMIT } from "../../../src/domain/interest-deposit";
 import { clockMinutes } from "../../../src/domain/notify-schedule";
 import { DEFAULT_SEPAY_CONNECTION_ID } from "../../../src/domain/system-ids";
 import { ApiError, errorText } from "./api";
@@ -552,10 +553,11 @@ export function memberPayload(f: { name: string; tg_chat_id: string }, current: 
   }));
 }
 
-type ConfigFields = "salary_min_amount" | "safety_fund_months" | "month_close_wealth_pct" | "month_close_reward_wallet";
+type ConfigFields = "salary_min_amount" | "interest_max_amount" | "safety_fund_months" | "month_close_wealth_pct" | "month_close_reward_wallet";
 
 export function configPayload(f: {
   salary_min_amount: number;
+  interest_max_amount: number;
   safety_fund_months: string;
   month_close_wealth_pct: string;
   month_close_reward_wallet: string;
@@ -564,10 +566,12 @@ export function configPayload(f: {
   const months = parseInteger(f.safety_fund_months, 1, 24);
   if (months === null) errors.safety_fund_months = "Số tháng là số nguyên từ 1 đến 24.";
   if (f.salary_min_amount < 0) errors.salary_min_amount = "Ngưỡng không âm.";
+  if (f.interest_max_amount < 0 || f.interest_max_amount > INTEREST_MAX_AMOUNT_LIMIT) errors.interest_max_amount = "Ngưỡng từ 0 đến 10.000.000 ₫ (0 = tắt).";
   const closePct = parseInteger(f.month_close_wealth_pct, 0, 100);
   if (closePct === null) errors.month_close_wealth_pct = "Tỷ lệ là số nguyên từ 0 đến 100.";
   return done(errors, () => ({
     salary_min_amount: f.salary_min_amount,
+    interest_max_amount: f.interest_max_amount,
     safety_fund_months: months!,
     month_close_wealth_pct: closePct!,
     month_close_reward_wallet: orNull(f.month_close_reward_wallet),

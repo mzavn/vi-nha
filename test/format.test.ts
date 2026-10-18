@@ -58,6 +58,17 @@ describe("dailyMessage", () => {
     expect(text.split("\n")).toEqual(["💰 Còn để chi tuần này: 3.250.000 ₫ (4 ngày)", "🏦 Đối soát: khớp"]);
   });
 
+  it("UC-402: lãi tiền gửi tự ghi hôm qua → một dòng thông tin sau dòng đối soát, kèm ví (escape HTML); bản đẩy không đổi; không có lãi → không có dòng", () => {
+    const msg = dailyMessage({ ...base, interestYesterday: { total: 155, count: 3, wallets: ["Tích sản", "Chi tiêu <vợ>", "Có thì tốt"] } });
+    expect(msg.full.split("\n")).toEqual([
+      "💰 Còn để chi tuần này: 3.250.000 ₫ (4 ngày)",
+      "🏦 Đối soát: khớp",
+      "💰 Lãi tiền gửi: +155 ₫ (3 khoản) — vào Tích sản, Chi tiêu &lt;vợ&gt;, Có thì tốt",
+    ]);
+    expect(msg.push).toEqual(dailyMessage(base).push);
+    expect(dailyMessage({ ...base, interestYesterday: { total: 0, count: 0, wallets: [] } }).full).toBe(dailyMessage(base).full);
+  });
+
   it("đủ mọi mục: dòng 💰, rồi việc cần làm, rồi thông tin; đúng câu chữ", () => {
     const input: DailyMessageInput = {
       ...base,

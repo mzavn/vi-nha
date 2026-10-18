@@ -49,6 +49,7 @@ function parseSplit(raw: unknown, index: number): Split {
     link_id: typeof s.link_id === "number" ? s.link_id : null,
     taxable: s.taxable === true,
     asset_kind: typeof s.asset_kind === "string" ? s.asset_kind : null,
+    interest: s.interest === true,
     note: typeof s.note === "string" ? s.note : null,
   };
 }

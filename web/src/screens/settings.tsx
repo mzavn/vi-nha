@@ -1476,6 +1476,15 @@ function Params({ d, ro, open }: SectionProps) {
         right={<span class="srow-v">{c.salary_min_amount ? formatVnd(c.salary_min_amount) : "không ngưỡng"}</span>}
         onClick={edit}
       />
+      {/* Bản cài đặt lưu offline từ trước bản lãi tiền gửi thiếu khoá này thì chưa hiện hàng. */}
+      {c.interest_max_amount !== undefined && (
+        <Row
+          title="Lãi tiền gửi: tự ghi khoản dưới"
+          sub="Lãi ngân hàng trả nhỏ hơn mức này thì máy tự ghi vào ví của chính tài khoản nhận"
+          right={<span class="srow-v">{c.interest_max_amount ? formatVnd(c.interest_max_amount) : "tắt"}</span>}
+          onClick={edit}
+        />
+      )}
       <Row
         title="Quỹ an tâm"
         sub="Số tháng chi Must giữ trong Tích sản trước khi mua tài sản"
