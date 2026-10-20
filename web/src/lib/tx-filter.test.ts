@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bookPath, defaultFilter, entryDay, filterChips, groupByDay, removeChip, stepMonth, summaryParts, summaryPath, toggleMeaning, type BookFilter } from "./tx-filter";
+import { bookPath, clearFilters, defaultFilter, entryDay, filterChips, groupByDay, removeChip, stepMonth, summaryParts, summaryPath, toggleMeaning, type BookFilter } from "./tx-filter";
 import type { Bootstrap, TxRow } from "./types";
 
 const now = new Date("2026-10-06T03:00:00Z");
@@ -23,6 +23,31 @@ describe("Sổ giao dịch: bộ lọc (change 261006-so-giao-dich)", () => {
     expect(summaryPath({ ...f, showVoid: true })).toBe("/v1/transactions/summary?month=2026-09&meaning=spend&category_id=medicine");
     expect(summaryPath({ ...f0, month: null })).toBe("/v1/transactions/summary");
   });
+  it("UC-716 AC-10: khoảng ngày ghi đè month trong query; summaryPath và bookPath giữ đúng khoảng ngày", () => {
+    const f: BookFilter = { ...f0, month: "2026-10", fromDate: "2026-09-01", toDate: "2026-09-15" };
+    expect(bookPath(f)).toBe("/v1/transactions?from_date=2026-09-01&to_date=2026-09-15&limit=51");
+    expect(summaryPath(f)).toBe("/v1/transactions/summary?from_date=2026-09-01&to_date=2026-09-15");
+    // Nếu fromDate > toDate tạm thời lúc đang chọn ngày: bỏ qua không gửi để tránh lỗi 400
+    expect(bookPath({ ...f0, fromDate: "2026-09-20", toDate: "2026-09-10" })).toBe("/v1/transactions?month=2026-10&limit=51");
+  });
+
+  it("UC-716 AC-10: chip khoảng ngày, chạm × phục hồi về tháng hiện tại; clearFilters chỉ reset tháng khi có khoảng ngày", () => {
+    const fRange: BookFilter = { ...f0, month: null, fromDate: "2026-09-01", toDate: "2026-09-15" };
+    const chips = filterChips(fRange, boot);
+    expect(chips).toEqual([{ key: "dateRange", label: "1/9 – 15/9/2026" }]);
+    expect(removeChip(fRange, chips[0]!, now)).toMatchObject({ fromDate: null, toDate: null, month: "2026-10" });
+
+    // Chỉ từ ngày hoặc chỉ đến ngày
+    expect(filterChips({ ...f0, month: null, fromDate: "2026-09-01", toDate: null }, boot)).toEqual([{ key: "dateRange", label: "Từ 1/9/2026" }]);
+    expect(filterChips({ ...f0, month: null, fromDate: null, toDate: "2026-09-15" }, boot)).toEqual([{ key: "dateRange", label: "Đến 15/9/2026" }]);
+
+    // clearFilters: đang xem tháng 9 (không khoảng ngày) thì giữ tháng 9
+    const fMonth9: BookFilter = { ...f0, month: "2026-09", categoryId: "medicine" };
+    expect(clearFilters(fMonth9, now)).toMatchObject({ month: "2026-09", categoryId: null, fromDate: null, toDate: null });
+    // clearFilters: đang có khoảng ngày thì quay về tháng 10 (tháng hiện tại)
+    expect(clearFilters(fRange, now)).toMatchObject({ month: "2026-10", fromDate: null, toDate: null });
+  });
+
 
   it("chữ tìm: gửi khi đủ 2 ký tự (đã cắt khoảng trắng, mã hoá URL), ngắn hơn thì chưa tìm", () => {
     expect(bookPath({ ...f0, month: null, q: "  shopee " })).toBe("/v1/transactions?q=shopee&limit=51");
@@ -56,6 +81,12 @@ describe("Sổ giao dịch: bộ lọc (change 261006-so-giao-dich)", () => {
     expect(entryDay("2028-02", new Date("2028-05-01T03:00:00Z"))).toBe("2028-02-29");
     expect(entryDay("2026-10", now)).toBe("2026-10-06");
     expect(entryDay(null, now)).toBe("2026-10-06");
+    // Với đối tượng BookFilter có toDate trong quá khứ:
+    expect(entryDay({ ...f0, month: null, fromDate: "2026-09-01", toDate: "2026-09-15" }, now)).toBe("2026-09-15");
+    // Khoảng ngày chứa hôm nay (hôm nay 06/10/2026):
+    expect(entryDay({ ...f0, month: null, fromDate: "2026-10-01", toDate: "2026-10-06" }, now)).toBe("2026-10-06");
+    // Không có toDate (chỉ có fromDate):
+    expect(entryDay({ ...f0, month: null, fromDate: "2026-09-01", toDate: null }, now)).toBe("2026-10-06");
   });
 
   it("nhóm theo ngày giờ VN, tiêu đề ngày nói chi thật của ngày (trừ hoàn tiền, bỏ khoản đã xoá)", () => {

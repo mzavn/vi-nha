@@ -96,4 +96,4 @@ ADR nháp (ADR-114) — **Lãi tiền gửi: máy tự ghi khoản thu + chia m�
 - [x] Test đỏ: `interest-deposit` thuần, ingest (tự ghi, gợi ý, gán, gỡ, thứ tự), allocate `interest`, settings, reports, PWA
 - [x] Code (`6afc8c8`, `eebb011`, `2d63892`); `npm test`, `typecheck`, `build`; thử màn Gán 390px (local, 2026-10-18)
 - [x] Hợp nhất UC, ADR-114, luật 6, glossary; `specs:gen` + `specs:check`; CHANGELOG `## Chưa phát hành` (feat → Y)
-- [ ] Deploy, GitBook
+- [x] Phát hành v1.6.0 (`2df16e9`, Release `mzavn/vi-nha` v1.6.0); deploy nhà mình 2026-10-18 (không migration); GitBook `vi-nha-doc` `44bb5c9`; gán 3 khoản lãi còn chờ trên live qua đường Gán (vào Có thì tốt)

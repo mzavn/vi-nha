@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { parseManualAmounts } from "../domain/allocation";
 import { MANUAL_MEANINGS, normalizeAt, type EntryInput } from "../domain/entry";
-import { monthKey, weekKey } from "../domain/period";
+import { dayKey, monthKey, weekKey } from "../domain/period";
 import { DomainError } from "../domain/types";
 import type { AppEnv } from "../env";
 import { recordChange } from "../services/audit";
@@ -90,6 +90,15 @@ v1.post("/accounts/:id/count", async (c) => {
 
 // ── Giao dịch nhập tay ──────────────────────────────────────────────
 const REF_ID = /^[\w.-]{1,64}$/;
+const DAY_REGEX = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+function filterDay(v: string | undefined, name: string, today: string): string | undefined {
+  if (v === undefined) return undefined;
+  if (!DAY_REGEX.test(v)) bad(`${name} phải có dạng YYYY-MM-DD.`);
+  const d = new Date(`${v}T00:00:00+07:00`);
+  if (Number.isNaN(d.getTime()) || dayKey(d) !== v) bad(`${name} phải có dạng YYYY-MM-DD.`);
+  if (v > today) bad("Ngày lọc không được sau hôm nay.");
+  return v;
+}
 /** Bộ lọc sổ giao dịch dùng chung cho danh sách và tổng (ledger UC-111, pwa UC-716); tham số sai → `invalid_input`. */
 function txFilter(c: Context<AppEnv>): ledger.TxFilter {
   const q = (name: string) => c.req.query(name) || undefined;
@@ -98,6 +107,10 @@ function txFilter(c: Context<AppEnv>): ledger.TxFilter {
     if (v !== undefined && !REF_ID.test(v)) bad(`${name} không hợp lệ.`);
     return v;
   };
+  const today = dayKey(new Date());
+  const fromDate = filterDay(q("from_date"), "from_date", today);
+  const toDate = filterDay(q("to_date"), "to_date", today);
+  if (fromDate && toDate && fromDate > toDate) bad("from_date không được sau to_date.");
   const month = q("month");
   if (month !== undefined && !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) bad("month phải có dạng YYYY-MM.");
   const meanings = q("meaning")?.split(",");
@@ -109,6 +122,8 @@ function txFilter(c: Context<AppEnv>): ledger.TxFilter {
   if (text !== undefined && text.length > 100) bad("Từ tìm dài quá 100 ký tự.");
   return {
     month,
+    fromDate,
+    toDate,
     meanings,
     categoryId: ref("category_id"),
     walletId: ref("wallet_id"),

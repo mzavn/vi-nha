@@ -456,8 +456,12 @@ export const BOOK_MEANINGS = ["spend", "income", "refund", "transfer", "lend", "
 
 /** Bộ lọc sổ giao dịch (pwa UC-716): mọi trường tuỳ chọn, các trường có mặt cùng phải khớp. */
 export interface TxFilter {
-  /** `YYYY-MM`, so với `month_key`. */
+  /** `YYYY-MM`, so với `month_key`. Bị bỏ qua khi có fromDate hoặc toDate. */
   month?: string;
+  /** `YYYY-MM-DD` ngày VN. */
+  fromDate?: string;
+  /** `YYYY-MM-DD` ngày VN. */
+  toDate?: string;
   meanings?: string[];
   categoryId?: string;
   /** Khớp ví được cộng hoặc ví bị trừ. */
@@ -478,7 +482,17 @@ function txWhere(f: TxFilter): { sql: string; binds: unknown[] } {
   const parts = ["t.meaning <> 'fund'"];
   const binds: unknown[] = [];
   if (!f.includeVoid) parts.push("t.status = 'active'");
-  if (f.month) {
+  if (f.fromDate) {
+    const fromAt = new Date(`${f.fromDate}T00:00:00+07:00`).toISOString();
+    parts.push("t.at >= ?");
+    binds.push(fromAt);
+  }
+  if (f.toDate) {
+    const toAt = new Date(Date.parse(`${f.toDate}T00:00:00+07:00`) + 86_400_000).toISOString();
+    parts.push("t.at < ?");
+    binds.push(toAt);
+  }
+  if (!f.fromDate && !f.toDate && f.month) {
     parts.push("t.month_key = ?");
     binds.push(f.month);
   }

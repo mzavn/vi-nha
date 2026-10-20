@@ -1,7 +1,7 @@
 # UC-111: Xem sổ giao dịch & tải dữ liệu nền
 - Status: implemented
 - BR: BR-03, BR-01, BR-09
-- Decisions: D12 (dữ liệu nền được PWA cache để nhập offline), D6 (`private` ẩn lịch sự)
+- Decisions: D12 (dữ liệu nền được PWA cache để nhập offline), D6 (`private` ẩn lịch sự), ADR-115 (lọc sổ giao dịch theo khoảng ngày)
 - Actor: thành viên (PWA: màn Hôm nay, Nhập — cả điện thoại, Sổ giao dịch, Tích sản, sheet chi tiết giao dịch; khởi động app)
 - Trigger: `GET /v1/transactions?limit=&before=&include_void=&month=&meaning=&category_id=&wallet_id=&account_id=&member_id=&source=&q=`, `GET /v1/transactions/summary?<cùng bộ lọc>`, `GET /v1/transactions/:id`, `GET /v1/transactions/link-candidates?meaning=&days=`, `GET /v1/bootstrap`
 
@@ -17,13 +17,15 @@
 - v9 (2026-10-05, commit `d7992d1`): change [`261005-lien-ket-khoan-goc`](../changes/archive/261005-lien-ket-khoan-goc/proposal.md) — `GET /v1/transactions/refund-candidates` thay bằng **`GET /v1/transactions/link-candidates?meaning=spend|lend&days=N`** (bước 4; `days` 1..366; mỗi dòng thêm `receivable_id`, `receivable_name`) — PWA chuyển hẳn, route cũ bỏ. `GET /v1/transactions/:id` thêm **`linked_from`** (các khoản hoàn tiền / nhận lại còn hiệu lực trỏ về khoản này) và **`link`** (tóm tắt khoản gốc của khoản hoàn tiền / nhận lại có `link_id`) — cùng một batch, PWA không gọi thêm (pwa UC-715 bước 2b).
 - v10 (2026-10-06, commit `43e4699`): change [`261006-so-giao-dich`](../changes/archive/261006-so-giao-dich/proposal.md) — `GET /v1/transactions` nhận bộ lọc tuỳ chọn `month`, `meaning` (nhiều, phẩy), `category_id`, `wallet_id` (ví được cộng hoặc bị trừ), `account_id` (tiền ra hoặc vào), `member_id`, `source=manual|bank`, `q` (≥ 2 ký tự; khớp cả dạng bỏ dấu của chữ tìm — "thuốc" ra nội dung ngân hàng "THUOC"); thêm **`GET /v1/transactions/summary`** cùng bộ lọc → tổng theo loại, một truy vấn GROUP BY, chỉ khoản còn hiệu lực. Một hàm dựng WHERE (`txWhere`) cho cả hai. `limit`, `before`, `include_void` giữ nguyên. Cho màn Sổ giao dịch (pwa [UC-716](../pwa/UC-716-so-giao-dich.md)). Không thêm index: đo `EXPLAIN QUERY PLAN` trên 6.000 khoản, lọc tháng đi qua `idx_tx_cat (category_id, month_key) WHERE status='active'` (dò bỏ cột đầu), danh sách / tổng một tháng < 1 ms, cả sổ ~1–3 ms.
 - v11 (2026-10-17, commit `e207802`): bộ lọc nguồn: khoản nhập tay đã nối log (`log_id` hay `log_id_2`) tính là `bank`, không còn là `manual` (change [261017-webhook-truoc-moc](../changes/archive/261017-webhook-truoc-moc/proposal.md))
+- v12 (2026-10-18, commit `a746780`): lọc sổ giao dịch theo khoảng ngày `from_date`, `to_date` (giờ VN), khoảng ngày ghi đè month; thêm AC-15 (change [261019-loc-khoang-ngay-so-giao-dich](../changes/archive/261019-loc-khoang-ngay-so-giao-dich/proposal.md))
 
 ## Preconditions
 - Đã xác thực; `memberId` của request.
 
 ## Main Flow — sổ giao dịch
 1. Route kiểm `limit` (mặc định 50) và `before` (tuỳ chọn) là số nguyên; sai → `invalid_input`. Bộ lọc (`txFilter`, dùng chung cho danh sách và tổng; tham số rỗng coi như không có):
-   - `month` dạng `YYYY-MM` (tháng 01–12), so với `month_key`;
+   - `month` dạng `YYYY-MM` (tháng 01–12), so với `month_key`; bị bỏ qua khi có `from_date` hoặc `to_date`;
+   - `from_date`, `to_date` dạng `YYYY-MM-DD` (ngày theo giờ VN, hợp lệ trên lịch, không quá hôm nay giờ VN; `from_date <= to_date`); chuyển sang mốc UTC ISO so với `t.at >= fromAt AND t.at < toAt`;
    - `meaning` một hoặc nhiều loại cách nhau bằng phẩy, trong `spend, income, refund, transfer, lend, collect, buy_asset, adjust` (`BOOK_MEANINGS` — không có `fund`);
    - `category_id`, `wallet_id` (khớp `wallet_id` **hoặc** `counter_wallet_id`), `account_id` (khớp `account_id` **hoặc** `counter_account_id`), `member_id` (`by_member_id`): mã 1–64 ký tự chữ, số, `_ . -`;
    - `source`: `bank` = `source='sepay'` hoặc có `log_id`, hoặc khoản tay đã nối log ở `log_id_2`; `manual` = `source='manual'` và không có `log_id` lẫn `log_id_2` (bút toán hệ thống không thuộc nguồn nào) — khoản tay đã nối log tính là `bank` (change 261017-webhook-truoc-moc);
@@ -45,7 +47,7 @@
 
 ## Exceptions
 - E1. `limit`/`before` không phải số nguyên → `invalid_input` 400 "limit / before phải là số nguyên."
-- E2. Bộ lọc sai (cả danh sách lẫn tổng) → `invalid_input` 400: "month phải có dạng YYYY-MM."; "meaning phải là một hoặc nhiều trong: spend, income, refund, transfer, lend, collect, buy_asset, adjust."; "source phải là manual hoặc bank."; "{category_id|wallet_id|account_id|member_id} không hợp lệ."; "Từ tìm phải có ít nhất 2 ký tự."; "Từ tìm dài quá 100 ký tự."
+- E2. Bộ lọc sai (cả danh sách lẫn tổng) → `invalid_input` 400: "month phải có dạng YYYY-MM."; "from_date phải có dạng YYYY-MM-DD."; "to_date phải có dạng YYYY-MM-DD."; "from_date không được sau to_date."; "Ngày lọc không được sau hôm nay."; "meaning phải là một hoặc nhiều trong: spend, income, refund, transfer, lend, collect, buy_asset, adjust."; "source phải là manual hoặc bank."; "{category_id|wallet_id|account_id|member_id} không hợp lệ."; "Từ tìm phải có ít nhất 2 ký tự."; "Từ tìm dài quá 100 ký tự."
 
 ## Acceptance Criteria
 ### AC-1: Sổ không lộ bút toán nạp ví; khoản đã xoá ẩn mặc định, xem lại được
@@ -131,6 +133,12 @@
 - When `q=thuốc`, `q=THUỐC`, `q=thuoc`
 - Then cả hai khoản; chỉ khoản ngân hàng (qua dạng bỏ dấu); chỉ khoản ngân hàng (ghi chú có dấu cần cột chuẩn hoá — [OPEN])
 - Tests: [`test/api.test.ts`](../../test/api.test.ts) › "sổ giao dịch (UC-111) › lọc và tổng (change 261006-so-giao-dich) › tìm có dấu cũng khớp nội dung ngân hàng không dấu; tìm không dấu chưa khớp chữ có dấu đã lưu"
+
+### AC-15: Lọc theo khoảng ngày (from_date, to_date)
+- Given các giao dịch ngày 28/8, 01/9 10:00, 15/9 23:30, 20/9, 05/10
+- When `?from_date=2026-09-01&to_date=2026-09-15` (cả list và summary); rồi trang sau với con trỏ `before`; rồi chỉ `from_date=2026-09-20`; rồi chỉ `to_date=2026-09-01`; rồi gửi kèm cả `month=2026-10`; rồi `from_date=2026-10-10&to_date=2026-10-01`; rồi `from_date=2026-02-30`; rồi `from_date` ở tương lai
+- Then lần 1: đúng 2 khoản (01/9, 15/9), summary trả đúng `count: 2`, tổng chi/thu khớp; trang sau với `before` giữ nguyên bộ lọc khoảng ngày; lần 3: các khoản từ 20/9 đến nay; lần 4: các khoản đến hết 01/9; lần 5: khoảng ngày ghi đè month; lần 6: 400 "from_date không được sau to_date."; lần 7: 400 "from_date phải có dạng YYYY-MM-DD."; lần 8: 400 "Ngày lọc không được sau hôm nay."
+- Tests: [`test/api.test.ts`](../../test/api.test.ts) › "sổ giao dịch (UC-111) › lọc và tổng (change 261006-so-giao-dich) › UC-111 AC-15: lọc theo khoảng ngày (from_date, to_date), khoảng ngày ghi đè month; summary và phân trang before"
 
 ## Traceability
 - Code: `src/routes/v1.ts` › `txFilter`, `GET /transactions`, `GET /transactions/summary`, `GET /transactions/link-candidates`, `GET /transactions/:id`, `GET /bootstrap`; `src/services/ledger.ts` › `TX_FROM`, `TX_VIEW`, `BOOK_MEANINGS`, `TxFilter`, `txWhere`, `listTransactions`, `TxSummary`, `transactionSummary`, `linkCandidates`, `transactionView`, `loadRefs` (`debts`, `receivables`), `categoryUsage`

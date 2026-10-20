@@ -5,13 +5,14 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { ApiError, request } from "../lib/api";
 import { formatVnd, groupDigits, maskAmounts, moneyDigits } from "../lib/money";
-import { monthLabel, timeHM } from "../lib/period";
+import { dayKey, monthLabel, timeHM } from "../lib/period";
 import { MEANING_LABEL, txLabel, txSign } from "../lib/transactions";
 import {
   BOOK_MEANINGS,
   BOOK_PAGE,
   bookPath,
   clearFilters,
+  dateRangeLabel,
   defaultFilter,
   entryDay,
   filterChips,
@@ -56,14 +57,15 @@ export function LedgerBook() {
   const prevMonth = stepMonth(filter.month, -1, now);
   const nextMonth = stepMonth(filter.month, 1, now);
   const shortQuery = query.trim().length === 1;
-
-  const add = () => go("entry", { entryPreset: { day: entryDay(filter.month, now), back: "ledger" } });
+  const add = () => go("entry", { entryPreset: { day: entryDay(filter, now), back: "ledger" } });
+  const dateLabel = dateRangeLabel(filter.fromDate, filter.toDate);
+  const hasDateRange = Boolean(filter.fromDate || filter.toDate);
 
   return (
     <>
       <PageHeader
         title="Sổ giao dịch"
-        sub={filter.month ? monthLabel(filter.month) : "Cả sổ, mọi tháng"}
+        sub={dateLabel ?? (filter.month ? monthLabel(filter.month) : "Cả sổ, mọi tháng")}
         action={
           <button type="button" class="btn btn-primary" onClick={add}>
             <Icon name="plus" size={16} />
@@ -74,22 +76,28 @@ export function LedgerBook() {
 
       <div class="book-bar">
         <div class="book-month" role="group" aria-label="Tháng">
-          <button type="button" class="btn book-step" aria-label="Tháng trước" disabled={!prevMonth} onClick={() => prevMonth && setFilter({ ...filter, month: prevMonth })}>
+          <button type="button" class="btn book-step" aria-label="Tháng trước" disabled={hasDateRange || !prevMonth} onClick={() => prevMonth && setFilter({ ...filter, month: prevMonth })}>
             <Icon name="chevron-left" size={18} />
           </button>
           <span class="book-month-t" aria-live="polite">
-            {filter.month ? monthLabel(filter.month) : "Mọi tháng"}
+            {dateLabel ?? (filter.month ? monthLabel(filter.month) : "Mọi tháng")}
           </span>
-          <button type="button" class="btn book-step" aria-label="Tháng sau" disabled={!nextMonth} onClick={() => nextMonth && setFilter({ ...filter, month: nextMonth })}>
+          <button type="button" class="btn book-step" aria-label="Tháng sau" disabled={hasDateRange || !nextMonth} onClick={() => nextMonth && setFilter({ ...filter, month: nextMonth })}>
             <Icon name="chevron-right" size={18} />
           </button>
           <button
             type="button"
             class="btn book-all"
-            aria-pressed={filter.month === null}
-            onClick={() => setFilter({ ...filter, month: filter.month === null ? defaultFilter(now).month : null })}
+            aria-pressed={hasDateRange || filter.month === null}
+            onClick={() => {
+              if (hasDateRange) {
+                setFilter({ ...filter, fromDate: null, toDate: null, month: defaultFilter(now).month });
+              } else {
+                setFilter({ ...filter, month: filter.month === null ? defaultFilter(now).month : null });
+              }
+            }}
           >
-            {filter.month === null ? "Theo tháng" : "Mọi tháng"}
+            {hasDateRange || filter.month === null ? "Theo tháng" : "Mọi tháng"}
           </button>
         </div>
         <div class="book-find">
@@ -115,7 +123,7 @@ export function LedgerBook() {
         {chips.length > 0 && (
           <div class="seg book-chips" role="group" aria-label="Bộ lọc đang bật">
             {chips.map((c) => (
-              <button type="button" key={`${c.key}:${c.value ?? ""}`} aria-pressed="true" aria-label={`Bỏ lọc ${c.label}`} onClick={() => setFilter(removeChip(filter, c))}>
+              <button type="button" key={`${c.key}:${c.value ?? ""}`} aria-pressed="true" aria-label={`Bỏ lọc ${c.label}`} onClick={() => setFilter(removeChip(filter, c, now))}>
                 {c.label}
                 <Icon name="x" size={14} />
               </button>
@@ -134,7 +142,7 @@ export function LedgerBook() {
           filtered={chips.length > 0 || searchText(filter.q) !== null}
           onClear={() => {
             setQuery("");
-            setFilter({ ...clearFilters(filter), q: "" });
+            setFilter({ ...clearFilters(filter, now), q: "" });
           }}
         />
       </Card>
@@ -406,6 +414,7 @@ function WideRow({ r, boot }: { r: TxRow; boot: Bootstrap | null }) {
 
 /** Sheet Lọc: đổi đâu áp ngay (danh sách và tổng tải lại phía sau); "Xong" đóng sheet. */
 function FilterSheet({ filter, boot, onChange, onClose }: { filter: BookFilter; boot: Bootstrap | null; onChange: (f: BookFilter) => void; onClose: () => void }) {
+  const today = dayKey(new Date());
   const pick = (id: string, label: string, value: string | null, options: { id: string; name: string }[], set: (v: string | null) => void) => (
     <div class="field">
       <label for={id}>{label}</label>
@@ -421,6 +430,50 @@ function FilterSheet({ filter, boot, onChange, onClose }: { filter: BookFilter; 
   );
   return (
     <Sheet open title="Lọc sổ giao dịch" onClose={onClose}>
+      <div class="pad">
+        <div class="book-sheet-k" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>Khoảng ngày</span>
+          {(filter.fromDate || filter.toDate) && (
+            <button
+              type="button"
+              class="btn"
+              style={{ padding: "2px 8px", fontSize: "0.8125rem" }}
+              onClick={() => onChange({ ...filter, fromDate: null, toDate: null, month: filter.month ?? defaultFilter(new Date()).month })}
+            >
+              Xoá ngày
+            </button>
+          )}
+        </div>
+      </div>
+      <div class="field" style={{ borderTop: 0 }}>
+        <label for="f-book-from">Từ ngày</label>
+        <input
+          id="f-book-from"
+          class="ctl"
+          type="date"
+          max={filter.toDate || today}
+          value={filter.fromDate ?? ""}
+          onInput={(e) => {
+            const v = e.currentTarget.value || null;
+            onChange({ ...filter, fromDate: v, month: v || filter.toDate ? null : (filter.month ?? defaultFilter(new Date()).month) });
+          }}
+        />
+      </div>
+      <div class="field">
+        <label for="f-book-to">Đến ngày</label>
+        <input
+          id="f-book-to"
+          class="ctl"
+          type="date"
+          min={filter.fromDate || undefined}
+          max={today}
+          value={filter.toDate ?? ""}
+          onInput={(e) => {
+            const v = e.currentTarget.value || null;
+            onChange({ ...filter, toDate: v, month: v || filter.fromDate ? null : (filter.month ?? defaultFilter(new Date()).month) });
+          }}
+        />
+      </div>
       <div class="pad">
         <div class="book-sheet-k" id="f-book-types">
           Loại

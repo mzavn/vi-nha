@@ -5,18 +5,18 @@
 
 | Context | UC | AC | Có test | ⚠ Chưa có test |
 |---|---|---|---|---|
-| ledger | 11 | 125 | 101 | 24 |
+| ledger | 11 | 126 | 102 | 24 |
 | allocation | 7 | 72 | 63 | 9 |
 | ingest | 8 | 129 | 122 | 7 |
 | notify | 11 | 124 | 112 | 12 |
 | access | 10 | 125 | 117 | 8 |
 | mcp | 6 | 46 | 31 | 15 |
-| pwa | 19 | 267 | 151 | 116 |
+| pwa | 19 | 268 | 152 | 116 |
 | rental | 5 | 39 | 29 | 10 |
 | debt | 4 | 32 | 29 | 3 |
 | receivable | 5 | 43 | 38 | 5 |
 | balance | 7 | 44 | 44 | 0 |
-| **Tổng** | **93** | **1046** | **837** | **209** |
+| **Tổng** | **93** | **1048** | **839** | **209** |
 
 ## Sổ cái (ledger)
 
@@ -210,6 +210,7 @@ Status: `implemented` · BR: BR-03, BR-01, BR-09
 | ✅ AC-12: Tổng theo loại, điều chỉnh tách hai chiều, không có nạp ví | [`test/api.test.ts`](../test/api.test.ts) › "sổ giao dịch (UC-111) › lọc và tổng (change 261006-so-giao-dich) › tổng theo nghĩa tiền thật: chi, hoàn, thu, cho vay / nhận lại, chuyển nội bộ, mua tài sản, điều chỉnh hai chiều" |
 | ✅ AC-13: Tham số sai → invalid_input nói rõ tham số nào | [`test/api.test.ts`](../test/api.test.ts) › "sổ giao dịch (UC-111) › lọc và tổng (change 261006-so-giao-dich) › tham số sai định dạng → invalid_input, nói rõ tham số nào" |
 | ✅ AC-14: Tìm có dấu khớp cả nội dung ngân hàng không dấu | [`test/api.test.ts`](../test/api.test.ts) › "sổ giao dịch (UC-111) › lọc và tổng (change 261006-so-giao-dich) › tìm có dấu cũng khớp nội dung ngân hàng không dấu; tìm không dấu chưa khớp chữ có dấu đã lưu" |
+| ✅ AC-15: Lọc theo khoảng ngày (from_date, to_date) | [`test/api.test.ts`](../test/api.test.ts) › "sổ giao dịch (UC-111) › lọc và tổng (change 261006-so-giao-dich) › UC-111 AC-15: lọc theo khoảng ngày (from_date, to_date), khoảng ngày ghi đè month; summary và phân trang before" |
 
 ## Chia tiền (allocation)
 
@@ -1319,6 +1320,7 @@ Status: `implemented` · BR: BR-01, BR-03, BR-05
 | ⚠ AC-7: Sửa / xoá từ sổ: danh sách và tổng cập nhật, khoản cũ thành "đã xoá" (ẩn mặc định) | ⚠ Chưa có test (đã chạy tay trên `wrangler dev` cục bộ 2026-10-06, 390px: Chi 10.454.000 → 10.004.000 sau xoá 450.000, scrollY giữ 4461; 10.004.000 → 10.046.000 sau sửa 35.000 → 77.000) |
 | ✅ AC-8: Ghi thêm khi đang xem tháng 9 → ngày mặc định 30/9 | `web/src/lib/tx-filter.test.ts` › "Sổ giao dịch: bộ lọc (change 261006-so-giao-dich) › ghi thêm khi đang xem tháng 9 → ngày mặc định 30/9; tháng này hay cả sổ → hôm nay"; màn hình: ⚠ Chưa có test (đã chạy tay trên `wrangler dev` cục bộ 2026-10-06, 390px và 1280px) |
 | ⚠ AC-9: Mở từ Giao dịch gần đây và từ Ngân sách | ⚠ Chưa có test (đã chạy tay trên `wrangler dev` cục bộ 2026-10-06, 390px và 1280px, sáng / tối) |
+| ✅ AC-10: Lọc theo khoảng ngày và tương tác với tháng | `web/src/lib/tx-filter.test.ts` › "Sổ giao dịch: bộ lọc (change 261006-so-giao-dich) › UC-716 AC-10: khoảng ngày ghi đè month trong query; summaryPath và bookPath giữ đúng khoảng ngày" · "… › UC-716 AC-10: chip khoảng ngày, chạm × phục hồi về tháng hiện tại; clearFilters chỉ reset tháng khi có khoảng ngày"; màn hình: `plans/reports/code-review-261019-loc-khoang-ngay-so-giao-dich.md` (chụp ảnh thực tế 390px qua `tools/chup-lai.sh so-giao-dich`) |
 
 ### [UC-717](pwa/UC-717-man-tai-san-va-tu-do.md) Màn Tài sản & tự do
 Status: `implemented` · BR: BR-15, BR-12, BR-13, BR-07

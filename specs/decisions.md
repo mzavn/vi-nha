@@ -123,6 +123,7 @@ Status: `accepted` (đang có hiệu lực) · `superseded by ADR-xx` · `propos
 | ADR-112 | 2026-10-15 | Khi chia: Có Tích sản (kéo 1–100%, mặc định 10%) hoặc Không Tích sản (bắt buộc lý do) | accepted | allocation (+ pwa) |
 | ADR-113 | 2026-10-17 | Mốc theo dõi SePay (theo giờ) cho tài khoản đã dùng: log lịch sử trước mốc như log trước ngày mở sổ (webhook luôn tính); số theo ngân hàng tính động | accepted | access (+ ingest, ledger, pwa) |
 | ADR-114 | 2026-10-18 | Lãi tiền gửi: máy tự ghi khoản thu + chia một fund vào ví của chính tài khoản nhận (role → Tích sản; một ví → ví đó; còn lại → Có thì tốt), không lệnh chuyển, Thu nhập thụ động; ngoại lệ thứ hai của luật 6, chặn bởi ngưỡng ở Tham số | accepted | ingest (+ allocation, balance, access, notify, pwa, mcp) |
+| ADR-115 | 2026-10-18 | Lọc sổ giao dịch theo khoảng ngày (từ ngày – đến ngày): chọn trong Sheet Lọc sổ giao dịch, khoảng ngày ghi đè tháng; SQL lọc theo mốc UTC ISO tận dụng index idx_tx_at | accepted | ledger (+ pwa) |
 
 ---
 
@@ -2058,3 +2059,24 @@ Phương án bị loại: (a) chỉ gợi ý, bấm tay mỗi tháng — chủ n
 Khoản chuyển nhỏ dưới ngưỡng có nội dung rỗng hoặc "LAI TIEN GUI" của người lạ cũng thành lãi (mặc định dưới 10.000 ₫ mỗi khoản, báo ở tin sáng, gỡ gán được). Lãi không qua Thuế (`taxable = 0`). Lãi làm lần chia lương sau rót cho ví nhận ít đi đúng số lãi. Report class do máy ghi hiện như phân loại tay ("đã xếp lại") ở Lưu chuyển tiền. Tin sáng nhận lãi tự ghi bằng dấu hiệu đợt chia (không người ghi, một fund trọn số, không lệnh chuyển, `passive_income`) — khoản gán tay qua token không gắn thành viên có cùng dấu hiệu cũng được đếm.
 ### Verified in code
 `src/domain/interest-deposit.ts` › `isInterestLog`, `interestWallet`, `INTEREST_MAX_AMOUNT_DEFAULT`, `INTEREST_MAX_AMOUNT_LIMIT` · `src/services/ingest.ts` › `matchLog` (bước 6), `recordInterest`, `interestWalletFor`, `listPendingLogs` / `suggestFor` (gợi ý Lãi tiền gửi), `assignLog` (split `interest`) · `src/services/ledger.ts` › `interestMaxAmount`, `previewAllocation` / `allocateIncome` (`interest`) · `src/services/settings.ts` › `readConfig`, `updateConfig` · `src/routes/logs.ts` › `parseSplit` · `src/mcp/tools.ts` › `assign_log` · `src/cron/daily.ts` (`interestYesterday`) · `src/notify/format.ts` › `dailyMessage` · `web/src/screens/assign.tsx`, `web/src/lib/splits.ts` › `logChip`, `interestHint`, `interestToast` · `web/src/screens/settings-sheets.tsx` › `ConfigSheet` — commit `6afc8c8`, `eebb011`, `2d63892`
+
+## ADR-115: Lọc sổ giao dịch theo khoảng ngày (từ ngày – đến ngày): chọn trong Sheet Lọc sổ giao dịch, khoảng ngày ghi đè tháng; SQL lọc theo mốc UTC ISO tận dụng index idx_tx_at
+- Date: 2026-10-18 · Status: accepted
+- Context: ledger (UC-111) + pwa (UC-716)
+- Source: chủ nhà 2026-10-18, chat — "sổ giao dịch thiếu cái lọc từ ngày x đến ngày Y , mới có tháng thôi nè" (kèm ảnh chụp màn Sổ giao dịch); change [261019-loc-khoang-ngay-so-giao-dich](changes/archive/261019-loc-khoang-ngay-so-giao-dich/proposal.md)
+### Context
+Màn Sổ giao dịch (UC-716) trước đây chỉ cho xem theo từng tháng hoặc xem toàn bộ sổ ("Mọi tháng"). Người dùng không có cách nào lọc theo khoảng ngày cụ thể (ví dụ 10 ngày đầu tháng, một kỳ lương vắt qua 2 tháng, hoặc một đợt chi tiêu chuyến đi).
+### Decision
+- **Vị trí UI:** Đặt 2 ô "Từ ngày" và "Đến ngày" trong sheet Lọc sổ giao dịch (`FilterSheet`), kèm nút "Xoá ngày". Khi có khoảng ngày, ngoài màn hình hiện chip `1/9 – 15/9/2026 ×` để bỏ nhanh.
+- **Khoảng ngày ghi đè tháng:** Sổ hiển thị đúng các giao dịch trong khoảng ngày (kể cả vắt qua nhiều tháng). Cụm chọn tháng ở đầu thanh bar mờ hai nút `< >`; nút bên cạnh hiển thị **Theo tháng** (bấm vào xoá khoảng ngày và quay về tháng hiện tại).
+- **Giới hạn:** Ngày lọc tối đa là hôm nay giờ VN, không chọn ngày tương lai; `from_date <= to_date`.
+- **Backend & SQL:** `GET /v1/transactions` và `GET /v1/transactions/summary` nhận `from_date` và `to_date` dạng `YYYY-MM-DD` (ngày theo giờ VN, validate hợp lệ trên lịch). `txWhere` chuyển sang UTC ISO: `t.at >= fromAt AND t.at < toAt` (với `toAt = toDateT00:00:00+07:00 + 86.400.000ms`), tận dụng 100% index `idx_tx_at ON transactions(at DESC)`. Phân trang `before` và tính tổng `summary` dùng chung `txWhere`.
+
+Phương án bị loại:
+- (a) Đặt cụm date range ngay trên thanh bar đầu màn hình: chật chội trên mobile 390px, vỡ giao diện.
+- (b) Buộc khoảng ngày phải nằm trong tháng đang chọn: không đáp ứng được nhu cầu xem đợt chi tiêu vắt qua ranh giới tháng.
+- (c) Dùng hàm SQLite `date(t.at, '+7 hours') BETWEEN ? AND ?`: không dùng được index `idx_tx_at ON transactions(at DESC)`.
+### Consequences
+API `/v1/transactions` và `/v1/transactions/summary` hỗ trợ linh hoạt cả xem theo tháng lẫn khoảng ngày. Khi đang xem khoảng ngày đã qua trong quá khứ, nút "+ Ghi khoản" điền sẵn ngày `toDate`. Không thay đổi cấu trúc bảng, không cần migration.
+### Verified in code
+`src/services/ledger.ts` › `TxFilter`, `txWhere` · `src/routes/v1.ts` › `txFilter` (`filterDay`) · `web/src/lib/tx-filter.ts` › `BookFilter`, `dateRangeLabel`, `filterQuery`, `filterChips`, `removeChip`, `clearFilters`, `entryDay` · `web/src/screens/ledger-book.tsx` · test [`test/api.test.ts`](../test/api.test.ts) › "sổ giao dịch (UC-111) › lọc và tổng › UC-111 AC-15", [`web/src/lib/tx-filter.test.ts`](../web/src/lib/tx-filter.test.ts) › "Sổ giao dịch: bộ lọc › UC-716 AC-10" — commit `a746780`

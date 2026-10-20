@@ -21,8 +21,10 @@ export const BOOK_MEANINGS: { value: string; label: string }[] = [
 ];
 
 export interface BookFilter {
-  /** `YYYY-MM`; null = cả sổ. */
+  /** `YYYY-MM`; null = cả sổ hoặc xem theo khoảng ngày. */
   month: string | null;
+  fromDate?: string | null;
+  toDate?: string | null;
   meanings: string[];
   categoryId: string | null;
   walletId: string | null;
@@ -35,7 +37,24 @@ export interface BookFilter {
 }
 
 export function defaultFilter(now: Date): BookFilter {
-  return { month: monthKey(now), meanings: [], categoryId: null, walletId: null, accountId: null, memberId: null, source: null, q: "", showVoid: false };
+  return { month: monthKey(now), fromDate: null, toDate: null, meanings: [], categoryId: null, walletId: null, accountId: null, memberId: null, source: null, q: "", showVoid: false };
+}
+
+/** `2026-09-01` + `2026-09-15` → `1/9 – 15/9/2026`, hoặc `Từ 1/9/2026`, `Đến 15/9/2026`. */
+export function dateRangeLabel(from: string | null | undefined, to: string | null | undefined): string | null {
+  if (!from && !to) return null;
+  if (from && to) {
+    if (from > to) return null;
+    const [y1, m1, d1] = from.split("-").map(Number);
+    const [y2, m2, d2] = to.split("-").map(Number);
+    return y1 === y2 ? `${d1}/${m1} – ${d2}/${m2}/${y2}` : `${d1}/${m1}/${y1} – ${d2}/${m2}/${y2}`;
+  }
+  if (from) {
+    const [y, m, d] = from.split("-").map(Number);
+    return `Từ ${d}/${m}/${y}`;
+  }
+  const [y, m, d] = to!.split("-").map(Number);
+  return `Đến ${d}/${m}/${y}`;
 }
 
 /** Chữ tìm gửi lên server: cắt khoảng trắng; dưới 2 ký tự thì chưa tìm (server sẽ báo sai). */
@@ -44,7 +63,14 @@ export const searchText = (q: string): string | null => (q.trim().length >= 2 ? 
 /** Phần bộ lọc của query string, dùng chung cho danh sách và tổng. */
 export function filterQuery(f: BookFilter): string {
   const p = new URLSearchParams();
-  if (f.month) p.set("month", f.month);
+  const hasRange = Boolean(f.fromDate || f.toDate);
+  const validRange = !f.fromDate || !f.toDate || f.fromDate <= f.toDate;
+  if (hasRange && validRange) {
+    if (f.fromDate) p.set("from_date", f.fromDate);
+    if (f.toDate) p.set("to_date", f.toDate);
+  } else if (f.month) {
+    p.set("month", f.month);
+  }
   if (f.meanings.length) p.set("meaning", f.meanings.join(","));
   if (f.categoryId) p.set("category_id", f.categoryId);
   if (f.walletId) p.set("wallet_id", f.walletId);
@@ -68,7 +94,7 @@ export function summaryPath(f: BookFilter): string {
   return `/v1/transactions/summary${q ? `?${q}` : ""}`;
 }
 
-export type ChipKey = "meaning" | "categoryId" | "walletId" | "accountId" | "memberId" | "source" | "showVoid";
+export type ChipKey = "dateRange" | "meaning" | "categoryId" | "walletId" | "accountId" | "memberId" | "source" | "showVoid";
 export interface Chip {
   key: ChipKey;
   /** Loại cụ thể khi `key = "meaning"` (mỗi loại một chip). */
@@ -78,8 +104,11 @@ export interface Chip {
 
 /** Bộ lọc đang bật thành chip (tháng và chữ tìm có chỗ riêng ở đầu màn, không thành chip). */
 export function filterChips(f: BookFilter, boot: Bootstrap | null): Chip[] {
+  const chips: Chip[] = [];
+  const range = dateRangeLabel(f.fromDate, f.toDate);
+  if (range) chips.push({ key: "dateRange", label: range });
   const name = <T extends { id: string; name: string }>(list: T[] | undefined, id: string) => list?.find((x) => x.id === id)?.name ?? id;
-  const chips: Chip[] = f.meanings.map((m) => ({ key: "meaning", value: m, label: BOOK_MEANINGS.find((x) => x.value === m)?.label ?? m }));
+  chips.push(...f.meanings.map((m) => ({ key: "meaning" as const, value: m, label: BOOK_MEANINGS.find((x) => x.value === m)?.label ?? m })));
   if (f.categoryId) chips.push({ key: "categoryId", label: name(boot?.categories, f.categoryId) });
   if (f.walletId) chips.push({ key: "walletId", label: `Ví ${name(boot?.wallets, f.walletId)}` });
   if (f.accountId) chips.push({ key: "accountId", label: name(boot?.accounts, f.accountId) });
@@ -90,11 +119,13 @@ export function filterChips(f: BookFilter, boot: Bootstrap | null): Chip[] {
 }
 
 /** Chạm × trên một chip: bỏ đúng bộ lọc đó. */
-export function removeChip(f: BookFilter, chip: Chip): BookFilter {
+export function removeChip(f: BookFilter, chip: Chip, now = new Date()): BookFilter {
+  if (chip.key === "dateRange") return { ...f, fromDate: null, toDate: null, month: monthKey(now) };
   if (chip.key === "meaning") return { ...f, meanings: f.meanings.filter((m) => m !== chip.value) };
   if (chip.key === "showVoid") return { ...f, showVoid: false };
   return { ...f, [chip.key]: null };
 }
+
 
 /** Bật / tắt một loại trong sheet Lọc, giữ thứ tự của danh sách loại. */
 export function toggleMeaning(f: BookFilter, meaning: string): BookFilter {
@@ -102,9 +133,10 @@ export function toggleMeaning(f: BookFilter, meaning: string): BookFilter {
   return { ...f, meanings: BOOK_MEANINGS.map((x) => x.value).filter((m) => on.includes(m)) };
 }
 
-/** Bỏ mọi bộ lọc trong sheet Lọc, giữ tháng và chữ tìm. */
-export function clearFilters(f: BookFilter): BookFilter {
-  return { ...f, meanings: [], categoryId: null, walletId: null, accountId: null, memberId: null, source: null, showVoid: false };
+/** Bỏ mọi bộ lọc trong sheet Lọc, giữ tháng (hoặc về tháng này nếu đang lọc khoảng ngày) và chữ tìm. */
+export function clearFilters(f: BookFilter, now = new Date()): BookFilter {
+  const hadRange = Boolean(f.fromDate || f.toDate);
+  return { ...f, month: hadRange ? monthKey(now) : f.month, fromDate: null, toDate: null, meanings: [], categoryId: null, walletId: null, accountId: null, memberId: null, source: null, showVoid: false };
 }
 
 /**
@@ -122,8 +154,16 @@ export function stepMonth(month: string | null, delta: -1 | 1, now: Date): strin
  * Ngày điền sẵn khi ghi thêm từ sổ: đang xem một tháng đã qua → ngày cuối tháng đó (đổi được); tháng hiện tại hay cả sổ →
  * hôm nay. Giờ ghi tính bằng `atForDay` như mọi lần chọn ngày lùi lại.
  */
-export function entryDay(month: string | null, now: Date): string {
-  if (!month || month >= monthKey(now)) return dayKey(now);
+export function entryDay(monthOrFilter: BookFilter | string | null, now: Date): string {
+  const today = dayKey(now);
+  if (typeof monthOrFilter === "object" && monthOrFilter !== null) {
+    if (monthOrFilter.fromDate || monthOrFilter.toDate) {
+      return monthOrFilter.toDate && monthOrFilter.toDate < today ? monthOrFilter.toDate : today;
+    }
+    return entryDay(monthOrFilter.month, now);
+  }
+  const month = monthOrFilter;
+  if (!month || month >= monthKey(now)) return today;
   const [y, m] = month.split("-").map(Number);
   return new Date(Date.UTC(y!, m!, 0)).toISOString().slice(0, 10);
 }

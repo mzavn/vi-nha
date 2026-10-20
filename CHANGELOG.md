@@ -6,6 +6,12 @@ bản cài cũ vẫn lên được bình thường (kể cả nâng database t�
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
 trước (xem README › Cập nhật bản mới).
 
+## v1.7.0 — 20/10/2026
+
+**Mới**
+
+- **Lọc sổ giao dịch theo khoảng ngày (từ ngày – đến ngày):** trong sheet Lọc sổ giao dịch (bấm nút Lọc cạnh ô tìm kiếm), bạn có thể chọn "Từ ngày" và "Đến ngày" để xem chi tiêu theo một kỳ lương hay một khoảng thời gian cụ thể (kể cả vắt qua nhiều tháng). Ngoài màn hình hiện chip ngày (ví dụ `1/9 – 15/9/2026 ×`) để bấm bỏ nhanh. Hai nút chuyển tháng `‹ ›` tự mờ đi khi lọc ngày; bấm nút "Theo tháng" hoặc chạm `×` trên chip ngày sẽ quay về tháng hiện tại. Nút "+ Ghi khoản" khi xem khoảng ngày trong quá khứ sẽ điền sẵn ngày cuối của khoảng đó.
+
 ## v1.6.0 — 18/10/2026
 
 **Mới**
