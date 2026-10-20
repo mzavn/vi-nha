@@ -1008,5 +1008,52 @@ describe("sổ giao dịch (UC-111)", () => {
       expect(await bad(`?q=${"x".repeat(101)}`)).toBe("Từ tìm dài quá 100 ký tự.");
       expect(await bad("?limit=abc")).toBe("limit / before phải là số nguyên.");
     });
+
+    it("UC-111 AC-15: lọc theo khoảng ngày (from_date, to_date), khoảng ngày ghi đè month; summary và phân trang before", async () => {
+      const t1 = await post({ meaning: "spend", amount: 10_000, category_id: "groceries", at: "2026-08-28T12:00:00+07:00" });
+      const t2 = await post({ meaning: "spend", amount: 20_000, category_id: "groceries", at: "2026-09-01T10:00:00+07:00" });
+      const t3 = await post({ meaning: "spend", amount: 30_000, category_id: "groceries", at: "2026-09-15T23:30:00+07:00" });
+      const t4 = await post({ meaning: "spend", amount: 40_000, category_id: "groceries", at: "2026-09-20T12:00:00+07:00" });
+      const t5 = await post({ meaning: "income", amount: 100_000, account_id: "cash-husband", at: "2026-10-05T12:00:00+07:00" });
+
+      // Lọc từ 01/9 đến 15/9: đúng 2 khoản t3, t2
+      expect(await ids("from_date=2026-09-01&to_date=2026-09-15")).toEqual([t3, t2]);
+      const sum = (await call("GET", "/v1/transactions/summary?from_date=2026-09-01&to_date=2026-09-15")).json.data;
+      expect(sum).toMatchObject({ count: 2, spend: 50_000, income: 0 });
+
+      // Phân trang với con trỏ before khi lọc khoảng ngày
+      const p1 = (await call("GET", "/v1/transactions?from_date=2026-09-01&to_date=2026-09-20&limit=2")).json.data.map((r: { id: number }) => r.id);
+      expect(p1).toEqual([t4, t3]);
+      const p2 = (await call("GET", `/v1/transactions?from_date=2026-09-01&to_date=2026-09-20&limit=2&before=${t3}`)).json.data.map((r: { id: number }) => r.id);
+      expect(p2).toEqual([t2]);
+
+      // Chỉ from_date: từ 20/9 đến nay (gồm t5, t4)
+      expect(await ids("from_date=2026-09-20")).toEqual([t5, t4]);
+
+      // Chỉ to_date: đến hết 01/9 (gồm t2, t1)
+      expect(await ids("to_date=2026-09-01")).toEqual([t2, t1]);
+
+      // Gửi cả month=2026-10 nhưng có from_date/to_date: khoảng ngày ghi đè month
+      expect(await ids("month=2026-10&from_date=2026-09-01&to_date=2026-09-15")).toEqual([t3, t2]);
+
+      // Validation: from_date > to_date
+      const resOrder = await call("GET", "/v1/transactions?from_date=2026-10-10&to_date=2026-10-01");
+      expect(resOrder.status).toBe(400);
+      expect(resOrder.json.error?.message).toBe("from_date không được sau to_date.");
+
+      // Validation: sai định dạng hoặc ngày không tồn tại
+      const resFormat = await call("GET", "/v1/transactions?from_date=2026-9");
+      expect(resFormat.status).toBe(400);
+      expect(resFormat.json.error?.message).toBe("from_date phải có dạng YYYY-MM-DD.");
+
+      const resNotExist = await call("GET", "/v1/transactions?from_date=2026-02-30");
+      expect(resNotExist.status).toBe(400);
+      expect(resNotExist.json.error?.message).toBe("from_date phải có dạng YYYY-MM-DD.");
+
+      // Validation: ngày tương lai
+      const resFuture = await call("GET", "/v1/transactions?from_date=2099-01-01");
+      expect(resFuture.status).toBe(400);
+      expect(resFuture.json.error?.message).toBe("Ngày lọc không được sau hôm nay.");
+    });
   });
 });
