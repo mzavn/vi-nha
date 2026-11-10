@@ -2223,6 +2223,75 @@
     flex: 1;
     min-width: 0;
   }
+  /* Số lệnh chuyển tiền chờ trên tab Ví & quỹ (pwa UC-707) — cùng kiểu huy hiệu cột bên. */
+  .tab-badge {
+    display: inline-grid;
+    place-items: center;
+    min-width: 20px;
+    height: 20px;
+    margin-left: 6px;
+    padding: 0 6px;
+    border-radius: 99px;
+    background: var(--warn-bg);
+    color: var(--warn);
+    font-size: 11.5px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    vertical-align: 1px;
+  }
+  /* Mã QR chuyển tiền: nền trắng cố định để app ngân hàng quét được cả khi app ở nền tối. */
+  .qr-block {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    margin-top: 10px;
+  }
+  .qr-block img {
+    background: #fff;
+    border-radius: var(--r-sm);
+    border: 1px solid var(--border);
+    flex: none;
+  }
+  .qr-block > div {
+    flex: 1;
+    min-width: 200px;
+  }
+  .qr-row td {
+    padding-top: 0;
+  }
+  /* Bảng Chuyển tiền (máy tính): cột nội dung, số tiền, nút chỉ rộng vừa đủ, không xuống dòng; cột "Chuyển" lấy phần còn lại. */
+  table.data.transfer-table td:not(:first-child),
+  table.data.transfer-table th:not(:first-child) {
+    width: 1%;
+    white-space: nowrap;
+  }
+  table.data.transfer-table .dk-act {
+    flex-wrap: nowrap;
+  }
+  table.data.transfer-table .qr-row td {
+    width: auto;
+    white-space: normal;
+  }
+  /* Card đảo màu (pwa UC-702: hàng Sổ giao dịch ở Hôm nay) — nổi ở cả nền sáng lẫn tối, không dùng màu trạng thái. */
+  .card-invert {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--primary-fg);
+  }
+  .card-invert .tier .tsub,
+  .card-invert .link-more {
+    color: var(--primary-fg);
+  }
+  .card-invert .tier .tsub {
+    opacity: 0.85;
+  }
+  .card-invert button.tier:hover {
+    background: transparent;
+  }
+  .card-invert .tier .nm {
+    font-weight: 650;
+  }
   .side-badge {
     min-width: 20px;
     height: 20px;

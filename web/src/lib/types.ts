@@ -384,6 +384,12 @@ export interface TransferOrder {
   memo: string;
   /** Các ví nhận tiền của lệnh này (cùng lô, ở tài khoản đích), vd "Tích sản, Thuế"; null với lệnh không gắn ví. */
   wallet_names: string | null;
+  /** Tài khoản nhận — cho mã QR (pwa UC-707, ADR-116). */
+  to_kind: string;
+  to_bank: string | null;
+  to_account_no: string | null;
+  to_sub_account: string | null;
+  to_sepay_enabled: number;
   status: "pending" | "done" | "skipped";
   created_at: string;
 }

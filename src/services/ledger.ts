@@ -1426,7 +1426,8 @@ export async function listTransferOrders(db: D1Database, status: string) {
   return rows(
     await db
       .prepare(
-        `SELECT o.*, fa.name AS from_name, ta.name AS to_name,
+        `SELECT o.*, fa.name AS from_name, ta.name AS to_name, ta.kind AS to_kind, ta.bank AS to_bank, ta.account_no AS to_account_no,
+           ta.sub_account AS to_sub_account, ta.sepay_enabled AS to_sepay_enabled,
            (SELECT group_concat(name, ', ') FROM (
               SELECT w.name FROM transactions t JOIN wallets w ON w.id = t.wallet_id
               WHERE t.batch_id = o.batch_id AND t.status = 'active' AND t.meaning IN ('fund', 'transfer') AND w.account_id = o.to_account_id

@@ -268,6 +268,15 @@ describe("chia lương end-to-end", () => {
     expect(toTcb).toMatchObject({ from_name: expect.any(String), to_name: expect.any(String), amount: 12_000_000, wallet_names: "Tích sản" });
   });
 
+  it("UC-205 AC-7: lệnh chuyển tiền trả thông tin tài khoản nhận để tạo mã QR", async () => {
+    raw.prepare("UPDATE accounts SET bank = 'Techcombank', account_no = '0123456789' WHERE id = 'tcb-husband'").run();
+    const id = await salary(40_000_000);
+    await call("POST", "/v1/allocate", { income_tx_id: id });
+    const { json } = await call("GET", "/v1/transfer-orders?status=pending");
+    const toTcb = json.data.find((o: { to_account_id: string }) => o.to_account_id === "tcb-husband");
+    expect(toTcb).toMatchObject({ to_kind: "bank", to_bank: "Techcombank", to_account_no: "0123456789", to_sub_account: null, to_sepay_enabled: 0 });
+  });
+
   it("một khoản thu không bao giờ được chia hai lần", async () => {
     const id = await salary(30_000_000);
     expect((await call("POST", "/v1/allocate", { income_tx_id: id })).status).toBe(201);

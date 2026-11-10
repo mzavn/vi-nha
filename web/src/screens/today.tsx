@@ -174,9 +174,13 @@ function TodayBody({ snap }: { snap: Snapshot }) {
       <SpendableCashCard snap={snap} />
 
       {/* Lối vào Sổ giao dịch trên điện thoại (UC-716) — chủ nhà: "không xem được trên mobile cái chi tiết các bản ghi à? tôi tìm không thấy". */}
-      <Card flush>
+      <Card flush class="card-invert">
         <TierRow
-          name="Sổ giao dịch"
+          name={
+            <>
+              <Icon name="book" size={16} /> Sổ giao dịch
+            </>
+          }
           dot={null}
           amount={<span class="link-more">Mở <Icon name="chevron-right" size={14} /></span>}
           left="Xem lại theo tháng, lọc, tìm, sửa các khoản đã ghi"

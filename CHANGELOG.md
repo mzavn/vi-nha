@@ -6,6 +6,34 @@ bản cài cũ vẫn lên được bình thường (kể cả nâng database t�
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
 trước (xem README › Cập nhật bản mới).
 
+## v1.8.0 — 10/11/2026
+
+Không nâng cấp database.
+
+**Mới**
+
+- **Mã QR cho lệnh chuyển tiền:** ở Ví & quỹ › Chuyển tiền, mỗi lệnh có nút **Mã QR** (máy tính: cạnh Chép nội dung; điện
+  thoại: nút dài dưới các nút). Mã theo chuẩn VietQR, gói sẵn ngân hàng, số tài khoản nhận, số tiền và nội dung chuyển khoản
+  (mã PF) — quét bằng app ngân hàng là xong, không phải gõ. Mã tạo ngay trên máy, không gửi số tài khoản đi đâu, mất mạng
+  vẫn dùng được.
+  - Trên máy tính: mở app ngân hàng trên điện thoại › Quét QR, quét màn hình.
+  - Trên điện thoại: nhấn giữ mã để lưu ảnh (hoặc chụp màn hình), rồi trong app ngân hàng chọn Quét QR › chọn ảnh.
+  - Trước khi chuyển, xem đúng tên người nhận và nội dung có mã PF — app dựa vào mã này để tự đánh dấu lệnh đã chuyển.
+  - Tài khoản nhận là BIDV, MSB, OCB hay KienlongBank đã nối SePay qua tài khoản ảo (VA): mã dùng số VA để SePay báo được
+    khoản đến.
+  - Không thấy nút Mã QR? Tài khoản nhận cần có **Ngân hàng** và **Số tài khoản** trong Cài đặt › Tài khoản (app ghi rõ
+    thiếu gì ngay dưới lệnh). Tiền mặt, ví điện tử, thẻ tín dụng và "Ngân hàng khác" không có mã QR.
+  - Chế độ che số tiền không che mã QR (mã chỉ hiện khi bạn bấm).
+- **Số lệnh chuyển tiền đang chờ** hiện thành huy hiệu nổi bật trên tab Chuyển tiền, thay cho số trong ngoặc; hết lệnh thì
+  huy hiệu tự ẩn.
+- **Sổ giao dịch dễ thấy hơn:** ở Hôm nay trên điện thoại, hàng Sổ giao dịch thành card đảo màu kèm biểu tượng sổ (nền sáng:
+  card đen chữ trắng; nền tối: card trắng chữ đen).
+
+**Cho người tự cài**
+
+- API `GET /v1/transfer-orders` (và tool MCP `list_transfer_orders`) trả thêm thông tin tài khoản nhận: `to_kind`, `to_bank`,
+  `to_account_no`, `to_sub_account`, `to_sepay_enabled`.
+
 ## v1.7.0 — 20/10/2026
 
 **Mới**

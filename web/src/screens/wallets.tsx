@@ -2,8 +2,10 @@
 // Ba trục tách bạch: ví kèm "còn lại", tài khoản kèm "lệch", danh mục kèm "kỳ trước".
 
 import { Fragment } from "preact";
-import { useState } from "preact/hooks";
+import { useMemo, useState } from "preact/hooks";
+import { encode } from "uqr";
 import { LOAN_INTEREST_ID } from "../../../src/domain/system-ids";
+import { transferQr } from "../../../src/domain/vietqr";
 import { api, errorText } from "../lib/api";
 import { budgetTotals, coverPrefill, type MoveDraft } from "../lib/budget";
 import { DRIFT_LABEL, driftOf } from "../lib/drift";
@@ -49,7 +51,12 @@ export function Wallets() {
         {TABS.map((t) => (
           <button type="button" key={t.value} aria-pressed={walletsTab === t.value} onClick={() => setWalletsTab(t.value)}>
             {t.label}
-            {t.value === "transfers" && orders > 0 ? ` (${orders})` : ""}
+            {t.value === "transfers" && orders > 0 && (
+              <span class="tab-badge">
+                {orders}
+                <span class="sr-only"> lệnh chờ</span>
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -839,11 +846,44 @@ function AnalysisWide({ d, label }: { d: SpendByCategory; label: (k: string) => 
 }
 
 // ── Chuyển tiền cần làm ────────────────────────────────────────────
+/** Ảnh PNG của mã QR (nền trắng, mức sửa lỗi M, viền 4 ô) — PNG để nhấn giữ lưu được vào thư viện ảnh cho app ngân hàng quét. */
+function qrPng(payload: string): string {
+  const { data, size } = encode(payload, { ecc: "M", border: 4 });
+  const scale = 8;
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = size * scale;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return "";
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#000";
+  data.forEach((row, y) => row.forEach((on, x) => on && ctx.fillRect(x * scale, y * scale, scale, scale)));
+  return canvas.toDataURL("image/png");
+}
+
+/** Mã QR VietQR của một lệnh (ADR-116): vẽ trên máy, nền trắng cố định để quét được cả khi app ở nền tối. */
+function TransferQrBlock({ payload, label, memo }: { payload: string; label: string; memo: string }) {
+  const src = useMemo(() => qrPng(payload), [payload]);
+  return (
+    <div class="qr-block">
+      <img src={src} alt={`Mã QR chuyển tiền: ${label}`} width={200} height={200} />
+      <div>
+        <div style={{ fontWeight: 500 }}>{label}</div>
+        <div class="sub-line" style={{ marginTop: "4px" }}>
+          Mở app ngân hàng › Quét QR. Đang dùng điện thoại: nhấn giữ để lưu ảnh (hoặc chụp màn hình) rồi chọn ảnh trong mục quét QR.
+          Xem đúng tên người nhận và nội dung có <strong>{memo}</strong> trước khi chuyển.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TransfersTab() {
   const { online } = useApp();
   const res = useResource<TransferOrder[]>("/v1/transfer-orders?status=pending");
   const [busy, setBusy] = useState<number | null>(null);
   const [confirmSkip, setConfirmSkip] = useState<number | null>(null);
+  const [qrOpen, setQrOpen] = useState<number | null>(null);
   const wide = useWide();
 
   async function mark(o: TransferOrder, status: "done" | "skip") {
@@ -869,7 +909,7 @@ function TransfersTab() {
             <Empty title="Không có lệnh chuyển tiền nào đang chờ." />
           ) : wide ? (
             <div class="table-wrap">
-              <table class="data dk-table">
+              <table class="data dk-table transfer-table">
                 <thead>
                   <tr>
                     <th scope="col">Chuyển</th>
@@ -886,8 +926,10 @@ function TransfersTab() {
                   {list.map((o) => {
                     const created = `${o.created_at.replace(" ", "T")}Z`;
                     const overdue = Date.now() - Date.parse(created) > 3 * 86_400_000;
+                    const qr = transferQr(o);
                     return (
-                      <tr key={o.id}>
+                      <Fragment key={o.id}>
+                      <tr>
                         <td>
                           {o.from_name} → {o.to_name}
                           <div class="sub-line">
@@ -908,6 +950,11 @@ function TransfersTab() {
                             <button type="button" class="btn" onClick={() => void copyText(o.memo, "nội dung")}>
                               <Icon name="copy" size={14} /> Chép nội dung
                             </button>
+                            {"payload" in qr && (
+                              <button type="button" class="btn" aria-expanded={qrOpen === o.id} onClick={() => setQrOpen(qrOpen === o.id ? null : o.id)}>
+                                <Icon name="qr" size={14} /> {qrOpen === o.id ? "Ẩn QR" : "Mã QR"}
+                              </button>
+                            )}
                             <button type="button" class="btn" disabled={!online || busy === o.id} onClick={() => void mark(o, "done")}>
                               <Icon name="check" size={14} /> Đã chuyển
                             </button>
@@ -922,6 +969,12 @@ function TransfersTab() {
                           </div>
                         </td>
                       </tr>
+                      {(qrOpen === o.id || ("reason" in qr && qr.reason)) && (
+                        <tr class="qr-row">
+                          <td colSpan={4}>{"payload" in qr ? <TransferQrBlock payload={qr.payload} label={qr.label} memo={o.memo} /> : <div class="sub-line">{qr.reason}</div>}</td>
+                        </tr>
+                      )}
+                      </Fragment>
                     );
                   })}
                 </tbody>
@@ -936,6 +989,7 @@ function TransfersTab() {
             <div>
               {list.map((o) => {
                 const overdue = Date.now() - Date.parse(`${o.created_at.replace(" ", "T")}Z`) > 3 * 86_400_000;
+                const qr = transferQr(o);
                 return (
                   <div key={o.id} style={{ padding: "12px 14px", borderTop: "1px solid var(--border)" }}>
                     <div class="flex justify-between items-baseline gap-2">
@@ -971,7 +1025,18 @@ function TransfersTab() {
                       >
                         {confirmSkip === o.id ? "Bỏ qua hẳn" : "Bỏ qua"}
                       </button>
+                      {"payload" in qr && (
+                        <button type="button" class="btn col-span-2" aria-expanded={qrOpen === o.id} onClick={() => setQrOpen(qrOpen === o.id ? null : o.id)}>
+                          <Icon name="qr" size={15} /> {qrOpen === o.id ? "Ẩn mã QR" : "Mã QR"}
+                        </button>
+                      )}
                     </div>
+                    {"payload" in qr && qrOpen === o.id && <TransferQrBlock payload={qr.payload} label={qr.label} memo={o.memo} />}
+                    {"reason" in qr && qr.reason && (
+                      <div class="sub-line" style={{ marginTop: "8px" }}>
+                        {qr.reason}
+                      </div>
+                    )}
                   </div>
                 );
               })}

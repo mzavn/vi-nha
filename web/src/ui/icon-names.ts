@@ -2,7 +2,7 @@
 // mà không cần JSX. icons.tsx khai báo đúng từng tên này — thiếu hay thừa một tên là lỗi kiểu.
 
 export const ICON_NAMES = [
-  "home", "plus-circle", "plus", "inbox", "wallet", "sync", "copy", "x", "settings", "chevron-right", "chevron-left", "search",
+  "home", "plus-circle", "plus", "inbox", "wallet", "sync", "copy", "qr", "x", "settings", "chevron-right", "chevron-left", "search",
   "help", "filter", "chevron-down", "chevron-up", "check", "grid", "cloud-off", "eye", "eye-off", "basket", "utensils", "zap",
   "fuel", "car", "wrench", "laptop", "pill", "dumbbell", "heart", "gift", "sprout", "swap", "receipt", "bag", "plane", "coffee",
   "film", "tag", "wifi", "building", "bus", "map-pin", "book", "credit-card", "more", "percent", "trending-up",
