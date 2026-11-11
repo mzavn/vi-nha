@@ -1,6 +1,9 @@
 // Bộ lọc màn Sổ giao dịch (pwa UC-716): bộ lọc ↔ query string của GET /v1/transactions(/summary) (ledger UC-111),
-// bộ lọc → chip bỏ được, đi tháng, ngày mặc định khi ghi thêm, nhóm dòng theo ngày. Thuần, không đụng DOM.
+// bộ lọc → chip bỏ được, đi tháng, ngày mặc định khi ghi thêm, nhóm dòng theo ngày, bộ lọc ↔ địa chỉ `#ledger?…`. Thuần, không đụng DOM.
 
+import type { CycleRef } from "../../../src/domain/look-back";
+import { isDayKey } from "./hash-route";
+import { cycleSpan, spanText } from "./look-back";
 import { formatVnd } from "./money";
 import { dayHeading, dayKey, monthKey, nextMonth, previousMonth } from "./period";
 import type { Bootstrap, TxRow, TxSummary } from "./types";
@@ -20,14 +23,23 @@ export const BOOK_MEANINGS: { value: string; label: string }[] = [
   { value: "adjust", label: "Điều chỉnh" },
 ];
 
+/** Kỳ lương mở từ Nhìn lại (pwa UC-707): ngày lương gửi lên server, ngày đầu / ngày cuối (VN) chỉ để ghi chip. */
+export interface BookCycle {
+  payday: string;
+  from: string;
+  /** null = kỳ đang chạy. */
+  to: string | null;
+}
+
 export interface BookFilter {
-  /** `YYYY-MM`; null = cả sổ hoặc xem theo khoảng ngày. */
+  /** `YYYY-MM`; null = cả sổ, hoặc xem theo khoảng ngày / theo kỳ. */
   month: string | null;
   fromDate?: string | null;
   toDate?: string | null;
+  /** Đúng mốc giờ của một kỳ lương (ledger UC-111 `cycle`): ghi đè tháng và khoảng ngày. */
+  cycle: BookCycle | null;
   meanings: string[];
   categoryId: string | null;
-  walletId: string | null;
   accountId: string | null;
   memberId: string | null;
   source: "manual" | "bank" | null;
@@ -37,7 +49,21 @@ export interface BookFilter {
 }
 
 export function defaultFilter(now: Date): BookFilter {
-  return { month: monthKey(now), fromDate: null, toDate: null, meanings: [], categoryId: null, walletId: null, accountId: null, memberId: null, source: null, q: "", showVoid: false };
+  return { month: monthKey(now), fromDate: null, toDate: null, cycle: null, meanings: [], categoryId: null, accountId: null, memberId: null, source: null, q: "", showVoid: false };
+}
+
+/** Chạm một danh mục ở Nhìn lại (pwa UC-707 AC-35, UC-716 AC-9): sổ lọc danh mục đó trong đúng kỳ, Chi bằng số của Nhìn lại. */
+export function cycleFilter(ref: Pick<CycleRef, "payday" | "start" | "end">, categoryId: string | null, now: Date): BookFilter {
+  return { ...defaultFilter(now), month: null, cycle: { payday: ref.payday, ...cycleSpan(ref) }, categoryId };
+}
+
+/** Chip / nhãn đầu màn của kỳ: "Kỳ từ 10/11" (đang chạy), "Kỳ 10/10 – 9/11" (đã kết thúc). */
+export const cycleLabel = (c: BookCycle): string => (c.to ? `Kỳ ${spanText(c)}` : spanText(c));
+
+/** Dòng đầu khi lọc theo tài khoản riêng tư của người khác (UC-716 AC-22): chỉ thấy chuyển khoản vào / ra, không thấy từng khoản chi. */
+export function privateAccountLine(f: Pick<BookFilter, "accountId">, boot: Pick<Bootstrap, "accounts"> | null): string | null {
+  const a = f.accountId ? boot?.accounts.find((x) => x.id === f.accountId) : undefined;
+  return a?.hiddenFromMe ? "Tài khoản riêng tư: chỉ chủ tài khoản thấy từng khoản" : null;
 }
 
 /** `2026-09-01` + `2026-09-15` → `1/9 – 15/9/2026`, hoặc `Từ 1/9/2026`, `Đến 15/9/2026`. */
@@ -60,12 +86,14 @@ export function dateRangeLabel(from: string | null | undefined, to: string | nul
 /** Chữ tìm gửi lên server: cắt khoảng trắng; dưới 2 ký tự thì chưa tìm (server sẽ báo sai). */
 export const searchText = (q: string): string | null => (q.trim().length >= 2 ? q.trim() : null);
 
-/** Phần bộ lọc của query string, dùng chung cho danh sách và tổng. */
+/** Phần bộ lọc của query string, dùng chung cho danh sách và tổng. Không còn lọc theo ví (Đợt C): bộ lọc cũ có `walletId` bị bỏ qua. */
 export function filterQuery(f: BookFilter): string {
   const p = new URLSearchParams();
   const hasRange = Boolean(f.fromDate || f.toDate);
   const validRange = !f.fromDate || !f.toDate || f.fromDate <= f.toDate;
-  if (hasRange && validRange) {
+  if (f.cycle) {
+    p.set("cycle", f.cycle.payday);
+  } else if (hasRange && validRange) {
     if (f.fromDate) p.set("from_date", f.fromDate);
     if (f.toDate) p.set("to_date", f.toDate);
   } else if (f.month) {
@@ -73,7 +101,6 @@ export function filterQuery(f: BookFilter): string {
   }
   if (f.meanings.length) p.set("meaning", f.meanings.join(","));
   if (f.categoryId) p.set("category_id", f.categoryId);
-  if (f.walletId) p.set("wallet_id", f.walletId);
   if (f.accountId) p.set("account_id", f.accountId);
   if (f.memberId) p.set("member_id", f.memberId);
   if (f.source) p.set("source", f.source);
@@ -94,7 +121,7 @@ export function summaryPath(f: BookFilter): string {
   return `/v1/transactions/summary${q ? `?${q}` : ""}`;
 }
 
-export type ChipKey = "dateRange" | "meaning" | "categoryId" | "walletId" | "accountId" | "memberId" | "source" | "showVoid";
+export type ChipKey = "cycle" | "dateRange" | "meaning" | "categoryId" | "accountId" | "memberId" | "source" | "showVoid";
 export interface Chip {
   key: ChipKey;
   /** Loại cụ thể khi `key = "meaning"` (mỗi loại một chip). */
@@ -105,12 +132,12 @@ export interface Chip {
 /** Bộ lọc đang bật thành chip (tháng và chữ tìm có chỗ riêng ở đầu màn, không thành chip). */
 export function filterChips(f: BookFilter, boot: Bootstrap | null): Chip[] {
   const chips: Chip[] = [];
-  const range = dateRangeLabel(f.fromDate, f.toDate);
+  if (f.cycle) chips.push({ key: "cycle", label: cycleLabel(f.cycle) });
+  const range = f.cycle ? null : dateRangeLabel(f.fromDate, f.toDate);
   if (range) chips.push({ key: "dateRange", label: range });
   const name = <T extends { id: string; name: string }>(list: T[] | undefined, id: string) => list?.find((x) => x.id === id)?.name ?? id;
   chips.push(...f.meanings.map((m) => ({ key: "meaning" as const, value: m, label: BOOK_MEANINGS.find((x) => x.value === m)?.label ?? m })));
   if (f.categoryId) chips.push({ key: "categoryId", label: name(boot?.categories, f.categoryId) });
-  if (f.walletId) chips.push({ key: "walletId", label: `Ví ${name(boot?.wallets, f.walletId)}` });
   if (f.accountId) chips.push({ key: "accountId", label: name(boot?.accounts, f.accountId) });
   if (f.memberId) chips.push({ key: "memberId", label: `${name(boot?.members, f.memberId)} ghi` });
   if (f.source) chips.push({ key: "source", label: f.source === "bank" ? "Từ ngân hàng" : "Ghi tay" });
@@ -118,14 +145,14 @@ export function filterChips(f: BookFilter, boot: Bootstrap | null): Chip[] {
   return chips;
 }
 
-/** Chạm × trên một chip: bỏ đúng bộ lọc đó. */
+/** Chạm × trên một chip: bỏ đúng bộ lọc đó; bỏ kỳ hay khoảng ngày thì về tháng hiện tại. */
 export function removeChip(f: BookFilter, chip: Chip, now = new Date()): BookFilter {
+  if (chip.key === "cycle") return { ...f, cycle: null, month: monthKey(now) };
   if (chip.key === "dateRange") return { ...f, fromDate: null, toDate: null, month: monthKey(now) };
   if (chip.key === "meaning") return { ...f, meanings: f.meanings.filter((m) => m !== chip.value) };
   if (chip.key === "showVoid") return { ...f, showVoid: false };
   return { ...f, [chip.key]: null };
 }
-
 
 /** Bật / tắt một loại trong sheet Lọc, giữ thứ tự của danh sách loại. */
 export function toggleMeaning(f: BookFilter, meaning: string): BookFilter {
@@ -133,10 +160,10 @@ export function toggleMeaning(f: BookFilter, meaning: string): BookFilter {
   return { ...f, meanings: BOOK_MEANINGS.map((x) => x.value).filter((m) => on.includes(m)) };
 }
 
-/** Bỏ mọi bộ lọc trong sheet Lọc, giữ tháng (hoặc về tháng này nếu đang lọc khoảng ngày) và chữ tìm. */
+/** Bỏ mọi bộ lọc trong sheet Lọc, giữ tháng (hoặc về tháng này nếu đang lọc khoảng ngày / kỳ) và chữ tìm. */
 export function clearFilters(f: BookFilter, now = new Date()): BookFilter {
-  const hadRange = Boolean(f.fromDate || f.toDate);
-  return { ...f, month: hadRange ? monthKey(now) : f.month, fromDate: null, toDate: null, meanings: [], categoryId: null, walletId: null, accountId: null, memberId: null, source: null, showVoid: false };
+  const hadRange = Boolean(f.fromDate || f.toDate || f.cycle);
+  return { ...f, month: hadRange ? monthKey(now) : f.month, fromDate: null, toDate: null, cycle: null, meanings: [], categoryId: null, accountId: null, memberId: null, source: null, showVoid: false };
 }
 
 /**
@@ -151,21 +178,79 @@ export function stepMonth(month: string | null, delta: -1 | 1, now: Date): strin
 }
 
 /**
- * Ngày điền sẵn khi ghi thêm từ sổ: đang xem một tháng đã qua → ngày cuối tháng đó (đổi được); tháng hiện tại hay cả sổ →
- * hôm nay. Giờ ghi tính bằng `atForDay` như mọi lần chọn ngày lùi lại.
+ * Ngày điền sẵn khi ghi thêm từ sổ: đang xem một tháng đã qua → ngày cuối tháng đó (đổi được); kỳ lương / khoảng ngày đã qua →
+ * ngày cuối; tháng hiện tại hay cả sổ → hôm nay. Giờ ghi tính bằng `atForDay` như mọi lần chọn ngày lùi lại.
  */
 export function entryDay(monthOrFilter: BookFilter | string | null, now: Date): string {
   const today = dayKey(now);
   if (typeof monthOrFilter === "object" && monthOrFilter !== null) {
-    if (monthOrFilter.fromDate || monthOrFilter.toDate) {
-      return monthOrFilter.toDate && monthOrFilter.toDate < today ? monthOrFilter.toDate : today;
-    }
+    const last = monthOrFilter.cycle ? monthOrFilter.cycle.to : monthOrFilter.fromDate || monthOrFilter.toDate ? (monthOrFilter.toDate ?? null) : undefined;
+    if (last !== undefined) return last && last < today ? last : today;
     return entryDay(monthOrFilter.month, now);
   }
   const month = monthOrFilter;
   if (!month || month >= monthKey(now)) return today;
   const [y, m] = month.split("-").map(Number);
   return new Date(Date.UTC(y!, m!, 0)).toISOString().slice(0, 10);
+}
+
+/**
+ * Bộ lọc → query trên địa chỉ `#ledger?…` (UC-716 AC-23: F5 giữ bộ lọc, kể cả kỳ lương). Chỉ ghi ô khác mặc định; đọc lại bằng
+ * `bookFromHashQuery` ra đúng bộ lọc. Tháng chỉ ghi khi không lọc kỳ / khoảng ngày: `month=all` là cả sổ.
+ */
+export function bookHashQuery(f: BookFilter, now: Date): string {
+  const p = new URLSearchParams();
+  if (!f.cycle && !f.fromDate && !f.toDate && f.month !== monthKey(now)) p.set("month", f.month ?? "all");
+  if (!f.cycle && f.fromDate) p.set("from_date", f.fromDate);
+  if (!f.cycle && f.toDate) p.set("to_date", f.toDate);
+  if (f.meanings.length) p.set("meaning", f.meanings.join(","));
+  if (f.categoryId) p.set("category_id", f.categoryId);
+  if (f.accountId) p.set("account_id", f.accountId);
+  if (f.memberId) p.set("member_id", f.memberId);
+  if (f.source) p.set("source", f.source);
+  if (f.q) p.set("q", f.q);
+  if (f.showVoid) p.set("include_void", "1");
+  if (f.cycle) {
+    p.set("cycle", f.cycle.payday);
+    p.set("cycle_from", f.cycle.from);
+    if (f.cycle.to) p.set("cycle_to", f.cycle.to);
+  }
+  return p.toString();
+}
+
+/** Địa chỉ `#ledger?…` → bộ lọc. Ô sai dạng (tháng, ngày, nguồn, loại lạ) bị bỏ qua như không có. */
+export function bookFromHashQuery(query: string, now: Date): BookFilter {
+  const p = new URLSearchParams(query);
+  const day = (k: string) => {
+    const v = p.get(k);
+    return v && isDayKey(v) ? v : null;
+  };
+  const f = defaultFilter(now);
+  const payday = day("cycle");
+  if (payday) {
+    const to = day("cycle_to");
+    return { ...f, ...rest(), month: null, cycle: { payday, from: day("cycle_from") ?? payday, to } };
+  }
+  const fromDate = day("from_date");
+  const toDate = day("to_date");
+  if (fromDate || toDate) return { ...f, ...rest(), month: null, fromDate, toDate };
+  const month = p.get("month");
+  return { ...f, ...rest(), month: month === "all" ? null : month && /^\d{4}-(0[1-9]|1[0-2])$/.test(month) ? month : f.month };
+
+  function rest(): Pick<BookFilter, "meanings" | "categoryId" | "accountId" | "memberId" | "source" | "q" | "showVoid"> {
+    const known = BOOK_MEANINGS.map((m) => m.value);
+    const picked = (p.get("meaning") ?? "").split(",");
+    const source = p.get("source");
+    return {
+      meanings: known.filter((m) => picked.includes(m)),
+      categoryId: p.get("category_id") || null,
+      accountId: p.get("account_id") || null,
+      memberId: p.get("member_id") || null,
+      source: source === "manual" || source === "bank" ? source : null,
+      q: p.get("q") ?? "",
+      showVoid: p.get("include_void") === "1",
+    };
+  }
 }
 
 /** Chi thật của một nhóm dòng: chi tiêu − hoàn tiền, chỉ khoản còn hiệu lực. */

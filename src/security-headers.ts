@@ -18,7 +18,6 @@ export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
     "connect-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com https://api.github.com",
     "worker-src 'self'",
     "manifest-src 'self'",
-    "frame-src https://mzavn.gitbook.io",
     "frame-ancestors 'none'",
     "base-uri 'self'",
     "form-action 'self'",

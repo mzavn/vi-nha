@@ -9,12 +9,12 @@ export const expenseNeededText = "Cần chi phí tháng — nhập ở Tham số
 
 const sourceText = (s: "manual" | "ledger" | null): string => (s === "manual" ? "tự nhập" : "theo sổ, 3 tháng gần nhất");
 
-/** Card Thông số: "Chi 20.000.000 ₫/tháng (tự nhập) · Must 15.000.000 · SWR 3,5% · lạm phát 3,5%". */
+/** Card Thông số: "Chi 20.000.000 ₫/tháng (tự nhập) · Thiết yếu 15.000.000 · SWR 3,5% · lạm phát 3,5%". */
 export function paramsSummary(p: FreedomParams): string {
   const expense =
     p.expenseMonthly === null
       ? expenseNeededText
-      : [`Chi ${formatVnd(p.expenseMonthly)}/tháng (${sourceText(p.expenseSource)})`, p.expenseMustMonthly !== null ? `Must ${moneyDigits(p.expenseMustMonthly)}` : null].filter(Boolean).join(" · ");
+      : [`Chi ${formatVnd(p.expenseMonthly)}/tháng (${sourceText(p.expenseSource)})`, p.expenseMustMonthly !== null ? `Thiết yếu ${moneyDigits(p.expenseMustMonthly)}` : null].filter(Boolean).join(" · ");
   return `${expense} · SWR ${bpsText(p.swrBps)}% · lạm phát ${bpsText(p.inflationBps)}%`;
 }
 
@@ -52,9 +52,9 @@ export function freedomTargetText(t: NonNullable<FreedomMilestone["target"]>): s
 /** Tên và câu hỏi của từng mốc (Mốc an tâm đặt tên theo số tháng ở màn). */
 export const MILESTONE_LABEL: Record<IncomeMilestone["key"] | FreedomMilestone["key"], { name: string; hint: string }> = {
   M2: { name: "M2 · Thu nhập đủ chi", hint: "Thu nhập nhà ≥ chi phí tháng" },
-  M2p: { name: "M2′ · Đủ chi sau phần khóa", hint: "Thu nhập trừ phần khóa (Tích sản, Thuế) vẫn đủ chi phí tháng" },
+  M2p: { name: "M2′ · Đủ chi sau phần trích trước", hint: "Thu nhập trừ phần trích trước (Tích luỹ, Thuế) vẫn đủ chi phí tháng" },
   M3: { name: "M3 · Thu nhập gấp đôi chi", hint: "Thu nhập ≥ 2 lần chi phí tháng" },
-  F1: { name: "F1 · Tự do cơ bản", hint: "Tài sản đầu tư trừ nợ đủ chi Must theo tỷ lệ rút an toàn" },
+  F1: { name: "F1 · Tự do cơ bản", hint: "Tài sản đầu tư trừ nợ đủ chi thiết yếu theo tỷ lệ rút an toàn" },
   F2: { name: "F2 · Tự do hoàn toàn", hint: "Đủ chi phí sống bình thường, có hệ số dự phòng" },
   F3: { name: "F3", hint: "Sống bằng lãi thực, không đụng vốn" },
 };

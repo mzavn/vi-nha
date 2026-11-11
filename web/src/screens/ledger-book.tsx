@@ -6,17 +6,19 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { ApiError, request } from "../lib/api";
 import { formatVnd, groupDigits, maskAmounts, moneyDigits } from "../lib/money";
 import { dayKey, monthLabel, timeHM } from "../lib/period";
-import { MEANING_LABEL, txLabel, txSign } from "../lib/transactions";
+import { isLegacyTx, LEGACY_LABEL, MEANING_LABEL, txLabel, txSign } from "../lib/transactions";
 import {
   BOOK_MEANINGS,
   BOOK_PAGE,
   bookPath,
   clearFilters,
+  cycleLabel,
   dateRangeLabel,
   defaultFilter,
   entryDay,
   filterChips,
   groupByDay,
+  privateAccountLine,
   removeChip,
   searchText,
   stepMonth,
@@ -27,7 +29,7 @@ import {
 } from "../lib/tx-filter";
 import type { Bootstrap, TxRow, TxSummary } from "../lib/types";
 import { useResource, type Resource } from "../state/resource";
-import { getState, go, openTx, setState, useApp } from "../state/store";
+import { getState, go, openTx, setBook, useApp } from "../state/store";
 import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
 import { Card, Empty, PageHeader, Seg, Sheet, Skeleton } from "../ui/parts";
@@ -38,7 +40,7 @@ export function LedgerBook() {
   const wide = useWide();
   const now = new Date();
   const filter = app.book ?? defaultFilter(now);
-  const setFilter = (f: BookFilter) => setState({ book: f });
+  const setFilter = setBook;
   const [query, setQuery] = useState(filter.q);
   const [filtering, setFiltering] = useState(false);
 
@@ -46,7 +48,7 @@ export function LedgerBook() {
   useEffect(() => {
     const t = setTimeout(() => {
       const cur = getState().book ?? defaultFilter(new Date());
-      if (cur.q !== query) setState({ book: { ...cur, q: query } });
+      if (cur.q !== query) setBook({ ...cur, q: query });
     }, 300);
     return () => clearTimeout(t);
   }, [query]);
@@ -58,8 +60,9 @@ export function LedgerBook() {
   const nextMonth = stepMonth(filter.month, 1, now);
   const shortQuery = query.trim().length === 1;
   const add = () => go("entry", { entryPreset: { day: entryDay(filter, now), back: "ledger" } });
-  const dateLabel = dateRangeLabel(filter.fromDate, filter.toDate);
-  const hasDateRange = Boolean(filter.fromDate || filter.toDate);
+  // Kỳ lương (mở từ Nhìn lại) và khoảng ngày cùng thay chỗ tháng: nhãn đầu màn nói kỳ / khoảng, ‹ › mờ.
+  const dateLabel = filter.cycle ? cycleLabel(filter.cycle) : dateRangeLabel(filter.fromDate, filter.toDate);
+  const hasDateRange = Boolean(filter.cycle || filter.fromDate || filter.toDate);
 
   return (
     <>
@@ -91,7 +94,7 @@ export function LedgerBook() {
             aria-pressed={hasDateRange || filter.month === null}
             onClick={() => {
               if (hasDateRange) {
-                setFilter({ ...filter, fromDate: null, toDate: null, month: defaultFilter(now).month });
+                setFilter({ ...filter, cycle: null, fromDate: null, toDate: null, month: defaultFilter(now).month });
               } else {
                 setFilter({ ...filter, month: filter.month === null ? defaultFilter(now).month : null });
               }
@@ -133,6 +136,8 @@ export function LedgerBook() {
       </div>
 
       <Summary res={sum} />
+
+      {privateAccountLine(filter, app.boot) && <p class="note">{privateAccountLine(filter, app.boot)}</p>}
 
       <Card flush class="book-list">
         <BookList
@@ -296,7 +301,7 @@ function BookList({ list, boot, wide, filtered, onClear }: { list: BookRows; boo
                 Khoản
               </th>
               <th scope="col" class="l">
-                Danh mục / Ví
+                Danh mục
               </th>
               <th scope="col" class="l">
                 Tài khoản
@@ -371,9 +376,18 @@ const Voided = ({ r }: { r: TxRow }) =>
     </>
   ) : null;
 
-/** Điện thoại: hai cột — khoản (giờ · ghi chú · ví · tài khoản · người ở dòng phụ) và số tiền. Cả hàng chạm được. */
+/** Nhãn nhỏ "cách tính cũ" (UC-716 AC-21, AC-24): khoản cũ (`legacy`, id ≤ `config.legacy_max_tx_id`). */
+const Legacy = ({ r }: { r: TxRow }) =>
+  isLegacyTx(r) ? (
+    <>
+      {" "}
+      <span class="chip">{LEGACY_LABEL}</span>
+    </>
+  ) : null;
+
+/** Điện thoại: hai cột — khoản (giờ · ghi chú · tài khoản · người ở dòng phụ) và số tiền. Cả hàng chạm được. */
 function PhoneRow({ r, boot }: { r: TxRow; boot: Bootstrap | null }) {
-  const sub = [timeHM(r.at), r.note && maskAmounts(r.note), r.wallet_name, accountText(r, boot), who(r, boot)].filter(Boolean).join(" · ");
+  const sub = [timeHM(r.at), r.note && maskAmounts(r.note), accountText(r, boot), who(r, boot)].filter(Boolean).join(" · ");
   return (
     <tr class="tx-row" onClick={() => openTx(r.id, r)}>
       <td class="l">
@@ -381,6 +395,7 @@ function PhoneRow({ r, boot }: { r: TxRow; boot: Bootstrap | null }) {
           {txLabel(r)}
         </button>
         <Voided r={r} />
+        <Legacy r={r} />
         <div class="sub-line">{sub}</div>
       </td>
       <Amount r={r} />
@@ -388,7 +403,7 @@ function PhoneRow({ r, boot }: { r: TxRow; boot: Bootstrap | null }) {
   );
 }
 
-/** Máy tính: Giờ · Số tiền (đứng đầu cho dễ nhìn) · Khoản (loại, ghi chú) · Danh mục / Ví · Tài khoản · Người. */
+/** Máy tính: Giờ · Số tiền (đứng đầu cho dễ nhìn) · Khoản (loại, ghi chú) · Danh mục · Tài khoản · Người. */
 function WideRow({ r, boot }: { r: TxRow; boot: Bootstrap | null }) {
   const kind = r.category_name ? (MEANING_LABEL[r.meaning] ?? r.meaning) : txLabel(r);
   return (
@@ -400,11 +415,11 @@ function WideRow({ r, boot }: { r: TxRow; boot: Bootstrap | null }) {
           {kind}
         </button>
         <Voided r={r} />
+        <Legacy r={r} />
         {r.note && <div class="sub-line">{maskAmounts(r.note)}</div>}
       </td>
       <td class="l">
         {r.category_name ?? ""}
-        {r.wallet_name && <div class="sub-line">{r.wallet_name}</div>}
       </td>
       <td class="l">{accountText(r, boot)}</td>
       <td class="l">{who(r, boot) ?? ""}</td>
@@ -455,7 +470,7 @@ function FilterSheet({ filter, boot, onChange, onClose }: { filter: BookFilter; 
           value={filter.fromDate ?? ""}
           onInput={(e) => {
             const v = e.currentTarget.value || null;
-            onChange({ ...filter, fromDate: v, month: v || filter.toDate ? null : (filter.month ?? defaultFilter(new Date()).month) });
+            onChange({ ...filter, cycle: null, fromDate: v, month: v || filter.toDate ? null : (filter.month ?? defaultFilter(new Date()).month) });
           }}
         />
       </div>
@@ -470,7 +485,7 @@ function FilterSheet({ filter, boot, onChange, onClose }: { filter: BookFilter; 
           value={filter.toDate ?? ""}
           onInput={(e) => {
             const v = e.currentTarget.value || null;
-            onChange({ ...filter, toDate: v, month: v || filter.fromDate ? null : (filter.month ?? defaultFilter(new Date()).month) });
+            onChange({ ...filter, cycle: null, toDate: v, month: v || filter.fromDate ? null : (filter.month ?? defaultFilter(new Date()).month) });
           }}
         />
       </div>
@@ -487,7 +502,6 @@ function FilterSheet({ filter, boot, onChange, onClose }: { filter: BookFilter; 
         </div>
       </div>
       {pick("f-book-cat", "Danh mục", filter.categoryId, boot?.categories ?? [], (v) => onChange({ ...filter, categoryId: v }))}
-      {pick("f-book-wallet", "Ví", filter.walletId, boot?.wallets ?? [], (v) => onChange({ ...filter, walletId: v }))}
       {pick("f-book-acct", "Tài khoản", filter.accountId, boot?.accounts ?? [], (v) => onChange({ ...filter, accountId: v }))}
       {(boot?.members.length ?? 0) > 1 && pick("f-book-member", "Người ghi", filter.memberId, boot?.members ?? [], (v) => onChange({ ...filter, memberId: v }))}
       <div class="field">

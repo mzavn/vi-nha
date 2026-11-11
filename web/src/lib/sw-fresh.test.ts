@@ -6,14 +6,12 @@ describe("freshFor: bao lâu service worker trả bản lưu không hỏi mạng
     for (const p of ["/v1/bootstrap", "/v1/settings", "/v1/categories", "/v1/rental"]) expect(freshFor(p), p).toBe(300_000);
   });
 
-  it("số tiền và danh sách hay đổi: 30 giây", () => {
+  it("UC-710: số tiền và danh sách hay đổi: 30 giây (không còn /v1/budget, /v1/transfer-orders)", () => {
     for (const p of [
       "/v1/snapshot",
-      "/v1/budget",
       "/v1/accounts",
       "/v1/goals",
       "/v1/spend-by-category",
-      "/v1/transfer-orders",
       "/v1/transactions",
       "/v1/logs",
       "/v1/push",

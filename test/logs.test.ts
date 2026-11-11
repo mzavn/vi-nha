@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import { app } from "../src/index";
+import { ingestLog, parseWebhookPayload } from "../src/services/ingest";
 import { asD1, openDb } from "./helpers/d1-sqlite";
+import { client, householdP, P_NOW } from "./helpers/household-p";
 
 let env: Env;
 let raw: ReturnType<typeof openDb>;
@@ -91,7 +93,7 @@ describe("POST /v1/logs/:id/assign", () => {
   it("gán kèm create_rule tạo luôn rule cho lần sau; income bị từ chối vì luật 6", async () => {
     seedLog("a4", "out", 77_000, "vcb-husband", { content: "MOMO nap tien" });
     const { status, json } = await call("POST", "/v1/logs/a4/assign", {
-      splits: [{ meaning: "spend", amount: 77_000, wallet_id: "fun-husband", category_id: "shopping" }],
+      splits: [{ meaning: "spend", amount: 77_000, category_id: "shopping" }],
       create_rule: { match_type: "content", pattern: "MOMO" },
     });
     expect(status).toBe(201);
@@ -119,13 +121,13 @@ describe("POST /v1/logs/:id/assign", () => {
 
     // Rule vừa tạo phải khớp được lần chuyển sau, dù mã giao dịch và số đuôi khác hẳn.
     const { matchRule } = await import("../src/domain/rules");
-    const saved = { id: 1, priority: 100, matchType: "content" as const, pattern: "GRAB VIETNAM THANH TOAN", meaning: "spend" as const, isSalary: false, walletId: "transport", categoryId: "ride-hailing", byMemberId: null };
+    const saved = { id: 1, priority: 100, matchType: "content" as const, pattern: "GRAB VIETNAM THANH TOAN", meaning: "spend" as const, isSalary: false, categoryId: "ride-hailing", byMemberId: null };
     expect(matchRule([saved], "out", "CT DEN:555000111 GRAB VIETNAM THANH TOAN 0930", null)).toEqual(saved);
   });
 
   it("create_rule: true với tiền vào thì vẫn gán được, chỉ báo không tạo rule", async () => {
     seedLog("b4", "in", 300_000, "vcb-husband", { content: "HOAN TIEN DON HANG" });
-    const res = await call("POST", "/v1/logs/b4/assign", { splits: [{ meaning: "refund", amount: 300_000, wallet_id: "nice-to-have" }], create_rule: true });
+    const res = await call("POST", "/v1/logs/b4/assign", { splits: [{ meaning: "refund", amount: 300_000 }], create_rule: true });
     expect(res.status).toBe(201);
     expect(res.json.data.rule).toBeNull();
     expect(res.json.data.ruleSkipped).toMatch(/tiền vào luôn phải hỏi/);
@@ -161,20 +163,16 @@ describe("POST /v1/logs/:id/assign", () => {
     expect(wrong.json.error?.code).toBe("debt_spend_only");
   });
 
-  it("gán log tiền vào là nhận lại tiền cho vay (collect): trừ khoản phải thu, không thành thu nhập, không chia, ví không đổi", async () => {
+  it("gán log tiền vào là nhận lại tiền cho vay (collect): trừ khoản phải thu, không thành thu nhập, không kỳ, không ví", async () => {
     expect((await call("POST", "/v1/receivables", { name: "Em Hai", amount: 3_000_000, at: "2026-09-20T02:00:00.000Z" })).status).toBe(201);
-    const wallets = () => raw.prepare("SELECT wallet_id, balance FROM v_wallet_balance ORDER BY wallet_id").all();
-    const before = wallets();
     seedLog("c1", "in", 1_000_000, "vcb-husband", { content: "EM HAI TRA TIEN" });
     const { status, json } = await call("POST", "/v1/logs/c1/assign", { splits: [{ meaning: "collect", amount: 1_000_000, receivable_id: "em-hai" }] });
     expect(status).toBe(201);
     const tx = json.data.transactions[0];
-    expect(tx).toMatchObject({ meaning: "collect", receivable_id: "em-hai", counter_account_id: "vcb-husband", account_id: null, wallet_id: null, counter_wallet_id: null, source: "sepay" });
-    expect(wallets()).toEqual(before);
+    expect(tx).toMatchObject({ meaning: "collect", receivable_id: "em-hai", counter_account_id: "vcb-husband", account_id: null, source: "sepay" });
+    expect(json.data.effects).toEqual({ cycle: null, tasksDone: [] });
     expect(raw.prepare("SELECT COUNT(*) n FROM transactions WHERE meaning IN ('income', 'fund')").get()).toEqual({ n: 0 });
-    const allocate = await call("POST", "/v1/allocate", { income_tx_id: tx.id });
-    expect(allocate.status).toBe(404);
-    expect(allocate.json.error?.code).toBe("not_income");
+    expect(raw.prepare("SELECT COUNT(*) n FROM pay_cycles").get()).toEqual({ n: 0 });
     const receivable = (await call("GET", "/v1/receivables")).json.data.receivables[0];
     expect(receivable).toMatchObject({ id: "em-hai", lent: 3_000_000, collected: 1_000_000, balance: 2_000_000 });
     expect(receivable.movements).toMatchObject([{ kind: "collect", amount: 1_000_000, accountId: "vcb-husband", source: "sepay" }]);
@@ -187,7 +185,6 @@ describe("POST /v1/logs/:id/assign", () => {
 
 describe("trả lại cho khoản chi khi gán (change 261004-gan-tham-chieu)", () => {
   afterEach(() => vi.useRealTimers());
-  const coThiTot = "SELECT balance FROM v_wallet_balance WHERE wallet_id = 'nice-to-have'";
 
   /** Gán một log tiền ra thành khoản chi y tế (vd hoá đơn thuốc 244.000). Trả id giao dịch. */
   async function spend(logId: string, amount: number, opts: { content?: string; at?: string } = {}) {
@@ -197,14 +194,12 @@ describe("trả lại cho khoản chi khi gán (change 261004-gan-tham-chieu)", 
     return res.json.data.transactions[0].id as number;
   }
 
-  it("gán log tiền vào là hoàn tiền có link_id: nối khoản chi gốc, danh mục theo khoản gốc; phần chênh nằm lại trong ví của danh mục", async () => {
-    const before = (raw.prepare(coThiTot).get() as { balance: number } | undefined)?.balance ?? 0;
+  it("gán log tiền vào là hoàn tiền có link_id: nối khoản chi gốc, danh mục theo khoản gốc, không ví", async () => {
     const spendId = await spend("s1", 244_000, { content: "NHA THUOC LONG CHAU" });
     seedLog("r1", "in", 250_000, "vcb-husband", { content: "CHI LAN TRA TIEN THUOC" });
-    const { status, json } = await call("POST", "/v1/logs/r1/assign", { splits: [{ meaning: "refund", amount: 250_000, wallet_id: "nice-to-have", link_id: spendId }] });
+    const { status, json } = await call("POST", "/v1/logs/r1/assign", { splits: [{ meaning: "refund", amount: 250_000, link_id: spendId }] });
     expect(status).toBe(201);
-    expect(json.data.transactions[0]).toMatchObject({ meaning: "refund", amount: 250_000, link_id: spendId, category_id: "health", wallet_id: "nice-to-have", counter_account_id: "vcb-husband", source: "sepay" });
-    expect(raw.prepare(coThiTot).get()).toEqual({ balance: before + 6_000 });
+    expect(json.data.transactions[0]).toMatchObject({ meaning: "refund", amount: 250_000, link_id: spendId, category_id: "health", counter_account_id: "vcb-husband", source: "sepay" });
   });
 
   it("link_id phải trỏ về khoản chi còn hiệu lực: không thì invalid_link (như nhập tay), log vẫn chờ, không ghi gì", async () => {
@@ -213,17 +208,17 @@ describe("trả lại cho khoản chi khi gán (change 261004-gan-tham-chieu)", 
     seedLog("r2", "in", 50_000, "vcb-husband");
     const txBefore = raw.prepare("SELECT COUNT(*) n FROM transactions").get();
     for (const link_id of [income, 9_999]) {
-      const res = await call("POST", "/v1/logs/r2/assign", { splits: [{ meaning: "refund", amount: 50_000, wallet_id: "nice-to-have", link_id }] });
+      const res = await call("POST", "/v1/logs/r2/assign", { splits: [{ meaning: "refund", amount: 50_000, link_id }] });
       expect(res.status).toBe(400);
       expect(res.json.error?.code).toBe("invalid_link");
     }
-    const typo = await call("POST", "/v1/logs/r2/assign", { splits: [{ meaning: "refund", amount: 50_000, wallet_id: "nice-to-have", link_id: "12" }] });
+    const typo = await call("POST", "/v1/logs/r2/assign", { splits: [{ meaning: "refund", amount: 50_000, link_id: "12" }] });
     expect(typo.json.error?.code).toBe("invalid_input");
     expect(raw.prepare("SELECT COUNT(*) n FROM transactions").get()).toEqual(txBefore);
     expect(raw.prepare("SELECT status FROM bank_logs WHERE id = 'r2'").get()).toEqual({ status: "pending" });
   });
 
-  it("GET /v1/transactions/link-candidates?meaning=spend: khoản chi còn hiệu lực 30 ngày gần nhất, mới nhất trước, kèm danh mục, ví đã trừ, nội dung ngân hàng", async () => {
+  it("GET /v1/transactions/link-candidates?meaning=spend: khoản chi còn hiệu lực 30 ngày gần nhất, mới nhất trước, kèm danh mục, nội dung ngân hàng (khoản v2 không ví)", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-10-04T05:00:00.000Z"));
     await spend("old", 100_000, { at: "2026-09-01T02:00:00.000Z" });
@@ -242,8 +237,6 @@ describe("trả lại cho khoản chi khi gán (change 261004-gan-tham-chieu)", 
         amount: 244_000,
         category_id: "health",
         category_name: "Y tế (khám, thuốc, TPCN)",
-        wallet_id: "nice-to-have",
-        wallet_name: expect.any(String),
         receivable_id: null,
         receivable_name: null,
         note: null,
@@ -280,7 +273,7 @@ describe("trả cho khoản cho vay, xem hai chiều (change 261005-lien-ket-kho
     seedLog("c1", "in", 600_000, "vcb-husband", { content: "CHI LAN TRA TIEN" });
     const { status, json } = await call("POST", "/v1/logs/c1/assign", { splits: [{ meaning: "collect", amount: 600_000, link_id: lend }] });
     expect(status).toBe(201);
-    expect(json.data.transactions[0]).toMatchObject({ meaning: "collect", amount: 600_000, link_id: lend, receivable_id: lan, wallet_id: null, category_id: null });
+    expect(json.data.transactions[0]).toMatchObject({ meaning: "collect", amount: 600_000, link_id: lend, receivable_id: lan, category_id: null });
     expect(await balanceOf(lan)).toBe(400_000);
 
     seedLog("c2", "in", 100_000, "vcb-husband");
@@ -290,12 +283,12 @@ describe("trả cho khoản cho vay, xem hai chiều (change 261005-lien-ket-kho
       expect(res.status).toBe(400);
       expect(res.json.error?.code).toBe("invalid_link");
     }
-    expect((await call("POST", "/v1/logs/c2/assign", { splits: [{ meaning: "refund", amount: 100_000, wallet_id: "nice-to-have", link_id: lend }] })).json.error?.code).toBe("invalid_link");
+    expect((await call("POST", "/v1/logs/c2/assign", { splits: [{ meaning: "refund", amount: 100_000, link_id: lend }] })).json.error?.code).toBe("invalid_link");
     expect(raw.prepare("SELECT COUNT(*) n FROM transactions").get()).toEqual(txBefore);
     expect(raw.prepare("SELECT status FROM bank_logs WHERE id = 'c2'").get()).toEqual({ status: "pending" });
   });
 
-  it("mua hộ là cho vay (ADR-84): trả dư thì tách Nhận lại đúng số còn nợ + Thu nhập phần dư — hết nợ, phần dư chia được, chi tiêu không đổi", async () => {
+  it("mua hộ là cho vay (ADR-84): trả dư thì tách Nhận lại đúng số còn nợ + Thu nhập phần dư — hết nợ, chi tiêu không đổi", async () => {
     const lan = await person("Chị Lan");
     const spent = () => raw.prepare("SELECT COUNT(*) n FROM transactions WHERE meaning IN ('spend', 'refund')").get();
     const spentBefore = spent();
@@ -314,7 +307,6 @@ describe("trả cho khoản cho vay, xem hai chiều (change 261005-lien-ket-kho
     expect(byMeaning("income")).toMatchObject({ amount: 6_000 });
     expect(await balanceOf(lan)).toBe(0);
     expect(spent()).toEqual(spentBefore);
-    expect((await call("POST", "/v1/allocate", { income_tx_id: byMeaning("income").id })).status).toBe(201);
   });
 
   it("GET /v1/transactions/link-candidates?meaning=lend: khoản cho vay còn hiệu lực trong số ngày hỏi, mới nhất trước, kèm người vay; meaning hay days sai → invalid_input", async () => {
@@ -336,8 +328,6 @@ describe("trả cho khoản cho vay, xem hai chiều (change 261005-lien-ket-kho
         amount: 1_000_000,
         category_id: "lending",
         category_name: expect.any(String),
-        wallet_id: null,
-        wallet_name: null,
         receivable_id: lan,
         receivable_name: "Chị Lan",
         note: "mượn sửa xe",
@@ -352,11 +342,10 @@ describe("trả cho khoản cho vay, xem hai chiều (change 261005-lien-ket-kho
   it("GET /v1/transactions/:id: khoản gốc kèm các khoản còn hiệu lực đã trả về nó (linked_from), khoản trả về kèm tóm tắt khoản gốc (link)", async () => {
     const lan = await person("Chị Lan");
     const spendId = await assign("s1", "out", { meaning: "spend", amount: 244_000, category_id: "health" }, { at: "2026-10-04T02:00:00.000Z" });
-    const refund = await assign("r1", "in", { meaning: "refund", amount: 250_000, wallet_id: "nice-to-have", link_id: spendId }, { at: "2026-10-05T02:00:00.000Z" });
+    const refund = await assign("r1", "in", { meaning: "refund", amount: 250_000, link_id: spendId }, { at: "2026-10-05T02:00:00.000Z" });
     const lend = await assign("l1", "out", { meaning: "lend", amount: 1_000_000, receivable_id: lan }, { at: "2026-09-15T02:00:00.000Z" });
     const collect = await assign("c1", "in", { meaning: "collect", amount: 600_000, link_id: lend }, { at: "2026-10-01T02:00:00.000Z" });
     const income = await assign("i1", "in", { meaning: "income", amount: 5_000_000 });
-    expect((await call("POST", "/v1/allocate", { income_tx_id: income })).status).toBe(201);
     const view = async (id: number) => (await call("GET", `/v1/transactions/${id}`)).json.data;
 
     expect(await view(spendId)).toMatchObject({ id: spendId, meaning: "spend", link: null, linked_from: [{ id: refund, at: "2026-10-05T02:00:00.000Z", amount: 250_000, meaning: "refund" }] });
@@ -364,7 +353,6 @@ describe("trả cho khoản cho vay, xem hai chiều (change 261005-lien-ket-kho
     expect((await view(refund)).linked_from).toEqual([]);
     expect((await view(lend)).linked_from).toEqual([{ id: collect, at: "2026-10-01T02:00:00.000Z", amount: 600_000, meaning: "collect" }]);
     expect((await view(collect)).link).toMatchObject({ id: lend, amount: 1_000_000, meaning: "lend", receivable_name: "Chị Lan" });
-    // Bút toán nạp ví của lần chia cũng mang link_id về khoản thu, nhưng không phải khoản trả về.
     expect((await view(income)).linked_from).toEqual([]);
 
     expect((await call("POST", `/v1/logs/transactions/${collect}/void`)).status).toBe(200);
@@ -372,51 +360,40 @@ describe("trả cho khoản cho vay, xem hai chiều (change 261005-lien-ket-kho
   });
 });
 
-describe("gán thu nhập, để chia sau (pwa UC-706, ledger UC-103)", () => {
-  const balance = (id: string) => (raw.prepare("SELECT balance FROM v_wallet_balance WHERE wallet_id = ?").get(id) as { balance: number } | undefined)?.balance ?? 0;
+describe("Gán thu nhập không ví, kỳ lương (ingest UC-305 AC-33, ledger UC-103)", () => {
   const snapshot = async () => (await call("GET", "/v1/snapshot")).json.data;
 
-  it("gán mà không gọi /v1/allocate: khoản thu nằm ở ví Thu nhập, chưa chia, còn để chi không đổi; chia sau vẫn được", async () => {
-    const before = await snapshot();
-    expect(before.attention.unallocatedIncome).toEqual({ count: 0, amount: 0, oldestTxId: null });
-    seedLog("u1", "in", 250_000, "vcb-husband", { content: "chuyen khoan nhanh qua Zalo" });
-    const { status, json } = await call("POST", "/v1/logs/u1/assign", { splits: [{ meaning: "income", amount: 250_000 }] });
+  it("UC-305 AC-33: gán thu nhập nguồn mở kỳ → khoản thu không ví, kỳ mở, effects báo kỳ mới; snapshot không còn khoản thu chưa chia", async () => {
+    seedLog("u1", "in", 20_000_000, "vcb-husband", { content: "chuyen khoan nhanh qua Zalo" });
+    const { status, json } = await call("POST", "/v1/logs/u1/assign", { splits: [{ meaning: "income", amount: 20_000_000, income_stream_id: "salary-husband" }] });
     expect(status).toBe(201);
-    const tx = json.data.transactions[0];
-    expect(tx).toMatchObject({ meaning: "income", amount: 250_000, wallet_id: "income" });
-    expect(raw.prepare("SELECT COUNT(*) n FROM allocation_runs").get()).toEqual({ n: 0 });
-    expect(balance("income")).toBe(250_000);
-    expect((await call("GET", `/v1/transactions/${tx.id}`)).json.data.allocated).toBeFalsy();
-
-    const after = await snapshot();
-    expect(after.spendableThisWeek).toBe(before.spendableThisWeek);
-    expect(after.attention.unallocatedIncome).toEqual({ count: 1, amount: 250_000, oldestTxId: tx.id });
-
-    // Chia sau ở chi tiết giao dịch (pwa UC-715): bảng chia thử gửi đúng các trường của khoản này, lần chia ra đúng bảng đó.
-    const preview = await call("POST", "/v1/allocate/preview", { amount: tx.amount, taxable: !!tx.taxable, at: tx.at, account_id: tx.counter_account_id });
-    const allocate = await call("POST", "/v1/allocate", { income_tx_id: tx.id });
-    expect(allocate.status).toBe(201);
-    expect(allocate.json.data.funds).toEqual(preview.json.data.funds);
-    expect(balance("income")).toBe(0);
-    const funds = raw.prepare("SELECT wallet_id, amount FROM transactions WHERE meaning = 'fund' AND batch_id = ?").all(allocate.json.data.batchId) as { wallet_id: string; amount: number }[];
-    expect(funds.map((f) => ({ walletId: f.wallet_id, amount: f.amount }))).toEqual(expect.arrayContaining(preview.json.data.funds));
-    expect(funds.reduce((s, f) => s + f.amount, 0)).toBe(250_000);
-    expect((await snapshot()).attention.unallocatedIncome).toEqual({ count: 0, amount: 0, oldestTxId: null });
+    expect(json.data.transactions[0]).toMatchObject({ meaning: "income", amount: 20_000_000 });
+    expect(json.data.transactions[0]).not.toHaveProperty("wallet_id");
+    expect(json.data.effects.cycle).toMatchObject({ opened: true, startedAt: "2026-09-22T02:00:00.000Z" });
+    expect(raw.prepare("SELECT COUNT(*) n FROM pay_cycles WHERE status = 'active'").get()).toEqual({ n: 1 });
+    expect((await snapshot()).attention).not.toHaveProperty("unallocatedIncome");
   });
 
-  it("snapshot đếm khoản thu chưa chia: bỏ khoản đã chia và khoản đã huỷ, khoản cũ nhất trước", async () => {
-    seedLog("u2", "in", 300_000, "vcb-husband");
-    seedLog("u3", "in", 400_000, "vcb-husband");
-    seedLog("u4", "in", 500_000, "vcb-husband");
-    seedLog("u5", "in", 600_000, "vcb-husband");
-    const ids: number[] = [];
-    for (const [id, amount] of [["u2", 300_000], ["u3", 400_000], ["u4", 500_000], ["u5", 600_000]] as const) {
-      ids.push((await call("POST", `/v1/logs/${id}/assign`, { splits: [{ meaning: "income", amount }] })).json.data.transactions[0].id);
+  it("UC-305 AC-33: opens_cycle: false → không kỳ; transfer_order_id ở thân hay wallet_id / from_wallet_id / wealth_move / allocate / earmark_id ở dòng → 400 model_changed, không ghi gì", async () => {
+    seedLog("u2", "in", 20_000_000, "vcb-husband");
+    const income = { meaning: "income", amount: 20_000_000, income_stream_id: "salary-husband" };
+    for (const [body, fields] of [
+      [{ transfer_order_id: 41, splits: [income] }, ["transfer_order_id"]],
+      [{ splits: [{ ...income, wallet_id: "income" }] }, ["wallet_id"]],
+      [{ splits: [{ ...income, from_wallet_id: "rental-income" }] }, ["from_wallet_id"]],
+      [{ splits: [{ ...income, wealth_move: "fund" }] }, ["wealth_move"]],
+      [{ splits: [{ ...income, allocate: true }] }, ["allocate"]],
+      [{ splits: [{ meaning: "spend", amount: 20_000_000, category_id: "groceries", earmark_id: "tuition" }] }, ["earmark_id"]],
+    ] as const) {
+      const res = await call("POST", "/v1/logs/u2/assign", body);
+      expect(res.status).toBe(400);
+      expect(res.json.error).toMatchObject({ code: "model_changed", fields });
     }
-    raw.prepare("UPDATE transactions SET at = '2026-09-01T02:00:00.000Z' WHERE id = ?").run(ids[2]);
-    expect((await call("POST", "/v1/allocate", { income_tx_id: ids[0] })).status).toBe(201);
-    expect((await call("POST", `/v1/logs/transactions/${ids[1]}/void`)).status).toBe(200);
-    expect((await snapshot()).attention.unallocatedIncome).toEqual({ count: 2, amount: 1_100_000, oldestTxId: ids[2] });
+    expect(raw.prepare("SELECT COUNT(*) n FROM transactions").get()).toEqual({ n: 0 });
+    const res = await call("POST", "/v1/logs/u2/assign", { splits: [{ ...income, opens_cycle: false }] });
+    expect(res.status).toBe(201);
+    expect(res.json.data.effects.cycle).toBeNull();
+    expect(raw.prepare("SELECT COUNT(*) n FROM pay_cycles").get()).toEqual({ n: 0 });
   });
 });
 
@@ -425,8 +402,8 @@ describe("lệch đối soát chỉ là sổ khác giao dịch ngân hàng đã 
     seedLog("r1", "out", 300_000, "vcb-husband");
     raw
       .prepare(
-        `INSERT INTO transactions (log_id, at, amount, meaning, counter_wallet_id, account_id, category_id, week_key, month_key)
-         VALUES ('r1', '2026-09-22T02:00:00.000Z', 250000, 'spend', 'food', 'vcb-husband', 'groceries', '2026-W39', '2026-09')`,
+        `INSERT INTO transactions (log_id, at, amount, meaning, account_id, category_id, week_key, month_key)
+         VALUES ('r1', '2026-09-22T02:00:00.000Z', 250000, 'spend', 'vcb-husband', 'groceries', '2026-W39', '2026-09')`,
       )
       .run();
     raw.prepare("UPDATE bank_logs SET status = 'assigned' WHERE id = 'r1'").run();
@@ -500,10 +477,35 @@ describe("GET/POST /v1/rules", () => {
     expect(patterns).toEqual(expect.arrayContaining(["EAN", "EXE", "EMS", "LUONG THANG"]));
   });
 
-  it("tạo rule mới cho spend", async () => {
-    const { status, json } = await call("POST", "/v1/rules", { match_type: "code", pattern: "ENT", meaning: "spend", wallet_id: "fun-husband", category_id: "entertainment" });
+  it("UC-307 AC-23: tạo rule chi kèm wallet_id / from_wallet_id → 400 model_changed; không ví → 201", async () => {
+    for (const old of [{ wallet_id: "fun-husband" }, { from_wallet_id: "nice-to-have" }]) {
+      const bad = await call("POST", "/v1/rules", { match_type: "code", pattern: "ENT", meaning: "spend", category_id: "entertainment", ...old });
+      expect(bad.status).toBe(400);
+      expect(bad.json.error).toMatchObject({ code: "model_changed", fields: Object.keys(old) });
+    }
+    const { status, json } = await call("POST", "/v1/rules", { match_type: "code", pattern: "ENT", meaning: "spend", category_id: "entertainment" });
     expect(status).toBe(201);
     expect(json.data).toMatchObject({ pattern: "ENT", meaning: "spend" });
+    expect(json.data).not.toHaveProperty("wallet_id");
+  });
+
+  it("UC-307 AC-23: rule chi cũ có wallet_id mà không category_id → log chờ; PATCH { wallet_id } → 400 model_changed; PATCH { category_id } → lưu, log sau khớp thành khoản chi không ví", async () => {
+    raw.prepare("UPDATE rules SET category_id = NULL WHERE pattern = 'EAN'").run();
+    const id = (raw.prepare("SELECT id FROM rules WHERE pattern = 'EAN'").get() as { id: number }).id;
+    const hook = (logId: string, at: string) => ({ id: logId, gateway: "Vietcombank", transactionDate: at, accountNumber: "0011xxxxxxx", code: "EAN", content: "EAN AN TRUA", transferType: "out", transferAmount: 90_000, referenceCode: logId });
+    const ingest = (logId: string, at: string) => ingestLog(env.DB, parseWebhookPayload(hook(logId, at)), "webhook", new Date("2026-09-22T05:00:00.000Z"));
+    await ingest("e1", "2026-09-22 09:00:00");
+    expect(raw.prepare("SELECT status FROM bank_logs WHERE id = 'e1'").get()).toEqual({ status: "pending" });
+
+    const bad = await call("PATCH", `/v1/settings/rules/${id}`, { wallet_id: "food" });
+    expect(bad.status).toBe(400);
+    expect(bad.json.error?.code).toBe("model_changed");
+    expect((await call("PATCH", `/v1/settings/rules/${id}`, { category_id: "eating-out" })).status).toBe(200);
+    await ingest("e2", "2026-09-22 11:00:00");
+    expect(raw.prepare("SELECT meaning, category_id FROM transactions WHERE log_id = 'e2'").get()).toEqual({
+      meaning: "spend",
+      category_id: "eating-out",
+    });
   });
 
   it("tạo rule income mà không is_salary → từ chối (luật 6)", async () => {
@@ -524,15 +526,15 @@ describe("Gán: nối log vào khoản đã nhập tay (261017-webhook-truoc-moc
     (
       raw
         .prepare(
-          `INSERT INTO transactions (at, amount, meaning, counter_wallet_id, account_id, category_id, week_key, month_key, source, note)
-           VALUES (?, ?, ?, 'food', 'vcb-husband', 'groceries', '2026-W39', '2026-09', 'manual', ?) RETURNING id`,
+          `INSERT INTO transactions (at, amount, meaning, account_id, category_id, week_key, month_key, source, note)
+           VALUES (?, ?, ?, 'vcb-husband', 'groceries', '2026-W39', '2026-09', 'manual', ?) RETURNING id`,
         )
         .get(at, amount, meaning, note) as { id: number }
     ).id;
-  const txRow = (id: number) => raw.prepare("SELECT status, log_id, log_id_2, counter_wallet_id, category_id, source, note FROM transactions WHERE id = ?").get(id);
+  const txRow = (id: number) => raw.prepare("SELECT status, log_id, log_id_2, category_id, source, note FROM transactions WHERE id = ?").get(id);
   const logStatus = (id: string) => (raw.prepare("SELECT status FROM bank_logs WHERE id = ?").get(id) as { status: string }).status;
 
-  it("UC-305 AC-27: log chờ 500.000, khoản tay khớp → hiện trong 'Đã nhập tay?'; Nối → log đã gán, giao dịch giữ ví / hạng mục; gỡ gán → giao dịch còn, log chờ lại", async () => {
+  it("UC-305 AC-27: log chờ 500.000, khoản tay khớp → hiện trong 'Đã nhập tay?' (không trường ví); Nối → log đã gán, giao dịch giữ hạng mục; gỡ gán → giao dịch còn, log chờ lại", async () => {
     const hit = manual(500_000, "2026-09-21T13:00:00.000Z");
     const other = manual(300_000, "2026-09-22T01:00:00.000Z");
     manual(500_000, "2026-09-18T01:00:00.000Z"); // quá 1 ngày
@@ -544,8 +546,9 @@ describe("Gán: nối log vào khoản đã nhập tay (261017-webhook-truoc-moc
 
     const list = await call("GET", "/v1/logs?status=pending");
     expect(list.json.data[0].manual_matches).toEqual([
-      expect.objectContaining({ id: hit, at: "2026-09-21T13:00:00.000Z", amount: 500_000, meaning: "spend", category_id: "groceries", note: "đi chợ" }),
+      { id: hit, at: "2026-09-21T13:00:00.000Z", amount: 500_000, meaning: "spend", category_id: "groceries", account_id: "vcb-husband", counter_account_id: null, note: "đi chợ" },
     ]);
+    expect(list.json.data[0]).not.toHaveProperty("order_matches");
 
     const wrong = await call("POST", "/v1/logs/m1/link", { transaction_id: other });
     expect(wrong.status).toBe(409);
@@ -555,7 +558,7 @@ describe("Gán: nối log vào khoản đã nhập tay (261017-webhook-truoc-moc
     const linked = await call("POST", "/v1/logs/m1/link", { transaction_id: hit });
     expect(linked.status).toBe(200);
     expect(linked.json.data).toMatchObject({ log: { id: "m1", status: "assigned" }, transaction: { id: hit, log_id: "m1" } });
-    expect(txRow(hit)).toEqual({ status: "active", log_id: "m1", log_id_2: null, counter_wallet_id: "food", category_id: "groceries", source: "manual", note: "đi chợ" });
+    expect(txRow(hit)).toEqual({ status: "active", log_id: "m1", log_id_2: null, category_id: "groceries", source: "manual", note: "đi chợ" });
     expect((await call("GET", "/v1/logs?status=pending")).json.data).toEqual([]);
     // Nối lần hai: log không còn chờ.
     expect((await call("POST", "/v1/logs/m1/link", { transaction_id: hit })).status).toBe(409);
@@ -578,22 +581,120 @@ describe("Gán: nối log vào khoản đã nhập tay (261017-webhook-truoc-moc
 });
 
 describe("Gán lãi tiền gửi qua REST (261018-lai-tien-gui)", () => {
-  it("UC-305: split { meaning: income, interest: true, wallet_id } → 201, khoản thu + một fund vào ví đó, 0 lệnh chuyển; ví Thu nhập → 400 invalid_wallet; log tiền ra → 400 invalid_input; không ghi gì khi lỗi", async () => {
+  it("UC-305 AC-28: split { meaning: income, interest: true } → 201, khoản thu Thu nhập thụ động, không fund; kèm wallet_id → 400 model_changed; log tiền ra → 400 invalid_input; không ghi gì khi lỗi", async () => {
     seedLog("li", "in", 37, "vcb-husband", { content: "BankAPINotify" });
     seedLog("lo", "out", 37, "vcb-husband");
-    const bad = await call("POST", "/v1/logs/li/assign", { splits: [{ meaning: "income", amount: 37, interest: true, wallet_id: "income" }] });
+    const bad = await call("POST", "/v1/logs/li/assign", { splits: [{ meaning: "income", amount: 37, interest: true, wallet_id: "nice-to-have" }] });
     expect(bad.status).toBe(400);
-    expect(bad.json.error?.code).toBe("invalid_wallet");
-    const out = await call("POST", "/v1/logs/lo/assign", { splits: [{ meaning: "income", amount: 37, interest: true, wallet_id: "nice-to-have" }] });
+    expect(bad.json.error?.code).toBe("model_changed");
+    const out = await call("POST", "/v1/logs/lo/assign", { splits: [{ meaning: "income", amount: 37, interest: true }] });
     expect(out.status).toBe(400);
     expect(out.json.error?.code).toBe("invalid_input");
     expect(raw.prepare("SELECT COUNT(*) n FROM transactions").get()).toEqual({ n: 0 });
 
-    const { status, json } = await call("POST", "/v1/logs/li/assign", { splits: [{ meaning: "income", amount: 37, interest: true, wallet_id: "nice-to-have" }] });
+    const { status, json } = await call("POST", "/v1/logs/li/assign", { splits: [{ meaning: "income", amount: 37, interest: true }] });
     expect(status).toBe(201);
     const id = json.data.transactions[0].id;
-    expect(raw.prepare("SELECT wallet_id, amount FROM transactions WHERE meaning = 'fund' AND link_id = ?").all(id)).toEqual([{ wallet_id: "nice-to-have", amount: 37 }]);
-    expect(raw.prepare("SELECT COUNT(*) n FROM transfer_orders").get()).toEqual({ n: 0 });
+    expect(json.data.transactions[0]).toMatchObject({ meaning: "income", counter_account_id: "vcb-husband" });
+    expect(raw.prepare("SELECT COUNT(*) n FROM transactions WHERE meaning = 'fund'").get()).toEqual({ n: 0 });
     expect(raw.prepare("SELECT report_class FROM transaction_report_classes WHERE transaction_id = ?").get(id)).toEqual({ report_class: "passive_income" });
+  });
+});
+
+describe("Gán: tài khoản riêng tư (access UC-504)", () => {
+  it("UC-504 AC-7: GET /v1/logs không trả log chờ của tài khoản riêng tư của người khác; gán log đó → 403 private_account", async () => {
+    raw.prepare("UPDATE accounts SET private = 1 WHERE id = 'vcb-wife'").run();
+    seedLog("rieng", "out", 120_000, "vcb-wife");
+    seedLog("chung", "out", 50_000, "vcb-husband");
+    const asHusband = async (method: string, path: string, body?: unknown) => {
+      const res = await app.request(
+        path,
+        { method, headers: { Authorization: "Bearer tok", "X-Member-Id": "husband", ...(body !== undefined ? { "Content-Type": "application/json" } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) },
+        env,
+      );
+      return { status: res.status, json: (await res.json()) as Json };
+    };
+    expect((await asHusband("GET", "/v1/logs?status=pending")).json.data.map((l: { id: string }) => l.id)).toEqual(["chung"]);
+    const res = await asHusband("POST", "/v1/logs/rieng/assign", { splits: [{ meaning: "spend", amount: 120_000, category_id: "groceries" }] });
+    expect(res.status).toBe(403);
+    expect(res.json.error?.code).toBe("private_account");
+    expect(raw.prepare("SELECT status FROM bank_logs WHERE id = 'rieng'").get()).toEqual({ status: "pending" });
+  });
+});
+
+describe("Log chờ của tài khoản riêng tư ở hộ mẫu P (access UC-504, ADR-133)", () => {
+  let db: ReturnType<typeof householdP>;
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(P_NOW);
+    db = householdP();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const count = (sql: string) => (db.prepare(sql).get() as { n: number }).n;
+  const statusOf = (id: string) => (db.prepare("SELECT status FROM bank_logs WHERE id = ?").get(id) as { status: string }).status;
+
+  it("UC-504 AC-13: chồng bỏ qua / nối / ghép cặp log của VCB (vợ) → 403 private_account, log vẫn chờ, không ghi gì; vợ bỏ qua → 200 kèm nhật ký log.ignore", async () => {
+    const husband = client(db, "husband");
+    const txBefore = count("SELECT COUNT(*) AS n FROM transactions");
+    const auditBefore = count("SELECT COUNT(*) AS n FROM audit_log");
+    for (const [path, body] of [
+      ["/v1/logs/L1/ignore", undefined],
+      ["/v1/logs/L1/link", { transaction_id: 101 }],
+      ["/v1/logs/pair", { log_a: "L2", log_b: "L1" }],
+    ] as const) {
+      const res = await husband("POST", path, body);
+      expect([res.status, res.json.error?.code], path).toEqual([403, "private_account"]);
+    }
+    expect([statusOf("L1"), statusOf("L2")]).toEqual(["pending", "pending"]);
+    expect(count("SELECT COUNT(*) AS n FROM transactions")).toBe(txBefore);
+    expect(count("SELECT COUNT(*) AS n FROM audit_log")).toBe(auditBefore);
+
+    const res = await client(db, "wife")("POST", "/v1/logs/L1/ignore");
+    expect(res.status).toBe(200);
+    expect(statusOf("L1")).toBe("ignored");
+    expect(db.prepare("SELECT member_id, action, target, detail FROM audit_log ORDER BY id DESC LIMIT 1").get()).toEqual({
+      member_id: "wife",
+      action: "log.ignore",
+      target: "log:L1",
+      detail: null,
+    });
+  });
+
+  it("UC-504 AC-17: chồng gán chuyển khoản sang VCB (vợ) hay gắn chân hai vào #110 → 403 private_account; gợi ý trỏ VCB (vợ) bị bỏ; vợ gán L8 → gắn vào #110", async () => {
+    db.exec(`
+      INSERT INTO bank_logs (id, at, amount, direction, account_id, content, status) VALUES
+        ('L7', '2026-11-11T03:00:00.000Z', 2000000, 'out', 'vcb-wife', 'CK cho chong', 'pending'),
+        ('L8', '2026-11-11T03:05:00.000Z', 2000000, 'in', 'vcb-husband', 'CK tu vo', 'pending');
+      INSERT INTO transactions (id, log_id, at, amount, meaning, account_id, counter_account_id, by_member_id, week_key, month_key, source) VALUES
+        (110, 'L7', '2026-11-11T03:00:00.000Z', 2000000, 'transfer', 'vcb-wife', 'vcb-husband', 'wife', '2026-W46', '2026-11', 'sepay');
+      UPDATE bank_logs SET status = 'assigned' WHERE id = 'L7';
+      INSERT INTO rules (priority, match_type, pattern, meaning, is_salary, account_id, counter_account_id) VALUES
+        (5, 'content', 'CK DI', 'transfer', 0, 'vcb-husband', 'vcb-wife');
+    `);
+    const husband = client(db, "husband");
+    const txBefore = count("SELECT COUNT(*) AS n FROM transactions");
+
+    const toWife = await husband("POST", "/v1/logs/L2/assign", { splits: [{ meaning: "transfer", amount: 3_000_000, other_account_id: "vcb-wife" }] });
+    expect([toWife.status, toWife.json.error?.code]).toEqual([403, "private_account"]);
+    const secondLeg = await husband("POST", "/v1/logs/L8/assign", { splits: [{ meaning: "transfer", amount: 2_000_000, other_account_id: "vcb-wife" }] });
+    expect([secondLeg.status, secondLeg.json.error?.code]).toEqual([403, "private_account"]);
+    expect([statusOf("L2"), statusOf("L8")]).toEqual(["pending", "pending"]);
+    expect(db.prepare("SELECT log_id_2 FROM transactions WHERE id = 110").get()).toEqual({ log_id_2: null });
+    expect(count("SELECT COUNT(*) AS n FROM transactions")).toBe(txBefore);
+
+    const list = await husband("GET", "/v1/logs?status=pending");
+    expect(list.status).toBe(200);
+    expect(list.json.data.map((l: { id: string }) => l.id)).toEqual(expect.arrayContaining(["L2", "L8"]));
+    expect(list.json.data.filter((l: { suggestion: { other_account_id?: string } | null }) => l.suggestion?.other_account_id === "vcb-wife")).toEqual([]);
+    // Vợ vẫn thấy gợi ý chân hai của #110.
+    const wife = client(db, "wife");
+    const wifeList = await wife("GET", "/v1/logs?status=pending");
+    expect(wifeList.json.data.find((l: { id: string }) => l.id === "L8").suggestion).toMatchObject({ other_account_id: "vcb-wife", attach_to_tx: 110 });
+
+    const attached = await wife("POST", "/v1/logs/L8/assign", { splits: [{ meaning: "transfer", amount: 2_000_000, other_account_id: "vcb-wife" }] });
+    expect(attached.status).toBe(201);
+    expect(attached.json.data.attached).toBe(true);
+    expect(db.prepare("SELECT log_id_2 FROM transactions WHERE id = 110").get()).toEqual({ log_id_2: "L8" });
   });
 });

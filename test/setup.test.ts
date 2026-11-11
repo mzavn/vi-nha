@@ -6,7 +6,6 @@ import { DomainError } from "../src/domain/types";
 import type { Env } from "../src/env";
 import { app } from "../src/index";
 import { createHousehold, parseSetup } from "../src/services/setup";
-import { isIconName } from "../web/src/ui/icon-names";
 import { asD1, openDb, readSql } from "./helpers/d1-sqlite";
 
 let raw: DatabaseSync;
@@ -23,7 +22,7 @@ beforeEach(() => {
   env = { DB: asD1(raw), API_TOKEN: "tok", APP_PASSWORD: "mat-khau-chung" } as Env;
 });
 
-type Json = { ok: boolean; data: unknown; error?: { code: string; message: string; field?: string } };
+type Json = { ok: boolean; data: unknown; error?: { code: string; message: string; field?: string; fields?: string[] } };
 const IP = "203.0.113.7";
 
 async function request(method: string, path: string, body?: unknown, headers: Record<string, string> = {}) {
@@ -46,17 +45,40 @@ const setupBody = (over: Record<string, unknown> = {}) => ({
     { name: "Tiền mặt", kind: "cash", owner: null },
     { name: "VCB của Bố", kind: "bank", bank: "Vietcombank", owner: 0 },
   ],
-  template: { taxable: true, must: ["food", "housing", "transport", "utilities"] },
   ...over,
 });
 
 const count = (table: string) => Number(raw.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n);
+const all = (sql: string) => raw.prepare(sql).all() as Record<string, unknown>[];
 const nothingCreated = () => {
   expect(count("members")).toBe(0);
   expect(count("accounts")).toBe(0);
-  expect(count("wallets WHERE id <> 'loan-interest'")).toBe(0); // ví hệ thống "Lãi vay" có sẵn từ schema
+  expect(count("category_groups")).toBe(0);
+  expect(count("categories WHERE id <> 'loan-interest'")).toBe(0); // danh mục hệ thống "Lãi vay" có sẵn từ schema
+  expect(count("income_streams")).toBe(0);
+  expect(count("reserve_goals")).toBe(0);
   expect(raw.prepare("SELECT v FROM config WHERE k = 'setup_done'").get()).toBeUndefined();
+  expect(raw.prepare("SELECT v FROM config WHERE k = 'payday_day'").get()).toBeUndefined();
 };
+/** Không còn bảng ví / luật nạp / phần giữ riêng; thiết lập không ghi `conversion_state` (chỉ nhà lên từ 1.x mới có). */
+const noWallets = () => {
+  expect(all("SELECT name FROM sqlite_master WHERE name IN ('wallets', 'allocations', 'earmarks', 'earmark_lines')")).toEqual([]);
+  expect(raw.prepare("SELECT v FROM config WHERE k = 'conversion_state'").get()).toBeUndefined();
+};
+const goals = () => all("SELECT id, name, account_id, target_amount, target_pct, monthly_amount, repeat_months, due_date FROM reserve_goals ORDER BY sort, id");
+const groups = () => all("SELECT id, name, essential, cycle_limit FROM category_groups ORDER BY sort");
+const auth = { Authorization: "Bearer tok" };
+const api = (method: string, path: string, body?: unknown) => request(method, path, body, auth);
+/** Nhập thu nhập nguồn "Lương" (bước Nhập của app) vào tài khoản `account`. */
+const salary = (account: string, amount = 20_000_000) => api("POST", "/v1/transactions", { meaning: "income", amount, account_id: account, income_stream_id: "luong" });
+type Task = { id: number; kind: string; amount: number; goal: { id: string; name: string } | null; toPocket: string | null };
+type Snap = {
+  pockets: Record<"savings" | "reserve" | "operating" | "outside", { total: number; accounts: { id: string }[] }>;
+  paySetup: { hasCycleStream: boolean };
+  payCycle: { tasks: Task[] } | null;
+};
+const snap = async () => (await api("GET", "/v1/snapshot")).json.data as Snap;
+const tasks = async () => (await snap()).payCycle!.tasks.map((t) => [t.kind, t.goal?.name ?? t.toPocket, t.amount]);
 const loginFailures = () => raw.prepare("SELECT failures FROM auth_failures WHERE scope = 'login' AND ip = ?").get(IP);
 
 describe("UC-510 thiết lập nhà lần đầu", () => {
@@ -97,8 +119,21 @@ describe("UC-510 thiết lập nhà lần đầu", () => {
     });
   });
 
-  it("AC-3: đúng mật khẩu, body hợp lệ → 201 chủ hộ + cookie của chủ hộ; thành viên theo thứ tự, mật khẩu riêng lưu băm, tài khoản, setup_done, nhật ký setup.done", async () => {
-    const res = await request("POST", "/v1/setup", setupBody());
+  it("AC-3: đúng mật khẩu, body hợp lệ → 201 chủ hộ + cookie của chủ hộ; thành viên theo thứ tự, mật khẩu riêng lưu băm, tài khoản theo ngăn đã xác nhận, ngày lương, % Tích luỹ, nhóm danh mục, nguồn Lương mở kỳ, không ví / luật nạp, setup_done, nhật ký setup.done", async () => {
+    const res = await request(
+      "POST",
+      "/v1/setup",
+      setupBody({
+        accounts: [
+          { name: "Tiền mặt", kind: "cash", owner: null },
+          { name: "VCB của Bố", kind: "bank", bank: "Vietcombank", owner: 0, pocket: "reserve" },
+        ],
+        payday_day: 5,
+        savings_pct: 20,
+        groups: ["utilities", "housing"],
+        taxable: true,
+      }),
+    );
     expect(res.status).toBe(201);
     expect(res.json.data).toEqual({ member: { id: "bo", name: "Bố" } });
     const members = raw.prepare("SELECT id, name, role, active, password_hash, session_gen FROM members ORDER BY rowid").all();
@@ -108,12 +143,42 @@ describe("UC-510 thiết lập nhà lần đầu", () => {
     ]);
     expect(members[0]!.password_hash).toMatch(/^pbkdf2-sha256\$20000\$[A-Za-z0-9_-]{22}\$[A-Za-z0-9_-]{43}$/);
     expect(members[1]!.password_hash).toBeNull();
-    expect(raw.prepare("SELECT id, name, kind, bank, owner_member_id, spendable FROM accounts ORDER BY rowid").all()).toEqual([
-      { id: "tien-mat", name: "Tiền mặt", kind: "cash", bank: null, owner_member_id: null, spendable: 1 },
-      { id: "vcb-cua-bo", name: "VCB của Bố", kind: "bank", bank: "Vietcombank", owner_member_id: "bo", spendable: 1 },
+    expect(all("SELECT id, name, kind, bank, owner_member_id, pocket, pocket_confirmed FROM accounts ORDER BY rowid")).toEqual([
+      { id: "tien-mat", name: "Tiền mặt", kind: "cash", bank: null, owner_member_id: null, pocket: "operating", pocket_confirmed: 1 },
+      { id: "vcb-cua-bo", name: "VCB của Bố", kind: "bank", bank: "Vietcombank", owner_member_id: "bo", pocket: "reserve", pocket_confirmed: 1 },
     ]);
+    expect(all("SELECT k, v FROM config WHERE k IN ('payday_day', 'savings_pct') ORDER BY k")).toEqual([
+      { k: "payday_day", v: "5" },
+      { k: "savings_pct", v: "20" },
+    ]);
+    expect(groups()).toEqual([
+      { id: "nha-o", name: "Nhà ở", essential: 1, cycle_limit: null },
+      { id: "dien-nuoc", name: "Điện nước", essential: 1, cycle_limit: null },
+      { id: "y-te", name: "Y tế", essential: 1, cycle_limit: null },
+      { id: "mua-sam", name: "Mua sắm", essential: 0, cycle_limit: null },
+    ]);
+    expect(all("SELECT id, name, group_id FROM categories WHERE id <> 'loan-interest' ORDER BY sort")).toEqual([
+      { id: "housing", name: "Nhà ở", group_id: "nha-o" },
+      { id: "utilities", name: "Điện nước mạng", group_id: "dien-nuoc" },
+      { id: "health", name: "Y tế", group_id: "y-te" },
+      { id: "lending", name: "Cho vay / trả hộ", group_id: null },
+      { id: "debt-payment", name: "Trả nợ", group_id: null },
+      { id: "shopping", name: "Mua sắm", group_id: "mua-sam" },
+    ]);
+    expect(all("SELECT id, name, pocket, opens_cycle, active FROM income_streams")).toEqual([{ id: "luong", name: "Lương", pocket: null, opens_cycle: 1, active: 1 }]);
+    noWallets();
     expect(raw.prepare("SELECT v FROM config WHERE k = 'setup_done'").get()?.v).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
-    expect(raw.prepare("SELECT member_id, via, action FROM audit_log").all()).toEqual([{ member_id: "bo", via: "session", action: "setup.done" }]);
+    expect(all("SELECT member_id, via, action FROM audit_log")).toEqual([{ member_id: "bo", via: "session", action: "setup.done" }]);
+    expect(JSON.parse(String(raw.prepare("SELECT detail FROM audit_log").get()?.detail))).toEqual({
+      members: 2,
+      accounts: 2,
+      pockets: { savings: 0, reserve: 1, operating: 1, outside: 0 },
+      payday_day: 5,
+      savings_pct: 20,
+      groups: ["housing", "utilities"],
+      goals: 0,
+      taxable: true,
+    });
     // Cookie của chủ hộ dùng được ngay; chủ hộ có mật khẩu riêng nên vào bằng mật khẩu riêng.
     expect(res.cookie).toMatch(/^pf_session=bo\.p\.0\.\d+\.[A-Za-z0-9_-]+$/);
     const session = await request("GET", "/v1/session", undefined, { Cookie: res.cookie! });
@@ -150,11 +215,221 @@ describe("UC-510 thiết lập nhà lần đầu", () => {
       ["ngân hàng ngoài danh mục", { accounts: [{ name: "TK", kind: "cash", owner: null }, { name: "NH lạ", kind: "bank", bank: "KhongCo", owner: null }] }, "accounts.1.bank"],
       ["owner ngoài khoảng chỉ số", { accounts: [{ name: "TK", kind: "cash", owner: null }, { name: "TK 2", kind: "cash", owner: 2 }] }, "accounts.1.owner"],
       ["owner âm", { accounts: [{ name: "TK", kind: "cash", owner: -1 }] }, "accounts.0.owner"],
-      ["ví Must ngoài danh sách", { template: { taxable: false, must: ["food", "garden"] } }, "template.must"],
-      ["ví Must trùng", { template: { taxable: false, must: ["food", "food"] } }, "template.must"],
+      ["ngăn lạ", { accounts: [{ name: "TK", kind: "cash", owner: null, pocket: "spend" }] }, "accounts.0.pocket"],
+      ["ngày lương ngoài 1–31", { payday_day: 32 }, "payday_day"],
+      ["ngày lương không nguyên", { payday_day: 10.5 }, "payday_day"],
+      ["% Tích luỹ 0", { savings_pct: 0 }, "savings_pct"],
+      ["% Tích luỹ hơn 100", { savings_pct: 101 }, "savings_pct"],
+      ["taxable không phải true / false", { taxable: "có" }, "taxable"],
+      ["nhóm lạ", { groups: ["wallet"] }, "groups"],
+      ["nhóm trùng", { groups: ["food", "food"] }, "groups"],
+      ["groups không phải mảng", { groups: "food" }, "groups"],
+      ["goals không phải mảng", { goals: { name: "Học phí" } }, "goals"],
+      ["hơn 10 mục tiêu", { goals: Array.from({ length: 11 }, (_, i) => ({ name: `Mục ${i + 1}`, monthly_amount: 100_000 })) }, "goals"],
+      ["tên mục tiêu trống", { goals: [{ name: " ", monthly_amount: 100_000 }] }, "goals.0.name"],
+      ["tên mục tiêu dài hơn 60", { goals: [{ name: "A".repeat(61), monthly_amount: 100_000 }] }, "goals.0.name"],
+      ["hai mục tiêu cùng mã", { goals: [{ name: "Học phí", monthly_amount: 100_000 }, { name: "hoc phi", monthly_amount: 100_000 }] }, "goals.1.name"],
+      ["số mỗi tháng ≤ 0", { goals: [{ name: "Học phí", monthly_amount: 0 }] }, "goals.0.monthly_amount"],
+      ["số mỗi tháng thiếu", { goals: [{ name: "Học phí" }] }, "goals.0.monthly_amount"],
+      ["số mỗi tháng quá 1e12", { goals: [{ name: "Học phí", monthly_amount: 1e12 + 1 }] }, "goals.0.monthly_amount"],
+      ["mấy tháng một lần ngoài 1–12", { goals: [{ name: "Học phí", monthly_amount: 100_000, repeat_months: 13 }] }, "goals.0.repeat_months"],
+      ["hạn sai dạng", { goals: [{ name: "Học phí", monthly_amount: 100_000, due_date: "2027-02-30" }] }, "goals.0.due_date"],
+      ["tài khoản của mục tiêu ngoài danh sách", { goals: [{ name: "Học phí", monthly_amount: 100_000, account: 5 }] }, "goals.0.account"],
+      ["tài khoản của mục tiêu không phải chỉ số", { goals: [{ name: "Học phí", monthly_amount: 100_000, account: "vcb-cua-bo" }] }, "goals.0.account"],
     ];
     it.each(cases)("%s", async (_title, over, field) => {
       const res = await request("POST", "/v1/setup", setupBody(over));
+      expect(res.status).toBe(400);
+      expect(res.json.error).toMatchObject({ code: "invalid_input", field });
+      nothingCreated();
+    });
+
+    it("thân còn `template` của bộ ví mẫu cũ → 400 model_changed, không tạo gì", async () => {
+      const res = await request("POST", "/v1/setup", setupBody({ template: { taxable: true, must: ["food"] } }));
+      expect(res.status).toBe(400);
+      expect(res.json.error).toMatchObject({ code: "model_changed", fields: ["template"] });
+      nothingCreated();
+    });
+  });
+
+  it("AC-9: ba ngăn đủ — ngăn theo thân, nhóm Ăn uống / Đi lại / Y tế / Mua sắm, Học phí và Thuế chưa gắn tài khoản (thân không gửi account), không giữ riêng Tích luỹ; snapshot ba ngăn, có nguồn mở kỳ; lương 20.000.000 vào tài khoản chính → kỳ mở, ① 3.000.000", async () => {
+    const res = await request(
+      "POST",
+      "/v1/setup",
+      setupBody({
+        accounts: [
+          { name: "VCB chính", kind: "bank", bank: "Vietcombank", owner: null, pocket: "operating" },
+          { name: "Techcom tích luỹ", kind: "bank", bank: "Techcombank", owner: null, pocket: "savings" },
+          { name: "MB tiết kiệm", kind: "bank", bank: "MBBank", owner: null, pocket: "reserve" },
+          { name: "Tiền mặt", kind: "cash", owner: null },
+          { name: "Thẻ VIB", kind: "credit", bank: "VIB", owner: 0 },
+        ],
+        payday_day: 10,
+        savings_pct: 15,
+        groups: ["food", "transport"],
+        taxable: true,
+        goals: [{ name: "Học phí", monthly_amount: 2_000_000, repeat_months: 3 }],
+      }),
+    );
+    expect(res.status).toBe(201);
+    expect(all("SELECT id, pocket, pocket_confirmed FROM accounts ORDER BY rowid")).toEqual([
+      { id: "vcb-chinh", pocket: "operating", pocket_confirmed: 1 },
+      { id: "techcom-tich-luy", pocket: "savings", pocket_confirmed: 1 },
+      { id: "mb-tiet-kiem", pocket: "reserve", pocket_confirmed: 1 },
+      { id: "tien-mat", pocket: "operating", pocket_confirmed: 1 },
+      { id: "the-vib", pocket: "operating", pocket_confirmed: 1 },
+    ]);
+    expect(groups()).toEqual([
+      { id: "an-uong", name: "Ăn uống", essential: 1, cycle_limit: null },
+      { id: "di-lai", name: "Đi lại", essential: 1, cycle_limit: null },
+      { id: "y-te", name: "Y tế", essential: 1, cycle_limit: null },
+      { id: "mua-sam", name: "Mua sắm", essential: 0, cycle_limit: null },
+    ]);
+    expect(all("SELECT name FROM categories WHERE group_id = 'an-uong' ORDER BY sort")).toEqual([{ name: "Đi chợ / nấu ăn" }, { name: "Ăn ngoài" }]);
+    expect(goals()).toEqual([
+      { id: "hoc-phi", name: "Học phí", account_id: null, target_amount: 6_000_000, target_pct: null, monthly_amount: 2_000_000, repeat_months: 3, due_date: null },
+      { id: "thue", name: "Thuế", account_id: null, target_amount: null, target_pct: 10, monthly_amount: null, repeat_months: null, due_date: null },
+    ]);
+    noWallets();
+    const s = await snap();
+    expect(s.pockets.operating.accounts.map((a) => a.id).sort()).toEqual(["the-vib", "tien-mat", "vcb-chinh"]);
+    expect(s.paySetup.hasCycleStream).toBe(true);
+    expect(s.payCycle).toBeNull();
+    const income = await salary("vcb-chinh");
+    expect(income.status).toBe(201);
+    expect(income.json.data).toMatchObject({ effects: { cycle: { opened: true } } });
+    expect(await tasks()).toContainEqual(["savings", "savings", 3_000_000]);
+  });
+
+  it("AC-10: nhà một tài khoản — tài khoản ở Vận hành, không giữ riêng; Học phí chưa gắn tài khoản; lương 20.000.000 → kỳ mở với ① 2.000.000, không có ② (Học phí chưa gắn)", async () => {
+    const res = await request(
+      "POST",
+      "/v1/setup",
+      setupBody({ accounts: [{ name: "VCB", kind: "bank", bank: "Vietcombank", owner: null }], goals: [{ name: "Học phí", monthly_amount: 2_000_000 }] }),
+    );
+    expect(res.status).toBe(201);
+    expect(all("SELECT id, pocket, pocket_confirmed FROM accounts")).toEqual([{ id: "vcb", pocket: "operating", pocket_confirmed: 1 }]);
+    expect(goals()).toEqual([
+      { id: "hoc-phi", name: "Học phí", account_id: null, target_amount: 2_000_000, target_pct: null, monthly_amount: 2_000_000, repeat_months: 1, due_date: null },
+    ]);
+    noWallets();
+    expect((await salary("vcb")).status).toBe(201);
+    const list = await tasks();
+    expect(list).toContainEqual(["savings", "savings", 2_000_000]);
+    expect(list.filter(([kind]) => kind === "goal")).toEqual([]);
+    const { pockets } = await snap();
+    expect([pockets.savings.total, pockets.savings.accounts, pockets.operating.total]).toEqual([0, [], 20_000_000]);
+  });
+
+  describe("AC-11: mặc định và lỗi", () => {
+    it("không gửi ngày lương, % Tích luỹ, nhóm, mục tiêu, ngăn → ngày lương 10, % Tích luỹ 10, chỉ nhóm Y tế và Mua sắm, mọi tài khoản Vận hành", async () => {
+      expect((await request("POST", "/v1/setup", setupBody())).status).toBe(201);
+      expect(all("SELECT k, v FROM config WHERE k IN ('payday_day', 'savings_pct') ORDER BY k")).toEqual([
+        { k: "payday_day", v: "10" },
+        { k: "savings_pct", v: "10" },
+      ]);
+      expect(groups().map((g) => g.name)).toEqual(["Y tế", "Mua sắm"]);
+      expect(all("SELECT pocket FROM accounts")).toEqual([{ pocket: "operating" }, { pocket: "operating" }]);
+      expect(count("reserve_goals")).toBe(0);
+    });
+
+    const goal = (name: string) => ({ name, monthly_amount: 100_000 });
+    const cases: [string, Record<string, unknown>, string, string][] = [
+      ["groups trùng", { groups: ["food", "food"] }, "invalid_input", "groups"],
+      ["groups lạ", { groups: ["wallet"] }, "invalid_input", "groups"],
+      ["savings_pct 0", { savings_pct: 0 }, "invalid_input", "savings_pct"],
+      ["ngăn “spend”", { accounts: [{ name: "TK", kind: "cash", owner: null, pocket: "spend" }] }, "invalid_input", "accounts.0.pocket"],
+      ["11 mục tiêu", { goals: Array.from({ length: 11 }, (_, i) => goal(`Mục ${i + 1}`)) }, "invalid_input", "goals"],
+      ["có thuế kèm mục tiêu tên Thuế", { taxable: true, goals: [goal("Thuế")] }, "invalid_input", "goals.0.name"],
+      ["có template", { template: { taxable: false, must: [] } }, "model_changed", ""],
+    ];
+    it.each(cases)("%s → 400, không tạo gì", async (_title, over, code, field) => {
+      const res = await request("POST", "/v1/setup", setupBody(over));
+      expect(res.status).toBe(400);
+      expect(res.json.error?.code).toBe(code);
+      if (field) expect(res.json.error?.field).toBe(field);
+      nothingCreated();
+    });
+
+    it("tên “Giữ cho Tích luỹ” không còn đặc biệt: nhà một tài khoản tạo được mục tiêu tên đó, chưa gắn tài khoản", async () => {
+      const res = await request("POST", "/v1/setup", setupBody({ accounts: [{ name: "VCB", kind: "bank", bank: "Vietcombank", owner: null }], goals: [goal("Giữ cho Tích luỹ")] }));
+      expect(res.status).toBe(201);
+      expect(all("SELECT id, account_id FROM reserve_goals")).toEqual([{ id: "giu-cho-tich-luy", account_id: null }]);
+    });
+  });
+
+  describe("AC-13: tài khoản Vận hành không gắn được mục tiêu", () => {
+    it("thẻ tín dụng nhập trước, rồi tiền mặt, không gửi ngăn → cả hai Vận hành; mục tiêu Thuế chưa gắn tài khoản", async () => {
+      const res = await request(
+        "POST",
+        "/v1/setup",
+        setupBody({
+          accounts: [
+            { name: "Thẻ VIB", kind: "credit", bank: "VIB", owner: null },
+            { name: "Tiền mặt", kind: "cash", owner: null },
+          ],
+          taxable: true,
+        }),
+      );
+      expect(res.status).toBe(201);
+      expect(all("SELECT id, pocket FROM accounts ORDER BY rowid")).toEqual([
+        { id: "the-vib", pocket: "operating" },
+        { id: "tien-mat", pocket: "operating" },
+      ]);
+      expect(all("SELECT id, account_id FROM reserve_goals ORDER BY id")).toEqual([{ id: "thue", account_id: null }]);
+    });
+
+    it("hai tài khoản đều ngoài ngăn → Thuế có, chưa gắn tài khoản", async () => {
+      const res = await request(
+        "POST",
+        "/v1/setup",
+        setupBody({
+          accounts: [
+            { name: "Tiền mặt", kind: "cash", owner: null, pocket: null },
+            { name: "VCB của Bố", kind: "bank", bank: "Vietcombank", owner: 0, pocket: null },
+          ],
+          taxable: true,
+        }),
+      );
+      expect(res.status).toBe(201);
+      expect(all("SELECT pocket FROM accounts")).toEqual([{ pocket: null }, { pocket: null }]);
+      expect(all("SELECT id, account_id FROM reserve_goals")).toEqual([{ id: "thue", account_id: null }]);
+    });
+  });
+
+  describe("AC-14: mục tiêu gắn tài khoản ngăn Dự phòng của thân (goals[].account)", () => {
+    const accounts = [
+      { name: "VCB chính", kind: "bank", bank: "Vietcombank", owner: null, pocket: "operating" },
+      { name: "MB tiết kiệm", kind: "bank", bank: "MBBank", owner: null, pocket: "reserve" },
+    ];
+
+    it("Học phí account 1 → gắn tài khoản tiết kiệm; Hoá đơn không account → chưa gắn; không bảng / dòng phần giữ riêng, không conversion_state; snapshot thấy A = số dư", async () => {
+      const res = await request(
+        "POST",
+        "/v1/setup",
+        setupBody({ accounts, goals: [{ name: "Học phí", monthly_amount: 2_000_000, account: 1 }, { name: "Hoá đơn", monthly_amount: 1_300_000 }] }),
+      );
+      expect(res.status).toBe(201);
+      expect(all("SELECT id, account_id FROM reserve_goals ORDER BY sort")).toEqual([
+        { id: "hoc-phi", account_id: "mb-tiet-kiem" },
+        { id: "hoa-don", account_id: null },
+      ]);
+      noWallets();
+      const reserve = (await api("GET", "/v1/snapshot")).json.data as { pockets: { reserve: { goals: { id: string; accountId: string | null; held: number | null }[] } } };
+      expect(reserve.pockets.reserve.goals.map((g) => [g.id, g.accountId, g.held])).toEqual([
+        ["hoa-don", null, null],
+        ["hoc-phi", "mb-tiet-kiem", 0],
+      ]);
+    });
+
+    const cases: [string, unknown[], string][] = [
+      ["account 0 (Vận hành)", [{ name: "Học phí", monthly_amount: 2_000_000, account: 0 }], "goals.0.account"],
+      ["hai mục tiêu cùng một tài khoản", [{ name: "Học phí", monthly_amount: 2_000_000, account: 1 }, { name: "Hoá đơn", monthly_amount: 1_300_000, account: 1 }], "goals.1.account"],
+      ["chỉ số âm", [{ name: "Học phí", monthly_amount: 2_000_000, account: -1 }], "goals.0.account"],
+      ["chỉ số không nguyên", [{ name: "Học phí", monthly_amount: 2_000_000, account: 1.5 }], "goals.0.account"],
+    ];
+    it.each(cases)("%s → 400, không tạo gì", async (_title, list, field) => {
+      const res = await request("POST", "/v1/setup", setupBody({ accounts, goals: list }));
       expect(res.status).toBe(400);
       expect(res.json.error).toMatchObject({ code: "invalid_input", field });
       nothingCreated();
@@ -185,78 +460,6 @@ describe("UC-510 thiết lập nhà lần đầu", () => {
       await expect(second).rejects.toBeInstanceOf(DomainError);
       await expect(second).rejects.toMatchObject({ code: "already_setup", status: 409 });
       expect(raw.prepare("SELECT id FROM members ORDER BY rowid").all()).toEqual([{ id: "bo" }, { id: "me" }]);
-    });
-  });
-
-  describe("AC-6: mẫu Profit First cơ bản", () => {
-    it("có thuế, chọn đủ bốn ví Must: ví, luật nạp, danh mục có icon; mọi ví trú ở tài khoản ngân hàng đầu tiên", async () => {
-      expect((await request("POST", "/v1/setup", setupBody())).status).toBe(201);
-      expect(raw.prepare("SELECT id, name, tier, must_group, kind, scope, account_id, private FROM wallets ORDER BY sort").all()).toEqual([
-        { id: "income", name: "Thu nhập", tier: "holding", must_group: null, kind: "holding", scope: "shared", account_id: "vcb-cua-bo", private: 0 },
-        { id: "wealth-building", name: "Tích sản", tier: "wealth_building", must_group: null, kind: "accrual", scope: "shared", account_id: "vcb-cua-bo", private: 0 },
-        { id: "tax", name: "Thuế", tier: "tax", must_group: null, kind: "accrual", scope: "shared", account_id: "vcb-cua-bo", private: 0 },
-        { id: "housing", name: "Nhà ở", tier: "must", must_group: "must", kind: "accrual", scope: "shared", account_id: "vcb-cua-bo", private: 0 },
-        { id: "food", name: "Ăn uống", tier: "must", must_group: "must", kind: "envelope", scope: "shared", account_id: "vcb-cua-bo", private: 0 },
-        { id: "transport", name: "Đi lại", tier: "must", must_group: "must", kind: "envelope", scope: "shared", account_id: "vcb-cua-bo", private: 0 },
-        { id: "utilities", name: "Điện nước", tier: "must", must_group: "must", kind: "bill", scope: "shared", account_id: "vcb-cua-bo", private: 0 },
-        { id: "loan-interest", name: "Lãi vay", tier: "must", must_group: "must", kind: "bill", scope: "shared", account_id: "vcb-cua-bo", private: 0 },
-        { id: "nice-to-have", name: "Có thì tốt", tier: "must", must_group: "have", kind: "envelope", scope: "shared", account_id: "vcb-cua-bo", private: 0 },
-      ]);
-      expect(raw.prepare("SELECT wallet_id, mode, period, percent, amount FROM allocations WHERE active = 1 ORDER BY priority").all()).toEqual([
-        { wallet_id: "wealth-building", mode: "percent", period: "month", percent: 0.1, amount: null },
-        { wallet_id: "tax", mode: "percent", period: "month", percent: 0.1, amount: null },
-        { wallet_id: "nice-to-have", mode: "remainder", period: "month", percent: null, amount: null },
-      ]);
-      const categories = raw.prepare("SELECT id, name, default_wallet_id, icon FROM categories ORDER BY sort").all();
-      expect(categories).toEqual([
-        { id: "housing", name: "Nhà ở", default_wallet_id: "housing", icon: "home" },
-        { id: "groceries", name: "Đi chợ / nấu ăn", default_wallet_id: "food", icon: "basket" },
-        { id: "eating-out", name: "Ăn ngoài", default_wallet_id: "food", icon: "utensils" },
-        { id: "utilities", name: "Điện nước mạng", default_wallet_id: "utilities", icon: "zap" },
-        { id: "fuel-parking", name: "Xăng xe / gửi xe", default_wallet_id: "transport", icon: "fuel" },
-        { id: "ride-hailing", name: "Grab / taxi", default_wallet_id: "transport", icon: "car" },
-        { id: "health", name: "Y tế", default_wallet_id: "nice-to-have", icon: "pill" },
-        { id: "lending", name: "Cho vay / trả hộ", default_wallet_id: "nice-to-have", icon: "swap" },
-        { id: "debt-payment", name: "Trả nợ", default_wallet_id: "nice-to-have", icon: "credit-card" },
-        { id: "shopping", name: "Mua sắm", default_wallet_id: "nice-to-have", icon: "bag" },
-        { id: "loan-interest", name: "Lãi vay", default_wallet_id: "loan-interest", icon: "percent" },
-      ]);
-      expect(categories.every((c) => isIconName(String(c.icon)))).toBe(true);
-    });
-
-    it("không có thuế, không chọn ví Must, không có tài khoản ngân hàng: không có ví Thuế, chỉ bốn danh mục luôn có, ví trú ở tài khoản đầu tiên", async () => {
-      const body = setupBody({ accounts: [{ name: "Tiền mặt", kind: "cash", owner: null }, { name: "Momo", kind: "ewallet", bank: "MoMo", owner: 1 }], template: { taxable: false, must: [] } });
-      expect((await request("POST", "/v1/setup", body)).status).toBe(201);
-      expect(raw.prepare("SELECT id, account_id FROM wallets ORDER BY sort").all()).toEqual([
-        { id: "income", account_id: "tien-mat" },
-        { id: "wealth-building", account_id: "tien-mat" },
-        { id: "loan-interest", account_id: "tien-mat" },
-        { id: "nice-to-have", account_id: "tien-mat" },
-      ]);
-      expect(raw.prepare("SELECT id FROM categories ORDER BY sort").all().map((c) => c.id)).toEqual(["health", "lending", "debt-payment", "shopping", "loan-interest"]);
-    });
-
-    it("sau thiết lập ghi được khoản chi ngay; chia thử 10.000.000: Tích sản 1.000.000, Thuế 1.000.000, Có thì tốt nhận phần còn lại", async () => {
-      const { cookie } = await request("POST", "/v1/setup", setupBody());
-      const headers = { Cookie: cookie! };
-      const spend = await request("POST", "/v1/transactions", { meaning: "spend", amount: 50_000, category_id: "groceries", account_id: "tien-mat" }, headers);
-      expect(spend.status).toBe(201);
-      const taxable = await request("POST", "/v1/allocate/preview", { amount: 10_000_000, taxable: true, account_id: "vcb-cua-bo" }, headers);
-      expect(taxable.status).toBe(200);
-      expect(taxable.json.data).toMatchObject({
-        funds: [
-          { walletId: "wealth-building", amount: 1_000_000 },
-          { walletId: "tax", amount: 1_000_000 },
-          { walletId: "nice-to-have", amount: 8_000_000 },
-        ],
-      });
-      const untaxed = await request("POST", "/v1/allocate/preview", { amount: 10_000_000, account_id: "vcb-cua-bo" }, headers);
-      expect(untaxed.json.data).toMatchObject({
-        funds: [
-          { walletId: "wealth-building", amount: 1_000_000 },
-          { walletId: "nice-to-have", amount: 9_000_000 },
-        ],
-      });
     });
   });
 

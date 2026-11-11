@@ -14,13 +14,13 @@ export function crc16(s: string): string {
   return crc.toString(16).toUpperCase().padStart(4, "0");
 }
 
-/** Nội dung chuyển khoản app ngân hàng nào cũng nhận: bỏ dấu, chỉ chữ / số / khoảng trắng, tối đa 25 ký tự. */
+/** Nội dung chuyển khoản app ngân hàng nào cũng nhận: bỏ dấu, chỉ chữ / số / khoảng trắng / gạch nối, tối đa 25 ký tự. */
 export function qrMemo(memo: string): string {
   return memo
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[đĐ]/g, (c) => (c === "đ" ? "d" : "D"))
-    .replace(/[^A-Za-z0-9 ]/g, " ")
+    .replace(/[^A-Za-z0-9 -]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 25)

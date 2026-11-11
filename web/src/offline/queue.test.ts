@@ -36,7 +36,7 @@ const body = (amount: number): EntryBody => ({
   at: "2026-09-22T03:00:00.000Z",
   client_id: `c${String(++n).padStart(8, "0")}`,
   category_id: "ride-hailing",
-  wallet_id: "transport",
+  account_id: "main",
 });
 
 function setup(member: string | null = "wife") {
@@ -157,6 +157,30 @@ describe("hàng đợi nhập offline", () => {
     await syncer.retry(dup.client_id, { confirmDuplicate: true });
     expect(await store.list()).toEqual([]);
     expect(server.rows.get(dup.client_id)).toMatchObject({ amount: 500_000, confirm_duplicate: true });
+  });
+
+  it("UC-704 AC-27: khoản chi bản cũ kèm wallet_id → gửi không wallet_id, rời hàng đợi; chuyển ngân sách giữa hai ví → ở lại kèm câu, xoá được; server 400 model_changed → ở lại kèm câu", async () => {
+    const { server, store, syncer } = setup();
+    const oldSpend = { ...body(200_000), account_id: "main", wallet_id: "food", counter_wallet_id: null, wealth_move: "new", allocate: true } as unknown as EntryBody;
+    const walletMove = { meaning: "transfer", amount: 500_000, at: "2026-09-22T03:00:00.000Z", client_id: "c-wallet-move", wallet_id: "food", from_wallet_id: "other" } as unknown as EntryBody;
+    await syncer.enqueue(oldSpend, "wife");
+    await syncer.enqueue(walletMove, "wife");
+    await syncer.flush();
+    const sent = server.rows.get(oldSpend.client_id) as unknown as Record<string, unknown>;
+    expect(sent).toMatchObject({ amount: 200_000, account_id: "main" });
+    for (const k of ["wallet_id", "counter_wallet_id", "wealth_move", "allocate"]) expect(sent).not.toHaveProperty(k);
+    expect(server.calls).not.toContain("c-wallet-move");
+    expect(await store.list()).toEqual([
+      expect.objectContaining({ clientId: "c-wallet-move", status: "rejected", error: { code: "model_changed", message: "Chuyển giữa hai ví không còn ở bản mới — xoá khoản này" } }),
+    ]);
+    await syncer.discard("c-wallet-move");
+    expect(await store.list()).toEqual([]);
+
+    const kept = body(90_000);
+    await syncer.enqueue(kept, "wife");
+    server.failNextWith({ status: 400, payload: { ok: false, error: { code: "model_changed", message: "Trường ví đã bỏ.", fields: ["wallet_id"] } } });
+    await syncer.flush();
+    expect(await store.list()).toEqual([expect.objectContaining({ clientId: kept.client_id, status: "rejected", error: { code: "model_changed", message: "Bản mới đã bỏ ví — mở lại app để gửi lại" } })]);
   });
 
   it("lỗi 5xx: giữ lại để thử sau nhưng không chặn khoản phía sau; mất mạng thì dừng cả loạt", async () => {

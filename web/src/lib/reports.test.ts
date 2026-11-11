@@ -121,17 +121,23 @@ describe("lưu chuyển tiền: card tóm tắt và chú", () => {
 });
 
 describe("phân loại lại một giao dịch", () => {
-  it("UC-1105 AC-2: xếp khoản thu 50.000.000 vào Tài chính / về mặc định — toast nói chỉ đổi báo cáo; \"Thu nhập thụ động\" chỉ có ở khoản thu; dòng có khoản đã xếp lại ghi rõ", () => {
+  it("UC-1105 AC-2: xếp khoản thu 50.000.000 vào Tài chính / về mặc định — toast nói chỉ đổi báo cáo, số dư và ngăn giữ nguyên; \"Thu nhập thụ động\" chỉ có ở khoản thu; dòng có khoản đã xếp lại ghi rõ", () => {
     expect(classOptions("income")).toEqual(["operating", "passive_income", "investing", "financing"]);
     expect(classOptions("spend")).toEqual(["operating", "investing", "financing"]);
-    expect(reclassToast(50_000_000, "financing")).toBe(vnd("Đã xếp khoản 50.000.000 ₫ vào Tài chính — chỉ đổi báo cáo, ví và số dư giữ nguyên."));
+    expect(reclassToast(50_000_000, "financing")).toBe(vnd("Đã xếp khoản 50.000.000 ₫ vào Tài chính — chỉ đổi báo cáo, số dư và ngăn giữ nguyên."));
     expect(reclassToast(-50_000_000, null)).toBe(vnd("Đã đưa khoản 50.000.000 ₫ về nhóm mặc định."));
     expect(lineSub({ count: 1, reclassified: 1 })).toBe("1 giao dịch, 1 đã xếp lại");
     expect(lineSub({ count: 3, reclassified: 0 })).toBe("3 giao dịch");
-    const tx = { id: 5, at: "2026-10-06T03:00:00Z", amount: 50_000_000, meaning: "income", note: "bố mẹ cho vay", categoryName: null, walletName: "Thu nhập", accountName: "VCB", reportClass: "financing" as const, defaultLine: "salary_other" as const };
+    const tx = { id: 5, at: "2026-10-06T03:00:00Z", amount: 50_000_000, meaning: "income", note: "bố mẹ cho vay", categoryName: null, groupName: null, accountName: "VCB", reportClass: "financing" as const, defaultLine: "salary_other" as const };
     expect(reportTxTitle(tx)).toBe("Thu nhập");
     expect(reportTxTitle({ ...tx, categoryName: "Ăn ngoài" })).toBe("Ăn ngoài");
-    expect(reportTxSub(tx)).toBe("6/10 · VCB · ví Thu nhập · bố mẹ cho vay");
+    expect(reportTxSub(tx)).toBe("6/10 · VCB · bố mẹ cho vay");
+  });
+
+  it("UC-717 AC-6: dòng phụ giao dịch của một dòng chi ghi \"nhóm Ăn uống\", không còn chữ \"ví\"", () => {
+    const tx = { id: 7, at: "2026-11-11T02:00:00Z", amount: -1_800_000, meaning: "spend", note: null, categoryName: "Đi chợ / nấu ăn", groupName: "Ăn uống", accountName: "Tài khoản chính", reportClass: null, defaultLine: "spend_essential" as const };
+    expect(reportTxSub(tx)).toBe("11/11 · Tài khoản chính · nhóm Ăn uống");
+    expect(`${reportTxSub(tx)} ${reclassToast(1, "operating")}`).not.toMatch(/(^|\s)ví(\s|$)|Must|Có thì tốt|Hưởng thụ/);
   });
 });
 
@@ -150,13 +156,19 @@ describe("kết quả thu chi", () => {
     );
   });
 
-  it("UC-1106 AC-2, AC-3: chi tiêu ẩn dòng 0; Thuế đã nộp hiện khi có; Must có dòng con Lãi vay 300.000 khi có lãi", () => {
-    const lines = [line("must", 11_800_000, [line("loan_interest", 300_000)]), line("have", 3_000_000), line("nice", 0), line("tax", 1_000_000), line("wealth_building", 0), line("other", 0)];
+  it("UC-1106 AC-2, AC-3, AC-5: chi tiêu ẩn dòng 0; Thuế đã nộp hiện khi có; Thiết yếu có dòng con từng nhóm và Lãi vay, Mong muốn có từng nhóm và Chưa xếp nhóm — dòng con 0 ẩn", () => {
+    const lines = [
+      line("essential", 9_250_000, [line("group:d-food", 2_500_000), line("group:d-school", 6_000_000), line("loan_interest", 300_000), line("group:d-transport", 0)]),
+      line("flex", 1_700_000, [line("group:d-shopping", 1_200_000), line("ungrouped", 500_000)]),
+      line("tax", 1_000_000),
+      line("savings", 0),
+      line("other", 0),
+    ];
     expect(shownExpenseLines(lines).map((l) => [l.line, l.total, l.children?.map((c) => c.line)])).toEqual([
-      ["must", 11_800_000, ["loan_interest"]],
-      ["have", 3_000_000, undefined],
+      ["essential", 9_250_000, ["group:d-food", "group:d-school", "loan_interest"]],
+      ["flex", 1_700_000, ["group:d-shopping", "ungrouped"]],
       ["tax", 1_000_000, undefined],
     ]);
-    expect(shownExpenseLines([line("must", 5, [line("loan_interest", 0)])])[0]!.children).toEqual([]);
+    expect(shownExpenseLines([line("essential", 5, [line("loan_interest", 0)])])[0]!.children).toEqual([]);
   });
 });

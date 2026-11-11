@@ -10,6 +10,8 @@ export class ApiError extends Error {
     message: string,
     /** Ô bị lỗi theo server, dạng dấu chấm ("members.0.name"); chỉ có ở một số lỗi 400. */
     readonly field?: string,
+    /** Thân lỗi nguyên văn (vd 409 của POST /v1/conversion/steps/:step có `steps`, `next`, pocket UC-1208). */
+    readonly body?: Record<string, unknown>,
   ) {
     super(message);
   }
@@ -78,7 +80,7 @@ async function send<T>(path: string, method: string, body: unknown, noCache: boo
   if (res.status === 401 && payload?.error?.code !== "wrong_password" && !path.startsWith("/v1/session")) onUnauthorized();
   if (!res.ok || !payload?.ok) {
     const field = typeof payload?.error?.field === "string" ? payload.error.field : undefined;
-    throw new ApiError(res.status, payload?.error?.code ?? `http_${res.status}`, payload?.error?.message ?? `Máy chủ trả mã ${res.status}.`, field);
+    throw new ApiError(res.status, payload?.error?.code ?? `http_${res.status}`, payload?.error?.message ?? `Máy chủ trả mã ${res.status}.`, field, payload ?? undefined);
   }
   return { data: payload.data as T, cachedAt: res.headers.get(SW_CACHED_AT) };
 }

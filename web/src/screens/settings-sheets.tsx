@@ -4,14 +4,20 @@
 import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { BANKS, bankByCode } from "../../../src/domain/banks";
+import { DEFAULT_PAYDAY_DAY } from "../../../src/domain/snapshot";
 import { api, errorText } from "../lib/api";
+import { goalAccountRequest, goalCreateRequest, type GoalAccountResult } from "../lib/convert";
+import { groupAccountsByPocket, groupPayload, groupToForm, OUTSIDE_LABEL, POCKET_LABEL, POCKET_ORDER, type PocketChoice, pocketsPayload } from "../lib/pockets";
 import {
   ACCOUNT_KIND_LABEL,
+  accountGoal,
+  type AccountForm,
   accountPayload,
   accountSubmitError,
   accountToForm,
   bankHint,
-  canSplitWeekly,
+  canSetOwner,
+  canSetPrivate,
   clearSecretPayload,
   configPayload,
   connectionPicker,
@@ -22,16 +28,23 @@ import {
   fiConfigPayload,
   fiConfigToForm,
   type Errors,
+  GOAL_MODE_LABEL,
+  GOAL_POCKET_LOCK,
+  goalAccountOptions,
+  type GoalForm,
+  goalPayload,
+  goalToForm,
   followsCodeConvention,
   isoFromVnInput,
   MATCH_LABEL,
   MEANING_LABEL,
   linkCodeLeft,
   memberPayload,
-  MODE_LABEL,
+  OPENS_CYCLE_HINT,
   normalizePattern,
   notifyPayload,
   type Result,
+  rewardAccountOptions,
   rulePayload,
   ruleToForm,
   secretLabel,
@@ -40,25 +53,20 @@ import {
   type SepayConnectionForm,
   sepayOutDefault,
   sepayOutHint,
-  spendableDefault,
   streamPayload,
   streamToForm,
   vnDateTimeInput,
-  walletPayload,
-  walletToForm,
   WEEKDAY_LABEL,
-  type AllocForm,
 } from "../lib/settings";
-import { isIncomeHolding } from "../lib/budget";
 import { memberSubmitError, newMemberPayload, passwordPayload, proofMode } from "../lib/members";
-import { rewardWalletOptions } from "../lib/month-close";
 import { dateText } from "../lib/net-worth";
 import { feePayload, rentalConfigPayload, tenantPayload } from "../lib/rental";
-import { openingCreditHint, ROLE_LABEL } from "../lib/wealth-building-accounts";
 import type {
-  AccountRole,
+  CategoryGroup,
+  DebtsData,
   IncomeStream,
   NotifySchedule,
+  Pocket,
   Rental,
   Rule,
   Secret,
@@ -66,11 +74,11 @@ import type {
   SendTestResult,
   SepayConnection,
   SepaySecretKey,
+  ReserveGoal,
   SettingsAccount,
   SettingsConfig,
   SettingsData,
   SettingsMember,
-  SettingsWallet,
   Tenant,
   TenantFee,
   ZaloLinkCode,
@@ -79,6 +87,7 @@ import { signedOut, toast, useApp } from "../state/store";
 import { AmountInput } from "../ui/fields";
 import { Icon } from "../ui/icons";
 import { NeedsNetwork, Seg, Sheet } from "../ui/parts";
+import { useResource } from "../state/resource";
 
 type Saved = (toastText: string) => Promise<void>;
 
@@ -195,15 +204,6 @@ export function BankOptions() {
 
 // ── Tài khoản ─────────────────────────────────────────────────────
 
-/** Lời dặn theo vai trò Tích sản của tài khoản (ADR-88). */
-const ROLE_HINT: Record<AccountRole, string> = {
-  piggy_bank: "Heo đất: tài khoản khóa; tiền bỏ heo từ tài khoản thường là Tích sản.",
-  buffer: "Phao dự phòng: tiền chuyển vào từ tài khoản thường là Tích sản — ví Có thì tốt chuyển sang Tích sản, như bỏ heo đất. Rút về tài khoản thường chỉ đổi chỗ, tiền vẫn thuộc Tích sản.",
-  term_deposit:
-    "Sổ tiết kiệm (khóa): để số dư đầu 0, rồi ghi Chuyển nội bộ từ phao sang sổ đúng số gửi — tiền gửi là Tích sản. Tất toán: chuyển sổ về tài khoản nhận, phần lãi ghi Thu nhập; xong thì tắt Đang dùng.",
-};
-type RoleChoice = "" | "buffer" | "term_deposit";
-
 /** Lời dặn dưới hàng "SePay theo dõi từ" (ADR-113). */
 const FEED_HINT: Record<FeedMode, string> = {
   enabled:
@@ -212,28 +212,39 @@ const FEED_HINT: Record<FeedMode, string> = {
   time: "Giao dịch SePay trước giờ này coi như đã có trong sổ, app bỏ qua; khoản trước giờ này nhập tay được.",
 };
 
-export function AccountSheet({ d, item, onClose, onSaved }: { d: SettingsData; item: SettingsAccount | null; onClose: () => void; onSaved: Saved }) {
-  const [f, setF] = useState(() => accountToForm(item));
+/**
+ * Thêm / sửa tài khoản. `preset`: điền sẵn khi thêm (vd "Tạo tài khoản mới" cho mục tiêu: tên mục tiêu, ngăn Dự phòng);
+ * `create`: thêm theo đường khác thay POST /v1/settings/accounts — "Tạo tài khoản mới" cho mục tiêu gửi một yêu cầu tạo và
+ * gắn (pocket UC-1208 bước 2.2, UC-1209 bước 8), hoặc giữ thân để sheet mục tiêu gửi sau; `toast` dựng câu báo theo tên.
+ * Lỗi thì sheet giữ nguyên các ô, Lưu lại gửi lại đúng thân đó (cùng tên → cùng mã, không sinh tài khoản thứ hai).
+ */
+export function AccountSheet({
+  d,
+  item,
+  preset,
+  create,
+  onClose,
+  onSaved,
+}: {
+  d: SettingsData;
+  item: SettingsAccount | null;
+  preset?: Partial<AccountForm>;
+  create?: { send: (body: Record<string, unknown>) => Promise<void>; toast: (name: string) => string };
+  onClose: () => void;
+  onSaved: Saved;
+}) {
+  const [f, setF] = useState(() => ({ ...accountToForm(item), ...preset }));
   const set = (patch: Partial<typeof f>) => setF((x) => ({ ...x, ...patch }));
   const { busy, error, errors, run } = useSubmit(onSaved, onClose, accountSubmitError);
   const isNew = !item;
   const e = (k: string) => ({ id: `a-${k}`, error: errors[k] });
-  // Heo đất và sổ tiết kiệm giữ vai trò từ lúc tạo; sổ tiết kiệm chỉ chọn được khi thêm (ADR-88).
-  const fixedRole = item?.locked ? item.role : null;
-  const saving = f.role === "term_deposit";
-  const locked = Boolean(item?.locked) || saving;
-  // Thành tài khoản Tích sản không tính mà đang có tiền: số dư đó vào Tích sản một lần khi lưu (ADR-91).
-  const creditHint = openingCreditHint({
-    wasRole: Boolean(item?.role),
-    role: f.role,
-    spendable: f.spendable && !locked,
-    balance: isNew ? f.opening_balance : (item.book_balance ?? 0) + f.opening_balance - item.opening_balance,
-  });
-  const roleOptions: { value: RoleChoice; label: string }[] = [
-    { value: "", label: "Không" },
-    { value: "buffer", label: ROLE_LABEL.buffer },
-    ...(isNew ? [{ value: "term_deposit" as const, label: ROLE_LABEL.term_deposit }] : []),
-  ];
+  // Công tắc Riêng tư (access UC-504): chỉ chủ tài khoản (theo chủ đã lưu) thấy và đổi.
+  const me = useApp().member?.id ?? null;
+  const showPrivate = canSetPrivate(item, me);
+  // Tài khoản riêng tư của người khác: ô Chủ tài khoản chỉ đọc (UC-709 AC-47).
+  const ownerLocked = !canSetOwner(item, me);
+  // Tài khoản của mục tiêu đang dùng: ngăn khoá ở Dự phòng (UC-1209 bước 3, server 409 `account_has_goal`).
+  const goal = item ? accountGoal(item.id, d.goals) : undefined;
 
   function submit() {
     const name = f.name.trim();
@@ -244,9 +255,13 @@ export function AccountSheet({ d, item, onClose, onSaved }: { d: SettingsData; i
         : " Tiền vào tài khoản này giờ tự về từ ngân hàng; khoản chi từ nó vẫn nhập tay.";
     void run(
       // Chỉ gửi kết nối khi có ô "Nối qua"; một kết nối thì server tự dùng nó.
-      accountPayload({ ...f, sepay_connection_id: picker?.value ?? "" }, item),
-      (body) => (isNew ? api.post("/v1/settings/accounts", body) : api.patch(`/v1/settings/accounts/${encodeURIComponent(item.id)}`, body)),
-      `${isNew ? "Đã thêm" : "Đã lưu"} tài khoản ${name}.${tail}`,
+      accountPayload({ ...f, sepay_connection_id: picker?.value ?? "" }, item, me),
+      async (body) => {
+        if (!isNew) return api.patch(`/v1/settings/accounts/${encodeURIComponent(item.id)}`, body);
+        if (create) return create.send(body);
+        await api.post<SettingsAccount>("/v1/settings/accounts", body);
+      },
+      isNew && create ? create.toast(name) : `${isNew ? "Đã thêm" : "Đã lưu"} tài khoản ${name}.${tail}`,
     );
   }
   const catalogBank = f.kind === "bank" || f.kind === "credit";
@@ -276,8 +291,6 @@ export function AccountSheet({ d, item, onClose, onSaved }: { d: SettingsData; i
             set({
               kind,
               ...(kind !== "bank" ? { sepay_enabled: false, sepay_out: false } : {}),
-              // Thêm mới: thẻ tín dụng và tài khoản Tích sản mặc định không tính vào tiền chi được (ADR-85, ADR-88).
-              ...(isNew ? { spendable: spendableDefault(kind, f.role) } : {}),
               // Ngân hàng/thẻ chọn trong danh mục, ví điện tử gõ tên: đổi qua lại thì bỏ giá trị cũ.
               ...((kind === "ewallet") !== (f.kind === "ewallet") ? { bank: "" } : {}),
             })
@@ -285,29 +298,19 @@ export function AccountSheet({ d, item, onClose, onSaved }: { d: SettingsData; i
           options={(Object.keys(ACCOUNT_KIND_LABEL) as SettingsAccount["kind"][]).map((k) => ({ value: k, label: ACCOUNT_KIND_LABEL[k] }))}
         />
       </Field>
-      {fixedRole ? (
-        <Field id="a-role" label="Giữ tiền Tích sản">
-          <span id="a-role">{ROLE_LABEL[fixedRole]}</span>
-        </Field>
-      ) : (
-        <Field id="a-role" label="Giữ tiền Tích sản" wrap>
-          <Seg
-            label="Giữ tiền Tích sản"
-            value={f.role ?? ""}
-            onChange={(choice) => {
-              const role = choice || null;
-              set({
-                role,
-                // Thêm mới, hoặc đổi sang phao: phao / sổ không tính vào tiền chi được (tiền để dành), về thường thì theo loại.
-                ...(isNew || role === "buffer" ? { spendable: spendableDefault(f.kind, role) } : {}),
-                ...(role === "term_deposit" ? { sepay_enabled: false, sepay_out: false } : {}),
-              });
-            }}
-            options={roleOptions}
-          />
-        </Field>
-      )}
-      {f.role && <Hint>{ROLE_HINT[f.role]}</Hint>}
+      {goal && <Hint>Tài khoản của mục tiêu {goal.name}</Hint>}
+      <Field id="a-pocket" label="Ngăn">
+        {goal ? (
+          <span id="a-pocket">{POCKET_LABEL.reserve}</span>
+        ) : (
+          <PocketSelect id="a-pocket" value={f.pocket} onChange={(p) => set({ pocket: p, pocket_touched: true })} />
+        )}
+      </Field>
+      <Hint>
+        {goal
+          ? `${GOAL_POCKET_LOCK}.`
+          : `Tiền về tài khoản nào là tiền của ngăn đó. Thẻ tín dụng để ở Vận hành.${item && item.pocket_confirmed === false ? " Ngăn này app mới đề xuất — lưu là xác nhận." : ""}`}
+      </Hint>
       {f.kind !== "cash" && (
         <>
           <Field {...e("bank")} label={f.kind === "ewallet" ? "Nhà cung cấp" : "Ngân hàng"}>
@@ -336,7 +339,7 @@ export function AccountSheet({ d, item, onClose, onSaved }: { d: SettingsData; i
           </Field>
         </>
       )}
-      {f.kind === "bank" && !saving && (
+      {f.kind === "bank" && (
         <>
           <Check
             id="a-sepay"
@@ -414,265 +417,42 @@ export function AccountSheet({ d, item, onClose, onSaved }: { d: SettingsData; i
         </>
       )}
       <Field id="a-owner" label="Chủ tài khoản">
-        <select id="a-owner" class="ctl" value={f.owner_member_id} onChange={(ev) => set({ owner_member_id: ev.currentTarget.value })}>
-          <option value="">Chung</option>
-          {d.members.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
-            </option>
-          ))}
-        </select>
+        {ownerLocked ? (
+          <span id="a-owner">{d.members.find((m) => m.id === f.owner_member_id)?.name ?? f.owner_member_id}</span>
+        ) : (
+          <select id="a-owner" class="ctl" value={f.owner_member_id} onChange={(ev) => set({ owner_member_id: ev.currentTarget.value })}>
+            <option value="">Chung</option>
+            {d.members.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </select>
+        )}
       </Field>
+      {ownerLocked && <Hint>Tài khoản riêng tư: chỉ chủ tài khoản đổi được chủ.</Hint>}
+      {showPrivate && (
+        <>
+          <Check id="a-private" label="Riêng tư — người khác chỉ thấy tổng" checked={f.private} onChange={(v) => set({ private: v })} />
+          <Hint>Người khác vẫn thấy số dư, không thấy từng khoản chi.</Hint>
+        </>
+      )}
       <Field id="a-opening" label="Số dư đầu">
         <AmountInput id="a-opening" value={f.opening_balance} onChange={(n) => set({ opening_balance: n })} />
       </Field>
-      <Field id="a-opened" label={saving ? "Ngày gửi" : "Số dư đầu tính tới ngày"} error={errors.opened_at}>
+      <Field id="a-opened" label="Số dư đầu tính tới ngày" error={errors.opened_at}>
         <input id="a-opened" class="ctl" type="date" value={f.opened_at} onInput={(ev) => set({ opened_at: ev.currentTarget.value })} />
       </Field>
-      <Hint>{saving ? "Chuyển nội bộ vào sổ ghi từ ngày gửi trở đi." : "Giao dịch ngân hàng trước ngày này đã nằm trong số dư đầu, app bỏ qua."}</Hint>
-      <Check id="a-spendable" label="Tính vào tiền chi được" checked={f.spendable && !locked} disabled={locked} onChange={(v) => set({ spendable: v })} />
-      <Hint>
-        {locked
-          ? "Heo đất và sổ tiết kiệm đã khóa — không bao giờ tính vào tiền chi được."
-          : "Số dư của tài khoản này cộng vào “Tiền chi được” ở Hôm nay. Tài khoản đang giữ tiền Tích sản / Thuế cứ để bật — app đã trừ phần Tích sản và Thuế; tài khoản để dành tiền Tích sản thì chọn Phao dự phòng ở trên. Tắt cho tiền không định tiêu và không thuộc ví nào (tiết kiệm ngoài app, thẻ tín dụng)."}
-      </Hint>
-      {creditHint && <Hint>{creditHint}</Hint>}
+      <Hint>Giao dịch ngân hàng trước ngày này đã nằm trong số dư đầu, app bỏ qua.</Hint>
       {!isNew && <Check id="a-active" label="Đang dùng" checked={f.active} onChange={(v) => set({ active: v })} />}
+      {!isNew && !f.active && goal && <Hint>Tài khoản của mục tiêu {goal.name}: bỏ gắn hoặc tắt mục tiêu trước khi tắt tài khoản.</Hint>}
       {!isNew && !f.active && (
         <Hint>
           Ngừng dùng thì tài khoản không còn hiện ở chỗ chọn; lịch sử vẫn giữ nguyên.
           {item.deactivated_at ? ` Đã tắt từ ${dateText(item.deactivated_at)} — bảng cân đối vẫn tính nó ở các tháng trước ngày đó.` : " Bảng cân đối vẫn tính nó ở các tháng trước ngày tắt."}
         </Hint>
       )}
-      <Footer busy={busy} error={error} label={isNew ? "Thêm tài khoản" : "Lưu tài khoản"} onSubmit={submit} />
-    </Sheet>
-  );
-}
-
-// ── Ví ─────────────────────────────────────────────────────────────
-
-const TIER_OPTIONS: { value: SettingsWallet["tier"]; label: string }[] = [
-  { value: "wealth_building", label: "Tích sản" },
-  { value: "tax", label: "Thuế" },
-  { value: "nice", label: "Hưởng thụ" },
-  { value: "must", label: "Vận hành" },
-];
-const KIND_OPTIONS: { value: SettingsWallet["kind"]; label: string }[] = [
-  { value: "envelope", label: "Phong bì (tiêu theo kỳ)" },
-  { value: "accrual", label: "Tích dồn (để dành cho một khoản)" },
-  { value: "bill", label: "Hoá đơn (trả định kỳ)" },
-];
-
-export function WalletSheet({ d, item, onClose, onSaved }: { d: SettingsData; item: SettingsWallet | null; onClose: () => void; onSaved: Saved }) {
-  const [f, setF] = useState(() => walletToForm(item));
-  const set = (patch: Partial<typeof f>) => setF((x) => ({ ...x, ...patch }));
-  const setA = (patch: Partial<AllocForm>) => setF((x) => ({ ...x, alloc: { ...x.alloc, ...patch } }));
-  const { busy, error, errors, run } = useSubmit(onSaved, onClose);
-  const isNew = !item;
-  const scope = item ? item.scope : f.scope;
-  const remainder = item?.allocation?.mode === "remainder";
-  const e = (k: string) => ({ id: `w-${k}`, error: errors[k] });
-
-  function submit() {
-    void run(
-      walletPayload(f, item),
-      (body) => (isNew ? api.post("/v1/settings/wallets", body) : api.patch(`/v1/settings/wallets/${encodeURIComponent(item.id)}`, body)),
-      `${isNew ? "Đã thêm" : "Đã lưu"} ví ${f.name.trim()}. Số nạp áp dụng từ lần chia tiền tới.`,
-    );
-  }
-
-  const modes = (["flat", "percent", "goal", "lump"] as const).map((m) => ({ value: m, label: MODE_LABEL[m] }));
-  const a = f.alloc;
-  return (
-    <Sheet open title={isNew ? "Thêm ví" : `Sửa ví ${item.name}`} onClose={onClose}>
-      <Field {...e("name")} label="Tên ví" first>
-        <input id="w-name" class="ctl" value={f.name} maxLength={40} placeholder="Học phí" onInput={(ev) => set({ name: ev.currentTarget.value })} {...invalid(errors, "name", "w-name")} />
-      </Field>
-      {isNew && (
-        <>
-          <Field id="w-tier" label="Tầng">
-            <select id="w-tier" class="ctl" value={f.tier} onChange={(ev) => set({ tier: ev.currentTarget.value as SettingsWallet["tier"] })}>
-              {TIER_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </Field>
-          {f.tier === "must" && (
-            <Field id="w-group" label="Nhóm" wrap>
-              <Seg
-                label="Nhóm trong Vận hành"
-                value={f.must_group}
-                onChange={(must_group) => set({ must_group })}
-                options={[
-                  { value: "must", label: "Must" },
-                  { value: "have", label: "Có thì tốt" },
-                ]}
-              />
-            </Field>
-          )}
-          <Field id="w-kind" label="Kiểu ví">
-            <select id="w-kind" class="ctl" value={f.kind} onChange={(ev) => set({ kind: ev.currentTarget.value as SettingsWallet["kind"] })}>
-              {KIND_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field id="w-scope" label="Của ai" wrap>
-            <Seg
-              label="Ví chung hay riêng"
-              value={f.scope}
-              onChange={(s) => set({ scope: s })}
-              options={[
-                { value: "shared", label: "Chung" },
-                { value: "personal", label: "Riêng một người" },
-              ]}
-            />
-          </Field>
-        </>
-      )}
-      {scope === "personal" && (
-        <>
-          <Field {...e("member_id")} label="Người dùng">
-            <select id="w-member_id" class="ctl" value={f.member_id} onChange={(ev) => set({ member_id: ev.currentTarget.value })} {...invalid(errors, "member_id", "w-member_id")}>
-              <option value="">Chọn người</option>
-              {d.members.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Check id="w-private" label="Ẩn số của ví này với người kia" checked={f.private} onChange={(v) => set({ private: v })} />
-        </>
-      )}
-      <Field id="w-account" label="Nằm ở tài khoản">
-        <select id="w-account" class="ctl" value={f.account_id} onChange={(ev) => set({ account_id: ev.currentTarget.value })}>
-          <option value="">Chưa gán</option>
-          {d.accounts
-            .filter((x) => x.active || x.id === f.account_id)
-            .map((x) => (
-              <option key={x.id} value={x.id}>
-                {x.name}
-              </option>
-            ))}
-        </select>
-      </Field>
-      {!isNew && <Check id="w-active" label="Đang dùng" checked={f.active} onChange={(v) => set({ active: v })} />}
-
-      <div class="set-sub">Số tiền nạp</div>
-      {remainder ? (
-        <>
-          <div class="field" style={{ borderTop: 0 }}>
-            <span class="k">Cách nạp</span>
-            <span>nhận phần còn lại</span>
-          </div>
-          <Hint>Ví này là cuối dòng thác: nhận hết phần còn lại sau khi các ví khác đã đủ. Cách nạp của nó không đổi được.</Hint>
-        </>
-      ) : (
-        <>
-          <Field {...e("mode")} label="Cách nạp" first>
-            <select id="w-mode" class="ctl" value={a.mode} onChange={(ev) => setA({ mode: ev.currentTarget.value as AllocForm["mode"] })}>
-              {!item?.allocation && <option value="none">Không nạp tự động</option>}
-              {modes.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </Field>
-          {a.mode === "flat" && (
-            <>
-              <Field id="w-period" label="Mỗi" wrap>
-                <Seg
-                  label="Kỳ nạp"
-                  value={a.period}
-                  onChange={(period) => setA({ period })}
-                  options={[
-                    { value: "week", label: "Tuần" },
-                    { value: "month", label: "Tháng" },
-                  ]}
-                />
-              </Field>
-              <Field {...e("amount")} label={a.period === "week" ? "Số mỗi tuần" : "Số mỗi tháng"}>
-                <AmountInput id="w-amount" value={a.amount} onChange={(n) => setA({ amount: n })} invalid={!!errors.amount} />
-              </Field>
-            </>
-          )}
-          {a.mode === "lump" && (
-            <Field {...e("amount")} label="Số mỗi tháng">
-              <AmountInput id="w-amount" value={a.amount} onChange={(n) => setA({ amount: n })} invalid={!!errors.amount} />
-            </Field>
-          )}
-          {(a.mode === "flat" || a.mode === "lump") && (
-            <>
-              <Field {...e("floor_amount")} label="Sàn cứng">
-                <AmountInput id="w-floor_amount" value={a.floor_amount} onChange={(n) => setA({ floor_amount: n })} invalid={!!errors.floor_amount} />
-              </Field>
-              <Hint>Thiếu tiền thì ví bị bóp, nhưng không xuống dưới sàn. Để 0 là không có sàn.</Hint>
-            </>
-          )}
-          {a.mode === "percent" && (
-            <>
-              <Field {...e("percent")} label="Phần trăm khoản thu">
-                <span class="flex items-center gap-2" style={{ maxWidth: "64%" }}>
-                  <input
-                    id="w-percent"
-                    class="ctl money"
-                    style={{ maxWidth: "none", width: "100%" }}
-                    inputMode="decimal"
-                    autocomplete="off"
-                    value={a.percent}
-                    placeholder="30"
-                    onInput={(ev) => setA({ percent: ev.currentTarget.value })}
-                    {...invalid(errors, "percent", "w-percent")}
-                  />
-                  %
-                </span>
-              </Field>
-              <Hint>Cắt thẳng từ mỗi khoản thu trước mọi ví khác. Tích sản và Thuế dùng cách này.</Hint>
-            </>
-          )}
-          {a.mode === "goal" && (
-            <>
-              <Field {...e("target_amount")} label="Số cần có">
-                <AmountInput id="w-target_amount" value={a.target_amount} onChange={(n) => setA({ target_amount: n })} invalid={!!errors.target_amount} />
-              </Field>
-              <Field {...e("target_date")} label="Trước ngày">
-                <input id="w-target_date" class="ctl" type="date" value={a.target_date} onInput={(ev) => setA({ target_date: ev.currentTarget.value })} {...invalid(errors, "target_date", "w-target_date")} />
-              </Field>
-              <Hint>Mỗi tháng nạp phần còn thiếu chia đều cho số tháng còn lại tới hạn.</Hint>
-            </>
-          )}
-          {a.mode !== "none" && (
-            <>
-              <Field {...e("priority")} label="Ưu tiên">
-                <input
-                  id="w-priority"
-                  class="ctl money"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  autocomplete="off"
-                  value={a.priority}
-                  onInput={(ev) => setA({ priority: ev.currentTarget.value })}
-                  {...invalid(errors, "priority", "w-priority")}
-                />
-              </Field>
-              <Hint>Số nhỏ được rót trước. Hai ví cùng số thì thiếu tiền chia đều, không ví nào nhận 0.</Hint>
-            </>
-          )}
-          {canSplitWeekly(item ? item.kind : f.kind, a) && (
-            <>
-              <Check id="w-split" label="Chia đều theo tuần" checked={f.split_weekly} onChange={(v) => set({ split_weekly: v })} />
-              <Hint>Mỗi tuần được tiêu số tháng chia cho số thứ Hai của tháng; "còn để chi tuần này" tính theo phần đó.</Hint>
-            </>
-          )}
-        </>
-      )}
-      <Footer busy={busy} error={error} label={isNew ? "Thêm ví" : "Lưu ví"} onSubmit={submit} />
+      <Footer busy={busy} error={error} label={isNew && create && error ? "Lưu lại" : isNew ? "Thêm tài khoản" : "Lưu tài khoản"} onSubmit={submit} />
     </Sheet>
   );
 }
@@ -688,11 +468,11 @@ export function RuleSheet({ d, item, onClose, onSaved }: { d: SettingsData; item
   const e = (k: string) => ({ id: `r-${k}`, error: errors[k] });
 
   function submit() {
-    const wallet = d.wallets.find((w) => w.id === f.wallet_id)?.name;
+    const category = f.meaning === "spend" ? d.categories.find((c) => c.id === f.category_id)?.name : undefined;
     void run(
       rulePayload(f, isNew),
       (body) => (isNew ? api.post("/v1/rules", body) : api.patch(`/v1/settings/rules/${item.id}`, body)),
-      `${isNew ? "Đã thêm" : "Đã lưu"} ${MATCH_LABEL[f.match_type].toLowerCase()} ${pattern}.${f.active && wallet ? ` Giao dịch mới khớp sẽ tự vào ${wallet}.` : ""}`,
+      `${isNew ? "Đã thêm" : "Đã lưu"} ${MATCH_LABEL[f.match_type].toLowerCase()} ${pattern}.${f.active && category ? ` Giao dịch mới khớp sẽ tự vào ${category}.` : ""}`,
     );
   }
 
@@ -730,12 +510,12 @@ export function RuleSheet({ d, item, onClose, onSaved }: { d: SettingsData; item
           options={(Object.keys(MEANING_LABEL) as Rule["meaning"][]).map((k) => ({ value: k, label: MEANING_LABEL[k] }))}
         />
       </Field>
-      {f.meaning === "income" && <Hint>Khoản khớp mẫu lương từ ngưỡng tự chia trở lên thì tự ghi và tự chia.</Hint>}
+      {f.meaning === "income" && <Hint>Khoản khớp mẫu lương từ ngưỡng tự nhận lương trở lên thì tự ghi; nguồn bật “Mở kỳ lương” thì lương về mở kỳ lương.</Hint>}
       {f.meaning === "income" && !isNew && (
         <>
           <Field id="r-stream" label="Nguồn thu">
             <select id="r-stream" class="ctl" value={f.income_stream_id} onChange={(ev) => set({ income_stream_id: ev.currentTarget.value })}>
-              <option value="">Mặc định (luật % chung)</option>
+              <option value="">Không nguồn (không mở kỳ lương)</option>
               {(d.incomeStreams ?? [])
                 .filter((s) => s.active || s.id === f.income_stream_id)
                 .map((s) => (
@@ -745,7 +525,7 @@ export function RuleSheet({ d, item, onClose, onSaved }: { d: SettingsData; item
                 ))}
             </select>
           </Field>
-          <Hint>Khoản thu khớp mã này chia theo phần khóa của nguồn đã chọn.</Hint>
+          <Hint>Khoản thu khớp mã này gắn nguồn đã chọn.</Hint>
         </>
       )}
       {f.meaning === "spend" && (
@@ -754,11 +534,7 @@ export function RuleSheet({ d, item, onClose, onSaved }: { d: SettingsData; item
             id="r-category_id"
             class="ctl"
             value={f.category_id}
-            onChange={(ev) => {
-              const id = ev.currentTarget.value;
-              const def = d.categories.find((c) => c.id === id)?.defaultWalletId;
-              set({ category_id: id, ...(!f.wallet_id && def ? { wallet_id: def } : {}) });
-            }}
+            onChange={(ev) => set({ category_id: ev.currentTarget.value })}
             {...invalid(errors, "category_id", "r-category_id")}
           >
             <option value="">Chọn danh mục</option>
@@ -770,18 +546,6 @@ export function RuleSheet({ d, item, onClose, onSaved }: { d: SettingsData; item
           </select>
         </Field>
       )}
-      <Field {...e("wallet_id")} label={f.meaning === "income" ? "Ví nhận" : "Ví"}>
-        <select id="r-wallet_id" class="ctl" value={f.wallet_id} onChange={(ev) => set({ wallet_id: ev.currentTarget.value })} {...invalid(errors, "wallet_id", "r-wallet_id")}>
-          <option value="">{f.meaning === "spend" ? "Chọn ví" : "Không chỉ định"}</option>
-          {d.wallets
-            .filter((w) => w.active || w.id === f.wallet_id)
-            .map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.name}
-              </option>
-            ))}
-        </select>
-      </Field>
       {!isNew && (
         <Field id="r-by" label="Người chi">
           <select id="r-by" class="ctl" value={f.by_member_id} onChange={(ev) => set({ by_member_id: ev.currentTarget.value })}>
@@ -905,8 +669,8 @@ function MemberActive({ member, self, onClose, onSaved }: { member: SettingsMemb
   }
 
   const warning = turningOff
-    ? `Tắt thì ${member.name} không vào app được nữa, mọi máy của ${member.name} đăng xuất ngay${self ? ", cả máy này" : ""}. Ví, tài khoản, giao dịch giữ nguyên; ví riêng tư của ${member.name} hiện cho cả nhà thấy. Bật lại được bất cứ lúc nào.`
-    : `Bật lại thì ${member.name} vào app được như trước; ví riêng tư của ${member.name} lại ẩn với người khác. Nhà có tối đa 6 người đang dùng.`;
+    ? `Tắt thì ${member.name} không vào app được nữa, mọi máy của ${member.name} đăng xuất ngay${self ? ", cả máy này" : ""}. Tài khoản, giao dịch giữ nguyên; tài khoản riêng tư của ${member.name} hiện cho cả nhà thấy. Bật lại được bất cứ lúc nào.`
+    : `Bật lại thì ${member.name} vào app được như trước; tài khoản riêng tư của ${member.name} lại ẩn với người khác. Nhà có tối đa 6 người đang dùng.`;
   return (
     <>
       <div class="set-sub">Đang dùng</div>
@@ -1301,65 +1065,102 @@ export function SepayConnectionSheet({ item, onClose, onSaved }: { item: SepayCo
 
 // ── Tham số ───────────────────────────────────────────────────────
 
-export function ConfigSheet({ config, wallets, onClose, onSaved }: { config: SettingsConfig; wallets: SettingsWallet[]; onClose: () => void; onSaved: Saved }) {
+export function ConfigSheet({ d, onClose, onSaved }: { d: SettingsData; onClose: () => void; onSaved: Saved }) {
+  const config = d.config;
   const [salary, setSalary] = useState(config.salary_min_amount);
   // Bản cài đặt lưu offline từ trước bản lãi tiền gửi thiếu khoá này: mặc định như server.
   const [interest, setInterest] = useState(config.interest_max_amount ?? 10_000);
   const [months, setMonths] = useState(String(config.safety_fund_months));
-  const [closePct, setClosePct] = useState(String(config.month_close_wealth_pct ?? 50));
-  const [reward, setReward] = useState(config.month_close_reward_wallet ?? "");
+  // Bản cài đặt lưu offline từ trước Đợt C thiếu hai khoá này: không hiện ô, không gửi.
+  const [surplusPct, setSurplusPct] = useState(config.surplus_savings_pct === undefined ? undefined : String(config.surplus_savings_pct));
+  const [reward, setReward] = useState(config.surplus_reward_account ?? "");
+  const [payday, setPayday] = useState(String(config.payday_day ?? DEFAULT_PAYDAY_DAY));
+  // Bản cài đặt lưu offline từ trước v2 thiếu khoá này: không hiện ô, không gửi.
+  const [savingsPct, setSavingsPct] = useState(config.savings_pct === undefined ? undefined : String(config.savings_pct));
   const { busy, error, errors, run } = useSubmit(onSaved, onClose);
-  // Ví đã chọn mà nay đã tắt / không còn hợp lệ vẫn hiện để biết (chốt tháng coi như chưa đặt).
-  const options = rewardWalletOptions(wallets.filter((w) => w.active));
-  const stale = reward && !options.some((w) => w.id === reward) ? wallets.find((w) => w.id === reward) : undefined;
+  // Ví Thưởng đã chọn mà nay đã tắt / không còn ở ngăn Dự phòng / đã gắn mục tiêu vẫn hiện để biết (dư kỳ trước coi như chưa chọn).
+  const options = rewardAccountOptions(d.accounts, d.goals);
+  const stale = reward && !options.some((a) => a.id === reward) ? (d.accounts.find((a) => a.id === reward) ?? { id: reward, name: reward }) : undefined;
   return (
     <Sheet open title="Tham số" onClose={onClose}>
-      <Field id="c-salary" label="Ngưỡng tự chia lương" error={errors.salary_min_amount} first>
+      <Field id="c-salary" label="Ngưỡng tự nhận lương" error={errors.salary_min_amount} first>
         <AmountInput id="c-salary" value={salary} onChange={setSalary} />
       </Field>
-      <Hint>Khoản khớp mẫu lương từ mức này trở lên thì tự ghi và tự chia; nhỏ hơn thì chờ ở màn Gán như mọi tiền vào khác. Để 0 là không có ngưỡng.</Hint>
+      <Hint>Khoản khớp mẫu lương từ mức này trở lên thì tự ghi (nguồn bật “Mở kỳ lương” thì mở kỳ lương); nhỏ hơn thì chờ ở màn Gán như mọi tiền vào khác. Để 0 là không có ngưỡng.</Hint>
       <Field id="c-interest" label="Lãi tiền gửi: tự ghi khoản dưới" error={errors.interest_max_amount}>
         <AmountInput id="c-interest" value={interest} onChange={setInterest} />
       </Field>
-      <Hint>Tiền vào nhỏ hơn mức này mà nội dung trống, chỉ "BankAPINotify" hay có "lãi tiền gửi" thì máy tự ghi là lãi, cộng thẳng vào ví của chính tài khoản nhận (không chia lương). Để 0 là tắt.</Hint>
-      <Field id="c-months" label="Quỹ an tâm (số tháng)" error={errors.safety_fund_months}>
+      <Hint>Tiền vào nhỏ hơn mức này mà nội dung trống, chỉ "BankAPINotify" hay có "lãi tiền gửi" thì máy tự ghi là lãi vào chính tài khoản nhận (Thu nhập thụ động). Để 0 là tắt.</Hint>
+      <Field id="c-months" label="Phần an tâm (số tháng vận hành)" error={errors.safety_fund_months}>
         <input id="c-months" class="ctl money" inputMode="numeric" pattern="[0-9]*" autocomplete="off" value={months} onInput={(ev) => setMonths(ev.currentTarget.value)} {...invalid(errors, "safety_fund_months", "c-months")} />
       </Field>
-      <Hint>Quỹ an tâm = số tháng này × chi Must trung bình một tháng. Tích sản giữ đủ Quỹ an tâm bằng tiền rồi mới mua tài sản.</Hint>
-      <Field id="c-reward" label="Ví Thưởng" error={errors.month_close_reward_wallet}>
-        <select id="c-reward" class="ctl" value={reward} onChange={(ev) => setReward(ev.currentTarget.value)}>
-          <option value="">Chưa đặt</option>
-          {stale && <option value={stale.id}>{stale.name} (không còn dùng được)</option>}
-          {options.map((w) => (
-            <option key={w.id} value={w.id}>
-              {w.name}
-            </option>
-          ))}
-        </select>
+      <Hint>Thẻ Dự phòng ở Hôm nay so phần an tâm với số tháng này (chi vận hành trung bình 3 kỳ lương gần nhất).</Hint>
+      <Field id="c-payday" label="Ngày lương" error={errors.payday_day}>
+        <input id="c-payday" class="ctl money" inputMode="numeric" pattern="[0-9]*" autocomplete="off" value={payday} onInput={(ev) => setPayday(ev.currentTarget.value)} {...invalid(errors, "payday_day", "c-payday")} />
       </Field>
-      <Hint>Phần dư khi chốt tháng chia giữa Tích sản và ví này; chưa đặt thì 100% vào Tích sản. Chọn ví tích luỹ phe Must / Hưởng thụ, không phải phong bì chung.</Hint>
-      <Field id="c-close-pct" label="Phần dư vào Tích sản (%)" error={errors.month_close_wealth_pct}>
-        <input
-          id="c-close-pct"
-          class="ctl money"
-          inputMode="numeric"
-          pattern="[0-9]*"
-          autocomplete="off"
-          value={closePct}
-          onInput={(ev) => setClosePct(ev.currentTarget.value)}
-          {...invalid(errors, "month_close_wealth_pct", "c-close-pct")}
-        />
-      </Field>
-      <Hint>Mặc định của thanh kéo khi chốt tháng (đổi được mỗi lần chốt). Nên là bội số của 5, ví dụ 50 = chia đôi.</Hint>
+      <Hint>Kỳ vận hành tính từ ngày lương tới trước ngày lương tháng sau; tháng ít ngày hơn lấy ngày cuối tháng. Thẻ Vận hành ở Hôm nay đếm ngược tới ngày này.</Hint>
+      {savingsPct !== undefined && (
+        <>
+          <Field id="c-savings-pct" label="% Tích luỹ mỗi kỳ lương" error={errors.savings_pct}>
+            <input
+              id="c-savings-pct"
+              class="ctl money"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              autocomplete="off"
+              value={savingsPct}
+              onInput={(ev) => setSavingsPct(ev.currentTarget.value)}
+              {...invalid(errors, "savings_pct", "c-savings-pct")}
+            />
+          </Field>
+          <Hint>Số gợi ý trích sang Tích luỹ khi lương về.</Hint>
+        </>
+      )}
+      {surplusPct !== undefined && (
+        <>
+          <Field id="c-surplus-pct" label="Dư cuối kỳ vào Tích luỹ (%)" error={errors.surplus_savings_pct}>
+            <input
+              id="c-surplus-pct"
+              class="ctl money"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              autocomplete="off"
+              value={surplusPct}
+              onInput={(ev) => setSurplusPct(ev.currentTarget.value)}
+              {...invalid(errors, "surplus_savings_pct", "c-surplus-pct")}
+            />
+          </Field>
+          <Field id="c-reward" label="Ví Thưởng" error={errors.surplus_reward_account}>
+            <select id="c-reward" class="ctl" value={reward} onChange={(ev) => setReward(ev.currentTarget.value)}>
+              <option value="">Chưa chọn</option>
+              {stale && <option value={stale.id}>{stale.name} (không còn dùng được)</option>}
+              {options.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Hint>Lương mở kỳ mới thì dư Vận hành kỳ trước gợi ý chia: phần trăm này vào Tích luỹ, còn lại chuyển vào Ví Thưởng (một tài khoản ngăn Dự phòng không gắn mục tiêu). Chưa chọn Ví Thưởng thì phần còn lại ở Vận hành.</Hint>
+        </>
+      )}
       <Footer
         busy={busy}
         error={error}
         label="Lưu tham số"
         onSubmit={() =>
           void run(
-            configPayload({ salary_min_amount: salary, interest_max_amount: interest, safety_fund_months: months, month_close_wealth_pct: closePct, month_close_reward_wallet: reward }),
+            configPayload({
+              salary_min_amount: salary,
+              interest_max_amount: interest,
+              safety_fund_months: months,
+              surplus_savings_pct: surplusPct,
+              ...(surplusPct === undefined ? {} : { surplus_reward_account: reward }),
+              payday_day: payday,
+              savings_pct: savingsPct,
+            }),
             (body) => api.put("/v1/settings/config", body),
-            "Đã lưu tham số. Áp dụng từ khoản thu tới.",
+            "Đã lưu tham số. Áp dụng từ kỳ lương tới.",
           )
         }
       />
@@ -1388,7 +1189,7 @@ export function FiConfigSheet({ config, onClose, onSaved }: { config: SettingsCo
       <Field id="fi-safe" label="Mốc an tâm (tháng)" error={errors.safetyMonths}>
         <input id="fi-safe" class="ctl money" autocomplete="off" value={f.safetyMonths} onInput={(ev) => set({ safetyMonths: ev.currentTarget.value })} {...invalid(errors, "safetyMonths", "fi-safe")} />
       </Field>
-      <Hint>Ba số tháng chi phí, tăng dần. Khác Quỹ an tâm ở trên (tiền mặt Tích sản so với chi Must).</Hint>
+      <Hint>Ba số tháng chi phí, tăng dần. Khác phần an tâm ở thẻ Dự phòng.</Hint>
       <Field id="fi-exp" label="Chi phí tháng">
         <AmountInput id="fi-exp" value={f.expense} onChange={(n) => set({ expense: n })} />
       </Field>
@@ -1431,7 +1232,7 @@ export function NotifyScheduleSheet({ schedule, onClose, onSaved }: { schedule: 
       <Field id="n-daily" label="Giờ gửi" error={errors.daily_time}>
         {time("n-daily", "dailyTime", "daily_time")}
       </Field>
-      <Hint>Tắt tin sáng thì ngày 1 không có tin mời chốt tháng — mở Hôm nay để chốt. Đổi giờ sau khi hôm nay đã gửi thì mai mới áp dụng.</Hint>
+      <Hint>Đổi giờ sau khi hôm nay đã gửi thì mai mới áp dụng.</Hint>
       <div class="set-sub">Tổng kết tuần</div>
       <Check id="n-weekly-on" label="Gửi tổng kết tuần" checked={f.weeklyEnabled} onChange={(v) => set({ weeklyEnabled: v })} />
       <Field id="n-weekday" label="Ngày" error={errors.weekly_day}>
@@ -1463,18 +1264,17 @@ export function NotifyScheduleSheet({ schedule, onClose, onSaved }: { schedule: 
 
 // ── Nguồn thu ─────────────────────────────────────────────────────
 
-let lockSeq = 1000;
-
 export function StreamSheet({ d, item, onClose, onSaved }: { d: SettingsData; item: IncomeStream | null; onClose: () => void; onSaved: Saved }) {
   const [f, setF] = useState(() => streamToForm(item));
   const { busy, error, errors, run } = useSubmit(onSaved, onClose);
   const isNew = !item;
-  const wallets = d.wallets.filter((w) => !isIncomeHolding(w) && (w.active || f.locks.some((l) => l.wallet_id === w.id)));
-  const setLock = (key: number, patch: Partial<(typeof f.locks)[number]>) => setF((x) => ({ ...x, locks: x.locks.map((l) => (l.key === key ? { ...l, ...patch } : l)) }));
+  // Nguồn cho thuê không mở kỳ lương (pocket UC-1205): không có công tắc.
+  const rental = useResource<Rental>("/v1/rental");
+  const isRental = !!item && rental.data?.incomeStreamId === item.id;
 
   function submit() {
     void run(
-      streamPayload(f, isNew),
+      streamPayload(f, isNew, isRental),
       (body) => (isNew ? api.post("/v1/settings/income-streams", body) : api.patch(`/v1/settings/income-streams/${encodeURIComponent(item.id)}`, body)),
       `${isNew ? "Đã thêm" : "Đã lưu"} nguồn ${f.name.trim()}. Áp dụng từ khoản thu tới.`,
     );
@@ -1485,46 +1285,23 @@ export function StreamSheet({ d, item, onClose, onSaved }: { d: SettingsData; it
       <Field id="s-name" label="Tên" error={errors.name} first>
         <input id="s-name" class="ctl" value={f.name} maxLength={60} placeholder="Lương vợ" onInput={(ev) => setF({ ...f, name: ev.currentTarget.value })} {...invalid(errors, "name", "s-name")} />
       </Field>
-      <div class="set-sub">Phần khóa trước dòng thác</div>
-      {f.locks.length === 0 && <Hint>Không khóa: cả khoản chảy vào dòng thác như lương thường.</Hint>}
-      {f.locks.map((l, i) => (
-        <div key={l.key}>
-          <div class="field" style={i === 0 ? { borderTop: 0 } : undefined}>
-            <select class="ctl" aria-label={`Ví khóa dòng ${i + 1}`} value={l.wallet_id} onChange={(ev) => setLock(l.key, { wallet_id: ev.currentTarget.value })}>
-              <option value="">Chọn ví</option>
-              {wallets.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.name}
-                </option>
-              ))}
-            </select>
-            <span class="flex items-center gap-2">
-              <input
-                class="ctl money"
-                style={{ width: "72px" }}
-                inputMode="decimal"
-                autocomplete="off"
-                aria-label={`Phần trăm dòng ${i + 1}`}
-                value={l.percent}
-                placeholder="45"
-                onInput={(ev) => setLock(l.key, { percent: ev.currentTarget.value })}
-              />
-              %
-              <button type="button" class="btn btn-ghost" aria-label={`Bỏ dòng ${i + 1}`} onClick={() => setF((x) => ({ ...x, locks: x.locks.filter((y) => y.key !== l.key) }))}>
-                <Icon name="x" size={16} />
-              </button>
-            </span>
-          </div>
-          {errors[`lock-${l.key}`] && <p class="err ferr">{errors[`lock-${l.key}`]}</p>}
-        </div>
-      ))}
-      <div class="field">
-        <button type="button" class="btn" onClick={() => setF((x) => ({ ...x, locks: [...x.locks, { key: ++lockSeq, wallet_id: "", percent: "" }] }))}>
-          <Icon name="plus" size={16} /> Thêm phần khóa
-        </button>
-      </div>
-      {errors.locks && <p class="err ferr">{errors.locks}</p>}
-      <Hint>Khóa 100% thì không chạy dòng thác: cả khoản vào ví khóa (vd tiền người thuê → Thu cho thuê).</Hint>
+      <Field id="s-pocket" label="Ngăn của tiền về">
+        <select id="s-pocket" class="ctl" value={f.pocket ?? ""} onChange={(ev) => setF({ ...f, pocket: (ev.currentTarget.value || null) as Pocket | null })}>
+          <option value="">Theo tài khoản nhận</option>
+          {(["savings", "reserve", "operating"] as const).map((p) => (
+            <option key={p} value={p}>
+              {POCKET_LABEL[p]}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Hint>Theo tài khoản nhận: tiền về tài khoản ngăn nào là tiền của ngăn đó. Chọn một ngăn khi tiền của nguồn này thuộc ngăn khác (vd tiền thuê là Tích luỹ).</Hint>
+      {!isRental && (
+        <>
+          <Check id="s-opens-cycle" label="Mở kỳ lương" checked={f.opens_cycle} onChange={(v) => setF({ ...f, opens_cycle: v })} error={errors.opens_cycle} />
+          <Hint>{OPENS_CYCLE_HINT}</Hint>
+        </>
+      )}
       {!isNew && <Check id="s-active" label="Đang dùng" checked={f.active} onChange={(v) => setF({ ...f, active: v })} />}
       <Footer busy={busy} error={error} label={isNew ? "Thêm nguồn thu" : "Lưu nguồn thu"} onSubmit={submit} />
     </Sheet>
@@ -1643,6 +1420,361 @@ export function RentalConfigSheet({ d, rental, onClose, onSaved }: { d: Settings
           void run(rentalConfigPayload({ headcount, shared_category_ids: cats, income_stream_id: stream }), (body) => api.patch("/v1/rental/config", body), "Đã lưu cấu hình cho thuê.")
         }
       />
+    </Sheet>
+  );
+}
+
+// ── Ba ngăn ───────────────────────────────────────────────────────
+
+/** Ô chọn ngăn của một tài khoản: Tích luỹ / Dự phòng / Vận hành / Ngoài ngăn (null). */
+function PocketSelect(props: { id: string; value: Pocket | null; label?: string; onChange: (p: Pocket | null) => void }) {
+  return (
+    <select id={props.id} class="ctl" aria-label={props.label} value={props.value ?? ""} onChange={(ev) => props.onChange((ev.currentTarget.value || null) as Pocket | null)}>
+      {POCKET_ORDER.map((p) => (
+        <option key={p ?? "outside"} value={p ?? ""}>
+          {p ? POCKET_LABEL[p] : OUTSIDE_LABEL}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+/** Câu của sheet xếp ngăn — cũng là bước 1 của màn chuyển đổi (pocket UC-1208). */
+export const POCKETS_SHEET_NOTE = "Tiền về tài khoản nào là tiền của ngăn đó. Thẻ tín dụng để ở Vận hành. Mỗi mục tiêu Dự phòng cần một tài khoản riêng ở ngăn Dự phòng.";
+
+/**
+ * Xếp tài khoản vào ngăn (UC-709 AC-35): đổi ngăn từng dòng, Xác nhận gửi một lô PUT /v1/settings/pockets. Tài khoản của mục
+ * tiêu đang dùng khoá ở Dự phòng. Màn chuyển đổi dùng lại sheet này ở bước 1 (`onSaved` gửi tiếp "bước này xong").
+ */
+export function PocketsSheet({ d, onClose, onSaved }: { d: SettingsData; onClose: () => void; onSaved: Saved }) {
+  const [choice, setChoice] = useState<PocketChoice>(() => Object.fromEntries(d.accounts.filter((a) => a.active).map((a) => [a.id, a.pocket ?? null])));
+  const { busy, error, run } = useSubmit(onSaved, onClose);
+  const groups = groupAccountsByPocket(d.accounts, choice);
+  const count = d.accounts.filter((a) => a.active).length;
+  return (
+    <Sheet open title="Xếp tài khoản vào ngăn" onClose={onClose}>
+      <Hint>{POCKETS_SHEET_NOTE}</Hint>
+      {groups.map((g) => (
+        <div key={g.key}>
+          <div class="set-sub">{g.label}</div>
+          {g.accounts.length === 0 && <Hint>Chưa có tài khoản nào.</Hint>}
+          {g.accounts.map((a) => {
+            const goal = accountGoal(a.id, d.goals);
+            return (
+              <div key={a.id}>
+                <Field id={`p-${a.id}`} label={a.pocket_confirmed === false ? `${a.name} (chưa xác nhận)` : a.name}>
+                  {goal ? (
+                    <span id={`p-${a.id}`}>{POCKET_LABEL.reserve}</span>
+                  ) : (
+                    <PocketSelect id={`p-${a.id}`} value={choice[a.id] ?? null} onChange={(p) => setChoice((x) => ({ ...x, [a.id]: p }))} />
+                  )}
+                </Field>
+                {goal && (
+                  <Hint>
+                    Tài khoản của mục tiêu {goal.name}. {GOAL_POCKET_LOCK}.
+                  </Hint>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+      <Footer
+        busy={busy}
+        error={error}
+        label="Xác nhận"
+        onSubmit={() => void run({ ok: true, value: pocketsPayload(d.accounts, choice) }, (body) => api.put("/v1/settings/pockets", body), `Đã xác nhận ngăn của ${count} tài khoản.`)}
+      />
+    </Sheet>
+  );
+}
+
+/** Giá trị của "Tạo tài khoản mới" trong ô Tài khoản của mục tiêu (mã tài khoản là slug, không có dấu +). */
+export const NEW_ACCOUNT = "+new";
+/** Tài khoản mới đang chờ gửi cùng mục tiêu mới (thêm mục tiêu: tạo mục tiêu trước, rồi tạo + gắn tài khoản). */
+const PENDING_ACCOUNT = "+pending";
+
+/**
+ * Thêm / sửa mục tiêu Dự phòng (UC-709 AC-36, AC-39, pocket UC-1209): tên, Tài khoản (tài khoản Dự phòng chưa gắn mục tiêu,
+ * không phải Ví Thưởng / "Tạo tài khoản mới" / "Chưa có"), cách đặt số, hạn, gắn nợ. "Tạo tài khoản mới" mở sheet tài khoản
+ * điền sẵn tên mục tiêu, ngăn Dự phòng (pocket UC-1208, sheet mục tiêu): sửa mục tiêu đã có → lưu sheet tài khoản là tạo và
+ * gắn ngay (`POST /v1/settings/goals/:id/account`); thêm mục tiêu mới → giữ thân tài khoản, Lưu tạo mục tiêu (không
+ * `account_id`) rồi tạo + gắn. Bước hai lỗi → sheet thành sửa mục tiêu vừa tạo, giữ lựa chọn và thân; Lưu lại chỉ gửi bước
+ * hai. `prefill`: gợi ý "Tạo mục tiêu Trả nợ" điền sẵn.
+ */
+export function GoalSheet({ d, item, prefill, onClose, onSaved }: { d: SettingsData; item: ReserveGoal | null; prefill?: GoalForm; onClose: () => void; onSaved: Saved }) {
+  const [f, setF] = useState<GoalForm>(() => prefill ?? goalToForm(item));
+  const set = (patch: Partial<GoalForm>) => setF((x) => ({ ...x, ...patch }));
+  const { busy, error, errors, run } = useSubmit(onSaved, onClose);
+  const [creating, setCreating] = useState(false);
+  // Tài khoản vừa tạo ở sheet con: cài đặt tải lại sau, nên giữ ở đây để ô chọn có ngay.
+  const [created, setCreated] = useState<SettingsAccount | null>(null);
+  // Thêm mục tiêu mới: thân tài khoản chờ gửi; mục tiêu đã tạo ở bước một khi bước hai lỗi.
+  const [pendingAccount, setPendingAccount] = useState<Record<string, unknown> | null>(null);
+  const [createdGoal, setCreatedGoal] = useState<ReserveGoal | null>(null);
+  const goal = item ?? createdGoal;
+  const debts = useResource<DebtsData>("/v1/debts");
+  const isNew = !goal;
+  const e = (k: string) => ({ id: `g-${k}`, error: errors[k] });
+  const accounts = created && !d.accounts.some((a) => a.id === created.id) ? [...d.accounts, created] : d.accounts;
+  const options = goalAccountOptions(accounts, d.goals, d.config.surplus_reward_account, goal?.id ?? null);
+  // Tài khoản đã gắn mà nay không chọn được vẫn hiện để biết.
+  const stale = f.account_id && !options.some((a) => a.id === f.account_id) ? (accounts.find((a) => a.id === f.account_id) ?? { id: f.account_id, name: f.account_id }) : null;
+  const debtOptions = (debts.data?.debts ?? []).filter((x) => x.active || x.id === f.debt_id);
+
+  /** Tạo tài khoản và gắn vào mục tiêu `goalId` trong một yêu cầu (pocket UC-1209 bước 8); gửi lại cùng thân không tạo thêm. */
+  async function createGoalAccount(goalId: string, body: Record<string, unknown>) {
+    const r = goalAccountRequest(goalId, body);
+    const res = await api.post<GoalAccountResult>(r.path, r.body);
+    setCreated(res.account);
+    set({ account_id: res.account.id });
+    setPendingAccount(null);
+  }
+
+  function submit() {
+    const name = f.name.trim();
+    const pendingName = String(pendingAccount?.name ?? "");
+    if (pendingAccount && createdGoal) {
+      // Lưu lại sau khi bước hai lỗi: chỉ gửi lại bước hai, đúng thân cũ.
+      return void run({ ok: true, value: pendingAccount }, (body) => createGoalAccount(createdGoal.id, body), `Đã tạo ${pendingName} và gắn vào ${createdGoal.name}`);
+    }
+    if (pendingAccount && !goal) {
+      const account = pendingAccount;
+      return void run(
+        goalPayload(f, null),
+        async (body) => {
+          const r = goalCreateRequest(body);
+          const g = await api.post<ReserveGoal>(r.path, r.body);
+          setCreatedGoal(g);
+          await createGoalAccount(g.id, account);
+        },
+        `Đã thêm mục tiêu ${name}, tạo ${pendingName} và gắn vào.`,
+      );
+    }
+    void run(
+      goalPayload(f, goal),
+      (body) => (goal ? api.patch(`/v1/settings/goals/${encodeURIComponent(goal.id)}`, body) : api.post("/v1/settings/goals", body)),
+      `${isNew ? "Đã thêm" : "Đã lưu"} mục tiêu ${name}.`,
+    );
+  }
+
+  return (
+    <Sheet open title={goal ? `Sửa ${goal.name}` : prefill ? `Tạo mục tiêu ${prefill.name}` : "Thêm mục tiêu Dự phòng"} onClose={onClose}>
+      <Field {...e("name")} label="Tên" first>
+        <input id="g-name" class="ctl" value={f.name} maxLength={60} placeholder="Học phí" onInput={(ev) => set({ name: ev.currentTarget.value })} {...invalid(errors, "name", "g-name")} />
+      </Field>
+      <Field {...e("account_id")} label="Tài khoản">
+        <select
+          id="g-account_id"
+          class="ctl"
+          value={pendingAccount ? PENDING_ACCOUNT : f.account_id}
+          onChange={(ev) => {
+            const v = ev.currentTarget.value;
+            if (v === NEW_ACCOUNT) {
+              // Ô chọn giữ giá trị cũ cho tới khi tài khoản mới lưu xong.
+              ev.currentTarget.value = pendingAccount ? PENDING_ACCOUNT : f.account_id;
+              setCreating(true);
+            } else if (v !== PENDING_ACCOUNT) {
+              setPendingAccount(null);
+              set({ account_id: v });
+            }
+          }}
+        >
+          <option value="">Chưa có</option>
+          {stale && <option value={stale.id}>{stale.name} (không còn chọn được)</option>}
+          {options.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name}
+            </option>
+          ))}
+          {pendingAccount && <option value={PENDING_ACCOUNT}>Tài khoản mới: {String(pendingAccount.name ?? "")}</option>}
+          <option value={NEW_ACCOUNT}>Tạo tài khoản mới</option>
+        </select>
+      </Field>
+      <Hint>Mỗi mục tiêu là một tài khoản thật ở ngăn Dự phòng; số đã có là số dư của tài khoản đó. Chưa có tài khoản thì mục tiêu chưa có việc nạp ở ngày lương.</Hint>
+      <Field id="g-mode" label="Cách đặt số" wrap>
+        <Seg label="Cách đặt số" value={f.mode} onChange={(mode) => set({ mode })} options={(["repeat", "once", "pct"] as const).map((m) => ({ value: m, label: GOAL_MODE_LABEL[m] }))} />
+      </Field>
+      {f.mode === "repeat" && (
+        <>
+          <Field {...e("monthly_amount")} label="Số mỗi tháng">
+            <AmountInput id="g-monthly_amount" value={f.monthly_amount} invalid={Boolean(errors.monthly_amount)} onChange={(n) => set({ monthly_amount: n })} />
+          </Field>
+          <Field {...e("repeat_months")} label="Mấy tháng một lần">
+            <input
+              id="g-repeat_months"
+              class="ctl money"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              autocomplete="off"
+              value={f.repeat_months}
+              onInput={(ev) => set({ repeat_months: ev.currentTarget.value })}
+              {...invalid(errors, "repeat_months", "g-repeat_months")}
+            />
+          </Field>
+          <Hint>Số cần mỗi lần = số mỗi tháng × số tháng (vd 2.000.000/tháng, 3 tháng một lần → 6.000.000).</Hint>
+        </>
+      )}
+      {f.mode === "once" && (
+        <Field {...e("target_amount")} label="Số cần">
+          <AmountInput id="g-target_amount" value={f.target_amount} invalid={Boolean(errors.target_amount)} onChange={(n) => set({ target_amount: n })} />
+        </Field>
+      )}
+      {f.mode === "pct" && (
+        <>
+          <Field {...e("target_pct")} label="% thu chịu thuế">
+            <input
+              id="g-target_pct"
+              class="ctl money"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              autocomplete="off"
+              value={f.target_pct}
+              placeholder="10"
+              onInput={(ev) => set({ target_pct: ev.currentTarget.value })}
+              {...invalid(errors, "target_pct", "g-target_pct")}
+            />
+          </Field>
+          <Hint>Không có số cần cố định; số cần tính theo các khoản thu chịu thuế.</Hint>
+        </>
+      )}
+      <Field {...e("due_date")} label={f.mode === "repeat" ? "Hạn kế tiếp" : "Hạn"}>
+        <input id="g-due_date" class="ctl" type="date" value={f.due_date} onInput={(ev) => set({ due_date: ev.currentTarget.value })} />
+      </Field>
+      <Field {...e("debt_id")} label="Gắn khoản nợ">
+        <select id="g-debt_id" class="ctl" value={f.debt_id} onChange={(ev) => set({ debt_id: ev.currentTarget.value })}>
+          <option value="">Không</option>
+          {f.debt_id && !debtOptions.some((x) => x.id === f.debt_id) && <option value={f.debt_id}>{f.debt_id}</option>}
+          {debtOptions.map((x) => (
+            <option key={x.id} value={x.id}>
+              {x.name}
+            </option>
+          ))}
+        </select>
+      </Field>
+      {!isNew && <Check id="g-active" label="Đang dùng" checked={f.active} onChange={(v) => set({ active: v })} />}
+      {!isNew && !f.active && <Hint>Tắt lúc nào cũng được: tiền vẫn nằm trong tài khoản, tài khoản thành tài khoản Dự phòng thường. Không xoá — lịch sử vẫn giữ.</Hint>}
+      <Footer busy={busy} error={error} label={pendingAccount && createdGoal ? "Lưu lại" : isNew ? "Thêm mục tiêu" : "Lưu mục tiêu"} onSubmit={submit} />
+      {creating && (
+        <AccountSheet
+          d={d}
+          item={null}
+          preset={{ name: f.name.trim(), pocket: "reserve", pocket_touched: true }}
+          create={
+            goal
+              ? { send: (body) => createGoalAccount(goal.id, body), toast: (name) => `Đã tạo ${name} và gắn vào ${goal.name}` }
+              : {
+                  // Mục tiêu chưa có mã: giữ thân, Lưu mục tiêu gửi cả hai bước.
+                  send: async (body) => {
+                    setPendingAccount(body);
+                    set({ account_id: "" });
+                  },
+                  toast: (name) => name,
+                }
+          }
+          onClose={() => setCreating(false)}
+          onSaved={goal ? onSaved : async () => {}}
+        />
+      )}
+    </Sheet>
+  );
+}
+
+/**
+ * Thêm / sửa nhóm danh mục và hạn mức mềm mỗi kỳ lương (UC-709 AC-39). Sửa thì chọn danh mục vào / ra nhóm ngay
+ * (PATCH /v1/categories/:id), không cần bấm Lưu.
+ */
+export function GroupSheet({ d, item, onClose, onSaved }: { d: SettingsData; item: CategoryGroup | null; onClose: () => void; onSaved: Saved }) {
+  const { online } = useApp();
+  const [f, setF] = useState(() => groupToForm(item));
+  const set = (patch: Partial<typeof f>) => setF((x) => ({ ...x, ...patch }));
+  const { busy, error, errors, run } = useSubmit(onSaved, onClose);
+  const [moving, setMoving] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const isNew = !item;
+  const groups = d.categoryGroups ?? [];
+  const inGroup = item ? d.categories.filter((c) => c.groupId === item.id) : [];
+  const others = item ? d.categories.filter((c) => c.groupId !== item.id) : [];
+
+  async function move(categoryId: string, groupId: string | null, text: string) {
+    setMoving(true);
+    setMoveError(null);
+    try {
+      await api.patch(`/v1/categories/${encodeURIComponent(categoryId)}`, { group_id: groupId });
+      await onSaved(text);
+    } catch (err) {
+      setMoveError(errorText(err));
+    } finally {
+      setMoving(false);
+    }
+  }
+
+  return (
+    <Sheet open title={isNew ? "Thêm nhóm danh mục" : `Sửa ${item.name}`} onClose={onClose}>
+      <Field id="g-name" label="Tên" error={errors.name} first>
+        <input id="g-name" class="ctl" value={f.name} maxLength={60} placeholder="Ăn uống" onInput={(ev) => set({ name: ev.currentTarget.value })} {...invalid(errors, "name", "g-name")} />
+      </Field>
+      <Check id="g-essential" label="Thiết yếu" checked={f.essential} onChange={(v) => set({ essential: v })} />
+      <Field id="g-limit" label="Hạn mức mỗi kỳ lương">
+        <AmountInput id="g-limit" value={f.cycle_limit} onChange={(n) => set({ cycle_limit: n })} />
+      </Field>
+      <Hint>Để trống là không đặt. Hạn mức mềm chỉ để nhìn lại, không giữ tiền, không âm, không bù.</Hint>
+      {!isNew && <Check id="g-active" label="Đang dùng" checked={f.active} onChange={(v) => set({ active: v })} />}
+      <Footer
+        busy={busy}
+        error={error}
+        label={isNew ? "Thêm nhóm" : "Lưu nhóm"}
+        onSubmit={() =>
+          void run(
+            groupPayload(f, item),
+            (body) => (isNew ? api.post("/v1/settings/category-groups", body) : api.patch(`/v1/settings/category-groups/${encodeURIComponent(item.id)}`, body)),
+            `${isNew ? "Đã thêm" : "Đã lưu"} nhóm ${f.name.trim()}.`,
+          )
+        }
+      />
+      {item && (
+        <>
+          <div class="set-sub">Danh mục trong nhóm</div>
+          {inGroup.length === 0 && <Hint>Chưa có danh mục nào.</Hint>}
+          {inGroup.map((c) => (
+            <div key={c.id} class="field">
+              <span class="k">{c.name}</span>
+              <button type="button" class="btn btn-ghost" disabled={!online || moving} onClick={() => void move(c.id, null, `Đã bỏ ${c.name} khỏi nhóm ${item.name}.`)}>
+                Bỏ khỏi nhóm
+              </button>
+            </div>
+          ))}
+          {item.active && others.length > 0 && (
+            <Field id="g-add" label="Thêm danh mục">
+              <select
+                id="g-add"
+                class="ctl"
+                value=""
+                disabled={!online || moving}
+                onChange={(ev) => {
+                  const c = others.find((x) => x.id === ev.currentTarget.value);
+                  if (c) void move(c.id, item.id, `Đã chuyển ${c.name} vào nhóm ${item.name}.`);
+                }}
+              >
+                <option value="">Chọn danh mục</option>
+                {others.map((c) => {
+                  const from = groups.find((g) => g.id === c.groupId)?.name;
+                  return (
+                    <option key={c.id} value={c.id}>
+                      {from ? `${c.name} (đang ở ${from})` : c.name}
+                    </option>
+                  );
+                })}
+              </select>
+            </Field>
+          )}
+          {moveError && (
+            <p class="err" role="alert">
+              {moveError}
+            </p>
+          )}
+        </>
+      )}
     </Sheet>
   );
 }

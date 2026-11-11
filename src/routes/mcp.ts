@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { Env } from "../env";
 import { registerTools, WRITE_TOOLS } from "../mcp/tools";
+import { notifyPayCycle } from "../notify/pay-cycle";
 import { SCOPE_READ, SCOPE_WRITE, type GrantProps } from "../oauth/server";
 
 /** Body JSON-RPC (một thông điệp hay một mảng) có gọi tool ghi nào không. Body hỏng để transport MCP tự trả lỗi. */
@@ -31,7 +32,8 @@ export const mcpHandler = {
     if (!scope.includes(SCOPE_READ)) return insufficientScope(ctx.auth, [SCOPE_READ]);
     if (!scope.includes(SCOPE_WRITE) && (await callsWriteTool(request))) return insufficientScope(ctx.auth, [SCOPE_READ, SCOPE_WRITE]);
     const server = new McpServer({ name: "vi-nha", version: "1.0.0" });
-    await registerTools(server, env.DB, ctx.props.memberId, () => new Date());
+    // Kỳ lương vừa mở qua add_transaction / assign_log → báo cả nhà sau khi trả lời (notify UC-412).
+    await registerTools(server, env.DB, ctx.props.memberId, () => new Date(), (payday) => ctx.waitUntil(notifyPayCycle(env, payday)));
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport);
     return transport.handleRequest(request);

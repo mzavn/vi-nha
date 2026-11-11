@@ -1,7 +1,7 @@
 // Hình dạng dữ liệu của /v1. Lấy thẳng kiểu từ src/domain để client không lệch hợp đồng với server.
 
-import type { AllocationResult } from "../../../src/domain/allocation";
 import type { ManualMeaning } from "../../../src/domain/entry";
+import type { PayCycleTask, PayCycleView, QrTarget, TaskKind } from "../../../src/domain/pay-cycle";
 import type {
   CashFlow,
   CashFlowGroup,
@@ -27,11 +27,26 @@ import type {
   ProjectionStart,
   SafetyMilestone,
 } from "../../../src/domain/freedom";
-import type { Snapshot } from "../../../src/domain/snapshot";
-import type { TransferOrderDraft } from "../../../src/domain/transfer-orders";
-import type { AccountRef, AccountRole, CategoryRef, MemberRef, WalletRef } from "../../../src/domain/types";
+import type { Snapshot as DomainSnapshot } from "../../../src/domain/snapshot";
+import type { AccountRef as DomainAccountRef, CategoryRef as DomainCategoryRef, MemberRef } from "../../../src/domain/types";
 
-export type { AccountRef, AccountRole, CategoryRef, ManualMeaning, MemberRef, Snapshot };
+export type { ManualMeaning, MemberRef, PayCycleTask, PayCycleView, QrTarget, TaskKind };
+
+/** Tài khoản trong bootstrap (UC-111): `private` = cờ tài khoản riêng tư, `hiddenFromMe` = riêng tư của người khác (UC-504). */
+export type AccountRef = DomainAccountRef & { private?: boolean; hiddenFromMe?: boolean };
+/** Danh mục trong bootstrap: không còn ví mặc định (UC-109). */
+export type CategoryRef = Omit<DomainCategoryRef, "defaultWalletId">;
+
+/**
+ * GET /v1/snapshot (ledger UC-103, Đợt C): thêm kỳ lương hiện tại và danh sách việc (`payCycle`), `paySetup`, số log chờ của
+ * tài khoản riêng tư bị giấu. Bản lưu offline cũ thiếu ba trường mới: coi như không kỳ / đã có nguồn mở kỳ / 0.
+ */
+export type Snapshot = Omit<DomainSnapshot, "attention"> & {
+  attention: DomainSnapshot["attention"] & { hiddenPendingLogs?: number };
+  payCycle?: PayCycleView | null;
+  paySetup?: { hasCycleStream: boolean };
+};
+
 export type { CashFlow, CashFlowGroup, CashFlowLine, CashFlowLineKey, CashFlowMonth, IncomeStatement, IncomeStatementMonth, ReportClass, StatementLine };
 export type {
   Freedom,
@@ -48,12 +63,9 @@ export type {
   SafetyMilestone,
 };
 
-export type Wallet = WalletRef & { hidden: boolean };
-
 export interface Bootstrap {
   member: MemberRef | null;
   members: MemberRef[];
-  wallets: Wallet[];
   categories: CategoryRef[];
   accounts: AccountRef[];
   categoryUsage: Record<string, number>;
@@ -63,15 +75,13 @@ export interface Bootstrap {
   receivables?: ReceivableRef[];
 }
 
-/** Thân POST /v1/transactions. `at` luôn gửi kèm: khoản nhập offline phải mang giờ lúc nhập, không phải giờ đồng bộ. */
+/** Thân POST /v1/transactions. `at` luôn gửi kèm: khoản nhập offline phải mang giờ lúc nhập, không phải giờ đồng bộ. Không còn ví (Đợt C). */
 export interface EntryBody {
   meaning: ManualMeaning;
   amount: number;
   at: string;
   client_id: string;
   category_id?: string;
-  wallet_id?: string;
-  from_wallet_id?: string;
   account_id?: string;
   to_account_id?: string;
   note?: string;
@@ -88,15 +98,20 @@ export interface EntryBody {
   interest_debt_id?: string;
   /** Người nhập xác nhận khoản SePay đã báo (409 `bank_log_exists`) là khoản thật thứ hai. */
   confirm_duplicate?: boolean;
+  /** Thu nhập: "Lương — mở kỳ lương" (pocket UC-1205); thiếu = theo cờ của nguồn. */
+  opens_cycle?: boolean;
 }
 
-/** `wallet` trong phản hồi POST /v1/transactions (ledger.walletStatus). */
-export interface WalletStatus {
-  walletId: string;
-  name: string;
-  balance: number | null;
-  weekRemaining: number | null;
-  monthRemaining: number | null;
+/** Hệ quả lên kỳ lương của một lần ghi (POST /v1/transactions, /replace, gán log). */
+export interface EntryEffects {
+  cycle: { opened: boolean; startedAt: string; payday: string; tasks: number } | null;
+  tasksDone: { id: number; kind: TaskKind }[];
+}
+
+/** Tiền vận hành sau khi ghi — cho toast "Đã ghi · Vận hành còn …" (UC-703). */
+export interface EntryNearSpend {
+  amount: number;
+  perDay: number | null;
 }
 
 /** Một dòng sổ (GET /v1/transactions, GET /v1/transactions/:id). */
@@ -106,15 +121,12 @@ export interface TxRow {
   amount: number;
   meaning: string;
   status: string;
-  wallet_id: string | null;
-  counter_wallet_id: string | null;
   account_id: string | null;
   counter_account_id: string | null;
   category_id: string | null;
   asset_kind: string | null;
   note: string | null;
   category_name?: string | null;
-  wallet_name?: string | null;
   by_member_id?: string | null;
   source?: string | null;
   log_id?: string | null;
@@ -137,7 +149,14 @@ export interface TxRow {
   link?: TxLink | null;
   /** Lý do lần chia khoản thu này không trả cho mình (Tích sản 0, ADR-112); null nếu không có. */
   wealth_note?: string | null;
+  /** Loại chi cũ chép từ phe của ví lúc lên v2 (ADR-131); null ở khoản mới và khoản cũ không ví. */
+  legacy_class?: LegacyClass | null;
+  /** Khoản cũ (id ≤ `config.legacy_max_tx_id`): Sổ gắn nhãn "cách tính cũ". */
+  legacy?: boolean;
 }
+
+/** Loại chi (cách tính cũ) của giao dịch trước v2 (transactions.legacy_class). */
+export type LegacyClass = "essential" | "flex" | "tax" | "savings" | "holding";
 
 export interface TxLinkedFrom {
   id: number;
@@ -166,54 +185,9 @@ export interface TxSummary {
   adjust_out: number;
 }
 
-/** Một tài khoản Tích sản ở GET /v1/wealth-building (và, không có log chờ, ở GET /v1/networth) — ADR-88. */
-export interface WealthBuildingAccount {
-  accountId: string;
-  name: string;
-  role: AccountRole;
-  memberId: string | null;
-  memberName: string | null;
-  balance: number;
-  pendingCount: number;
-  pendingNet: number;
-}
-
-/** GET /v1/wealth-building: Tích sản theo loại, chỗ nằm (heo, phao, sổ tiết kiệm), nguồn vào / ra (ledger UC-107, ADR-86, ADR-88). */
-export interface WealthBuildingBreakdown {
-  walletId: string;
-  name: string;
-  cash: number;
-  assets: number;
-  /** Tài khoản Tích sản: số dư sổ (có thể âm), log còn chờ gán — `pendingNet` theo phía tài khoản đó (chuyển vào +, rút về −). */
-  accounts: WealthBuildingAccount[];
-  /** Dòng còn hiệu lực chạm ví Tích sản, gộp theo nguồn; `count` = số lần (một lô chia / chốt tháng tính một lần). */
-  flows: {
-    kind: AccountRole | "fund" | "sweep" | "tax" | "opening" | "wallet" | "other" | "buy_asset";
-    direction: "in" | "out";
-    accountId: string | null;
-    accountName: string | null;
-    memberName: string | null;
-    walletId: string | null;
-    walletName: string | null;
-    walletActive: boolean | null;
-    assetKind: string | null;
-    count: number;
-    amount: number;
-  }[];
-  /** Lần chia không trả cho mình (Tích sản 0, có lý do) của khoản thu còn hiệu lực — mới trước, tối đa 50 (ADR-112). */
-  skippedRuns: {
-    incomeTxId: number;
-    at: string;
-    amount: number;
-    incomeNote: string | null;
-    streamName: string | null;
-    wealthNote: string;
-  }[];
-}
-
 /**
  * GET /v1/transactions/link-candidates: một khoản gốc còn hiệu lực (khoản chi / khoản cho vay) để nối khoản tiền về.
- * `wallet_id` là ví khoản chi đã trừ (khoản cho vay: null); `receivable_id` là người vay (khoản chi: null).
+ * `receivable_id` là người vay (khoản chi: null).
  */
 export interface LinkCandidate {
   id: number;
@@ -221,8 +195,6 @@ export interface LinkCandidate {
   amount: number;
   category_id: string | null;
   category_name: string | null;
-  wallet_id: string | null;
-  wallet_name: string | null;
   receivable_id: string | null;
   receivable_name: string | null;
   note: string | null;
@@ -232,127 +204,14 @@ export interface LinkCandidate {
 export interface CreateEntryResult {
   tx: TxRow;
   duplicate: boolean;
-  wallet: WalletStatus | null;
+  nearSpend?: EntryNearSpend | null;
+  effects?: EntryEffects;
 }
 
 /** POST /v1/transactions/:id/replace: khoản mới, id khoản cũ vừa huỷ. */
 export interface ReplaceEntryResult extends CreateEntryResult {
   replaced: number;
 }
-
-/** Tích sản của một bản chia (ADR-112): số trong `funds`, và khoản thu này có chỉnh được Tích sản không (false = nguồn khóa 100%). */
-export interface AllocationWealth {
-  walletId: string;
-  amount: number;
-  adjustable: boolean;
-}
-
-/** POST /v1/allocate/preview. `wealth` null khi nhà chưa có ví Tích sản. */
-export type AllocationPlan = AllocationResult & { transferOrders: TransferOrderDraft[]; wealth: AllocationWealth | null };
-
-/** POST /v1/allocate: kèm lý do Tích sản 0 đã lưu (null nếu không có). */
-export type AllocateResult = AllocationPlan & { batchId: string; wealthNote: string | null };
-
-/** Một ví tham gia chốt tháng (allocation UC-207). Mọi số do server tính. */
-export interface MonthCloseParticipant {
-  walletId: string;
-  name: string;
-  /** Số dư cộng dồn tới hết tháng được chốt. */
-  monthEndBalance: number;
-  /** Phần âm còn phải bù (đã trừ phần lương tháng sau rót vào). */
-  hole: number;
-  coveredByNextIncome: number;
-  contributed: number;
-  coverReceived: number;
-  toWealth: number;
-  toReward: number;
-  /** Số dư hiện tại và sau khi chốt. */
-  balanceNow: number;
-  balanceAfter: number;
-}
-
-export interface MonthCloseCover {
-  fromWalletId: string;
-  toWalletId: string;
-  amount: number;
-}
-
-export interface MonthCloseSweep {
-  fromWalletId: string;
-  toWalletId: string;
-  kind: "wealth" | "reward";
-  amount: number;
-}
-
-/** GET /v1/month-close khi tháng liền trước chưa chốt. */
-export interface MonthCloseOpen {
-  month: string;
-  closed: false;
-  wealthPct: number;
-  defaultWealthPct: number;
-  wealthWalletId: string;
-  /** null = chưa đặt Ví Thưởng hoặc ví đó không còn hợp lệ; khi đó wealthPct luôn 100. */
-  rewardWalletId: string | null;
-  positiveTotal: number;
-  holeTotal: number;
-  covered: number;
-  profit: number;
-  toWealth: number;
-  toReward: number;
-  participants: MonthCloseParticipant[];
-  covers: MonthCloseCover[];
-  sweeps: MonthCloseSweep[];
-  transferOrders: TransferOrderDraft[];
-  /** Ví âm sau khi chốt (đã tiêu tiền dư của tháng chốt sang tháng sau). */
-  warnings: { walletId: string; name: string; balanceAfter: number }[];
-}
-
-/** GET /v1/month-close khi tháng liền trước đã chốt. `closedAt` dạng `YYYY-MM-DD HH:MM:SS` (UTC). */
-export interface MonthCloseDone {
-  month: string;
-  closed: true;
-  closedAt: string;
-  byMemberId: string | null;
-  wealthPct: number;
-}
-
-export type MonthCloseView = MonthCloseOpen | MonthCloseDone;
-
-/** POST /v1/month-close (201). */
-export type MonthCloseResult = Omit<MonthCloseOpen, "closed"> & { closed: true; batchId: string; closedAt: string };
-
-export interface BudgetLine {
-  walletId: string;
-  name: string;
-  tier: WalletRef["tier"];
-  mustGroup: WalletRef["mustGroup"];
-  target: number | null;
-  spent: number | null;
-  remaining: number | null;
-  /** Số dư hiện tại của ví (không theo kỳ); null = ví riêng tư của người khác. */
-  balance?: number | null;
-}
-
-export interface Budget {
-  period: string;
-  kind: "week" | "month";
-  weeks: number;
-  lines: BudgetLine[];
-  /** Kỳ tháng: dòng lãi dự kiến từng khoản nợ có lãi (ví "Lãi vay"); kỳ tuần / bản cache cũ: thiếu. */
-  interestLines?: InterestLine[];
-}
-
-/** Lãi dự kiến tháng của một khoản nợ (Công thức 18) và số đã trả lãi trong tháng. */
-export interface InterestLine {
-  debtId: string;
-  name: string;
-  expected: number;
-  paid: number;
-  dueDay: number | null;
-}
-
-/** Ví giữ riêng (tier holding, kind khác holding), ví dụ "Thu cho thuê". */
-export type Reserve = Snapshot["reserves"][number];
 
 export interface AccountRow {
   accountId: string;
@@ -365,33 +224,6 @@ export interface AccountRow {
   pendingCount: number | null;
   lastAt: string | null;
   lastCountAt: string | null;
-}
-
-export interface SpendByCategory {
-  month: string;
-  previous: string;
-  categories: { categoryId: string; name: string; spent: number; previousSpent: number }[];
-}
-
-export interface TransferOrder {
-  id: number;
-  batch_id: string;
-  from_account_id: string;
-  to_account_id: string;
-  from_name: string;
-  to_name: string;
-  amount: number;
-  memo: string;
-  /** Các ví nhận tiền của lệnh này (cùng lô, ở tài khoản đích), vd "Tích sản, Thuế"; null với lệnh không gắn ví. */
-  wallet_names: string | null;
-  /** Tài khoản nhận — cho mã QR (pwa UC-707, ADR-116). */
-  to_kind: string;
-  to_bank: string | null;
-  to_account_no: string | null;
-  to_sub_account: string | null;
-  to_sepay_enabled: number;
-  status: "pending" | "done" | "skipped";
-  created_at: string;
 }
 
 export interface CountResult {
@@ -414,7 +246,6 @@ export interface BankLog {
   content: string | null;
   suggestion?: {
     meaning?: string | null;
-    wallet_id?: string | null;
     category_id?: string | null;
     is_salary?: boolean | null;
     /** Log khác (webhook ↔ rà soát đêm) có thể là cùng giao dịch này. */
@@ -424,12 +255,11 @@ export interface BankLog {
     tenant_id?: string | null;
     /** Lời nhắc kèm gợi ý, vd log tiền ra của tài khoản SePay đang để "chỉ tiền vào" (ADR-66). */
     note?: string | null;
-    /** transfer: tài khoản đầu kia và chuyển ví đi kèm (rút tiền mặt, bỏ heo đất — ADR-77/ADR-82; heo trả về chỉ có tài khoản). */
+    /** transfer: tài khoản đầu kia (rút tiền mặt, bỏ heo đất, heo trả về — chỉ tài khoản). */
     other_account_id?: string | null;
-    from_wallet_id?: string | null;
     /** Chân còn lại của chuyển nội bộ đã ghi (ADR-81): gán Chuyển nội bộ với `other_account_id` là gắn vào giao dịch này. */
     attach_to_tx?: number | null;
-    /** Log lãi tiền gửi (change 261018-lai-tien-gui): gán Lãi tiền gửi, `wallet_id` = ví nhận lãi (null = chưa chọn được). */
+    /** Log lãi tiền gửi (change 261018-lai-tien-gui): gán Lãi tiền gửi. */
     interest?: boolean | null;
   } | null;
   /** "Đã nhập tay?": khoản nhập tay khớp log (chiều, số tiền, ngày lệch ≤ 1) — Nối là gắn log vào đó, không ghi thêm. */
@@ -473,45 +303,46 @@ export interface SettingsAccount {
   active: boolean;
   /** Ngày tắt (YYYY-MM-DD giờ VN); null khi đang dùng hoặc tắt từ trước v1.31. */
   deactivated_at: string | null;
-  /** Heo đất, sổ tiết kiệm (ADR-77, ADR-88): không bao giờ tính vào "Tiền chi được". */
-  locked: boolean;
-  /** "Tính vào tiền chi được" (ADR-85). */
-  spendable: boolean;
-  /** Tài khoản Tích sản (ADR-88); null = tài khoản thường. */
-  role: AccountRole | null;
   /** Số dư sổ hiện có (ledger `v_account_book`); null khi tài khoản đã tắt. */
   book_balance: number | null;
+  /** Ngăn của tài khoản (v2, UC-1201); null = ngoài ngăn. Bản cài đặt lưu offline cũ thiếu hai trường này. */
+  pocket?: Pocket | null;
+  /** Người đã xác nhận ngăn (bản cập nhật chỉ đề xuất). */
+  pocket_confirmed?: boolean;
+  /** Tài khoản riêng tư (UC-504): người khác chỉ thấy tổng. Bản cài đặt lưu offline cũ thiếu. */
+  private?: boolean;
 }
 
-export type AllocationMode = "flat" | "percent" | "goal" | "lump" | "remainder";
+/** Ba ngăn (v2): Tích luỹ · Dự phòng · Vận hành. */
+export type Pocket = "savings" | "reserve" | "operating";
 
-export interface Allocation {
-  mode: AllocationMode;
-  period: "week" | "month" | null;
-  amount: number | null;
-  /** Phân số như trong DB: 0.3 = 30%. */
-  percent: number | null;
-  target_amount: number | null;
-  target_date: string | null;
-  floor_amount: number | null;
-  priority: number;
-  /** Chỉ có trong GET: phong bì tháng chia đều theo tuần. Gửi lên bằng `split_weekly`. */
-  splitWeekly?: boolean;
-}
-
-export interface SettingsWallet {
+/** Mục tiêu Dự phòng (GET /v1/settings › goals, UC-1209). `held` = số dư tài khoản gắn; null = chưa gắn tài khoản. */
+export interface ReserveGoal {
   id: string;
   name: string;
-  tier: "holding" | "wealth_building" | "tax" | "nice" | "must";
-  must_group: "must" | "have" | null;
-  kind: "envelope" | "accrual" | "bill" | "holding";
-  scope: "shared" | "personal";
-  member_id: string | null;
   account_id: string | null;
-  private: boolean;
+  /** Tài khoản đề xuất của bản cập nhật (chỉ gợi ý cho màn chuyển đổi, không phải gắn); null = không có. */
+  suggested_account_id: string | null;
+  held: number | null;
+  target_amount: number | null;
+  target_pct: number | null;
+  monthly_amount: number | null;
+  repeat_months: number | null;
+  /** YYYY-MM-DD; null = chưa đặt. */
+  due_date: string | null;
+  debt_id: string | null;
   sort: number;
   active: boolean;
-  allocation: Allocation | null;
+}
+
+/** Nhóm danh mục và hạn mức mềm mỗi kỳ lương (UC-1204); `cycle_limit` null = không đặt. */
+export interface CategoryGroup {
+  id: string;
+  name: string;
+  essential: boolean;
+  cycle_limit: number | null;
+  sort: number;
+  active: boolean;
 }
 
 export interface SettingsMember {
@@ -533,20 +364,22 @@ export interface Rule {
   pattern: string;
   meaning: "spend" | "transfer" | "income";
   is_salary: boolean;
-  wallet_id: string | null;
   category_id: string | null;
   by_member_id: string | null;
   active: boolean;
   incomeStreamId?: string | null;
 }
 
-/** Nguồn thu: phần khóa riêng của từng nguồn (percent là phân số 0..1). */
+/** Nguồn thu (UC-506, UC-709). */
 export interface IncomeStream {
   id: string;
   name: string;
   sort: number;
   active: boolean;
-  locks: { walletId: string; percent: number }[];
+  /** Ngăn của tiền về (UC-506); null = theo tài khoản nhận. Bản cài đặt lưu offline cũ thiếu. */
+  pocket?: Pocket | null;
+  /** "Mở kỳ lương" (pocket UC-1205). Bản cài đặt lưu offline cũ thiếu. */
+  opens_cycle?: boolean;
 }
 
 /** Bí mật chỉ ghi: server chỉ trả đã đặt hay chưa và 4 ký tự cuối. */
@@ -562,6 +395,8 @@ export interface SettingsConfig {
   /** Lãi tiền gửi: log tiền vào nhỏ hơn số này (nội dung rỗng / BankAPINotify / "lãi tiền gửi") thì máy tự ghi; 0 = tắt. */
   interest_max_amount: number;
   safety_fund_months: number;
+  /** Ngày lương 1–31 (tháng ít ngày hơn lấy ngày cuối tháng; mặc định 10). Optional: bản cài đặt lưu offline cũ chưa có. */
+  payday_day?: number;
   /** Tham số bảng cân đối / Mốc tự do (phần vạn: 350 = 3,5%). */
   fi_swr_bps: number;
   fi_inflation_bps: number;
@@ -577,10 +412,12 @@ export interface SettingsConfig {
   fi_target_age_f1: number | null;
   fi_target_age_f2: number | null;
   fi_target_age_f3: number | null;
-  /** Chốt tháng: % phần dư vào Tích sản (0–100, mặc định 50). Optional: bản cài đặt lưu offline cũ chưa có. */
-  month_close_wealth_pct?: number;
-  /** Ví Thưởng đã lưu (không lọc ví đã tắt); null = chưa đặt. */
-  month_close_reward_wallet?: string | null;
+  /** Dư cuối kỳ vào Tích luỹ (0–100, mặc định 50, UC-1207). Optional: bản cài đặt lưu offline cũ chưa có. */
+  surplus_savings_pct?: number;
+  /** Ví Thưởng: mã tài khoản Dự phòng không gắn mục tiêu (UC-1209 bước 4); null = chưa chọn. */
+  surplus_reward_account?: string | null;
+  /** % gợi ý trích sang Tích luỹ mỗi kỳ lương (1–100, UC-507). Optional: bản cài đặt lưu offline cũ chưa có. */
+  savings_pct?: number;
 }
 
 /** Giờ nhắc của cả nhà (GET /v1/settings › notifySchedule). Giờ "HH:MM" giờ VN; weeklyDay 1 = thứ Hai .. 7 = Chủ nhật. */
@@ -625,15 +462,18 @@ export interface Integrations {
 
 export interface SettingsData {
   accounts: SettingsAccount[];
-  wallets: SettingsWallet[];
   members: SettingsMember[];
   rules: Rule[];
-  categories: { id: string; name: string; defaultWalletId: string | null }[];
+  categories: { id: string; name: string; groupId?: string | null }[];
   config: SettingsConfig;
   integrations: Integrations;
   incomeStreams?: IncomeStream[];
   /** Bản cài đặt lưu offline từ trước khi có giờ nhắc thì thiếu trường này. */
   notifySchedule?: NotifySchedule;
+  /** Mục tiêu Dự phòng (UC-1209), mỗi mục tiêu gắn tối đa một tài khoản thật ngăn Dự phòng. */
+  goals: ReserveGoal[];
+  /** Ba ngăn (v2): bản cài đặt lưu offline cũ thiếu trường này. */
+  categoryGroups?: CategoryGroup[];
 }
 
 /** Kết quả nút Gửi thử (Telegram, Zalo). */
@@ -845,7 +685,6 @@ export interface DebtPayment {
   transactionId: number;
   at: string;
   amount: number;
-  walletId: string | null;
   accountId: string | null;
   note: string | null;
   source: "manual" | "sepay" | "system";
@@ -942,12 +781,11 @@ export interface ReceivablesData {
 export interface NetWorth {
   /** Σ số dư sổ của tài khoản đang dùng — tiền thật đang có. */
   cash: number;
-  /** Phần tiền của Tích sản (đã khóa), nằm trong `cash`. */
-  wealthBuildingCash: number;
-  /** Tài khoản Tích sản (heo, phao, sổ tiết kiệm — ADR-82, ADR-88): nằm trong `cash`, là chỗ tiền Tích sản đang nằm; tổng và từng tài khoản. */
-  wealthBuildingAccounts: { total: number; accounts: Omit<WealthBuildingAccount, "pendingCount" | "pendingNet">[] };
-  spendableThisWeek: number;
-  /** Vàng, chứng khoán… của Tích sản: không phải tiền mặt. */
+  /** Tổng từng ngăn (pocket UC-1203 bước 2), nằm trong `cash`. */
+  pockets: { savings: number; reserve: number; operating: number; outside: number };
+  /** Chi tiết Tích luỹ: các tài khoản ngăn Tích luỹ. */
+  savings: { accounts: { id: string; name: string; balance: number }[] };
+  /** Vàng, chứng khoán… mua qua app: không phải tiền mặt. */
   assets: number;
   receivables: number;
   tenants: number;
@@ -1135,7 +973,8 @@ export interface ReportTx {
   meaning: string;
   note: string | null;
   categoryName: string | null;
-  walletName: string | null;
+  /** Nhóm danh mục (của khoản gốc với khoản hoàn); null = không danh mục / chưa xếp nhóm. */
+  groupName: string | null;
   accountName: string | null;
   reportClass: ReportClass | null;
   defaultLine: CashFlowLineKey;

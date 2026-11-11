@@ -1,39 +1,42 @@
 // Tách một log ngân hàng thành nhiều dòng: tổng các dòng phải bằng đúng số tiền log (phase 04, lớp 2).
-// Hình dạng `Split` khớp src/services/ingest.ts — không import trực tiếp vì file đó kéo theo kiểu D1.
+// Hình dạng `Split` khớp src/services/ingest.ts — không import trực tiếp vì file đó kéo theo kiểu D1. Không ví (Đợt C).
 
 import { formatVnd } from "./money";
-import { ordersLeft, walletRemain } from "./pending";
+import { effectsToast } from "./pay-cycle";
+import { entryToast } from "./pending";
 import { shortDate, timeHM } from "./period";
 import { MEANING_LABEL } from "./transactions";
-import type { BankLog, ManualMatch, WalletStatus } from "./types";
+import type { AccountRef, BankLog, EntryEffects, EntryNearSpend, ManualMatch } from "./types";
 
 export type SplitMeaning = "spend" | "transfer" | "income" | "refund" | "lend" | "collect" | "buy_asset";
 
 export interface Split {
   meaning: SplitMeaning;
   amount: number;
-  wallet_id?: string | null;
   category_id?: string | null;
   other_account_id?: string | null;
   taxable?: boolean;
   asset_kind?: string | null;
   note?: string | null;
-  /** transfer: chuyển kèm số giữa hai ví (cả hai hoặc không). wallet_id là ví đích. */
-  from_wallet_id?: string | null;
-  /** income: nguồn thu (phần khóa) và người thuê trả tiền. */
+  /** income: nguồn thu và người thuê trả tiền. */
   income_stream_id?: string | null;
   tenant_id?: string | null;
+  /** income: "Lương — mở kỳ lương" (pocket UC-1205); mặc định theo cờ của nguồn. */
+  opens_cycle?: boolean;
   /** spend: khoản chi này trả cho khoản nợ nào trong sổ nợ. */
   debt_id?: string | null;
-  /** spend: khoản chi trả lãi cho khoản nợ nào (danh mục / ví "Lãi vay"); không đi cùng `debt_id`. */
+  /** spend: khoản chi trả lãi cho khoản nợ nào (danh mục "Lãi vay"); không đi cùng `debt_id`. */
   interest_debt_id?: string | null;
   /** lend / collect: cho vay hay nhận lại tiền gắn vào khoản nào trong sổ phải thu. */
   receivable_id?: string | null;
   /** refund / collect: khoản gốc được trả (ô "Trả lại cho khoản chi" / "Trả cho khoản cho vay"). */
   link_id?: number | null;
-  /** income: lãi tiền gửi (change 261018-lai-tien-gui) — một dòng, chia trọn vào `wallet_id`. */
+  /** income: lãi tiền gửi (change 261018-lai-tien-gui) — một dòng trọn số tiền log. */
   interest?: boolean;
 }
+
+/** Một dòng trên form Gán: `tenantMode` / `interestMode` là lựa chọn trên màn hình, gửi lên thành income kèm tenant_id / interest. */
+export type AssignRow = Split & { key: number; tenantMode?: boolean; interestMode?: boolean };
 
 /** "tenant" và "interest" chỉ là lựa chọn trên màn hình: gửi lên thành income kèm tenant_id / interest. */
 export type AssignChoice = SplitMeaning | "tenant" | "interest";
@@ -44,30 +47,30 @@ export type AssignChoice = SplitMeaning | "tenant" | "interest";
  */
 export const ASSIGN_CHOICES: Record<"in" | "out", { value: AssignChoice; label: string; hint: string }[]> = {
   in: [
-    { value: "income", label: "Thu nhập", hint: "Tiền mới của nhà (lương, thưởng, lãi, quà) — sẽ được chia vào các ví." },
-    { value: "interest", label: "Lãi tiền gửi", hint: "Lãi ngân hàng trả — cộng thẳng vào ví chọn bên dưới, không chia lương, báo cáo xếp Thu nhập thụ động." },
-    { value: "tenant", label: "Thu từ người thuê", hint: "Người thuê trả tiền — trừ vào số họ còn nợ, chia theo nguồn cho thuê." },
+    { value: "income", label: "Thu nhập", hint: "Tiền mới của nhà (lương, thưởng, lãi, quà). Lương mở kỳ lương và danh sách việc ngày lương." },
+    { value: "interest", label: "Lãi tiền gửi", hint: "Lãi ngân hàng trả — ghi vào tài khoản nhận, báo cáo xếp Thu nhập thụ động, không mở kỳ lương." },
+    { value: "tenant", label: "Thu từ người thuê", hint: "Người thuê trả tiền — trừ vào số họ còn nợ, ghi theo nguồn cho thuê." },
     {
       value: "refund",
       label: "Hoàn tiền",
-      hint: "Khoản nhà mình chi rồi được trả lại một phần (chia bill, shop hoàn) — chọn khoản chi đó; danh mục còn đúng phần nhà mình.",
+      hint: "Khoản nhà mình chi rồi được trả lại một phần (góp tiền bill, shop hoàn) — chọn khoản chi đó; danh mục còn đúng phần nhà mình.",
     },
     {
       value: "collect",
       label: "Nhận lại tiền cho vay",
-      hint: "Người ta trả khoản đã ghi Cho vay (cả mua hộ) — chọn đúng lần cho vay, không chia. Trả dư thì Tách thêm dòng Thu nhập cho phần dư.",
+      hint: "Người ta trả khoản đã ghi Cho vay (cả mua hộ) — chọn đúng lần cho vay. Trả dư thì Tách thêm dòng Thu nhập cho phần dư.",
     },
-    { value: "transfer", label: "Chuyển nội bộ", hint: "Tiền của chính nhà mình chuyển qua lại — không phải thu, không chia." },
+    { value: "transfer", label: "Chuyển nội bộ", hint: "Tiền của chính nhà mình chuyển qua lại — không phải thu nhập." },
   ],
   out: [
-    { value: "spend", label: "Chi tiêu", hint: "Nhà mình tiêu tiền — trừ vào ví của danh mục. Trả cả bill mà nhà mình có phần: ghi đủ ở đây, phần người khác chuyển lại ghi Hoàn tiền." },
+    { value: "spend", label: "Chi tiêu", hint: "Nhà mình tiêu tiền theo danh mục. Trả cả bill mà nhà mình có phần: ghi đủ ở đây, phần người khác chuyển lại ghi Hoàn tiền." },
     { value: "transfer", label: "Chuyển nội bộ", hint: "Tiền của chính nhà mình chuyển qua lại (sang tài khoản khác, rút tiền mặt) — không phải chi." },
     {
       value: "lend",
       label: "Cho vay",
-      hint: "Cho mượn tiền, hay mua hộ / trả hộ người khác (nhà mình không có phần) — người ta sẽ trả lại. Không trừ ví, ghi vào sổ phải thu.",
+      hint: "Cho mượn tiền, hay mua hộ / trả hộ người khác (nhà mình không có phần) — người ta sẽ trả lại. Ghi vào sổ phải thu, không phải chi tiêu.",
     },
-    { value: "buy_asset", label: "Mua tài sản", hint: "Mua vàng, cổ phiếu, chứng chỉ quỹ, nhà đất — tiền thành tài sản của Tích sản, không phải chi tiêu." },
+    { value: "buy_asset", label: "Mua tài sản", hint: "Mua vàng, cổ phiếu, chứng chỉ quỹ, nhà đất — tiền thành tài sản, không phải chi tiêu." },
   ],
 };
 
@@ -101,8 +104,6 @@ export function validateSplits(total: number, splits: Split[]): SplitCheck {
   if (noCat >= 0) return fail(`Dòng ${noCat + 1} là khoản chi, cần danh mục.`);
   const noAcct = splits.findIndex((s) => s.meaning === "transfer" && !s.other_account_id);
   if (noAcct >= 0) return fail(`Dòng ${noAcct + 1} là chuyển nội bộ, cần tài khoản đầu kia.`);
-  const halfMove = splits.findIndex((s) => s.meaning === "transfer" && (!!s.from_wallet_id !== !!s.wallet_id || (!!s.wallet_id && s.wallet_id === s.from_wallet_id)));
-  if (halfMove >= 0) return fail(`Dòng ${halfMove + 1}: chuyển ví cần hai ví khác nhau, hoặc bỏ trống cả hai.`);
   const noKind = splits.findIndex((s) => s.meaning === "buy_asset" && !s.asset_kind);
   if (noKind >= 0) return fail(`Dòng ${noKind + 1} là mua tài sản, cần loại tài sản.`);
   if (diff > 0) return fail(`Còn thiếu ${formatVnd(diff)} so với log.`);
@@ -111,38 +112,62 @@ export function validateSplits(total: number, splits: Split[]): SplitCheck {
 }
 
 /**
- * Toast sau khi gán một log (UC-706 bước 10, DESIGN §4): kết quả kèm hệ quả.
- * `label`: tên danh mục (không có thì tên loại) của dòng duy nhất; `status`: ví của dòng đó sau khi gán, null khi không biết.
- * Lệnh chuyển tiền: xem `ordersLeft`.
+ * Thân POST /v1/logs/:id/assign (UC-305, UC-706): mỗi dòng chỉ mang trường đúng loại — không trường ví, không
+ * `transfer_order_id`, không `earmark_id`. Thu nhập mang `opens_cycle` (trừ tiền người thuê và lãi).
  */
-export function assignToast(splits: Split[], o: { label: string; status: WalletStatus | null; newOrders: number; pendingOrders: number | null }): string {
+export function assignBody(rows: AssignRow[], createRule: boolean): { splits: Split[]; create_rule: boolean } {
+  const interest = rows.find((r) => r.interestMode);
+  if (interest) return { splits: [{ meaning: "income", amount: interest.amount, interest: true, ...(interest.note ? { note: interest.note } : {}) }], create_rule: createRule };
+  const splits = rows.map(({ key: _k, tenantMode, interestMode: _i, tenant_id, income_stream_id, opens_cycle, debt_id, interest_debt_id, receivable_id, link_id, other_account_id, category_id, taxable, asset_kind, ...s }): Split => ({
+    ...s,
+    ...(s.meaning === "spend" || s.meaning === "refund" ? { category_id: category_id ?? null } : {}),
+    ...(s.meaning === "transfer" ? { other_account_id } : {}),
+    ...(s.meaning === "income" ? { taxable: taxable === true } : {}),
+    ...(s.meaning === "buy_asset" ? { asset_kind } : {}),
+    ...(s.meaning === "income" && tenant_id ? { tenant_id } : {}),
+    ...(s.meaning === "income" && income_stream_id ? { income_stream_id } : {}),
+    ...(s.meaning === "income" && !tenantMode && opens_cycle !== undefined ? { opens_cycle } : {}),
+    ...(s.meaning === "spend" && debt_id ? { debt_id } : {}),
+    ...(s.meaning === "spend" && interest_debt_id ? { interest_debt_id } : {}),
+    ...((s.meaning === "lend" || s.meaning === "collect") && receivable_id ? { receivable_id } : {}),
+    ...((s.meaning === "refund" || s.meaning === "collect") && link_id ? { link_id } : {}),
+  }));
+  return { splits, create_rule: createRule };
+}
+
+/**
+ * Toast sau khi gán một log (UC-706 bước 10, DESIGN §4): kết quả kèm hệ quả theo kỳ lương / việc (`effects`) hoặc theo
+ * Vận hành (`nearSpend` sau khi tải lại). `label`: tên danh mục (không có thì tên loại) của dòng duy nhất.
+ */
+export function assignToast(splits: Split[], o: { label: string; effects?: EntryEffects; nearSpend: EntryNearSpend | null }): string {
+  const fx = effectsToast(o.effects);
   const income = splits.find((s) => s.meaning === "income");
-  if (income) {
-    const head = `Đã gán và chia ${formatVnd(income.amount)}.`;
-    const tail = ordersLeft(o.newOrders, o.pendingOrders);
-    return tail ? `${head} ${tail}` : head;
-  }
+  if (o.effects?.cycle?.opened && income) return `Đã gán ${formatVnd(income.amount)} · ${fx}`;
+  if (fx) return fx;
+  if (income) return `Đã gán thu nhập ${formatVnd(income.amount)}.`;
   if (splits.length > 1) return `Đã gán ${splits.length} dòng.`;
   const s = splits[0]!;
   if (s.meaning === "transfer") return `Đã gán chuyển nội bộ ${formatVnd(s.amount)}.`;
-  const head = `Đã gán ${formatVnd(s.amount)} ${o.label}.`;
-  const tail = walletRemain(o.status);
-  return tail ? `${head} ${tail}` : head;
+  if (s.meaning === "spend" && o.nearSpend) return entryToast(o.nearSpend, false).replace("Đã ghi", `Đã gán ${formatVnd(s.amount)} ${o.label}`);
+  return `Đã gán ${formatVnd(s.amount)} ${o.label}.`;
 }
 
-/** Toast khi ghi khoản thu mà để chia sau (UC-706 "Gán, để chia sau", UC-705 "Ghi, để chia sau"): nói tiền đang ở đâu, chia ở đâu. */
-export function deferredIncomeToast(amount: number): string {
-  return `Đã ghi ${formatVnd(amount)} vào ví Thu nhập, chưa chia. Chia ở Giao dịch gần đây › khoản này › Chia.`;
+/** Toast sau khi gán Lãi tiền gửi (UC-706): không mở kỳ, không việc. */
+export function interestToast(amount: number): string {
+  return `Đã ghi lãi ${formatVnd(amount)}`;
 }
 
-/** Dòng giải thích của loại Lãi tiền gửi ở sheet Gán (UC-706), theo ví đang chọn. */
-export function interestHint(walletName: string): string {
-  return `Lãi ngân hàng trả — cộng thẳng vào ${walletName}, không chia lương, báo cáo xếp Thu nhập thụ động.`;
+/** Dòng thay log chờ của tài khoản riêng tư bị giấu (UC-706 AC-36): "1 khoản của tài khoản riêng tư". */
+export function hiddenLogsLine(count: number | undefined): string | null {
+  return count ? `${count} khoản của tài khoản riêng tư` : null;
 }
 
-/** Toast sau khi gán Lãi tiền gửi (UC-706): không chia lương, không lệnh chuyển. */
-export function interestToast(amount: number, walletName: string): string {
-  return `Đã ghi lãi ${formatVnd(amount)} vào ${walletName}`;
+/**
+ * Ô tài khoản đầu kia khi gán chuyển khoản (UC-706 AC-37): mọi tài khoản trừ tài khoản của log và tài khoản riêng tư của
+ * người khác (`hiddenFromMe`) — server từ chối chuyển vào đó (access UC-504 AC-17).
+ */
+export function counterpartAccounts(accounts: AccountRef[], logAccountId: string | null): AccountRef[] {
+  return accounts.filter((a) => a.id !== logAccountId && !a.hiddenFromMe);
 }
 
 /**

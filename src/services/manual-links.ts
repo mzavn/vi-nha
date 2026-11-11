@@ -3,7 +3,7 @@
 //
 // Khoản tay khớp một log của tài khoản A: giao dịch active, source 'manual', không phải điều chỉnh, chưa mang log của A,
 // đúng chiều (tiền vào A: counter_account_id = A; tiền ra A: account_id = A), cùng số tiền, ngày VN lệch ≤ 1 ngày.
-// Nối không tạo giao dịch, không đổi ví / danh mục / ghi chú: tiền ra A → log_id; tiền vào A → log_id_2 nếu là chuyển
+// Nối không tạo giao dịch, không đổi danh mục / ghi chú: tiền ra A → log_id; tiền vào A → log_id_2 nếu là chuyển
 // khoản (chân nhận), ngược lại log_id. Trigger ở DB (0005, 0037) chỉ cho gắn log còn 'pending'.
 
 type Row = Record<string, unknown>;
@@ -22,8 +22,6 @@ export interface ManualMatch {
   amount: number;
   meaning: string;
   category_id: string | null;
-  wallet_id: string | null;
-  counter_wallet_id: string | null;
   account_id: string | null;
   counter_account_id: string | null;
   note: string | null;
@@ -47,7 +45,7 @@ export function feedMark(direction: "in" | "out", feedFrom: string | null, sepay
 export async function manualMatches(db: D1Database, log: LogSide, before: string | null = null): Promise<ManualMatch[]> {
   const res = await db
     .prepare(
-      `SELECT t.id, t.at, t.amount, t.meaning, t.category_id, t.wallet_id, t.counter_wallet_id, t.account_id, t.counter_account_id, t.note
+      `SELECT t.id, t.at, t.amount, t.meaning, t.category_id, t.account_id, t.counter_account_id, t.note
        FROM transactions t
        WHERE t.status = 'active' AND t.source = 'manual' AND t.meaning <> 'adjust' AND t.amount = ?1
          AND (CASE ?2 WHEN 'in' THEN t.counter_account_id ELSE t.account_id END) = ?3

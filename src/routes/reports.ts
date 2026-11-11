@@ -19,7 +19,7 @@ const txId = (c: Context<AppEnv>) => {
 reportRoutes.get("/reports/cash-flow", async (c) => ok(c, await reports.getCashFlow(c.env.DB, c.req.query("period"), new Date())));
 reportRoutes.get("/reports/income-statement", async (c) => ok(c, await reports.getIncomeStatement(c.env.DB, c.req.query("period"), new Date())));
 reportRoutes.get("/reports/transactions", async (c) =>
-  ok(c, await reports.reportTransactions(c.env.DB, c.req.query("period"), c.req.query("line"), new Date())),
+  ok(c, await reports.reportTransactions(c.env.DB, c.req.query("period"), c.req.query("line"), new Date(), c.get("memberId"))),
 );
 
 reportRoutes.put("/transactions/:id/report-class", async (c) => {
@@ -31,7 +31,7 @@ reportRoutes.put("/transactions/:id/report-class", async (c) => {
 });
 reportRoutes.delete("/transactions/:id/report-class", async (c) => {
   const id = txId(c);
-  const result = await reports.clearReportClass(c.env.DB, id);
+  const result = await reports.clearReportClass(c.env.DB, id, c.get("memberId"));
   await recordChange(c, "report_class.clear", `tx:${id}`, null);
   return ok(c, result);
 });

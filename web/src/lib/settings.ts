@@ -6,10 +6,11 @@ import { INTEREST_MAX_AMOUNT_LIMIT } from "../../../src/domain/interest-deposit"
 import { clockMinutes } from "../../../src/domain/notify-schedule";
 import { DEFAULT_SEPAY_CONNECTION_ID } from "../../../src/domain/system-ids";
 import { ApiError, errorText } from "./api";
-import { formatVnd } from "./money";
+import { formatVnd, moneyDigits } from "./money";
+import { dueText, nextDueDate } from "./pockets";
 import { sqliteUtcToIso } from "./push";
 import { dayKey, shortDate, timeHM } from "./period";
-import type { Allocation, AllocationMode, AuditEntry, IncomeStream, NotifySchedule, Rule, Secret, SepayConnection, SepaySyncResult, SettingsAccount, SettingsConfig, SettingsMember, SettingsWallet } from "./types";
+import type { AuditEntry, Debt, IncomeStream, NotifySchedule, Pocket, ReserveGoal, Rule, Secret, SepayConnection, SepaySyncResult, SettingsAccount, SettingsConfig, SettingsMember } from "./types";
 
 export type Errors = Record<string, string>;
 export type Result<T> = { ok: true; value: T } | { ok: false; errors: Errors };
@@ -101,191 +102,6 @@ export function sepaySyncText(r: SepaySyncResult): string {
   const beforeFeed = r.beforeFeed > 0 ? ` ${r.beforeFeed} giao dịch trước mốc theo dõi SePay — đã có trong sổ, không ghi lại.` : "";
   const failed = r.errors.length > 0 ? " Có chỗ chưa lấy được — xem lý do dưới nút Đồng bộ." : "";
   return `Đã lấy thêm ${r.added} giao dịch, ${r.duplicates} đã có sẵn.${early}${beforeFeed}${failed}`;
-}
-
-// ── Cách nạp (allocation) ─────────────────────────────────────────
-
-export const MODE_LABEL: Record<AllocationMode, string> = {
-  flat: "Cố định mỗi kỳ",
-  percent: "Theo % khoản thu",
-  goal: "Mục tiêu có hạn",
-  lump: "Một cục mỗi tháng",
-  remainder: "Nhận phần còn lại",
-};
-
-export interface AllocForm {
-  mode: AllocationMode | "none";
-  period: "week" | "month";
-  amount: number;
-  /** Chữ người dùng gõ, đơn vị %: "30", "12,5". */
-  percent: string;
-  target_amount: number;
-  target_date: string;
-  floor_amount: number;
-  priority: string;
-}
-
-/** 0.3 → "30", 0.125 → "12,5". */
-export const formatPercent = (fraction: number): string => String(Math.round(fraction * 10000) / 100).replace(".", ",");
-
-/** "12,5" / "12.5" / "30%" → 12.5; không đọc được → null. */
-export function parsePercent(text: string): number | null {
-  const t = text.trim().replace("%", "").replace(",", ".").trim();
-  if (!/^\d+(\.\d+)?$/.test(t)) return null;
-  return Number(t);
-}
-
-export function allocToForm(a: Allocation | null): AllocForm {
-  if (!a) return { mode: "none", period: "month", amount: 0, percent: "", target_amount: 0, target_date: "", floor_amount: 0, priority: "100" };
-  return {
-    mode: a.mode,
-    period: a.period ?? "month",
-    amount: a.amount ?? (a.mode === "lump" ? (a.target_amount ?? 0) : 0),
-    percent: a.percent !== null ? formatPercent(a.percent) : "",
-    target_amount: a.target_amount ?? 0,
-    target_date: a.target_date ?? "",
-    floor_amount: a.floor_amount ?? 0,
-    priority: String(a.priority),
-  };
-}
-
-/**
- * Form → thân `allocation`. Chỉ giữ các cột mode đó dùng, cột khác về null để không sót số cũ:
- * flat = số mỗi tuần/tháng (+ sàn) · percent = phân số của khoản thu · goal = số mục tiêu + hạn ·
- * lump = một cục mỗi tháng (amount và target_amount cùng số như seed, + sàn) · remainder = không số.
- */
-export function allocFormToPayload(f: AllocForm): Result<Allocation | null> {
-  if (f.mode === "none") return { ok: true, value: null };
-  const errors: Errors = {};
-  const mode = f.mode;
-  const priority = parseInteger(f.priority, 0, 9999);
-  if (priority === null) errors.priority = "Ưu tiên là số nguyên từ 0 đến 9999.";
-  const out: Allocation = { mode, period: "month", amount: null, percent: null, target_amount: null, target_date: null, floor_amount: null, priority: priority ?? 0 };
-
-  if (mode === "flat") {
-    if (f.amount <= 0) errors.amount = "Nhập số tiền mỗi kỳ.";
-    out.period = f.period;
-    out.amount = f.amount;
-    out.floor_amount = f.floor_amount || null;
-    if (f.floor_amount > f.amount && f.amount > 0) errors.floor_amount = "Sàn không lớn hơn số mỗi kỳ.";
-  } else if (mode === "percent") {
-    const p = parsePercent(f.percent);
-    if (p === null || p <= 0 || p > 100) errors.percent = "Phần trăm lớn hơn 0 và không quá 100.";
-    else out.percent = Math.round(p * 10000) / 1_000_000;
-  } else if (mode === "goal") {
-    if (f.target_amount <= 0) errors.target_amount = "Nhập số tiền mục tiêu.";
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(f.target_date)) errors.target_date = "Chọn hạn phải đủ tiền.";
-    out.target_amount = f.target_amount;
-    out.target_date = f.target_date;
-  } else if (mode === "lump") {
-    if (f.amount <= 0) errors.amount = "Nhập số tiền mỗi tháng.";
-    out.amount = f.amount;
-    out.target_amount = f.amount;
-    out.floor_amount = f.floor_amount || null;
-    if (f.floor_amount > f.amount && f.amount > 0) errors.floor_amount = "Sàn không lớn hơn số mỗi tháng.";
-  }
-  return done(errors, () => out);
-}
-
-/** Một dòng tóm tắt cách nạp cho danh sách ví. */
-export function allocationSummary(a: Allocation | null): string {
-  if (!a) return "chưa có số nạp";
-  const floor = a.floor_amount ? ` · sàn ${formatVnd(a.floor_amount)}` : "";
-  switch (a.mode) {
-    case "flat":
-      return `${formatVnd(a.amount ?? 0)}/${a.period === "week" ? "tuần" : "tháng"}${floor}`;
-    case "percent":
-      return `${formatPercent(a.percent ?? 0)}% mỗi khoản thu`;
-    case "goal":
-      return `đủ ${formatVnd(a.target_amount ?? 0)} trước ${a.target_date ? a.target_date.split("-").reverse().join("/") : "—"}`;
-    case "lump":
-      return `${formatVnd(a.amount ?? a.target_amount ?? 0)}/tháng, một cục${floor}`;
-    case "remainder":
-      return "nhận phần còn lại";
-  }
-}
-
-// ── Ví ─────────────────────────────────────────────────────────────
-
-export const TIER_GROUPS: { key: string; label: string; lock: boolean; match: (w: SettingsWallet) => boolean }[] = [
-  { key: "wealth_building", label: "Tích sản", lock: true, match: (w) => w.tier === "wealth_building" },
-  { key: "tax", label: "Thuế", lock: true, match: (w) => w.tier === "tax" },
-  { key: "nice", label: "Hưởng thụ", lock: false, match: (w) => w.tier === "nice" },
-  { key: "must", label: "Must", lock: false, match: (w) => w.tier === "must" && w.must_group !== "have" },
-  { key: "have", label: "Có thì tốt", lock: false, match: (w) => w.tier === "must" && w.must_group === "have" },
-  { key: "reserve", label: "Quỹ giữ riêng", lock: false, match: (w) => w.tier === "holding" && w.kind !== "holding" },
-  { key: "holding", label: "Ví nhận tiền về", lock: false, match: (w) => w.tier === "holding" && w.kind === "holding" },
-];
-
-/** Ví theo tầng, trong tầng theo `sort`; bỏ nhóm rỗng. */
-export function groupWallets(wallets: SettingsWallet[]): { key: string; label: string; lock: boolean; wallets: SettingsWallet[] }[] {
-  return TIER_GROUPS.map((g) => ({ key: g.key, label: g.label, lock: g.lock, wallets: wallets.filter(g.match).sort((a, b) => a.sort - b.sort) })).filter(
-    (g) => g.wallets.length > 0,
-  );
-}
-
-export interface WalletForm {
-  name: string;
-  tier: SettingsWallet["tier"];
-  must_group: "must" | "have";
-  kind: SettingsWallet["kind"];
-  scope: SettingsWallet["scope"];
-  member_id: string;
-  account_id: string;
-  private: boolean;
-  active: boolean;
-  alloc: AllocForm;
-  /** Phong bì tháng chia đều theo tuần (allocations.split_weekly). */
-  split_weekly: boolean;
-}
-
-/** Chia đều theo tuần chỉ có nghĩa với phong bì nạp một số mỗi tháng. */
-export const canSplitWeekly = (kind: SettingsWallet["kind"], a: AllocForm): boolean =>
-  kind === "envelope" && ((a.mode === "flat" && a.period === "month") || a.mode === "lump");
-
-export function walletToForm(w: SettingsWallet | null): WalletForm {
-  if (!w) {
-    return { name: "", tier: "must", must_group: "must", kind: "envelope", scope: "shared", member_id: "", account_id: "", private: false, active: true, alloc: allocToForm(null), split_weekly: false };
-  }
-  return {
-    name: w.name,
-    tier: w.tier,
-    must_group: w.must_group ?? "must",
-    kind: w.kind,
-    scope: w.scope,
-    member_id: w.member_id ?? "",
-    account_id: w.account_id ?? "",
-    private: w.private,
-    active: w.active,
-    alloc: allocToForm(w.allocation),
-    split_weekly: w.allocation?.splitWeekly ?? false,
-  };
-}
-
-/** Thân POST (existing = null) hoặc PATCH. Ví nhận phần còn lại không gửi `allocation`: cách nạp của nó không đổi được. */
-export function walletPayload(f: WalletForm, existing: SettingsWallet | null): Result<Record<string, unknown>> {
-  const errors: Errors = {};
-  const name = f.name.trim();
-  if (!name) errors.name = "Nhập tên ví.";
-  const scope = existing ? existing.scope : f.scope;
-  if (scope === "personal" && !f.member_id) errors.member_id = "Chọn người dùng ví riêng này.";
-  const keepsRemainder = existing?.allocation?.mode === "remainder";
-  if (!existing && f.alloc.mode === "remainder") errors.mode = "Chỉ một ví nhận phần còn lại.";
-  const alloc = keepsRemainder ? null : allocFormToPayload(f.alloc);
-  if (alloc && !alloc.ok) Object.assign(errors, alloc.errors);
-
-  return done(errors, () => {
-    const common: Record<string, unknown> = {
-      name,
-      account_id: f.account_id || null,
-      member_id: scope === "personal" ? f.member_id : null,
-      private: scope === "personal" ? f.private : false,
-    };
-    const parsed = alloc && alloc.ok ? alloc.value : null;
-    const allocation = parsed ? { ...parsed, split_weekly: canSplitWeekly(existing ? existing.kind : f.kind, f.alloc) && f.split_weekly } : null;
-    if (existing) return { ...common, active: f.active, ...(keepsRemainder || !allocation ? {} : { allocation }) };
-    return { ...common, tier: f.tier, must_group: f.tier === "must" ? f.must_group : null, kind: f.kind, scope, allocation };
-  });
 }
 
 // ── Tài khoản ─────────────────────────────────────────────────────
@@ -386,14 +202,17 @@ export interface AccountForm {
   /** ISO của giờ tuỳ chọn (`feed_mode` = `time`); "" = chưa chọn. */
   feed_from: string;
   active: boolean;
-  /** "Tính vào tiền chi được" (ADR-85). Thêm mới: bật, thẻ tín dụng và tài khoản Tích sản tắt (`spendableDefault`). Tài khoản khóa luôn tắt. */
-  spendable: boolean;
-  /** Tài khoản Tích sản (ADR-88): null thường · phao · sổ tiết kiệm (chỉ khi thêm) · heo (chỉ migration, không đổi). */
-  role: SettingsAccount["role"];
+  /** Ngăn (UC-1201); null = ngoài ngăn. Thêm mới mặc định Vận hành (như server khi không gửi `pocket`). */
+  pocket: Pocket | null;
+  /** Người dùng đã tự chọn ngăn: thêm mới chỉ gửi `pocket` khi đã chọn, còn không server đặt Vận hành (chưa xác nhận). */
+  pocket_touched: boolean;
+  /** "Riêng tư — người khác chỉ thấy tổng" (UC-504, UC-709); chỉ chủ tài khoản đổi được. */
+  private: boolean;
 }
 
 export function accountToForm(a: SettingsAccount | null): AccountForm {
-  if (!a) return { name: "", kind: "bank", bank: "", account_no: "", sub_account: "", sepay_enabled: false, sepay_out: false, sepay_connection_id: "", owner_member_id: "", opening_balance: 0, opened_at: "", feed_mode: "enabled", feed_from: "", active: true, spendable: true, role: null };
+  if (!a)
+    return { name: "", kind: "bank", bank: "", account_no: "", sub_account: "", sepay_enabled: false, sepay_out: false, sepay_connection_id: "", owner_member_id: "", opening_balance: 0, opened_at: "", feed_mode: "enabled", feed_from: "", active: true, pocket: "operating", pocket_touched: false, private: false };
   return {
     name: a.name,
     kind: a.kind,
@@ -410,13 +229,27 @@ export function accountToForm(a: SettingsAccount | null): AccountForm {
     feed_mode: a.feed_from ? "time" : a.sepay_enabled ? "opening" : "enabled",
     feed_from: a.feed_from ?? "",
     active: a.active,
-    spendable: a.spendable && !a.locked,
-    role: a.role,
+    pocket: a.pocket ?? null,
+    pocket_touched: false,
+    private: a.private ?? false,
   };
 }
 
-/** Mặc định của "Tính vào tiền chi được" khi thêm tài khoản: thẻ tín dụng (số dư là nợ — ADR-85) và tài khoản Tích sản (tiền để dành — ADR-88) tắt. */
-export const spendableDefault = (kind: AccountForm["kind"], role: AccountForm["role"]): boolean => kind !== "credit" && role === null;
+/**
+ * Công tắc "Riêng tư — người khác chỉ thấy tổng" ở sheet tài khoản (UC-709 AC-44): chỉ khi tài khoản đã có (không phải thêm
+ * mới), có chủ và người đang xem là chủ.
+ */
+export function canSetPrivate(a: Pick<SettingsAccount, "owner_member_id"> | null, viewerId: string | null): boolean {
+  return !!a && !!a.owner_member_id && a.owner_member_id === viewerId;
+}
+
+/**
+ * Ô Chủ tài khoản ở sheet tài khoản (UC-709 AC-47): tài khoản riêng tư có chủ mà người xem không phải chủ → chỉ đọc, không gửi
+ * `owner_member_id` (server: 403 `not_owner`, access UC-504 AC-10). Thêm mới / tài khoản công khai: ai cũng chọn được.
+ */
+export function canSetOwner(a: Pick<SettingsAccount, "owner_member_id" | "private"> | null, viewerId: string | null): boolean {
+  return !a?.private || !a.owner_member_id || a.owner_member_id === viewerId;
+}
 
 /**
  * Lỗi khi lưu tài khoản thuộc ô nào: đổi ngày mở sổ về sau giao dịch sớm nhất (409 `opening_after_entries`, access UC-506 AC-24)
@@ -431,9 +264,10 @@ export function accountSubmitError(err: unknown): { field: string | null; messag
 
 /**
  * `existing` = tài khoản đang sửa (null khi thêm). Như server, "SePay chưa hỗ trợ ngân hàng này" chỉ chặn khi bật SePay
- * hoặc đổi ngân hàng/loại — tài khoản cũ đã nối SePay trước khi có danh mục vẫn sửa tên được.
+ * hoặc đổi ngân hàng/loại — tài khoản cũ đã nối SePay trước khi có danh mục vẫn sửa tên được. `viewerId`: người đang xem —
+ * chỉ chủ tài khoản gửi `private`; tài khoản riêng tư của người khác không gửi `owner_member_id` (server: 403 `not_owner`).
  */
-export function accountPayload(f: AccountForm, existing: SettingsAccount | null): Result<Record<string, unknown>> {
+export function accountPayload(f: AccountForm, existing: SettingsAccount | null, viewerId: string | null = null): Result<Record<string, unknown>> {
   const errors: Errors = {};
   const name = f.name.trim();
   if (!name) errors.name = "Nhập tên tài khoản.";
@@ -446,8 +280,6 @@ export function accountPayload(f: AccountForm, existing: SettingsAccount | null)
   const feed = existing && f.sepay_enabled && f.kind === "bank" ? f.feed_mode : null;
   if (feed === "time" && !f.feed_from) errors.feed_from = "Chọn giờ bắt đầu theo dõi.";
   const cash = f.kind === "cash";
-  // Heo đất và sổ tiết kiệm khóa: không bao giờ tính vào tiền chi được — server cũng chặn (locked_account).
-  const locked = f.role === "term_deposit" || f.role === "piggy_bank";
   return done(errors, () => ({
     name,
     kind: f.kind,
@@ -457,14 +289,15 @@ export function accountPayload(f: AccountForm, existing: SettingsAccount | null)
     sepay_enabled: f.sepay_enabled,
     sepay_out: f.sepay_enabled && f.sepay_out,
     ...(f.sepay_enabled && f.sepay_connection_id ? { sepay_connection_id: f.sepay_connection_id } : {}),
-    owner_member_id: f.owner_member_id || null,
+    ...(canSetOwner(existing, viewerId) ? { owner_member_id: f.owner_member_id || null } : {}),
     opening_balance: f.opening_balance,
     opened_at: f.opened_at || null,
     ...(feed === "opening" ? { feed_from: null } : feed === "time" ? { feed_from: f.feed_from } : {}),
     ...(existing ? { active: f.active } : {}),
-    spendable: f.spendable && !locked,
-    // Heo đất và sổ tiết kiệm giữ vai trò từ lúc tạo: sửa thì không gửi (server chỉ cho đổi thường ↔ phao — ADR-88).
-    ...(existing?.locked ? {} : { role: f.role }),
+    // Không bao giờ gửi `spendable` / `role` / `locked` (bỏ ở v2, server trả 400 `model_changed`).
+    // Sửa thì luôn gửi ngăn (lưu là xác nhận); bản cài đặt cũ chưa có ngăn thì chỉ gửi khi người dùng chọn.
+    ...(f.pocket_touched || (existing && existing.pocket !== undefined) ? { pocket: f.pocket } : {}),
+    ...(canSetPrivate(existing, viewerId) && f.private !== (existing?.private ?? false) ? { private: f.private } : {}),
   }));
 }
 
@@ -488,22 +321,20 @@ export interface RuleForm {
   match_type: Rule["match_type"];
   pattern: string;
   meaning: Rule["meaning"];
-  wallet_id: string;
   category_id: string;
   by_member_id: string;
   priority: string;
   active: boolean;
-  /** Chỉ cho mã lương (thu nhập): nguồn thu quyết định phần khóa. */
+  /** Chỉ cho mã lương (thu nhập): nguồn thu (mở kỳ lương theo cờ của nguồn). */
   income_stream_id: string;
 }
 
 export function ruleToForm(r: Rule | null): RuleForm {
-  if (!r) return { match_type: "code", pattern: "", meaning: "spend", wallet_id: "", category_id: "", by_member_id: "", priority: "50", active: true, income_stream_id: "" };
+  if (!r) return { match_type: "code", pattern: "", meaning: "spend", category_id: "", by_member_id: "", priority: "50", active: true, income_stream_id: "" };
   return {
     match_type: r.match_type,
     pattern: r.pattern,
     meaning: r.meaning,
-    wallet_id: r.wallet_id ?? "",
     category_id: r.category_id ?? "",
     by_member_id: r.by_member_id ?? "",
     priority: String(r.priority),
@@ -519,7 +350,6 @@ export function rulePayload(f: RuleForm, isNew: boolean): Result<Record<string, 
   if (!pattern) errors.pattern = f.match_type === "code" ? "Nhập mã." : f.match_type === "content" ? "Nhập từ khoá." : "Nhập số tài khoản.";
   else if (f.match_type === "code" && !/^[A-Z0-9]{2,12}$/.test(pattern)) errors.pattern = "Mã viết liền, chỉ gồm chữ không dấu và số.";
   else if (f.match_type === "account" && !/^[0-9A-Za-z]+$/.test(pattern)) errors.pattern = "Số tài khoản chỉ gồm chữ số.";
-  if (f.meaning === "spend" && !f.wallet_id) errors.wallet_id = "Khoản chi cần ví.";
   if (f.meaning === "spend" && !f.category_id) errors.category_id = "Khoản chi cần danh mục.";
   const priority = parseInteger(f.priority, 0, 9999);
   if (priority === null) errors.priority = "Ưu tiên là số nguyên từ 0 đến 9999.";
@@ -528,7 +358,6 @@ export function rulePayload(f: RuleForm, isNew: boolean): Result<Record<string, 
       match_type: f.match_type,
       pattern,
       meaning: f.meaning,
-      wallet_id: f.wallet_id || null,
       category_id: f.meaning === "spend" ? f.category_id || null : null,
       priority,
       is_salary: f.meaning === "income",
@@ -553,29 +382,181 @@ export function memberPayload(f: { name: string; tg_chat_id: string }, current: 
   }));
 }
 
-type ConfigFields = "salary_min_amount" | "interest_max_amount" | "safety_fund_months" | "month_close_wealth_pct" | "month_close_reward_wallet";
+type ConfigFields = "salary_min_amount" | "interest_max_amount" | "safety_fund_months" | "payday_day";
 
 export function configPayload(f: {
   salary_min_amount: number;
   interest_max_amount: number;
   safety_fund_months: string;
-  month_close_wealth_pct: string;
-  month_close_reward_wallet: string;
-}): Result<Required<Pick<SettingsConfig, ConfigFields>>> {
+  payday_day: string;
+  /** % Tích luỹ mỗi kỳ lương (UC-507); undefined = bản cài đặt cũ chưa có, không gửi. */
+  savings_pct?: string;
+  /** Dư cuối kỳ vào Tích luỹ (UC-1207); undefined = bản cài đặt cũ chưa có, không gửi. */
+  surplus_savings_pct?: string;
+  /** Ví Thưởng: mã tài khoản Dự phòng không gắn mục tiêu (UC-1209 bước 4); "" = chưa chọn. */
+  surplus_reward_account?: string;
+}): Result<Required<Pick<SettingsConfig, ConfigFields>> & { savings_pct?: number; surplus_savings_pct?: number; surplus_reward_account?: string | null }> {
   const errors: Errors = {};
   const months = parseInteger(f.safety_fund_months, 1, 24);
   if (months === null) errors.safety_fund_months = "Số tháng là số nguyên từ 1 đến 24.";
   if (f.salary_min_amount < 0) errors.salary_min_amount = "Ngưỡng không âm.";
   if (f.interest_max_amount < 0 || f.interest_max_amount > INTEREST_MAX_AMOUNT_LIMIT) errors.interest_max_amount = "Ngưỡng từ 0 đến 10.000.000 ₫ (0 = tắt).";
-  const closePct = parseInteger(f.month_close_wealth_pct, 0, 100);
-  if (closePct === null) errors.month_close_wealth_pct = "Tỷ lệ là số nguyên từ 0 đến 100.";
+  const payday = parseInteger(f.payday_day, 1, 31);
+  if (payday === null) errors.payday_day = "Ngày lương là số nguyên từ 1 đến 31.";
+  const savingsPct = f.savings_pct === undefined ? undefined : parseInteger(f.savings_pct, 1, 100);
+  if (savingsPct === null) errors.savings_pct = "% Tích luỹ là số nguyên từ 1 đến 100.";
+  const surplusPct = f.surplus_savings_pct === undefined ? undefined : parseInteger(f.surplus_savings_pct, 0, 100);
+  if (surplusPct === null) errors.surplus_savings_pct = "Phần trăm từ 0 đến 100.";
   return done(errors, () => ({
     salary_min_amount: f.salary_min_amount,
     interest_max_amount: f.interest_max_amount,
     safety_fund_months: months!,
-    month_close_wealth_pct: closePct!,
-    month_close_reward_wallet: orNull(f.month_close_reward_wallet),
+    payday_day: payday!,
+    ...(savingsPct === undefined ? {} : { savings_pct: savingsPct! }),
+    ...(surplusPct === undefined ? {} : { surplus_savings_pct: surplusPct! }),
+    ...(f.surplus_reward_account === undefined ? {} : { surplus_reward_account: orNull(f.surplus_reward_account) }),
   }));
+}
+
+// ── Mục tiêu Dự phòng là một tài khoản thật (pocket UC-1209, pwa UC-709 AC-36, AC-39, AC-43) ──
+
+/** Mục tiêu đang dùng gắn tài khoản này (tài khoản của mục tiêu); không có → undefined. */
+export function accountGoal(accountId: string, goals: ReserveGoal[]): ReserveGoal | undefined {
+  return goals.find((g) => g.active && g.account_id === accountId);
+}
+
+/** Câu dưới ô Ngăn khi tài khoản đang gắn mục tiêu (server: 409 `account_has_goal`). */
+export const GOAL_POCKET_LOCK = "Bỏ gắn mục tiêu trước khi đổi ngăn";
+
+/** Tài khoản Dự phòng đang dùng chưa gắn mục tiêu đang dùng nào — chỗ chọn Ví Thưởng ở Tham số (UC-709 AC-43). */
+export function rewardAccountOptions(accounts: SettingsAccount[], goals: ReserveGoal[]): SettingsAccount[] {
+  return accounts.filter((a) => a.active && a.pocket === "reserve" && !accountGoal(a.id, goals));
+}
+
+/**
+ * Tài khoản chọn được cho một mục tiêu (UC-1209 bước 2): đang dùng, ngăn Dự phòng, không gắn mục tiêu đang dùng khác,
+ * không phải tài khoản Ví Thưởng. `goalId`: mục tiêu đang sửa — tài khoản nó đang gắn vẫn chọn lại được.
+ */
+export function goalAccountOptions(accounts: SettingsAccount[], goals: ReserveGoal[], rewardAccountId: string | null | undefined, goalId: string | null = null): SettingsAccount[] {
+  return accounts.filter((a) => {
+    if (!a.active || a.pocket !== "reserve" || a.id === rewardAccountId) return false;
+    const owner = accountGoal(a.id, goals);
+    return !owner || owner.id === goalId;
+  });
+}
+
+/**
+ * Một dòng ở Cài đặt › Ba ngăn › Mục tiêu Dự phòng (UC-709): "Học phí · đã có 4.000.000 / 6.000.000 · trong BIDV ·
+ * hạn 15/01/2027 · 2.000.000/tháng, 3 tháng một lần"; chưa gắn → "Bảo dưỡng xe · chưa có tài khoản · hạn 31/03/2027".
+ */
+export function goalLineText(g: ReserveGoal, accounts: { id: string; name: string }[]): string {
+  const parts = [g.name];
+  if (g.account_id) {
+    parts.push(`đã có ${moneyDigits(g.held ?? 0)}${g.target_amount !== null ? ` / ${moneyDigits(g.target_amount)}` : ""}`);
+    parts.push(`trong ${accounts.find((a) => a.id === g.account_id)?.name ?? g.account_id}`);
+  } else parts.push("chưa có tài khoản");
+  if (g.target_pct !== null) parts.push(`${g.target_pct}% thu chịu thuế`);
+  if (g.due_date) parts.push(`hạn ${dueText(g.due_date)}`);
+  if (g.monthly_amount !== null && g.repeat_months !== null) {
+    parts.push(g.repeat_months === 1 ? `${moneyDigits(g.monthly_amount)}/tháng` : `${moneyDigits(g.monthly_amount)}/tháng, ${g.repeat_months} tháng một lần`);
+  }
+  return parts.join(" · ");
+}
+
+/** Cách đặt số của mục tiêu: lặp (số mỗi tháng + mấy tháng một lần) · một lần (số cần + hạn) · % thu chịu thuế. */
+export type GoalMode = "repeat" | "once" | "pct";
+
+export const GOAL_MODE_LABEL: Record<GoalMode, string> = { repeat: "Lặp lại", once: "Một lần", pct: "% thu chịu thuế" };
+
+export interface GoalForm {
+  name: string;
+  /** Tài khoản của mục tiêu; "" = Chưa có. */
+  account_id: string;
+  mode: GoalMode;
+  monthly_amount: number;
+  repeat_months: string;
+  target_amount: number;
+  /** YYYY-MM-DD; "" = chưa đặt. */
+  due_date: string;
+  target_pct: string;
+  /** "" = không gắn khoản nợ. */
+  debt_id: string;
+  active: boolean;
+}
+
+export function goalToForm(g: ReserveGoal | null): GoalForm {
+  if (!g) return { name: "", account_id: "", mode: "repeat", monthly_amount: 0, repeat_months: "1", target_amount: 0, due_date: "", target_pct: "", debt_id: "", active: true };
+  return {
+    name: g.name,
+    account_id: g.account_id ?? "",
+    mode: g.target_pct !== null ? "pct" : g.monthly_amount !== null && g.repeat_months !== null ? "repeat" : "once",
+    monthly_amount: g.monthly_amount ?? 0,
+    repeat_months: String(g.repeat_months ?? 1),
+    target_amount: g.target_amount ?? 0,
+    due_date: g.due_date ?? "",
+    target_pct: g.target_pct === null ? "" : String(g.target_pct),
+    debt_id: g.debt_id ?? "",
+    active: g.active,
+  };
+}
+
+/** Trần số tiền như server (B, số mỗi tháng). */
+const MAX_TARGET = 1_000_000_000_000;
+
+/**
+ * Thân POST (existing = null) / PATCH mục tiêu, kiểm như server (UC-1209). Lặp: số mỗi tháng + số tháng, kèm B = tích
+ * (server kiểm khớp); một lần: B; thuế: %; cột của cách khác về null để không sót số cũ. Tài khoản "" → null (Chưa có).
+ */
+export function goalPayload(f: GoalForm, existing: ReserveGoal | null): Result<Record<string, unknown>> {
+  const errors: Errors = {};
+  const name = f.name.trim();
+  if (!name) errors.name = "Nhập tên.";
+  else if (name.length > 60) errors.name = "Tên tối đa 60 ký tự.";
+  if (f.due_date && !/^\d{4}-\d{2}-\d{2}$/.test(f.due_date)) errors.due_date = "Hạn là một ngày.";
+  let amounts: { target_amount: number | null; monthly_amount: number | null; repeat_months: number | null; target_pct: number | null } = {
+    target_amount: null,
+    monthly_amount: null,
+    repeat_months: null,
+    target_pct: null,
+  };
+  if (f.mode === "repeat") {
+    const months = parseInteger(f.repeat_months, 1, 12);
+    if (f.monthly_amount <= 0) errors.monthly_amount = "Nhập số mỗi tháng.";
+    if (months === null) errors.repeat_months = "Số tháng là số nguyên từ 1 đến 12.";
+    else if (f.monthly_amount * months > MAX_TARGET) errors.monthly_amount = "Số cần không quá 1.000.000.000.000.";
+    amounts = { ...amounts, monthly_amount: f.monthly_amount, repeat_months: months, target_amount: f.monthly_amount * (months ?? 0) };
+  } else if (f.mode === "once") {
+    if (f.target_amount <= 0) errors.target_amount = "Nhập số cần.";
+    else if (f.target_amount > MAX_TARGET) errors.target_amount = "Số cần không quá 1.000.000.000.000.";
+    amounts = { ...amounts, target_amount: f.target_amount };
+  } else {
+    const pct = parseInteger(f.target_pct, 1, 100);
+    if (pct === null) errors.target_pct = "% là số nguyên từ 1 đến 100.";
+    amounts = { ...amounts, target_pct: pct };
+  }
+  return done(errors, () => ({
+    name,
+    account_id: f.account_id || null,
+    ...amounts,
+    due_date: f.due_date || null,
+    debt_id: f.debt_id || null,
+    ...(existing ? { active: f.active } : {}),
+  }));
+}
+
+/**
+ * Khoản nợ ngắn hạn đang dùng, còn nợ, có số trả mỗi tháng mà chưa có mục tiêu đang dùng gắn → một dòng gợi ý mở sheet điền sẵn
+ * (UC-709 AC-39): số mỗi tháng = số trả mỗi tháng, 1 tháng một lần, hạn = ngày trả kế tiếp, gắn khoản nợ, chưa có tài khoản.
+ */
+export function debtGoalSuggestions(debts: Debt[], goals: ReserveGoal[], today: string): { debt: Debt; text: string; prefill: GoalForm }[] {
+  const taken = new Set(goals.filter((g) => g.active && g.debt_id).map((g) => g.debt_id));
+  return debts
+    .filter((d) => d.active && d.term === "short" && d.balance > 0 && d.monthlyPayment && !taken.has(d.id))
+    .map((d) => ({
+      debt: d,
+      text: `Tạo mục tiêu Trả nợ ${d.name} · ${moneyDigits(d.monthlyPayment!)}/tháng`,
+      prefill: { ...goalToForm(null), name: `Trả nợ ${d.name}`, monthly_amount: d.monthlyPayment!, repeat_months: "1", due_date: nextDueDate(d.dueDay, today), debt_id: d.id },
+    }));
 }
 
 // ── Tham số Tài sản & tự do (access UC-507 AC-16) ──────────────────
@@ -629,6 +610,13 @@ export const fiConfigToForm = (c: FiConfig): FiConfigForm => ({
   f2: intText(c.fi_target_age_f2),
   f3: intText(c.fi_target_age_f3),
 });
+
+/** "12,5" / "12.5" / "30%" → 12.5; không đọc được → null. */
+function parsePercent(text: string): number | null {
+  const t = text.trim().replace("%", "").replace(",", ".").trim();
+  if (!/^\d+(\.\d+)?$/.test(t)) return null;
+  return Number(t);
+}
 
 /** Thân PUT /v1/settings/config cho nhóm Tài sản & tự do; khoảng hợp lệ như server (access UC-507). `year`: năm nay. */
 export function fiConfigPayload(f: FiConfigForm, year: number): Result<FiConfig> {
@@ -691,12 +679,12 @@ export function scheduleRows(s: NotifySchedule): { title: string; sub: string; v
   return [
     {
       title: "Tin sáng",
-      sub: s.dailyEnabled ? "Còn để chi tuần này, ví sắp vỡ, đối soát, việc cần làm" : "Đang tắt — ngày 1 không có tin mời chốt tháng; mở Hôm nay để chốt",
+      sub: s.dailyEnabled ? "Chi khoảng mỗi ngày tới kỳ lương, nhóm gần hạn mức, đối soát, việc cần làm" : "Đang tắt — mở Hôm nay để xem việc cần làm",
       value: s.dailyEnabled ? s.dailyTime : "Tắt",
     },
     {
       title: "Tổng kết tuần",
-      sub: "Đã tiêu so với dự kiến từng phong bì, top 5 danh mục",
+      sub: "Chi tuần và chi từ Vận hành, nhóm có hạn mức, top 5 danh mục",
       value: s.weeklyEnabled ? `${WEEKDAY_LABEL[s.weeklyDay]} ${s.weeklyTime}` : "Tắt",
     },
     {
@@ -744,39 +732,38 @@ export function notifyPayload(f: NotifySchedule): Result<{
 export interface StreamForm {
   name: string;
   active: boolean;
-  /** percent: chữ người dùng gõ, đơn vị %. */
-  locks: { key: number; wallet_id: string; percent: string }[];
+  /** Ngăn của tiền về (UC-506); null = theo tài khoản nhận. */
+  pocket: Pocket | null;
+  /** "Mở kỳ lương" (pocket UC-1205). */
+  opens_cycle: boolean;
 }
+
+export const OPENS_CYCLE_HINT = "Lương về từ nguồn này mở kỳ lương mới và danh sách việc. Nhà hai người lương khác ngày: chỉ bật cho một nguồn.";
 
 export function streamToForm(s: IncomeStream | null): StreamForm {
-  if (!s) return { name: "", active: true, locks: [] };
-  return { name: s.name, active: s.active, locks: s.locks.map((l, i) => ({ key: i + 1, wallet_id: l.walletId, percent: formatPercent(l.percent) })) };
+  if (!s) return { name: "", active: true, pocket: null, opens_cycle: false };
+  return { name: s.name, active: s.active, pocket: s.pocket ?? null, opens_cycle: s.opens_cycle ?? false };
 }
 
-/** Thân POST/PATCH nguồn thu. Mỗi ví khóa một lần, mỗi phần > 0 và tổng không quá 100%; khóa 100% thì không chạy dòng thác. */
-export function streamPayload(f: StreamForm, isNew: boolean): Result<{ name: string; locks: { wallet_id: string; percent: number }[]; active?: boolean }> {
+/**
+ * Thân POST/PATCH nguồn thu. Nguồn cho thuê (config `rental_income_stream_id`) không mở kỳ lương: không có công tắc, không gửi
+ * `opens_cycle` (server: 400 `cannot_open_cycle`).
+ */
+export function streamPayload(f: StreamForm, isNew: boolean, isRental = false): Result<{ name: string; active?: boolean; pocket: Pocket | null; opens_cycle?: boolean }> {
   const errors: Errors = {};
   const name = f.name.trim();
   if (!name) errors.name = "Nhập tên nguồn thu.";
-  const seen = new Set<string>();
-  let total = 0;
-  const locks = f.locks.map((l, i) => {
-    const p = parsePercent(l.percent);
-    if (!l.wallet_id) errors[`lock-${l.key}`] = `Dòng ${i + 1}: chọn ví.`;
-    else if (seen.has(l.wallet_id)) errors[`lock-${l.key}`] = `Dòng ${i + 1}: ví này đã có ở dòng trên.`;
-    else if (p === null || p <= 0 || p > 100) errors[`lock-${l.key}`] = `Dòng ${i + 1}: phần trăm lớn hơn 0 và không quá 100.`;
-    seen.add(l.wallet_id);
-    total += p ?? 0;
-    return { wallet_id: l.wallet_id, percent: Math.round((p ?? 0) * 10000) / 1_000_000 };
-  });
-  if (total > 100 + 1e-9) errors.locks = `Tổng phần khóa ${formatPercent(total / 100)}% — không quá 100%.`;
-  return done(errors, () => ({ name, locks, ...(isNew ? {} : { active: f.active }) }));
+  return done(errors, () => ({ name, ...(isNew ? {} : { active: f.active }), pocket: f.pocket, ...(isRental ? {} : { opens_cycle: f.opens_cycle }) }));
 }
 
-/** "Tích sản 45%" · "không khóa — cả khoản vào dòng thác". */
-export function streamSummary(s: IncomeStream, wallets: { id: string; name: string }[]): string {
-  if (s.locks.length === 0) return "không khóa — cả khoản vào dòng thác";
-  return s.locks.map((l) => `${wallets.find((w) => w.id === l.walletId)?.name ?? l.walletId} ${formatPercent(l.percent)}%`).join(" · ");
+/** "Mở kỳ lương" · "" — dòng phụ của nguồn ở Cài đặt › Nguồn thu. */
+export const streamSummary = (s: IncomeStream): string => (s.opens_cycle ? "Mở kỳ lương" : "Không mở kỳ lương");
+
+/** Dòng nhắc ở Cài đặt › Nguồn thu (UC-709 AC-45): không nguồn đang dùng nào bật "Mở kỳ lương". Bản lưu cũ thiếu cờ: không nhắc. */
+export function cycleStreamReminder(streams: IncomeStream[]): string | null {
+  const active = streams.filter((s) => s.active);
+  if (active.length === 0 || active.some((s) => s.opens_cycle === undefined)) return null;
+  return active.some((s) => s.opens_cycle) ? null : "Chưa có nguồn nào mở kỳ lương: bật cho nguồn lương chính để lương về có danh sách việc.";
 }
 
 // ── Nhật ký thay đổi ──────────────────────────────────────────────
@@ -803,6 +790,21 @@ const AUDIT_ACTION: Record<string, string> = {
   "income.allocate": "Chia khoản thu",
   "tenant.paid_for_us": "Người thuê trả hộ",
   "month.close": "Chốt tháng",
+  "pay_cycle.open": "Mở kỳ lương",
+  "pay_cycle.void": "Huỷ kỳ lương",
+  "pay_cycle_task.done": "Xong việc ngày lương",
+  "pay_cycle_task.skip": "Bỏ qua việc ngày lương",
+  "pay_cycle_task.reopen": "Hoàn tác việc ngày lương",
+  "pay_cycle_task.amount": "Sửa số việc ngày lương",
+  "goal.create": "Thêm mục tiêu Dự phòng",
+  "goal.update": "Sửa mục tiêu Dự phòng",
+  "conversion.step": "Chuyển sang ba ngăn: xong một bước",
+  "conversion.done": "Chuyển sang ba ngăn: xong",
+  "income_stream.create": "Thêm nguồn thu",
+  "income_stream.update": "Sửa nguồn thu",
+  "log.ignore": "Bỏ qua giao dịch ngân hàng",
+  "category.create": "Thêm danh mục",
+  "category.update": "Sửa danh mục",
 };
 const AUDIT_VIA: Record<AuditEntry["via"], string> = { session: "", token: " · qua API token", mcp: " · qua Claude" };
 

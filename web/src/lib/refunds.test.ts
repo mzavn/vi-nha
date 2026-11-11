@@ -10,8 +10,6 @@ const spend = (id: number, amount: number, at: string, extra: Partial<LinkCandid
   amount,
   category_id: "health",
   category_name: "Thuốc thang",
-  wallet_id: "nice-to-have",
-  wallet_name: "Có thì tốt",
   receivable_id: null,
   receivable_name: null,
   note: null,
@@ -63,7 +61,7 @@ describe("trả lại cho khoản chi", () => {
 
 describe("trả cho khoản cho vay, xem hai chiều (change 261005-lien-ket-khoan-goc)", () => {
   const lend = (id: number, amount: number, at: string, receivable_id: string | null, receivable_name: string | null = null): LinkCandidate =>
-    spend(id, amount, at, { category_id: "lending", category_name: "Cho vay", wallet_id: null, wallet_name: null, receivable_id, receivable_name });
+    spend(id, amount, at, { category_id: "lending", category_name: "Cho vay", receivable_id, receivable_name });
 
   it("xếp khoản cho vay: của người đang chọn ở Ai trả lên trước, rồi gần số tiền nhất, rồi mới nhất; nhãn có tên người", () => {
     const rows = [

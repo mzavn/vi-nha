@@ -6,13 +6,14 @@
 import { pendingMessage, type PendingLog } from "../notify/format";
 import { notifyMembers } from "../notify/telegram";
 import { sqliteDateTime } from "../services/ingest";
+import { hiddenAccountIds } from "../services/privacy";
 import type { Env } from "../env";
 
 const DELAY_MS = 60_000;
 /** Telegram hỏng lâu (token sai, chat_id sai) thì thôi thử lại sau một ngày; tin sáng vẫn báo số chưa gán. */
 const RETRY_WINDOW_MS = 24 * 3600_000;
 
-type PendingRow = PendingLog & { id: string };
+type PendingRow = PendingLog & { id: string; accountId: string | null };
 
 export async function notifyPendingLogs(env: Env, now: Date): Promise<void> {
   const cutoff = sqliteDateTime(new Date(now.getTime() - DELAY_MS));
@@ -20,7 +21,7 @@ export async function notifyPendingLogs(env: Env, now: Date): Promise<void> {
   // Log chờ ≥ 60 giây mà CHƯA báo thành công. Báo thành công mới đánh dấu ok = 1: gửi lỗi thì lần chạy sau thử lại,
   // vì một khoản tiền lạ mà không ai được báo là đúng cái thứ cảnh báo này tồn tại để chặn.
   const pending = await env.DB.prepare(
-    `SELECT l.id, l.amount, l.direction, a.name AS accountName
+    `SELECT l.id, l.amount, l.direction, l.account_id AS accountId, a.name AS accountName
      FROM bank_logs l LEFT JOIN accounts a ON a.id = l.account_id
      WHERE l.status = 'pending' AND l.received_at <= ? AND l.received_at >= ?
        AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.kind = 'pending_log' AND n.day_key = l.id AND n.ok = 1)
@@ -31,7 +32,10 @@ export async function notifyPendingLogs(env: Env, now: Date): Promise<void> {
   const rows = pending.results ?? [];
   if (rows.length === 0) return;
 
-  const sent = await notifyMembers(env, "pending_batch", now.toISOString(), pendingMessage(rows));
+  // Log của tài khoản riêng tư có chủ còn hoạt động (cron không có người xem) chỉ được đếm, không số, không tên (notify UC-407 bước 2).
+  const hidden = await hiddenAccountIds(env.DB, null);
+  const shown = rows.filter((r) => r.accountId === null || !hidden.includes(r.accountId));
+  const sent = await notifyMembers(env, "pending_batch", now.toISOString(), pendingMessage(shown, rows.length - shown.length));
   if (sent === 0) return; // không ai nhận được: để nguyên, lần chạy sau thử lại
 
   await env.DB.batch(

@@ -83,3 +83,9 @@ export function monthsLeft(at: string | Date, targetDate: string): number {
   if (!ty || !tm) throw new Error(`target_date không hợp lệ: ${targetDate}`);
   return Math.max(1, (ty - now.getUTCFullYear()) * 12 + (tm - (now.getUTCMonth() + 1)));
 }
+
+/** Tháng liền trước của `YYYY-MM`. */
+export function previousMonth(month: string): string {
+  const [y, m] = month.split("-").map(Number) as [number, number];
+  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
+}

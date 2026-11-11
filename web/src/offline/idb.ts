@@ -6,9 +6,10 @@ import type { QueuedEntry, QueueStore } from "./queue";
 const DB_NAME = "vi-nha";
 const QUEUE = "queue";
 const CACHE = "cache";
-// Phiên bản dữ liệu lưu trên máy: tăng khi dạng dữ liệu API đổi (2: tên tiếng Anh — tiers.wealth_building, safetyFund…).
-// Khác phiên bản thì bản lưu cũ (bootstrap, snapshot, settings) bị bỏ; hàng đợi nhập giữ nguyên (pwa UC-710 AC-11).
-const DATA_VERSION = 2;
+// Phiên bản dữ liệu lưu trên máy: tăng khi dạng dữ liệu API đổi (2: tên tiếng Anh — tiers.wealth_building, safetyFund…;
+// 3: v2 ba ngăn — không ví, mục tiêu là tài khoản thật). Khác phiên bản thì bản lưu cũ (bootstrap, snapshot, settings) bị
+// bỏ; hàng đợi nhập giữ nguyên (pwa UC-710 AC-11, AC-13).
+const DATA_VERSION = 3;
 const LS_CACHE = "vi-nha:cache:";
 const LS_CACHE_VERSION = "vi-nha:cache-version";
 

@@ -80,20 +80,23 @@ function toReceivable({ in: lent, out: collected, movements, extra, ...b }: book
   };
 }
 
-/** Mọi khoản phải thu: đang theo dõi trước, chưa trả đủ trước, còn phải thu nhiều trước. Tổng chỉ cộng phần dương của khoản đang theo dõi. */
-export async function getReceivables(db: D1Database): Promise<{ totalBalance: number; receivables: Receivable[] }> {
-  const { totalBalance, books: list } = await books.listBooks<ReceivableLine>(db, RECEIVABLES);
+/**
+ * Mọi khoản phải thu: đang theo dõi trước, chưa trả đủ trước, còn phải thu nhiều trước. Tổng chỉ cộng phần dương của khoản đang theo dõi.
+ * `movements` bỏ khoản bị giấu với `viewerId`; `lent` / `collected` / `balance` vẫn cộng đủ (access UC-504 AC-15).
+ */
+export async function getReceivables(db: D1Database, viewerId: string | null): Promise<{ totalBalance: number; receivables: Receivable[] }> {
+  const { totalBalance, books: list } = await books.listBooks<ReceivableLine>(db, RECEIVABLES, viewerId);
   return { totalBalance, receivables: list.map(toReceivable) };
 }
 
 /** Thêm khoản phải thu: số người ta đang nợ thành dòng 'opening' — chỉ ghi nhớ, không tiền nào đi. Số 0: chỉ thêm người, không dòng nào. */
-export async function createReceivable(db: D1Database, b: books.Input, now: Date): Promise<Receivable> {
-  return toReceivable(await books.getBook<ReceivableLine>(db, RECEIVABLES, await books.createBook(db, RECEIVABLES, b, now)));
+export async function createReceivable(db: D1Database, b: books.Input, now: Date, viewerId: string | null): Promise<Receivable> {
+  return toReceivable(await books.getBook<ReceivableLine>(db, RECEIVABLES, await books.createBook(db, RECEIVABLES, b, now), viewerId));
 }
 
-export async function updateReceivable(db: D1Database, id: string, b: books.Input, now: Date): Promise<Receivable> {
+export async function updateReceivable(db: D1Database, id: string, b: books.Input, now: Date, viewerId: string | null): Promise<Receivable> {
   await books.updateBook(db, RECEIVABLES, id, b, now);
-  return toReceivable(await books.getBook<ReceivableLine>(db, RECEIVABLES, id));
+  return toReceivable(await books.getBook<ReceivableLine>(db, RECEIVABLES, id, viewerId));
 }
 
 /** Chỉnh tay (adjust ±). Cho vay thêm là giao dịch `lend`, không phải dòng sổ. */

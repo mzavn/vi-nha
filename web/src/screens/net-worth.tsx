@@ -249,7 +249,7 @@ function BalanceSheetView({ d, history, wide, onOpen }: { d: BalanceSheet; histo
       )}
       {d.liabilities.length > 0 && <Liabilities d={d} />}
       <p class="hint" style={{ margin: "0 4px 12px" }}>
-        Vốn chủ = tài sản − nợ. Tiền, nợ, phải thu lấy từ sổ. Số ở đây không đổi ví hay số còn để chi.
+        Vốn chủ = tài sản − nợ. Tiền, nợ, phải thu lấy từ sổ. Số ở đây không đổi số dư hay tiền vận hành.
       </p>
       <Loadable res={history}>{(h) => <History h={h} />}</Loadable>
     </>

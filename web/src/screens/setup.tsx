@@ -1,5 +1,5 @@
 // Thiết lập nhà lần đầu (UC-510, UC-701 AC-8): DB mới chưa có ai thì màn này thay màn đăng nhập.
-// Bốn bước: Mật khẩu chung → Thành viên → Tài khoản → Ví theo mẫu; xong vào thẳng Hôm nay bằng phiên của chủ hộ.
+// Bốn bước: Mật khẩu chung → Thành viên → Tài khoản → Ba ngăn; xong vào thẳng Hôm nay bằng phiên của chủ hộ.
 // Kiểm từng bước ở lib/setup.ts (có test); lỗi server có `field` thì mở lại đúng bước, hiện dưới đúng ô.
 
 import { useEffect, useRef, useState } from "preact/hooks";
@@ -7,19 +7,27 @@ import { ACCOUNT_KIND_LABEL, type Errors } from "../lib/settings";
 import { MAX_MEMBERS } from "../lib/members";
 import {
   emptySetup,
-  MUST_OPTIONS,
+  goalAccountChoices,
+  GROUP_OPTIONS,
+  MAX_GOALS,
+  newAccount,
+  newGoal,
+  removeAccount,
   removeMember,
+  SETUP_POCKET_OPTIONS,
   SETUP_STEPS,
   setupPayload,
   setupServerError,
+  setupSummary,
   stepErrors,
   stepOfField,
   type SetupAccount,
   type SetupForm,
+  type SetupGoal,
   type SetupMember,
   type SetupStep,
 } from "../lib/setup";
-import type { SettingsAccount } from "../lib/types";
+import type { Pocket, SettingsAccount } from "../lib/types";
 import { completeSetup, useApp } from "../state/store";
 import { Icon } from "../ui/icons";
 import { Seg } from "../ui/parts";
@@ -112,7 +120,7 @@ export function Setup() {
         {step === 0 && <HouseholdStep f={f} set={set} errors={errors} show={show} toggle={() => setShow((v) => !v)} />}
         {step === 1 && <MembersStep f={f} setF={setF} setMember={setMember} errors={errors} />}
         {step === 2 && <AccountsStep f={f} setF={setF} setAccount={setAccount} errors={errors} />}
-        {step === 3 && <TemplateStep f={f} set={set} errors={errors} />}
+        {step === 3 && <PocketsStep f={f} set={set} setF={setF} setAccount={setAccount} errors={errors} />}
         <div class="pad" style={{ paddingBottom: "14px" }}>
           {message && (
             <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
@@ -287,7 +295,7 @@ function AccountsStep({
             <BlockHead
               label={`Tài khoản ${i + 1}`}
               first={i === 0}
-              onRemove={f.accounts.length > 1 ? () => setF((x) => ({ ...x, accounts: x.accounts.filter((_, j) => j !== i) })) : undefined}
+              onRemove={f.accounts.length > 1 ? () => setF((x) => removeAccount(x, i)) : undefined}
               removeLabel={`Bớt ${a.name.trim() || `tài khoản ${i + 1}`}`}
             />
             <Field id={idOf(k("name"))} label="Tên" error={errors[k("name")]}>
@@ -361,30 +369,90 @@ function AccountsStep({
       })}
       <ListError error={errors.accounts} />
       <div class="pad">
-        <button type="button" class="btn" onClick={() => setF((x) => ({ ...x, accounts: [...x.accounts, { name: "", kind: "bank", bank: "", owner: null }] }))}>
+        <button type="button" class="btn" onClick={() => setF((x) => ({ ...x, accounts: [...x.accounts, newAccount()] }))}>
           <Icon name="plus" size={16} />
           Thêm tài khoản
         </button>
       </div>
-      <Hint>
-        Tài khoản ngân hàng, tiền mặt, ví điện tử nhà đang dùng. Các ví mẫu nằm ở tài khoản ngân hàng đầu tiên. Số dư, số tài khoản, nối SePay thêm sau ở Cài đặt ›
-        Tài khoản.
-      </Hint>
+      <Hint>Tài khoản ngân hàng, tiền mặt, MoMo… nhà đang dùng. Số dư, số tài khoản, nối SePay thêm sau ở Cài đặt › Tài khoản.</Hint>
     </>
   );
 }
 
-// ── Bước 4: ví theo mẫu ───────────────────────────────────────────
+// ── Bước 4: ba ngăn ───────────────────────────────────────────────
 
-function TemplateStep({ f, set, errors }: { f: SetupForm; set: (p: Partial<SetupForm>) => void; errors: Errors }) {
-  const taxId = idOf("template.taxable");
-  const chosen = MUST_OPTIONS.filter((o) => f.must.includes(o.value)).map((o) => o.label);
-  const wallets = ["Thu nhập", "Tích sản 10%", ...(f.taxable ? ["Thuế 10%"] : []), "Có thì tốt (nhận phần còn lại)", ...chosen];
+/** Giá trị của ô chọn ngăn: "" = ngoài ngăn. */
+const pocketValue = (p: Pocket | null) => p ?? "";
+
+function PocketsStep({
+  f,
+  set,
+  setF,
+  setAccount,
+  errors,
+}: {
+  f: SetupForm;
+  set: (p: Partial<SetupForm>) => void;
+  setF: (fn: (x: SetupForm) => SetupForm) => void;
+  setAccount: (i: number, p: Partial<SetupAccount>) => void;
+  errors: Errors;
+}) {
+  const setGoal = (i: number, patch: Partial<SetupGoal>) => setF((x) => ({ ...x, goals: x.goals.map((g, j) => (j === i ? { ...g, ...patch } : g)) }));
+  const paydayId = idOf("payday_day");
+  const pctId = idOf("savings_pct");
+  const taxId = idOf("taxable");
   return (
     <>
-      <Field id={taxId} label="Có thu nhập phải tự nộp thuế?" error={errors["template.taxable"]} wrap first>
+      <div class="set-sub" style={{ borderTop: 0 }}>
+        Tài khoản thuộc ngăn nào
+      </div>
+      {f.accounts.map((a, i) => {
+        const key = `accounts.${i}.pocket`;
+        return (
+          <Field key={i} id={idOf(key)} label={a.name.trim() || `Tài khoản ${i + 1}`} error={errors[key]}>
+            <select
+              id={idOf(key)}
+              class="ctl"
+              value={pocketValue(a.pocket)}
+              onChange={(e) => setAccount(i, { pocket: (e.currentTarget.value || null) as Pocket | null })}
+              {...invalid(errors, key, idOf(key))}
+            >
+              {SETUP_POCKET_OPTIONS.map((o) => (
+                <option key={o.label} value={pocketValue(o.value)}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+        );
+      })}
+      <Hint>Tiền về tài khoản nào là tiền của ngăn đó. Thẻ tín dụng để ở Vận hành.</Hint>
+      <Field id={paydayId} label="Ngày lương" error={errors.payday_day}>
+        <input
+          id={paydayId}
+          class="ctl"
+          inputMode="numeric"
+          maxLength={2}
+          value={f.paydayDay}
+          onInput={(e) => set({ paydayDay: e.currentTarget.value })}
+          {...invalid(errors, "payday_day", paydayId)}
+        />
+      </Field>
+      <Field id={pctId} label="% Tích luỹ" error={errors.savings_pct}>
+        <input
+          id={pctId}
+          class="ctl"
+          inputMode="numeric"
+          maxLength={3}
+          value={f.savingsPct}
+          onInput={(e) => set({ savingsPct: e.currentTarget.value })}
+          {...invalid(errors, "savings_pct", pctId)}
+        />
+      </Field>
+      <Hint>Trích mỗi kỳ lương — lương về sẽ có việc “Trích Tích luỹ”.</Hint>
+      <Field id={taxId} label="Nhà có tự nộp thuế không?" error={errors.taxable} wrap>
         <Seg<"" | "yes" | "no">
-          label="Có thu nhập phải tự nộp thuế"
+          label="Nhà có tự nộp thuế không"
           value={f.taxable === null ? "" : f.taxable ? "yes" : "no"}
           onChange={(v) => set({ taxable: v === "yes" })}
           options={[
@@ -393,21 +461,93 @@ function TemplateStep({ f, set, errors }: { f: SetupForm; set: (p: Partial<Setup
           ]}
         />
       </Field>
-      <Hint>Có (kinh doanh, cho thuê nhà, làm tự do…): thêm ví Thuế, giữ 10% mỗi khoản thu. Không: thu nhập đã khấu trừ thuế, như lương.</Hint>
-      <div class="set-sub">Ví Must — chi thiết yếu</div>
-      {MUST_OPTIONS.map((o) => (
+      <Hint>Có (kinh doanh, cho thuê nhà, làm tự do…): thêm mục tiêu Dự phòng “Thuế”, để riêng 10% thu chịu thuế. Không: thu nhập đã khấu trừ thuế, như lương.</Hint>
+      <div class="set-sub">Nhóm danh mục chi thiết yếu</div>
+      {GROUP_OPTIONS.map((o) => (
         <Check
           key={o.value}
-          id={idOf(`template.must.${o.value}`)}
+          id={idOf(`groups.${o.value}`)}
           label={o.label}
-          checked={f.must.includes(o.value)}
-          onChange={(v) => set({ must: v ? [...f.must, o.value] : f.must.filter((x) => x !== o.value) })}
+          checked={f.groups.includes(o.value)}
+          onChange={(v) => set({ groups: v ? [...f.groups, o.value] : f.groups.filter((x) => x !== o.value) })}
         />
       ))}
-      <ListError error={errors["template.must"]} />
+      <ListError error={errors.groups} />
+      <Hint>Luôn có thêm nhóm Y tế và Mua sắm. Hạn mức từng nhóm đặt sau ở Cài đặt › Ba ngăn.</Hint>
+      <div class="set-sub">Mục tiêu Dự phòng (tuỳ chọn)</div>
+      {f.goals.map((g, i) => {
+        const k = (field: string) => `goals.${i}.${field}`;
+        const choices = goalAccountChoices(f, i);
+        const accountId = idOf(k("account"));
+        return (
+          <div key={i}>
+            <BlockHead label={`Mục tiêu ${i + 1}`} first={false} onRemove={() => setF((x) => ({ ...x, goals: x.goals.filter((_, j) => j !== i) }))} removeLabel={`Bớt ${g.name.trim() || `mục tiêu ${i + 1}`}`} />
+            <Field id={idOf(k("name"))} label="Tên" error={errors[k("name")]}>
+              <input
+                id={idOf(k("name"))}
+                class="ctl"
+                value={g.name}
+                maxLength={60}
+                autocomplete="off"
+                placeholder="Học phí"
+                onInput={(e) => setGoal(i, { name: e.currentTarget.value })}
+                {...invalid(errors, k("name"), idOf(k("name")))}
+              />
+            </Field>
+            <Field id={idOf(k("monthly_amount"))} label="Số mỗi tháng" error={errors[k("monthly_amount")]}>
+              <input
+                id={idOf(k("monthly_amount"))}
+                class="ctl"
+                inputMode="numeric"
+                value={g.monthly}
+                placeholder="2.000.000"
+                onInput={(e) => setGoal(i, { monthly: e.currentTarget.value })}
+                {...invalid(errors, k("monthly_amount"), idOf(k("monthly_amount")))}
+              />
+            </Field>
+            <Field id={idOf(k("repeat_months"))} label="Mấy tháng một lần" error={errors[k("repeat_months")]}>
+              <input
+                id={idOf(k("repeat_months"))}
+                class="ctl"
+                inputMode="numeric"
+                maxLength={2}
+                value={g.repeat}
+                onInput={(e) => setGoal(i, { repeat: e.currentTarget.value })}
+                {...invalid(errors, k("repeat_months"), idOf(k("repeat_months")))}
+              />
+            </Field>
+            <Field id={accountId} label="Tài khoản của mục tiêu" error={errors[k("account")]}>
+              <select
+                id={accountId}
+                class="ctl"
+                value={g.account === null ? "" : String(g.account)}
+                onChange={(e) => setGoal(i, { account: e.currentTarget.value === "" ? null : Number(e.currentTarget.value) })}
+                {...invalid(errors, k("account"), accountId)}
+              >
+                <option value="">Chưa có</option>
+                {g.account !== null && !choices.some((c) => c.index === g.account) && (
+                  <option value={String(g.account)}>{f.accounts[g.account]?.name.trim() || `Tài khoản ${g.account + 1}`} (không chọn được)</option>
+                )}
+                {choices.map((c) => (
+                  <option key={c.index} value={String(c.index)}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+        );
+      })}
+      {f.goals.length > 0 && <Hint>Mỗi mục tiêu là một tài khoản thật ở ngăn Dự phòng; chưa có tài khoản thì chọn “Chưa có”, mở sau ở Cài đặt › Ba ngăn.</Hint>}
+      <ListError error={errors.goals} />
+      <div class="pad">
+        <button type="button" class="btn" disabled={f.goals.length >= MAX_GOALS} onClick={() => setF((x) => ({ ...x, goals: [...x.goals, newGoal()] }))}>
+          <Icon name="plus" size={16} />
+          Thêm mục tiêu
+        </button>
+      </div>
       <div class="note" style={{ borderTop: "1px solid var(--border)" }}>
-        Sẽ tạo: {wallets.join(" · ")}. Mỗi khoản thu chia vào Tích sản{f.taxable ? ", Thuế" : ""} trước, phần còn lại vào Có thì tốt. Số nạp cho ví Must đặt sau ở Cài
-        đặt › Ví & số tiền nạp.
+        {setupSummary(f)}
       </div>
     </>
   );

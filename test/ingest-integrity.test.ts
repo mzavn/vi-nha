@@ -3,8 +3,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Env } from "../src/env";
 import { assignLog, ingestLog, listPendingLogs, pairLogs, unassignTransaction, type ParsedBankLog } from "../src/services/ingest";
-import { countAccount, createEntry, replaceTransaction, setTransferOrderStatus, voidTransaction } from "../src/services/ledger";
+import { countAccount, createEntry, replaceTransaction } from "../src/services/ledger";
 import { asD1, openDb } from "./helpers/d1-sqlite";
+import { openLegacyDb } from "./helpers/legacy";
 
 let env: Env;
 let raw: ReturnType<typeof openDb>;
@@ -30,7 +31,8 @@ const log = (over: Partial<ParsedBankLog>): ParsedBankLog => ({
   ...over,
 });
 const count = (sql: string, ...args: (string | number)[]) => (raw.prepare(sql).get(...args) as { n: number }).n;
-const balance = (walletId: string) => (raw.prepare("SELECT balance FROM v_wallet_balance WHERE wallet_id = ?").get(walletId) as { balance: number }).balance;
+/** Số dư sổ của tài khoản (không ví từ v2, ADR-123). */
+const book = (accountId: string) => (raw.prepare("SELECT book_balance FROM v_account_book WHERE account_id = ?").get(accountId) as { book_balance: number }).book_balance;
 
 describe("webhook và cron vá đêm cùng một giao dịch", () => {
   it("khác id nhưng cùng mã tham chiếu trong cùng tài khoản → một log, một giao dịch", async () => {
@@ -39,7 +41,7 @@ describe("webhook và cron vá đêm cùng một giao dịch", () => {
     expect(again.created).toBe(false);
     expect(count("SELECT COUNT(*) n FROM bank_logs")).toBe(1);
     expect(count("SELECT COUNT(*) n FROM transactions WHERE meaning = 'spend'")).toBe(1);
-    expect(balance("food")).toBe(-100_000);
+    expect(book("vcb-husband")).toBe(-100_000);
   });
 
   it("chạy chen: log đã có mà request thứ hai vẫn tới được bước ghi → unique index chặn", async () => {
@@ -72,10 +74,10 @@ describe("gán hai lần cùng lúc", () => {
   it("ghép cặp tay khi một chân vừa được gán ở nơi khác → 409, không sinh giao dịch", async () => {
     await ingestLog(env.DB, log({ id: "P1", direction: "out", amount: 5_000_000, content: "x" }), "webhook", now());
     await ingestLog(env.DB, log({ id: "P2", direction: "in", accountNo: "1903xxxxxxx", amount: 5_000_000, at: "2026-09-22T04:00:00.000Z", content: "y" }), "webhook", now());
-    await assignLog(env.DB, "P2", [{ meaning: "refund", amount: 5_000_000, wallet_id: "nice-to-have" }], "husband", now());
+    await assignLog(env.DB, "P2", [{ meaning: "refund", amount: 5_000_000 }], "husband", now());
     raw.prepare("UPDATE bank_logs SET status = 'pending' WHERE id = 'P2'").run(); // request kia đọc trạng thái cũ
     raw.prepare("UPDATE bank_logs SET status = 'assigned' WHERE id = 'P2'").run(); // …rồi request này ghi xong trước
-    await expect(pairLogs(env.DB, "P1", "P2")).rejects.toMatchObject({ code: "not_pending" });
+    await expect(pairLogs(env.DB, "P1", "P2", "husband")).rejects.toMatchObject({ code: "not_pending" });
     expect(count("SELECT COUNT(*) n FROM transactions WHERE meaning = 'transfer'")).toBe(0);
   });
 });
@@ -94,45 +96,13 @@ describe("gỡ gán một log đã tách nhiều dòng", () => {
       now(),
     );
     const firstTx = (raw.prepare("SELECT id FROM transactions WHERE log_id = 'S1' ORDER BY id LIMIT 1").get() as { id: number }).id;
-    const res = await unassignTransaction(env.DB, firstTx);
+    const res = await unassignTransaction(env.DB, firstTx, "husband");
     expect(res.voided).toHaveLength(2);
     expect(count("SELECT COUNT(*) n FROM transactions WHERE log_id = 'S1' AND status = 'active'")).toBe(0);
-    expect(balance("food")).toBe(0);
-    expect(balance("nice-to-have")).toBe(0);
+    expect(book("vcb-husband")).toBe(0);
 
     await assignLog(env.DB, "S1", [{ meaning: "spend", amount: 500_000, category_id: "groceries" }], "husband", now());
-    expect(balance("food")).toBe(-500_000);
-    expect(balance("nice-to-have")).toBe(0);
-  });
-
-  it("gỡ giao dịch khớp lệnh chuyển tiền thì lệnh đó quay lại chờ", async () => {
-    raw.prepare("INSERT INTO transfer_orders (id, batch_id, from_account_id, to_account_id, amount, memo) VALUES (7, 'A99', 'vcb-husband', 'tcb-husband', 9000000, 'PF A9B8C7')").run();
-    await ingestLog(env.DB, log({ id: "O1", amount: 9_000_000, content: "PF A9B8C7" }), "webhook", now());
-    expect(raw.prepare("SELECT status, matched_log_id FROM transfer_orders WHERE id = 7").get()).toEqual({ status: "done", matched_log_id: "O1" });
-    const tx = (raw.prepare("SELECT id FROM transactions WHERE log_id = 'O1'").get() as { id: number }).id;
-    await unassignTransaction(env.DB, tx);
-    expect(raw.prepare("SELECT status, matched_log_id FROM transfer_orders WHERE id = 7").get()).toEqual({ status: "pending", matched_log_id: null });
-    expect(raw.prepare("SELECT status FROM bank_logs WHERE id = 'O1'").get()).toEqual({ status: "pending" });
-  });
-});
-
-describe("lệnh chuyển tiền", () => {
-  it("người ngoài chuyển tiền vào với mã kiểu cũ đoán được không làm lệnh thành 'đã chuyển'", async () => {
-    raw.prepare("INSERT INTO transfer_orders (id, batch_id, from_account_id, to_account_id, amount, memo) VALUES (8, 'A12', 'vcb-husband', 'tcb-husband', 9000000, 'PF H4K8M2')").run();
-    await ingestLog(env.DB, log({ id: "G1", direction: "in", accountNo: "1903xxxxxxx", amount: 9_000_000, content: "PF A12" }), "webhook", now());
-    expect(raw.prepare("SELECT status FROM transfer_orders WHERE id = 8").get()).toEqual({ status: "pending" });
-  });
-
-  it("một lần chia có hai lệnh: chân thứ hai gắn đúng giao dịch của lệnh mình", async () => {
-    raw.prepare("INSERT INTO transfer_orders (id, batch_id, from_account_id, to_account_id, amount, memo) VALUES (21, 'A5', 'vcb-husband', 'tcb-husband', 900000, 'PF AAAA22')").run();
-    raw.prepare("INSERT INTO transfer_orders (id, batch_id, from_account_id, to_account_id, amount, memo) VALUES (22, 'A5', 'vcb-husband', 'mb-husband', 300000, 'PF BBBB33')").run();
-    await ingestLog(env.DB, log({ id: "T1", direction: "out", amount: 900_000, content: "PF AAAA22" }), "webhook", now());
-    await ingestLog(env.DB, log({ id: "T2", direction: "out", amount: 300_000, content: "PF BBBB33", at: "2026-09-22T02:30:00.000Z" }), "webhook", now());
-    await ingestLog(env.DB, log({ id: "T3", direction: "in", accountNo: "0888xxxxxxx", amount: 300_000, content: "PF BBBB33", at: "2026-09-22T02:31:00.000Z" }), "webhook", now());
-    expect(raw.prepare("SELECT log_id, log_id_2 FROM transactions WHERE meaning = 'transfer' ORDER BY id").all()).toEqual([
-      { log_id: "T1", log_id_2: null },
-      { log_id: "T2", log_id_2: "T3" },
-    ]);
+    expect(book("vcb-husband")).toBe(-500_000);
   });
 });
 
@@ -143,27 +113,29 @@ describe("lương giả", () => {
     expect(count("SELECT COUNT(*) n FROM transactions")).toBe(0);
   });
 
-  it("lương thật (đủ ngưỡng) vẫn tự chia ngay; ngưỡng chỉnh được trong config", async () => {
+  it("UC-303 AC-10: lương thật (đủ ngưỡng) tự ghi khoản thu và mở kỳ; ngưỡng chỉnh được trong config", async () => {
     await ingestLog(env.DB, log({ id: "S9", direction: "in", amount: 30_000_000, content: "LUONG THANG 9" }), "webhook", now());
-    expect(count("SELECT COUNT(*) n FROM transactions WHERE meaning = 'fund'")).toBeGreaterThan(0);
+    expect(count("SELECT COUNT(*) n FROM transactions WHERE meaning = 'income'")).toBe(1);
+    expect(count("SELECT COUNT(*) n FROM pay_cycles WHERE status = 'active'")).toBe(1);
 
     raw.prepare("INSERT INTO config (k, v) VALUES ('salary_min_amount', '50000000')").run();
     await ingestLog(env.DB, log({ id: "S10", direction: "in", amount: 30_000_000, content: "LUONG THANG 10", at: "2026-09-22T05:00:00.000Z" }), "webhook", now());
     expect(raw.prepare("SELECT status FROM bank_logs WHERE id = 'S10'").get()).toEqual({ status: "pending" });
   });
 
-  it("lương giả lọt qua (đủ ngưỡng) vẫn gỡ được: gỡ gán log thì gỡ luôn lần chia", async () => {
+  it("UC-306 AC-7: lương giả lọt qua (đủ ngưỡng) vẫn gỡ được: gỡ gán log thì khoản thu void, kỳ nó mở void cùng mọi việc", async () => {
     await ingestLog(env.DB, log({ id: "S11", direction: "in", amount: 5_000_000, content: "LUONG THANG 9" }), "webhook", now());
     const income = raw.prepare("SELECT id FROM transactions WHERE log_id = 'S11' AND meaning = 'income'").get() as { id: number };
-    await unassignTransaction(env.DB, income.id);
+    await unassignTransaction(env.DB, income.id, "husband");
     expect(count("SELECT COUNT(*) n FROM transactions WHERE status = 'active'")).toBe(0);
     expect(raw.prepare("SELECT status FROM bank_logs WHERE id = 'S11'").get()).toEqual({ status: "pending" });
-    expect(count("SELECT COUNT(*) n FROM v_wallet_balance WHERE balance <> 0")).toBe(0);
+    expect(count("SELECT COUNT(*) n FROM pay_cycles WHERE status = 'active'")).toBe(0);
+    expect(count("SELECT COUNT(*) n FROM pay_cycle_tasks WHERE status <> 'void'")).toBe(0);
   });
 });
 
 describe("ba cách một đồng tiền bị đếm hai lần (red team, số của họ)", () => {
-  it("webhook không có mã tham chiếu, rà soát đêm mang lại cùng giao dịch với id khác và có mã → chia đúng một lần; log thứ hai chờ gán, đánh dấu có thể trùng", async () => {
+  it("webhook không có mã tham chiếu, rà soát đêm mang lại cùng giao dịch với id khác và có mã → ghi đúng một lần; log thứ hai chờ gán, đánh dấu có thể trùng", async () => {
     await ingestLog(env.DB, log({ id: "wh-77", direction: "in", amount: 40_000_000, content: "LUONG THANG 9", referenceNumber: null }), "webhook", now());
     await ingestLog(
       env.DB,
@@ -171,11 +143,10 @@ describe("ba cách một đồng tiền bị đếm hai lần (red team, số c�
       "backfill",
       new Date("2026-09-22T19:00:00.000Z"),
     );
-    expect(count("SELECT COUNT(*) n FROM allocation_runs")).toBe(1);
-    expect(count("SELECT SUM(amount) n FROM transactions WHERE meaning = 'fund' AND status = 'active'")).toBe(40_000_000);
-    expect(balance("wealth-building")).toBe(12_000_000);
+    expect(count("SELECT COUNT(*) n FROM transactions WHERE meaning = 'income' AND status = 'active'")).toBe(1);
+    expect(count("SELECT COUNT(*) n FROM pay_cycles")).toBe(1);
     expect(raw.prepare("SELECT status FROM bank_logs WHERE id = 'api-9f3c'").get()).toEqual({ status: "pending" });
-    const pending = await listPendingLogs(env.DB, 50);
+    const pending = await listPendingLogs(env.DB, 50, "husband");
     expect(pending.find((l) => l.id === "api-9f3c")?.suggestion).toMatchObject({ possible_duplicate_of: "wh-77" });
   });
 
@@ -226,7 +197,7 @@ describe("D14 theo chiều tiền (ADR-66): MB nối SePay, chỉ báo tiền v�
 
   it("nhập tay tiền vào MB (thu nhập, hoàn tiền, chuyển vào) → từ chối fed_account", async () => {
     await expect(createEntry(env.DB, { meaning: "income", amount: 1_000_000, account_id: "mb-husband" }, "husband", now())).rejects.toMatchObject({ code: "fed_account" });
-    await expect(createEntry(env.DB, { meaning: "refund", amount: 50_000, wallet_id: "food", account_id: "mb-husband" }, "husband", now())).rejects.toMatchObject({ code: "fed_account" });
+    await expect(createEntry(env.DB, { meaning: "refund", amount: 50_000, account_id: "mb-husband" }, "husband", now())).rejects.toMatchObject({ code: "fed_account" });
     await expect(
       createEntry(env.DB, { meaning: "transfer", amount: 50_000, account_id: "cash-husband", to_account_id: "mb-husband" }, "husband", now()),
     ).rejects.toMatchObject({ code: "fed_account" });
@@ -278,7 +249,7 @@ describe("mốc theo dõi SePay: khoản trước mốc nhập tay được (ADR
     expect(r.linkedLogs).toEqual(["tre"]);
     expect(raw.prepare("SELECT log_id, source FROM transactions WHERE id = ?").get(Number(r.tx!.id))).toEqual({ log_id: "tre", source: "manual" });
     expect(raw.prepare("SELECT status FROM bank_logs WHERE id = 'tre'").get()).toEqual({ status: "assigned" });
-    expect(await listPendingLogs(env.DB, 50)).toEqual([]);
+    expect(await listPendingLogs(env.DB, 50, "husband")).toEqual([]);
   });
 
   it("UC-101 AC-26: log trước mốc đã gán → nhập tay khoản đó → 409 bank_log_exists, không ghi; gửi lại confirm_duplicate → ghi", async () => {
@@ -306,40 +277,47 @@ describe("mốc theo dõi SePay: khoản trước mốc nhập tay được (ADR
 });
 
 describe("rà lại các bản sửa (reviewer cuối)", () => {
-  it("gỡ gán chân đầu của lệnh chuyển trước khi chân sau về → chân sau ghép lại cả hai, không log nào mồ côi", async () => {
-    raw.prepare("INSERT INTO transfer_orders (id, batch_id, from_account_id, to_account_id, amount, memo) VALUES (31, 'A7', 'vcb-husband', 'tcb-husband', 900000, 'PF ZZ0001')").run();
-    await ingestLog(env.DB, log({ id: "L1", direction: "out", amount: 900_000, content: "PF ZZ0001" }), "webhook", now());
+  it("gỡ gán chân đầu trước khi chân sau về → chân sau ghép lại cả hai, không log nào mồ côi", async () => {
+    await ingestLog(env.DB, log({ id: "L1", direction: "out", amount: 900_000, content: "chuyen tiet kiem" }), "webhook", now());
+    await assignLog(env.DB, "L1", [{ meaning: "transfer", amount: 900_000, other_account_id: "tcb-husband" }], "husband", now());
     const first = (raw.prepare("SELECT id FROM transactions WHERE log_id = 'L1'").get() as { id: number }).id;
-    await unassignTransaction(env.DB, first);
-    await ingestLog(env.DB, log({ id: "L2", direction: "in", accountNo: "1903xxxxxxx", amount: 900_000, content: "PF ZZ0001", at: "2026-09-22T02:05:00.000Z" }), "webhook", now());
+    await unassignTransaction(env.DB, first, "husband");
+    await ingestLog(env.DB, log({ id: "L2", direction: "in", accountNo: "1903xxxxxxx", amount: 900_000, content: "chuyen tiet kiem", at: "2026-09-22T02:05:00.000Z" }), "webhook", now());
     expect(raw.prepare("SELECT log_id, log_id_2 FROM transactions WHERE status = 'active'").all()).toEqual([{ log_id: "L1", log_id_2: "L2" }]);
     expect(count("SELECT COUNT(*) n FROM bank_logs WHERE status = 'pending'")).toBe(0);
   });
 
-  it("người kia bấm 'Đã chuyển' đúng lúc đang gỡ lần chia → huỷ bị từ chối, sổ giữ nguyên", async () => {
-    raw.prepare("UPDATE accounts SET sepay_enabled = 0 WHERE id = 'vcb-wife'").run();
-    const { tx } = await createEntry(env.DB, { meaning: "income", amount: 10_000_000, account_id: "vcb-wife", at: "2026-09-10T09:00:00+07:00" }, "wife", now());
-    const incomeId = Number(tx!.id);
-    const { allocateIncome, undoAllocationStatements } = await import("../src/services/ledger");
-    await allocateIncome(env.DB, incomeId);
-    // Bước đọc của lần gỡ thấy chưa có lệnh nào 'done'…
-    const undo = await undoAllocationStatements(env.DB, incomeId);
-    expect(undo.length).toBeGreaterThan(0);
-    // …thì request khác đánh dấu một lệnh đã chuyển, trước khi lần gỡ kịp ghi.
-    const order = raw.prepare("SELECT id FROM transfer_orders LIMIT 1").get() as { id: number };
-    await setTransferOrderStatus(env.DB, order.id, "done");
-    const { runUndo } = await import("../src/services/ledger");
-    await expect(runUndo(env.DB, undo)).rejects.toMatchObject({ code: "allocation_settled" });
-    expect(count("SELECT SUM(amount) n FROM transactions WHERE meaning = 'fund' AND status = 'active'")).toBe(10_000_000);
-    await expect(voidTransaction(env.DB, incomeId)).rejects.toMatchObject({ code: "allocation_settled" });
+  it("UC-306 AC-7: gỡ log lương cũ đã chia (lô có lệnh đã chuyển, trước 0040) → khoản thu và mọi fund cùng lô void, log về chờ", async () => {
+    const db = openLegacyDb((d) =>
+      d.exec(`
+        UPDATE accounts SET opened_at = NULL;
+        INSERT INTO bank_logs (id, at, amount, direction, account_id, status) VALUES ('LS', '2026-10-10T01:00:00.000Z', 10000000, 'in', 'vcb-anh', 'pending');
+        INSERT INTO transactions (id, log_id, at, amount, meaning, wallet_id, counter_account_id, week_key, month_key, source)
+          VALUES (900, 'LS', '2026-10-10T01:00:00.000Z', 10000000, 'income', 'thu-nhap', 'vcb-anh', '2026-W41', '2026-10', 'sepay');
+        UPDATE bank_logs SET status = 'assigned' WHERE id = 'LS';
+        INSERT INTO allocation_runs (income_tx_id, batch_id) VALUES (900, 'A900');
+        INSERT INTO transactions (at, amount, meaning, wallet_id, counter_wallet_id, link_id, batch_id, week_key, month_key, source) VALUES
+          ('2026-10-10T01:00:00.000Z', 3000000, 'fund', 'tich-san', 'thu-nhap', 900, 'A900', '2026-W41', '2026-10', 'system'),
+          ('2026-10-10T01:00:00.000Z', 7000000, 'fund', 'co-thi-tot', 'thu-nhap', 900, 'A900', '2026-W41', '2026-10', 'system');
+        INSERT INTO transfer_orders (batch_id, from_account_id, to_account_id, amount, memo, status) VALUES ('A900', 'vcb-anh', 'tcb-anh', 3000000, 'PF AAAAAA', 'done');
+      `),
+    );
+    const res = await unassignTransaction(asD1(db), 900, "husband");
+    expect(res).toEqual({ voided: [900], logs: ["LS"] });
+    expect(db.prepare("SELECT meaning, status FROM transactions ORDER BY id").all()).toEqual([
+      { meaning: "income", status: "void" },
+      { meaning: "fund", status: "void" },
+      { meaning: "fund", status: "void" },
+    ]);
+    expect(db.prepare("SELECT status FROM bank_logs WHERE id = 'LS'").get()).toEqual({ status: "pending" });
   });
 
-  it("lương đã ghi nhưng bước chia lỗi → không im lặng: ghi lại để tin sáng báo, webhook không bị gửi lại vô ích", async () => {
-    raw.prepare("UPDATE allocations SET active = 0 WHERE mode = 'remainder'").run(); // cấu hình hỏng: chia sẽ lỗi
+  it("lương về nhưng ghi kỳ lỗi → không im lặng: không ghi gì, log còn chờ, ghi lại để tin sáng báo", async () => {
+    raw.exec("CREATE TRIGGER boom BEFORE INSERT ON pay_cycles BEGIN SELECT RAISE(ABORT, 'boom'); END");
     const res = await ingestLog(env.DB, log({ id: "W1", direction: "in", amount: 30_000_000, content: "LUONG THANG 9" }), "webhook", now());
     expect(res.created).toBe(true);
-    expect(count("SELECT COUNT(*) n FROM transactions WHERE meaning = 'income'")).toBe(1);
-    expect(count("SELECT COUNT(*) n FROM allocation_runs")).toBe(0);
+    expect(count("SELECT COUNT(*) n FROM transactions")).toBe(0);
+    expect(raw.prepare("SELECT status FROM bank_logs WHERE id = 'W1'").get()).toEqual({ status: "pending" });
     const rec = raw.prepare("SELECT payload FROM notifications WHERE kind = 'ingest_error'").get() as { payload: string };
     expect(JSON.parse(rec.payload).message).toMatch(/xử lý tiếp bị lỗi/);
   });

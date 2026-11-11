@@ -6,6 +6,105 @@ bản cài cũ vẫn lên được bình thường (kể cả nâng database t�
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
 trước (xem README › Cập nhật bản mới).
 
+## v2.0.0 — 11/11/2026
+
+Có nâng cấp database: `0038` (ngăn cho tài khoản, mục tiêu Dự phòng, nhóm danh mục), `0039` (kỳ lương và danh sách việc
+ngày lương; lệnh chuyển đang chờ thành "bỏ qua"), `0040` (xoá ví, luật nạp, phần khoá, lệnh chuyển, chốt tháng; giao dịch cũ
+giữ nguyên, có nhãn "cách tính cũ"), `0041` (một tài khoản không thể vừa là Ví Thưởng vừa là tài khoản của mục tiêu; nhà
+nào đang trùng thì bỏ chọn Ví Thưởng, mục tiêu giữ tài khoản).
+
+**Bản đổi lớn, nâng cấp database lớn — đọc hết mục này và sao lưu trước khi cập nhật.** Database tự nâng khi cập nhật và
+**không lùi lại được bằng nút Cập nhật**.
+
+**Trước khi cập nhật: sao lưu**
+
+- Chọn lúc cả nhà không ghi chép (~15 phút).
+- Cài bằng lệnh (`npm run setup` / nhờ AI): trong thư mục `vi-nha` chạy
+
+  ```bash
+  mkdir -p .wrangler/backups
+  npx wrangler d1 export vi-nha --remote --output .wrangler/backups/vi-nha-truoc-2.0.sql
+  ```
+
+  Mở được file (có hàng nghìn dòng `INSERT`) thì mới cập nhật. File chứa mọi giao dịch và khoá kết nối: không commit, không
+  gửi ai. Nếu máy có nhiều tài khoản Cloudflare: đặt `CLOUDFLARE_ACCOUNT_ID` trước.
+- Cài bằng nút Deploy: D1 tự giữ lịch sử 7 ngày (Time Travel). **Ghi lại giờ bạn bấm cập nhật.** Muốn chắc hơn: cài Node,
+  đăng nhập `npx wrangler login` và chạy lệnh export ở trên với tên database của bạn.
+
+**Nếu bước nâng database lỗi**: bấm **Retry** ở build Cloudflare, hoặc chạy lại `npm run deploy` (bước nâng sẽ tiếp từ chỗ
+dừng). **Không** đưa code về bản 1.8 khi database chưa được khôi phục.
+
+**Có gì thay đổi**
+
+- **Ba ngăn thay cho ví**: Tích luỹ (trích trước, không đụng), Dự phòng (các khoản đã biết sẽ phải trả, phần còn lại là phần
+  an tâm), Vận hành (tiền sống tới kỳ lương). Mỗi tài khoản thuộc một ngăn; tiền về tài khoản nào là tiền của ngăn đó. Mọi
+  số là tiền thật trong tài khoản.
+- **Mỗi mục tiêu Dự phòng là một tài khoản thật** (tài khoản phụ, sổ tiết kiệm…): số "đã có" là số dư của tài khoản đó.
+  Không còn ví hay số "để riêng" trên giấy.
+- **Hôm nay**: thẻ Vận hành (còn bao nhiêu, chi khoảng bao nhiêu mỗi ngày tới kỳ lương), thẻ Tích luỹ (kỳ này đã trích bao
+  nhiêu %), thẻ Dự phòng (mục tiêu và phần an tâm). Bỏ Dòng thác, Quỹ an tâm.
+- **Lương về → danh sách việc ngày lương** thay chia ví và lệnh chuyển: trích Tích luỹ, nạp mục tiêu (chuyển tới tài khoản
+  của mục tiêu), dư kỳ trước. Mỗi việc có mã QR; tiền tới đúng tài khoản thì việc tự đánh dấu xong. Không còn mã PF, không
+  còn chốt tháng.
+- **Nhìn lại theo kỳ lương** thay Ngân sách: chi theo nhóm danh mục so hạn mức mềm (không âm, không bù), so kỳ trước, lãi
+  vay dự kiến / đã trả.
+- **Tài khoản riêng tư** thay ví riêng tư: người khác thấy tổng, không thấy từng khoản. Mặc định tắt. Người khác cũng không
+  huỷ, sửa, gán, bỏ qua hay ghi khoản vào tài khoản riêng tư của bạn; chỉ chủ đổi được chủ tài khoản. Tin nhắn và thông báo
+  gửi cả nhà gộp khoản của tài khoản riêng tư thành "N khoản của tài khoản riêng tư", không số tiền, không tên tài khoản;
+  lương về tài khoản riêng tư thì tin "Lương về" không ghi số.
+- Nhật ký ở Cài đặt ghi thêm: thêm / sửa nguồn thu, bỏ qua giao dịch ngân hàng, thêm / sửa danh mục, đổi chủ tài khoản.
+- Nhập / Gán / Loại khác không còn ô ví. Tài khoản không còn vai trò heo đất / phao / sổ tiết kiệm hay công tắc "Tính vào
+  tiền vận hành": chỉ có ngăn.
+- Tin sáng mở đầu bằng hai số Vận hành; tin tuần theo nhịp Vận hành; có tin "Lương về · N việc". Báo cáo và Mốc tự do chia
+  chi tiêu thành Thiết yếu / Mong muốn.
+
+**Sau khi cập nhật: làm màn "Chuyển sang ba ngăn"** (5 bước, khoảng 10 phút; app tự mở lần đầu, bấm Để sau thì Hôm nay có
+banner):
+
+1. Xem lại ngăn của từng tài khoản → Xác nhận.
+2. Gắn mỗi mục tiêu Dự phòng (app tạo sẵn từ ví cũ) với **một tài khoản thật** ở ngăn Dự phòng: chọn tài khoản có sẵn, thêm
+   tài khoản mới, tắt mục tiêu, hoặc **để sau** (mục tiêu chưa có tài khoản thì chưa có việc nạp, Hôm nay nhắc mở tài
+   khoản). Chọn tài khoản Ví Thưởng nếu dùng.
+3. Đọc đối chiếu Tích luỹ: số ví Tích sản cũ khác tiền thật ở Tích luỹ thế nào. Chưa có tài khoản Tích luỹ thì nên mở một
+   tài khoản thật cho nó.
+4. Bật "Mở kỳ lương" cho nguồn lương chính.
+5. Xem lại % trích Tích luỹ mỗi kỳ lương.
+
+**Giao dịch cũ**: vẫn trong Sổ, nhãn "cách tính cũ", có loại chi (Thiết yếu / Mong muốn / Thuế / Tích luỹ) và lần chia (chỉ
+xem); không còn tên ví.
+
+**Lùi về bản cũ** (chỉ khi thật cần): khôi phục database về trước giờ cập nhật bằng `npx wrangler d1 time-travel restore`
+(hoặc nạp lại file sao lưu) rồi deploy lại bản 1.8.0. Mọi thứ ghi sau giờ đó mất.
+
+**Cho người tự cài, gọi API hoặc nối Claude — thay đổi phá vỡ**
+
+- Bỏ đường (410 `model_changed`): `/v1/allocate*`, `/v1/month-close*`, `/v1/transfer-orders*`, `/v1/settings/wallets*`,
+  `/v1/budget`, `/v1/wealth-building`.
+- Tham số cũ bị từ chối (400 `model_changed`, kèm `fields`): `wallet_id`, `counter_wallet_id`, `from_wallet_id`,
+  `wealth_move`, `allocate`, `wealth_amount`, `wealth_note`, `amounts`, `transfer_order_id`, `locks`, `default_wallet_id`,
+  `month_close_wealth_pct`, `month_close_reward_wallet`, `spendable`, `locked`, `role`.
+- Bỏ trường:
+  - snapshot: `tiers`, `wallets`, `spendableThisWeek`, `spendableByWallet`, `reserves`, `safetyFund`, `goals`,
+    `wealthBuilding`, `attention.unallocatedIncome`, `attention.transferOrdersPending`, `attention.transferOrdersOverdue`,
+    `nearSpend.leaving`, `nearSpend.misplaced`, `nearSpend.excluded[].role`;
+  - settings: `wallets`, `allocations`, `income_streams[].locks`, `accounts[].spendable|locked|role`;
+  - bootstrap: `wallets`, `categories[].default_wallet_id`, `accounts[].locked`;
+  - giao dịch: `wallet_id`, `counter_wallet_id`, `wallet_name`; nợ: `walletId` của dòng trả nợ;
+  - networth: `wealthBuildingCash`, `wealthBuildingAccounts`, `spendableThisWeek`; `/v1/goals` dạng mới.
+- Thêm:
+  - snapshot `pockets`, `payCycle`, `paySetup`, `conversion`, `nearSpend.pendingTasks`;
+  - giao dịch `legacy`, `legacy_class`;
+  - settings `goals[]`, `config.surplus_reward_account`, `accounts[].private`;
+  - `/v1/pay-cycle-tasks/:id/*`, `/v1/settings/goals`, `/v1/settings/goals/:id/account` (tạo tài khoản và gắn mục tiêu
+    trong một lần, gửi lại không tạo thêm), `/v1/spend-by-category?cycle=`, `/v1/conversion`; `opens_cycle` khi ghi thu
+    nhập.
+- MCP: bỏ `allocate_income`, `preview_allocation`, `list_transfer_orders`, `get_budget`; `add_transaction` / `assign_log`
+  không nhận trường ví; `get_snapshot`, `get_goals`, `get_spending_by_category` đọc ngăn và kỳ lương.
+- Tài khoản riêng tư của người khác: giao dịch chỉ dính tài khoản đó → 404 ở mọi đường theo id; ghi / sửa / gán / bỏ qua
+  chạm tài khoản đó → 403 `private_account` (MCP: lỗi `private_account`); `link` trỏ tới khoản bị giấu → `null`;
+  `payCycle.tasks[].source` của khoản thu bị giấu → `{ hidden: true }`. Người cầm `API_TOKEN` vẫn đóng vai được bất kỳ ai.
+- CSP bỏ `frame-src` (app không nhúng trang nào).
+
 ## v1.8.0 — 10/11/2026
 
 Không nâng cấp database.

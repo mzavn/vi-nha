@@ -1,14 +1,13 @@
-// 19 tool MCP cho Claude: mỗi tool chỉ gọi lại đúng hàm domain/service dùng chung với REST
+// 15 tool MCP cho Claude (11 đọc, 4 ghi): mỗi tool chỉ gọi lại đúng hàm domain/service dùng chung với REST
 // (src/services/ledger.ts, src/services/ingest.ts, src/services/rental.ts, src/services/debts.ts, src/services/receivables.ts)
 // — không viết SQL nghiệp vụ ở tầng này.
-// Mỗi kết nối Claude mang người đã uỷ quyền (OAuth, UC-601): tool đọc nhìn số liệu như người đó trên app (ví private của
-// người khác bị ẩn — UC-504); tool ghi lấy người đó làm người ghi / người gán và ghi nhật ký `via = mcp` (ADR-90).
+// Mỗi kết nối Claude mang người đã uỷ quyền (OAuth, UC-601): tool đọc nhìn số liệu như người đó trên app (ví private cũ và
+// tài khoản riêng tư của người khác bị ẩn — UC-504); tool ghi lấy người đó làm người ghi / người gán và ghi nhật ký `via = mcp` (ADR-90).
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { MANUAL_MEANINGS, type EntryInput } from "../domain/entry";
-import { monthKey } from "../domain/period";
+import { MANUAL_MEANINGS, OLD_ENTRY_FIELDS, rejectOldFields, type EntryInput } from "../domain/entry";
 import { DomainError } from "../domain/types";
 import * as balance from "../services/balance";
 import * as debts from "../services/debts";
@@ -19,9 +18,13 @@ import * as receivables from "../services/receivables";
 import * as reports from "../services/reports";
 import * as rental from "../services/rental";
 import { audit, type Actor } from "../services/audit";
+import { nearSpendLine } from "../notify/format";
 
 /** Tool ghi: cần quyền `mcp:write` — routes/mcp.ts kiểm ở tầng HTTP trước khi tới đây (UC-601 AC-11). */
-export const WRITE_TOOLS: readonly string[] = ["add_transaction", "assign_log", "allocate_income", "add_tenant_shared_expense", "record_asset_value"];
+export const WRITE_TOOLS: readonly string[] = ["add_transaction", "assign_log", "add_tenant_shared_expense", "record_asset_value"];
+
+/** Trường của mô hình cũ mà tool ghi từ chối (mcp UC-603 AC-31, UC-604 AC-13) — schema lỏng để zod không bỏ lặng lẽ. */
+const OLD_SPLIT_FIELDS = ["wallet_id", "counter_wallet_id", "from_wallet_id", "wealth_move", "allocate", "earmark_id"] as const;
 
 type Row = Record<string, unknown>;
 const rows = <T = Row>(r: D1Result) => (r.results ?? []) as T[];
@@ -33,15 +36,27 @@ function ok(data: unknown, summary?: string): CallToolResult {
   return { content: summary ? [{ type: "text", text: summary }, { type: "text", text }] : [{ type: "text", text }] };
 }
 
-/** DomainError → thông điệp tiếng Việt sẵn có; lỗi lạ → thông điệp chung, không lộ chi tiết hệ thống. */
+/** DomainError → thông điệp tiếng Việt sẵn có (`model_changed` kèm mã để Claude biết bỏ trường); lỗi lạ → thông điệp chung. */
 function fail(err: unknown): CallToolResult {
-  if (err instanceof DomainError) return { content: [{ type: "text", text: err.message }], isError: true };
+  if (err instanceof DomainError) {
+    const text = err.code === "model_changed" ? `model_changed: ${err.message}` : err.message;
+    return { content: [{ type: "text", text }], isError: true };
+  }
   console.error("[mcp] lỗi khi chạy tool:", err instanceof Error ? err.message : err);
   return { content: [{ type: "text", text: "Lỗi hệ thống. Thử lại sau." }], isError: true };
 }
 
-/** Đăng ký cả 19 tool lên một McpServer mới dựng riêng cho request hiện tại; `memberId` = người đã uỷ quyền kết nối. */
-export async function registerTools(server: McpServer, db: D1Database, memberId: string, now: () => Date): Promise<void> {
+/**
+ * Đăng ký cả 15 tool lên một McpServer mới dựng riêng cho request hiện tại; `memberId` = người đã uỷ quyền kết nối.
+ * `onCycleOpened(payday)`: tool ghi vừa mở kỳ lương — người gọi báo kỳ lương mới sau khi trả lời (notify UC-412), không chặn kết quả tool.
+ */
+export async function registerTools(
+  server: McpServer,
+  db: D1Database,
+  memberId: string,
+  now: () => Date,
+  onCycleOpened: (payday: string) => void,
+): Promise<void> {
   const members = rows<{ id: string; name: string; role: string }>(
     await db.prepare("SELECT id, name, role FROM members WHERE active = 1 ORDER BY role = 'owner' DESC, name").all(),
   );
@@ -53,32 +68,21 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
     "get_snapshot",
     {
       description:
-        "Numbers behind the 'Today' screen: what is left to spend this week per wallet, balances per tier " +
-        "(wealth_building, tax, nice, must, have), the safety fund (safetyFund: months covered vs target), goal progress, " +
-        "and items needing attention (unassigned bank logs, reconciliation drift, pending transfer orders). " +
+        "Numbers behind the 'Today' screen, three cards. pockets: real money per pocket (each pocket is a group of real accounts: " +
+        "savings / reserve / operating / outside), savings change this / previous pay cycle (savings.change), reserve goals (each goal is a " +
+        "real account; held = its balance, null = no account yet; target or % of taxable income; sorted by due date), peace-of-mind amount " +
+        "(reserve accounts without a goal) and months of operating spend it covers (reserve.peace, reserve.peaceMonths), reward account " +
+        "(reserve.reward), short-term debts (shortDebt, reminder only — not subtracted). nearSpend: the operating pocket counted until the " +
+        "next payday, per day / per meal / per market trip, minus payday tasks not done yet (pendingTasks). " +
+        "payCycle: current pay cycle (opened by salary) and its payday checklist — savings transfer, reserve goal funding, moves, last cycle surplus. " +
+        "Also items needing attention (unassigned bank logs, reconciliation drift). " +
+        "conversion: one-time switch to pockets still pending ({ done, total: 5, next }; null when done). " +
         "No parameters. All amounts are integer VND.",
     },
     async () => {
       try {
         const snap = await ledger.getSnapshot(db, memberId, now());
-        return ok(snap, `Còn để chi tuần này: ${vnd(snap.spendableThisWeek)}`);
-      } catch (err) {
-        return fail(err);
-      }
-    },
-  );
-
-  server.registerTool(
-    "get_budget",
-    {
-      description:
-        "Budget table per wallet for one period: planned, actual and remaining. period is a month '2026-09' or an ISO week " +
-        "'2026-W39'; omit it for the current month. Amounts are integer VND.",
-      inputSchema: { period: z.string().optional() },
-    },
-    async (args) => {
-      try {
-        return ok(await ledger.getBudget(db, args.period ?? monthKey(now()), memberId));
+        return ok(snap, nearSpendLine(snap.nearSpend));
       } catch (err) {
         return fail(err);
       }
@@ -89,12 +93,13 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
     "get_goals",
     {
       description:
-        "Progress of goals with a deadline (percent reached, amount missing, days left), the safety fund (safetyFund: months " +
-        "covered, percent of target) and the wealth-building total (wealthBuilding: cash + assets). No parameters.",
+        "Savings pocket total and change per pay cycle, savings % and done this cycle, reserve goals (each goal is a real account; " +
+        "held = its balance, null = no account yet) vs target, peace-of-mind amount (reserve accounts without a goal) and months, " +
+        "short-term debts. Same numbers as get_snapshot pockets. No parameters.",
     },
     async () => {
       try {
-        return ok(await ledger.goals(db));
+        return ok(await ledger.goals(db, memberId, now()));
       } catch (err) {
         return fail(err);
       }
@@ -105,12 +110,13 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
     "list_pending_logs",
     {
       description:
-        "Bank logs (from SePay) not yet assigned to any transaction, newest first. limit defaults to 20 (max 200).",
+        "Bank logs (from SePay) not yet assigned to any transaction, newest first. limit defaults to 20 (max 200). " +
+        "Logs of another member's private account are not listed (attention.hiddenPendingLogs in get_snapshot counts them).",
       inputSchema: { limit: z.number().int().positive().max(200).optional() },
     },
     async (args) => {
       try {
-        return ok(await ingest.listPendingLogs(db, args.limit ?? 20));
+        return ok(await ingest.listPendingLogs(db, args.limit ?? 20, memberId));
       } catch (err) {
         return fail(err);
       }
@@ -124,20 +130,19 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
         "Assign one pending bank log (log_id from list_pending_logs) to 1..N transactions (splits); " +
         "the split amounts must add up to exactly the log amount. A payment on an interest-bearing debt is two splits: " +
         "interest (spend, interest_debt_id) and principal (spend, debt_id). " +
-        "Bank deposit interest (suggestion.interest from list_pending_logs) is ONE split { meaning: income, interest: true, wallet_id }: " +
-        "it records the income and puts all of it into wallet_id (no transfer orders, reported as passive income); wallet_id must be an active " +
-        "wallet that is not the Income holding wallet or a reserve.",
-      inputSchema: {
+        "Bank deposit interest (suggestion.interest from list_pending_logs) is ONE split { meaning: income, interest: true }: " +
+        "it records the income in the receiving account, reported as passive income. " +
+        "income: opens_cycle overrides whether this income opens a new pay cycle (default: the income stream's setting, e.g. salary). " +
+        "There are no wallets: sending wallet_id, from_wallet_id, wealth_move, earmark_id or transfer_order_id is an error (model_changed).",
+      inputSchema: z.looseObject({
         log_id: z.string().min(1),
         splits: z
           .array(
-            z.object({
+            z.looseObject({
               meaning: z.enum(["spend", "transfer", "income", "refund", "lend", "collect", "buy_asset"]),
               amount: z.number().int().positive(),
-              wallet_id: z.string().optional(),
               category_id: z.string().optional(),
               other_account_id: z.string().optional(),
-              from_wallet_id: z.string().optional(),
               income_stream_id: z.string().optional(),
               tenant_id: z.string().optional(),
               debt_id: z.string().optional(),
@@ -148,20 +153,21 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
               asset_kind: z.string().optional(),
               interest: z.boolean().optional(),
               note: z.string().optional(),
+              opens_cycle: z.boolean().optional(),
             }),
           )
           .min(1),
-      },
+      }),
     },
     async (args) => {
       try {
+        rejectOldFields(args, ["transfer_order_id"]);
+        for (const s of args.splits) rejectOldFields(s, OLD_SPLIT_FIELDS);
         const splits: ingest.Split[] = args.splits.map((s) => ({
           meaning: s.meaning,
           amount: s.amount,
-          wallet_id: s.wallet_id ?? null,
           category_id: s.category_id ?? null,
           other_account_id: s.other_account_id ?? null,
-          from_wallet_id: s.from_wallet_id ?? null,
           income_stream_id: s.income_stream_id ?? null,
           tenant_id: s.tenant_id ?? null,
           debt_id: s.debt_id ?? null,
@@ -172,9 +178,15 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
           asset_kind: s.asset_kind ?? null,
           interest: s.interest === true,
           note: s.note ?? null,
+          opens_cycle: s.opens_cycle,
         }));
         const result = await ingest.assignLog(db, args.log_id, splits, memberId, now());
         await audit(db, actor, "log.assign", `log:${args.log_id}`, { splits: splits.length });
+        if (result.effects.cycle?.opened) {
+          const income = result.transactions.find((t) => t.meaning === "income");
+          await audit(db, actor, "pay_cycle.open", `tx:${income?.id}`, { income_tx_id: Number(income?.id), payday: result.effects.cycle.payday });
+          onCycleOpened(result.effects.cycle.payday);
+        }
         return ok(result);
       } catch (err) {
         return fail(err);
@@ -187,30 +199,31 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
     {
       description:
         `Record a manually entered transaction (source='manual'); e.g. "spent 200k on fuel in cash" → meaning=spend, amount=200000, category_id=fuel-parking. ` +
-        "meaning is one of: spend, income, refund, transfer (between accounts or out of a wallet), buy_asset (buy an asset with wealth-building money), " +
-        "lend (lend or pay on someone's behalf: money leaves, no wallet is charged), collect (money lent comes back: money arrives, it is NOT income, " +
-        "no wallet is credited and nothing is allocated — do not use refund for repaid loans). " +
+        "meaning is one of: spend, income, refund, transfer (between two accounts), buy_asset (buy an asset), " +
+        "lend (lend or pay on someone's behalf: money leaves), collect (money lent comes back: money arrives, it is NOT income " +
+        "— do not use refund for repaid loans). " +
         "amount is a positive integer VND. by_member_id (who is recording this) is optional and defaults to the member who authorized this connection — valid ids: " +
-        `${memberHint}. Missing wallet_id/account_id are inferred from category_id (the category's default wallet) and the recorder's cash account, ` +
-        "exactly as the REST API does. transfer needs account_id (source) + to_account_id (destination), plus wallet_id/from_wallet_id to move wallets too; " +
-        "transfer WITHOUT accounts but with from_wallet_id + wallet_id moves budget between two wallets (the money stays in its account). " +
-        "income: income_stream_id = income stream (allocated by the stream's locked shares), tenant_id = rent paid by a tenant (id from list_tenants; " +
-        "without a stream the rental stream is used). " +
-        "spend: debt_id = a debt repayment of PRINCIPAL (id from get_debts; without category_id the debt-repayment category is used); " +
+        `${memberHint}. A missing account_id is the recorder's cash account, exactly as the REST API does. ` +
+        "transfer needs account_id (source) + to_account_id (destination); a transfer into the savings account counts toward the payday savings task. " +
+        "There are no wallets: sending wallet_id, from_wallet_id, wealth_move or earmark_id is an error (model_changed). " +
+        "Accounts marked private by another member cannot be written to (error private_account). " +
+        "income: income_stream_id = income stream, tenant_id = rent paid by a tenant (id from list_tenants; " +
+        "without a stream the rental stream is used); opens_cycle overrides whether this income opens a new pay cycle " +
+        "(default: the stream's setting, e.g. salary) — the result's effects.cycle tells whether a cycle opened and how many payday tasks it has. " +
+        "spend: money paid from a reserve goal's own account lowers that goal's held amount automatically; " +
+        "debt_id = a debt repayment of PRINCIPAL (id from get_debts; without category_id the debt-repayment category is used); " +
         "interest_debt_id = INTEREST paid on that debt (spend only, never together with debt_id; without category_id the 'loan-interest' category). " +
         "When paying a debt with interestRate > 0, record TWO transactions: interest = min(amount, interestThisMonth − interestPaidThisMonth from get_debts) " +
         "with interest_debt_id, and the rest as principal with debt_id. " +
         "lend / collect: receivable_id = the receivable (id from get_receivables); account_id = account money leaves (lend) / arrives in (collect). " +
-        "buy_asset needs asset_kind (stock|gold|re|fund). Get category_id/wallet_id/account_id from list_categories or get_snapshot. " +
+        "buy_asset needs asset_kind (stock|gold|re|fund) and account_id. Get category_id/account_id from list_categories or get_snapshot. " +
         "If the error code is bank_log_exists, the bank already reported this exact transaction and it is already in the books: do NOT retry " +
         "unless the user confirms these are two separate real transactions — then send confirm_duplicate=true.",
-      inputSchema: {
+      inputSchema: z.looseObject({
         meaning: z.enum(MANUAL_MEANINGS),
         amount: z.number().int().positive(),
         by_member_id: z.string().min(1).optional(),
         category_id: z.string().optional(),
-        wallet_id: z.string().optional(),
-        from_wallet_id: z.string().optional(),
         account_id: z.string().optional(),
         to_account_id: z.string().optional(),
         note: z.string().optional(),
@@ -224,10 +237,12 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
         interest_debt_id: z.string().optional(),
         receivable_id: z.string().optional(),
         confirm_duplicate: z.boolean().optional(),
-      },
+        opens_cycle: z.boolean().optional(),
+      }),
     },
     async (args) => {
       try {
+        rejectOldFields(args, OLD_ENTRY_FIELDS);
         const by = args.by_member_id ?? memberId;
         if (!memberIds.has(by)) {
           throw new DomainError("unknown_member", `Không có thành viên đang hoạt động với id "${by}".`, 404);
@@ -237,8 +252,6 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
           amount: args.amount,
           at: args.at,
           category_id: args.category_id ?? null,
-          wallet_id: args.wallet_id ?? null,
-          from_wallet_id: args.from_wallet_id ?? null,
           account_id: args.account_id ?? null,
           to_account_id: args.to_account_id ?? null,
           note: args.note ?? null,
@@ -251,10 +264,19 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
           interest_debt_id: args.interest_debt_id ?? null,
           receivable_id: args.receivable_id ?? null,
           confirm_duplicate: args.confirm_duplicate === true,
+          opens_cycle: args.opens_cycle,
         };
-        const result = await ledger.createEntry(db, input, by, now());
+        // Người ghi có thể là `by_member_id`; luật tài khoản riêng tư nhìn theo người đã uỷ quyền (access UC-504 AC-14).
+        const result = await ledger.createEntry(db, input, by, now(), memberId);
         // Không trùng thì tx là dòng vừa ghi.
-        if (!result.duplicate) await audit(db, actor, "tx.create", `tx:${result.tx!.id}`, { meaning: args.meaning, by_member_id: by });
+        if (!result.duplicate) {
+          const id = result.tx!.id;
+          await audit(db, actor, "tx.create", `tx:${id}`, { meaning: args.meaning, by_member_id: by });
+          if (result.effects.cycle?.opened) {
+            await audit(db, actor, "pay_cycle.open", `tx:${id}`, { income_tx_id: Number(id), payday: result.effects.cycle.payday });
+            onCycleOpened(result.effects.cycle.payday);
+          }
+        }
         return ok(result, result.duplicate ? "Giao dịch này đã được ghi trước đó (trùng client_id)." : "Đã ghi giao dịch.");
       } catch (err) {
         return fail(err);
@@ -266,8 +288,8 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
     "list_categories",
     {
       description:
-        "Active spending categories with their default wallet (default_wallet_id) — use them to map a spoken phrase (e.g. 'xăng xe', fuel) " +
-        "to category_id/wallet_id for add_transaction.",
+        "Active spending categories (id, name, icon, group) — use them to map a spoken phrase (e.g. 'xăng xe', fuel) " +
+        "to category_id for add_transaction.",
     },
     async () => {
       try {
@@ -282,63 +304,14 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
     "get_spending_by_category",
     {
       description:
-        "Spending per category for one month, compared with the previous month. period is a month '2026-09'; omit it for the current month.",
-      inputSchema: { period: z.string().optional() },
+        "Look back over a pay cycle: spending by category group vs the soft limit (never negative, no top-up), vs the previous cycle, " +
+        "loan interest expected vs paid; period=YYYY-MM for a calendar month. cycle is the payday 'YYYY-MM-DD' that starts a pay cycle " +
+        "(e.g. '2026-11-10'); omit both for the current cycle; never send cycle and period together. Amounts are integer VND.",
+      inputSchema: { cycle: z.string().optional(), period: z.string().optional() },
     },
     async (args) => {
       try {
-        return ok(await ledger.spendByCategory(db, args.period ?? monthKey(now())));
-      } catch (err) {
-        return fail(err);
-      }
-    },
-  );
-
-  server.registerTool(
-    "list_transfer_orders",
-    {
-      description:
-        "Pending transfer orders between bank accounts (created after allocating income or closing a month).",
-    },
-    async () => {
-      try {
-        return ok(await ledger.listTransferOrders(db, "pending"));
-      } catch (err) {
-        return fail(err);
-      }
-    },
-  );
-
-  server.registerTool(
-    "preview_allocation",
-    {
-      description:
-        "Preview how an income amount would be allocated with Profit First — nothing is recorded. " +
-        "amount: positive integer VND. taxable: whether this income is subject to personal income tax.",
-      inputSchema: { amount: z.number().int().positive(), taxable: z.boolean() },
-    },
-    async (args) => {
-      try {
-        return ok(await ledger.previewAllocation(db, { amount: args.amount, taxable: args.taxable, at: now().toISOString(), accountId: null }));
-      } catch (err) {
-        return fail(err);
-      }
-    },
-  );
-
-  server.registerTool(
-    "allocate_income",
-    {
-      description:
-        "Allocate a recorded income (income_tx_id from add_transaction with meaning=income) into wallets with Profit First; " +
-        "creates transfer orders when a target wallet lives in a different account from the receiving one. Each income can be allocated only once.",
-      inputSchema: { income_tx_id: z.number().int().positive() },
-    },
-    async (args) => {
-      try {
-        const result = await ledger.allocateIncome(db, args.income_tx_id);
-        await audit(db, actor, "income.allocate", `tx:${args.income_tx_id}`, null);
-        return ok(result);
+        return ok(await ledger.spendByCategory(db, { cycle: args.cycle ?? null, period: args.period ?? null }, now()));
       } catch (err) {
         return fail(err);
       }
@@ -388,7 +361,7 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
     },
     async () => {
       try {
-        const data = await debts.getDebts(db, now());
+        const data = await debts.getDebts(db, memberId, now());
         return ok(data, `Còn nợ: ${vnd(data.totalBalance)}`);
       } catch (err) {
         return fail(err);
@@ -406,7 +379,7 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
     },
     async () => {
       try {
-        const data = await receivables.getReceivables(db);
+        const data = await receivables.getReceivables(db, memberId);
         return ok(data, `Người khác còn nợ: ${vnd(data.totalBalance)}`);
       } catch (err) {
         return fail(err);
@@ -470,9 +443,9 @@ export async function registerTools(server: McpServer, db: D1Database, memberId:
         "Household financial reports for a month 'YYYY-MM' or a year 'YYYY' (same numbers as the app). kind=cash_flow: opening cash, " +
         "accounts opened / closed in the period, operating / investing / financing groups with lines (signed VND), closing cash = " +
         "sum of account books, card debt included; year adds a per-month list. kind=income_statement: income (salary and other, " +
-        "rental, passive), expenses by wallet tier (Must with loan interest sub-line, nice-to-have, fun, tax paid, from wealth " +
-        "building, other), savings and savings rate (%), plus amounts left out (principal repaid, assets bought, reclassified, " +
-        "count adjustments). Reports never change wallets or balances. Projections are not available here (not real numbers).",
+        "rental, passive), expenses by essential / flexible category groups (loan interest under essential), tax paid from the tax goal, " +
+        "spent from the savings pocket, other; savings and savings rate (%), plus amounts left out (principal repaid, assets bought, reclassified, " +
+        "count adjustments). Reports never change balances. Projections are not available here (not real numbers).",
       inputSchema: { kind: z.enum(["cash_flow", "income_statement"]), period: z.string() },
     },
     async (args) => {

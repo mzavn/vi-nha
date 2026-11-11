@@ -7,7 +7,8 @@ import { interestPart } from "../src/domain/interest";
 import type { BalanceSheet, HistoryPoint } from "../src/services/balance";
 import type { ItemView } from "../src/domain/balance";
 import type { Debt } from "../src/services/debts";
-import type { AllocationPlan, Budget, NetWorth, Receivable, SettingsConfig, SettingsData, Snapshot } from "../web/src/lib/types";
+import type { LookBack } from "../src/domain/look-back";
+import type { NetWorth, Receivable, SettingsConfig, SettingsData, Snapshot } from "../web/src/lib/types";
 import { asD1, openDb, readSql } from "./helpers/d1-sqlite";
 
 type EntryResult = { tx: Record<string, unknown> };
@@ -369,27 +370,27 @@ describe("receivable, access: kỳ hạn và ngày tắt", () => {
     expect(raw.prepare("SELECT action FROM audit_log WHERE action = 'config.update'").all().length).toBe(3);
   });
 
-  it("UC-1005 AC-7: thêm Vàng 126.000.000 (không gắn loại) → balanceItems 126.000.000, netWorth tăng đúng chừng đó; tiền, tài sản mua qua app, Tích sản, còn để chi không đổi", async () => {
+  it("UC-1005 AC-7: thêm Vàng 126.000.000 (không gắn loại) → balanceItems 126.000.000, netWorth tăng đúng chừng đó; tiền, tài sản mua qua app, ba ngăn không đổi", async () => {
     useDb(openDb());
     const before = (await call<NetWorth>("GET", "/v1/networth")).json.data;
     await item({ name: "Vàng", section: "A1", pyramid: "protective", measure: "value", value: 126_000_000 });
     const after = (await call<NetWorth>("GET", "/v1/networth")).json.data;
     expect(after.balanceItems).toBe(126_000_000);
     expect(after.netWorth - before.netWorth).toBe(126_000_000);
-    for (const k of ["cash", "assets", "wealthBuildingCash", "spendableThisWeek"] as const) expect(after[k], k).toBe(before[k]);
+    for (const k of ["cash", "assets"] as const) expect(after[k], k).toBe(before[k]);
+    expect(after.pockets).toEqual(before.pockets);
   });
 
-  it("UC-1005 AC-8: buy_asset vàng 2.000.000 rồi mục Vàng gắn gold 126.000.000 → assets về 0, netWorth tăng 124.000.000; Tích sản vẫn tài sản 2.000.000", async () => {
+  it("UC-1005 AC-8: buy_asset vàng 2.000.000 rồi mục Vàng gắn gold 126.000.000 → assets về 0, netWorth tăng 124.000.000", async () => {
     useDb(openDb());
-    raw.exec(`INSERT INTO transactions (at, amount, meaning, wallet_id, asset_kind, week_key, month_key, source)
-      VALUES ('2026-11-01T03:00:00.000Z', 2000000, 'buy_asset', 'wealth-building', 'gold', '2026-W44', '2026-11', 'manual')`);
+    raw.exec(`INSERT INTO transactions (at, amount, meaning, account_id, asset_kind, week_key, month_key, source)
+      VALUES ('2026-11-01T03:00:00.000Z', 2000000, 'buy_asset', 'tcb-husband', 'gold', '2026-W44', '2026-11', 'manual')`);
     const before = (await call<NetWorth>("GET", "/v1/networth")).json.data;
     expect(before.assets).toBe(2_000_000);
     await item({ name: "Vàng", section: "A1", pyramid: "protective", measure: "value", value: 126_000_000, asset_kind: "gold" });
     const after = (await call<NetWorth>("GET", "/v1/networth")).json.data;
     expect([after.assets, after.balanceItems, after.netWorth - before.netWorth]).toEqual([0, 126_000_000, 124_000_000]);
     expect(after.netWorth).toBe(after.cash + after.assets + after.balanceItems + after.receivables + after.tenants - after.debts - after.tenantsPrepaid);
-    expect((await call<Snapshot>("GET", "/v1/snapshot")).json.data.tiers.wealth_building.assets).toBe(2_000_000);
   });
 });
 
@@ -421,11 +422,11 @@ describe("debt, ledger, allocation: lãi vay hằng tháng (ADR nháp H)", () =>
     }
   });
 
-  it("UC-901 AC-10: khoản 0% → interestThisMonth 0, không có dòng lãi ở ngân sách", async () => {
+  it("UC-901 AC-10: khoản 0% → interestThisMonth 0, không có dòng lãi ở khối Lãi vay của Nhìn lại", async () => {
     await loans();
     expect((await debt("vay-nguoi-nha")).interestThisMonth).toBe(0);
-    const budget = (await call<Budget>("GET", "/v1/budget?period=2026-11")).json.data;
-    expect(budget.interestLines!.map((l) => l.debtId)).toEqual(["vay-tieu-dung"]);
+    const look = (await call<LookBack>("GET", "/v1/spend-by-category")).json.data;
+    expect(look.interest.lines.map((l) => l.debtId)).toEqual(["vay-tieu-dung"]);
   });
 
   it("UC-901 AC-11: tắt Vay cũ ngày 10/11 → deactivated_at 2026-11-10; bật lại → null", async () => {
@@ -435,11 +436,11 @@ describe("debt, ledger, allocation: lãi vay hằng tháng (ADR nháp H)", () =>
     expect((await call<Debt>("PATCH", "/v1/debts/vay-cu", { active: true })).json.data.deactivatedAt).toBeNull();
   });
 
-  it("UC-101 AC-25: spend trả lãi không danh mục → loan-interest, ví Lãi vay, còn nợ không đổi; income kèm lãi → interest_spend_only; cả debt_id → debt_and_interest; khoản không có / đã tắt", async () => {
+  it("UC-101 AC-25: spend trả lãi không danh mục → loan-interest (không ví), còn nợ không đổi; income kèm lãi → interest_spend_only; cả debt_id → debt_and_interest; khoản không có / đã tắt", async () => {
     await loans();
     const ok = await payInterest(300_000);
     expect(ok.status).toBe(201);
-    expect(ok.json.data.tx).toMatchObject({ category_id: "loan-interest", counter_wallet_id: "loan-interest", interest_debt_id: "vay-tieu-dung", debt_id: null });
+    expect(ok.json.data.tx).toMatchObject({ category_id: "loan-interest", interest_debt_id: "vay-tieu-dung", debt_id: null });
     expect((await debt("vay-tieu-dung")).balance).toBe(20_000_000);
     expect((await call("POST", "/v1/transactions", { meaning: "income", amount: 1_000, account_id: "cash-husband", interest_debt_id: "vay-tieu-dung" })).json.error?.code).toBe("interest_spend_only");
     expect((await payInterest(1_000, { debt_id: "vay-tieu-dung" })).json.error?.code).toBe("debt_and_interest");
@@ -448,47 +449,19 @@ describe("debt, ledger, allocation: lãi vay hằng tháng (ADR nháp H)", () =>
     expect((await payInterest(1_000, { interest_debt_id: "vay-nguoi-nha" })).json.error?.code).toBe("inactive_debt");
   });
 
-  it("UC-104 AC-8: ví Lãi vay dự kiến 300.000 và interestLines từng khoản; trả xong còn lại 0; tháng 12 dự kiến 270.000; luật nạp tay thắng", async () => {
-    await loans();
-    const line = (b: Budget) => b.lines.find((l) => l.walletId === "loan-interest")!;
-    const nov = (await call<Budget>("GET", "/v1/budget?period=2026-11")).json.data;
-    expect(line(nov)).toMatchObject({ tier: "must", mustGroup: "must", target: 300_000, spent: 0, remaining: 300_000 });
-    expect(nov.interestLines).toEqual([{ debtId: "vay-tieu-dung", name: "Vay tiêu dùng", expected: 300_000, paid: 0, dueDay: 5 }]);
-    await payInterest(300_000);
-    await payPrincipal(2_000_000);
-    const paid = (await call<Budget>("GET", "/v1/budget?period=2026-11")).json.data;
-    expect(line(paid)).toMatchObject({ spent: 300_000, remaining: 0 });
-    expect(paid.interestLines![0]!.paid).toBe(300_000);
-    expect(line((await call<Budget>("GET", "/v1/budget?period=2026-12")).json.data).target).toBe(270_000);
-    raw.exec("INSERT INTO allocations (wallet_id, mode, period, amount, priority) VALUES ('loan-interest', 'flat', 'month', 500000, 45)");
-    expect(line((await call<Budget>("GET", "/v1/budget?period=2026-11")).json.data).target).toBe(500_000);
-  });
-
-  it("UC-201 AC-21: chia thử 30.000.000 → ví Lãi vay nhận 300.000 ở bước sàn Must; khoản 0% không thêm gì; thiếu tiền thì bóp Have / Hưởng thụ trước; có luật tay thì theo luật tay", async () => {
-    await loans();
-    const preview = async (amount: number) => (await call<AllocationPlan>("POST", "/v1/allocate/preview", { amount, at: "2026-11-15T03:00:00.000Z" })).json.data;
-    const fund = (p: AllocationPlan, id: string) => p.funds.find((f) => f.walletId === id)?.amount ?? 0;
-    expect(fund(await preview(30_000_000), "loan-interest")).toBe(300_000);
-    const short = await preview(5_000_000);
-    const niceOrHave = ["fun-husband", "fun-wife", "travel", "nice-to-have"].reduce((s, id) => s + fund(short, id), 0);
-    if (fund(short, "loan-interest") < 300_000) {
-      expect(short.underfunded).toContain("loan-interest");
-      expect(niceOrHave).toBe(0);
-    }
-    raw.exec("INSERT INTO allocations (wallet_id, mode, period, amount, priority) VALUES ('loan-interest', 'flat', 'month', 500000, 45)");
-    expect(fund(await preview(30_000_000), "loan-interest")).toBe(500_000);
-  });
-
   it("UC-902 AC-10: trả 2.300.000 tách lãi 300.000 / gốc 2.000.000 → hai khoản chi; còn nợ 18.000.000; lãi còn phải trả tháng 11 về 0; tháng 12 dự kiến 270.000", async () => {
     await loans();
     const d = await debt("vay-tieu-dung");
     const interest = interestPart(d.monthlyPayment!, d.interestThisMonth, d.interestPaidThisMonth);
     expect([interest, d.monthlyPayment! - interest]).toEqual([300_000, 2_000_000]);
-    expect((await payInterest(interest)).json.data.tx).toMatchObject({ category_id: "loan-interest", counter_wallet_id: "loan-interest", interest_debt_id: "vay-tieu-dung" });
+    expect((await payInterest(interest)).json.data.tx).toMatchObject({ category_id: "loan-interest", interest_debt_id: "vay-tieu-dung" });
     expect((await payPrincipal(2_000_000)).json.data.tx).toMatchObject({ category_id: "debt-payment", debt_id: "vay-tieu-dung" });
     const after = await debt("vay-tieu-dung");
     expect(after.balance).toBe(18_000_000);
     expect(interestPart(2_300_000, after.interestThisMonth, after.interestPaidThisMonth)).toBe(0);
+    const nov = (await call<LookBack>("GET", "/v1/spend-by-category?period=2026-11")).json.data;
+    expect(nov.interest.lines).toEqual([{ debtId: "vay-tieu-dung", name: "Vay tiêu dùng", expected: 300_000, paid: 300_000, dueDay: 5 }]);
+    expect(nov.excluded.debtPrincipal).toBe(2_000_000);
     at("2026-12-02T05:00:00.000Z");
     expect((await debt("vay-tieu-dung")).interestThisMonth).toBe(270_000);
   });

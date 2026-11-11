@@ -1,6 +1,6 @@
 // Lãi vay hằng tháng (ADR nháp H): khoản nợ có lãi suất > 0 có lãi dự kiến tháng (server tính theo dư nợ đầu tháng — Công thức 18).
-// Trả nợ khoản có lãi tách hai khoản chi: lãi (danh mục / ví "Lãi vay", `interest_debt_id` — chi phí, không giảm nợ) và gốc (`debt_id`).
-// Thuần để test: ô Tiền lãi / Tiền gốc, thân hai khoản chi, câu chữ dòng lãi ở Ngân sách, sổ nợ và bảng cân đối.
+// Trả nợ khoản có lãi tách hai khoản chi: lãi (danh mục "Lãi vay", `interest_debt_id` — chi phí, không giảm nợ) và gốc (`debt_id`).
+// Thuần để test: ô Tiền lãi / Tiền gốc, thân hai khoản chi, câu chữ dòng lãi ở Nhìn lại (hàng Lãi vay), sổ nợ và bảng cân đối.
 
 import { DEBT_CATEGORY_ID, LOAN_INTEREST_ID } from "../../../src/domain/system-ids";
 import { formatVnd } from "./money";
@@ -55,16 +55,14 @@ export const withInterest = (d: SplitDraft, interest: number): SplitDraft => ({ 
 export const withPrincipal = (d: SplitDraft, principal: number): SplitDraft => ({ ...d, interest: d.amount - Math.min(principal, d.amount) });
 
 /**
- * Thân các khoản chi của một lần trả: khoản lãi (danh mục / ví "Lãi vay", `interest_debt_id`) rồi khoản gốc (`debt_id`, danh mục Trả nợ,
- * ví đang mở sheet). Phần bằng 0 thì không ghi. Mỗi khoản một `client_id` — cùng vào hàng đợi khi offline.
+ * Thân các khoản chi của một lần trả: khoản lãi (danh mục "Lãi vay", `interest_debt_id`) rồi khoản gốc (`debt_id`, danh mục Trả
+ * nợ). Trả từ tài khoản của mục tiêu Trả nợ thì chọn đúng tài khoản đó (ADR-132). Phần bằng 0 thì không ghi. Mỗi khoản một `client_id` — cùng vào hàng đợi khi offline.
  */
 export function debtPaymentEntries(p: {
   split: PaySplit;
   debtId: string | null;
   at: string;
   accountId: string;
-  principalWalletId: string;
-  interestWalletId: string;
   note?: string;
   newId: () => string;
 }): EntryBody[] {
@@ -77,7 +75,6 @@ export function debtPaymentEntries(p: {
       at: p.at,
       client_id: p.newId(),
       category_id: LOAN_INTEREST_ID,
-      wallet_id: p.interestWalletId,
       account_id: p.accountId,
       interest_debt_id: p.debtId,
       ...note,
@@ -90,7 +87,6 @@ export function debtPaymentEntries(p: {
       at: p.at,
       client_id: p.newId(),
       category_id: DEBT_CATEGORY_ID,
-      wallet_id: p.principalWalletId,
       account_id: p.accountId,
       ...(p.debtId ? { debt_id: p.debtId } : {}),
       ...note,
@@ -115,16 +111,16 @@ export const rateText = (rate: number): string => String(rate).replace(".", ",")
 export function assignDebtRows(
   amount: number,
   d: InterestFields & { id: string },
-  ids: { debtCategoryId: string; principalWalletId: string | null; interestWalletId: string },
+  ids: { debtCategoryId: string },
 ): Split[] {
   const s = splitOf({ amount, interest: hasInterest(d) ? interestDue(d) : 0 });
   const rows: Split[] = [];
-  if (s.interest > 0) rows.push({ meaning: "spend", amount: s.interest, category_id: LOAN_INTEREST_ID, wallet_id: ids.interestWalletId, interest_debt_id: d.id, debt_id: null });
-  if (s.principal > 0 || rows.length === 0) rows.push({ meaning: "spend", amount: s.principal, category_id: ids.debtCategoryId, wallet_id: ids.principalWalletId, debt_id: d.id, interest_debt_id: null });
+  if (s.interest > 0) rows.push({ meaning: "spend", amount: s.interest, category_id: LOAN_INTEREST_ID, interest_debt_id: d.id, debt_id: null });
+  if (s.principal > 0 || rows.length === 0) rows.push({ meaning: "spend", amount: s.principal, category_id: ids.debtCategoryId, debt_id: d.id, interest_debt_id: null });
   return rows;
 }
 
-/** Dòng phụ dưới ví "Lãi vay" ở Ngân sách: "Vay tiêu dùng · trả ngày 5 · dự kiến 300.000 ₫ · đã trả 0 ₫". */
+/** Dòng phụ từng khoản ở hàng "Lãi vay" của Nhìn lại (pwa UC-707): "Vay tiêu dùng · trả ngày 5 · dự kiến 300.000 ₫ · đã trả 0 ₫". */
 export function interestLineText(l: { name: string; expected: number; paid: number; dueDay: number | null }): string {
   return [l.name, l.dueDay ? `trả ngày ${l.dueDay}` : null, `dự kiến ${formatVnd(l.expected)}`, `đã trả ${formatVnd(l.paid)}`].filter(Boolean).join(" · ");
 }

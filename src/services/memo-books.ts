@@ -6,6 +6,7 @@
 import { normalizeAt } from "../domain/entry";
 import { dayKey } from "../domain/period";
 import { DomainError } from "../domain/types";
+import { hiddenAccountIds, hiddenTxSql } from "./privacy";
 
 type Row = Record<string, unknown>;
 export type Input = Record<string, unknown>;
@@ -113,9 +114,16 @@ const lineSql = (s: MemoBookSpec) => `SELECT id, ${s.key} AS ${s.lineKey}, at, k
 /**
  * Mọi đối tác của sổ: đang theo dõi trước, chưa xong trước, số dư lớn trước, rồi theo tên.
  * Tổng (`totalBalance`) chỉ cộng phần dương của đối tác đang theo dõi: dư ở khoản này không bù sang khoản khác.
+ * `movements` bỏ khoản bị giấu với `viewerId`; số vào / ra / dư vẫn cộng đủ (debt UC-901, receivable UC-1001, access UC-504 AC-15).
  */
-export async function listBooks<L extends MemoLine>(db: D1Database, s: MemoBookSpec, onlyId?: string): Promise<{ totalBalance: number; books: MemoBook<L>[] }> {
+export async function listBooks<L extends MemoLine>(
+  db: D1Database,
+  s: MemoBookSpec,
+  viewerId: string | null,
+  onlyId?: string,
+): Promise<{ totalBalance: number; books: MemoBook<L>[] }> {
   const meanings = s.meanings.map((m) => `'${m}'`).join(", ");
+  const priv = hiddenTxSql("transactions", await hiddenAccountIds(db, viewerId));
   const [bookRes, lineRes, txRes] = await db.batch([
     db.prepare(
       `SELECT d.id, d.name, d.note, d.active, d.created_at AS createdAt, d.deactivated_at AS deactivatedAt,
@@ -127,9 +135,9 @@ export async function listBooks<L extends MemoLine>(db: D1Database, s: MemoBookS
     db.prepare(`${lineSql(s)} WHERE status = 'active' AND (?1 IS NULL OR ${s.key} = ?1) ORDER BY at DESC, id DESC`).bind(onlyId ?? null),
     db.prepare(
       `SELECT * FROM transactions
-       WHERE ${s.key} IS NOT NULL AND meaning IN (${meanings}) AND status = 'active' AND (?1 IS NULL OR ${s.key} = ?1)
+       WHERE ${s.key} IS NOT NULL AND meaning IN (${meanings}) AND status = 'active' AND (?1 IS NULL OR ${s.key} = ?1) AND NOT ${priv.sql}
        ORDER BY at DESC, id DESC`,
-    ).bind(onlyId ?? null),
+    ).bind(onlyId ?? null, ...priv.binds),
   ]);
   const lines = rows(lineRes!);
   const txs = rows(txRes!);
@@ -155,8 +163,8 @@ export async function listBooks<L extends MemoLine>(db: D1Database, s: MemoBookS
   return { totalBalance: books.reduce((sum, b) => sum + (b.active ? Math.max(b.balance, 0) : 0), 0), books };
 }
 
-export async function getBook<L extends MemoLine>(db: D1Database, s: MemoBookSpec, id: string): Promise<MemoBook<L>> {
-  return (await listBooks<L>(db, s, id)).books[0] ?? fail("not_found", `Không có ${s.noun} này.`, 404);
+export async function getBook<L extends MemoLine>(db: D1Database, s: MemoBookSpec, id: string, viewerId: string | null): Promise<MemoBook<L>> {
+  return (await listBooks<L>(db, s, viewerId, id)).books[0] ?? fail("not_found", `Không có ${s.noun} này.`, 404);
 }
 
 /**
@@ -185,7 +193,8 @@ export async function createBook(db: D1Database, s: MemoBookSpec, b: Input, now:
  * này ở các tháng trước ngày tắt; bật lại xoá ngày tắt (như chưa từng tắt).
  */
 export async function updateBook(db: D1Database, s: MemoBookSpec, id: string, b: Input, now: Date): Promise<void> {
-  const book = await getBook(db, s, id);
+  // Chỉ cần đối tác và cờ đang theo dõi: không trả `movements` nên người xem nào cũng được (null = giấu mọi khoản riêng tư).
+  const book = await getBook(db, s, id, null);
   const cols: [string, unknown][] = [];
   if (has(b, "name")) cols.push(["name", text(b, "name", true)]);
   if (has(b, "note")) cols.push(["note", text(b, "note", false, 500)]);
@@ -206,7 +215,7 @@ export async function updateBook(db: D1Database, s: MemoBookSpec, id: string, b:
 
 /** Ghi tay một dòng sổ (loại trong `manualKinds`). */
 export async function addLine<L extends MemoLine>(db: D1Database, s: MemoBookSpec, bookId: string, b: Input, now: Date): Promise<L> {
-  const book = await getBook(db, s, bookId);
+  const book = await getBook(db, s, bookId, null);
   const kind = text(b, "kind", true)!;
   if (!s.manualKinds.includes(kind)) fail("invalid_kind", `kind phải là một trong: ${s.manualKinds.join(", ")}.`);
   const amount = money(b, "amount", s.positiveKinds.includes(kind));

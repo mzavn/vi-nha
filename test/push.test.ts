@@ -289,13 +289,13 @@ describe("notifyMembers qua push", () => {
 
     const tg = pushed.filter((p) => p.url.startsWith("https://api.telegram.org/")).map((p) => JSON.parse(p.body as string).text as string);
     expect(tg).toHaveLength(1);
-    expect(tg[0]!.split("\n")[0]).toBe("💰 Còn để chi tuần này: 0 ₫ (6 ngày)");
+    expect(tg[0]!.split("\n")[0]).toBe("💰 Tiền vận hành đã hết (0 ₫) — còn 18 ngày");
     expect(tg[0]).toContain("🏦 Đối soát");
 
     const devices = pushed.filter((p) => p.url.startsWith(`${FCM}/`));
     expect(devices).toHaveLength(2);
     const payload = await decrypt(devices[0]!.url, devices[0]!.body as Uint8Array);
-    expect(payload).toMatchObject({ title: "Còn 0 ₫ tuần này", url: "/#today", tag: "daily" });
+    expect(payload).toMatchObject({ title: "Tiền vận hành đã hết", url: "/#today", tag: "daily" });
     expect(payload.body).not.toContain("💰");
     expect(Array.from(payload.body!).length).toBeLessThanOrEqual(150);
 
@@ -307,7 +307,7 @@ describe("notifyMembers qua push", () => {
     ]);
   });
 
-  it("tổng kết tuần: máy nhận tiêu đề tổng chi cả tuần (spend trừ refund, mọi danh mục), mở màn Ví", async () => {
+  it("UC-406 AC-9, AC-12: tổng kết tuần: máy nhận tiêu đề tổng chi cả tuần (spend trừ refund, mọi danh mục), mở thẳng Ví & quỹ › Nhìn lại", async () => {
     raw.prepare("UPDATE accounts SET sepay_enabled = 0").run(); // tài khoản ghi tay mới nhận nhập tay (D14)
     const entry = (meaning: "spend" | "refund", amount: number, category_id: string, at: string, link_id?: number) =>
       createEntry(env.DB, { meaning, amount, category_id, account_id: "vcb-husband", at, link_id }, null, new Date(at));
@@ -319,7 +319,7 @@ describe("notifyMembers qua push", () => {
     await weekly(env, new Date("2026-09-28T01:00:00Z")); // 08:00 VN thứ Hai, tổng kết W39
 
     const payload = await decrypt(pushed[0]!.url, pushed[0]!.body as Uint8Array);
-    expect(payload).toMatchObject({ title: "Tuần T39: chi 460.000 ₫", url: "/#wallets", tag: "weekly" });
+    expect(payload).toMatchObject({ title: "Tuần T39: chi 460.000 ₫", url: "/#wallets/analysis", tag: "weekly" });
   });
 
   it("push service trả 410 thì xoá máy đó, claim giữ ok=0; máy khác vẫn nhận", async () => {
@@ -475,7 +475,8 @@ describe("nội dung push", () => {
   it("giữ nguyên tiêu đề và nội dung đã dựng; đường mở theo loại tin", () => {
     const push = { title: "2 giao dịch chưa gán", body: "−24.400 ₫ MB · +50.000 ₫ TK lạ" };
     expect(pushPayload("pending_batch", push)).toEqual({ ...push, url: "/#assign", tag: "pending_batch" });
-    expect(pushPayload("weekly", push)).toMatchObject({ url: "/#wallets", tag: "weekly" });
+    expect(pushPayload("weekly", push)).toMatchObject({ url: "/#wallets/analysis", tag: "weekly" });
+    expect(pushPayload("pay_cycle", push)).toMatchObject({ url: "/#today", tag: "pay_cycle" });
     expect(pushPayload("test", push)).toMatchObject({ url: "/#settings" });
     expect(pushPayload("other", push)).toMatchObject({ url: "/", tag: "other" });
   });

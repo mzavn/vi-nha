@@ -1,8 +1,8 @@
-// Ô nhập dùng chung cho các sheet: số tiền, chọn ví, chọn tài khoản, chọn danh mục.
+// Ô nhập dùng chung cho các sheet: số tiền, chọn tài khoản, chọn danh mục.
 
 import { useState } from "preact/hooks";
 import { amountText, evalAmount, formatTypedVnd, groupExpr, isAmountExpr, nextAmount } from "../lib/money";
-import type { AccountRef, CategoryRef, Wallet } from "../lib/types";
+import type { AccountRef, CategoryRef } from "../lib/types";
 
 /** Dòng dưới ô số tiền khi đang tính: kết quả, hoặc vì sao chưa tính được. Số đang gõ — không che (pwa UC-718). */
 export const amountExprHint = (result: number | null): string => (result === null ? "Sai: kết quả phải trên 0, tối đa 1.000 tỷ" : `= ${formatTypedVnd(result)}`);
@@ -78,19 +78,6 @@ export function AmountInput(props: { id: string; value: number; onChange: (n: nu
         </span>
       )}
     </span>
-  );
-}
-
-export function WalletSelect(props: { id: string; wallets: Wallet[]; value: string | null; onChange: (id: string) => void; placeholder?: string }) {
-  return (
-    <select id={props.id} class="ctl" value={props.value ?? ""} onChange={(e) => props.onChange(e.currentTarget.value)}>
-      {!props.value && <option value="">{props.placeholder ?? "Chọn ví"}</option>}
-      {props.wallets.map((w) => (
-        <option key={w.id} value={w.id}>
-          {w.name}
-        </option>
-      ))}
-    </select>
   );
 }
 

@@ -1,10 +1,9 @@
 // Một dòng sổ nhìn từ phía người dùng: nó từ đâu tới, làm được gì với nó (sửa / xoá / gán lại), mở form nào để sửa,
 // và câu toast sau khi sửa / xoá. Luật thật nằm ở server (ledger UC-102, ADR-73); ở đây chỉ để không hiện nút vô ích.
 
-import { formatVnd } from "./money";
-import { walletRemain } from "./pending";
+import { formatVnd, moneyDigits } from "./money";
 import { atForDay, dayKey } from "./period";
-import type { ManualMeaning, TxRow, WalletStatus } from "./types";
+import type { Bootstrap, EntryNearSpend, LegacyClass, ManualMeaning, TxRow } from "./types";
 
 export const MEANING_LABEL: Record<string, string> = {
   spend: "Chi tiêu",
@@ -15,14 +14,39 @@ export const MEANING_LABEL: Record<string, string> = {
   lend: "Cho vay",
   collect: "Nhận lại tiền cho vay",
   adjust: "Điều chỉnh sau đếm ví",
-  fund: "Nạp ví khi chia lương",
+  fund: "Nạp ví (cách tính cũ)",
 };
 
-/** Tên ngắn của một dòng: danh mục nếu có, không thì loại giao dịch. Chuyển chỉ giữa hai ví là "Chuyển ngân sách". */
+/** Tên ngắn của một dòng: danh mục nếu có, không thì loại giao dịch. Chuyển cũ chỉ giữa hai ví là "Chuyển ngân sách". */
 export function txLabel(tx: TxRow): string {
   if (tx.category_name) return tx.category_name;
-  if (tx.meaning === "transfer" && !tx.account_id && !tx.counter_account_id) return "Chuyển ngân sách";
+  if (isWalletOnlyTransfer(tx)) return "Chuyển ngân sách";
   return MEANING_LABEL[tx.meaning] ?? tx.meaning;
+}
+
+/** Chuyển cũ chỉ giữa hai ví, không tài khoản (UC-715): còn hiện, không sửa được (chỉ xoá). */
+export const isWalletOnlyTransfer = (tx: Pick<TxRow, "meaning" | "account_id" | "counter_account_id">): boolean =>
+  tx.meaning === "transfer" && !tx.account_id && !tx.counter_account_id;
+
+/** Nhãn nhỏ "cách tính cũ" ở Sổ (UC-716 AC-21, AC-24): khoản cũ — id ≤ `config.legacy_max_tx_id`, server gắn `legacy`. */
+export const LEGACY_LABEL = "cách tính cũ";
+export const isLegacyTx = (tx: Pick<TxRow, "legacy">): boolean => tx.legacy === true;
+
+/** Loại chi chép từ phe của ví cũ (ADR-131); khoản đang giữ (`holding`) không có dòng loại chi. */
+const LEGACY_CLASS_LABEL: Record<LegacyClass, string | null> = { essential: "Thiết yếu", flex: "Mong muốn", tax: "Thuế", savings: "Tích luỹ", holding: null };
+
+/**
+ * Phần "Theo cách tính cũ" của giao dịch cũ, chỉ đọc, không tên ví (UC-715 AC-10, AC-14, AC-15): loại chi theo `legacy_class`,
+ * khoản thu đã chia, lý do lần chia không trả cho mình. Giao dịch mới: rỗng.
+ */
+export function legacyRows(tx: TxRow): [string, string][] {
+  const cls = tx.legacy_class ? LEGACY_CLASS_LABEL[tx.legacy_class] : null;
+  const split = tx.meaning === "income" && !!tx.allocated;
+  return [
+    ...(cls ? [["Loại chi (cách tính cũ)", cls] as [string, string]] : []),
+    ...(split ? [["Lần chia", "đã chia vào các ví (bản cũ)"] as [string, string]] : []),
+    ...(split && tx.wealth_note ? [["Không trả cho mình lần này", tx.wealth_note] as [string, string]] : []),
+  ];
 }
 
 const SIGN: Record<string, "+" | "−"> = { spend: "−", lend: "−", income: "+", refund: "+", collect: "+" };
@@ -57,10 +81,19 @@ export interface TxActions {
   note: string | null;
 }
 
-/** Việc làm được với một dòng sổ, theo nguồn và loại — cùng luật với `voidTransaction` / `replaceTransaction` ở server. */
-export function txActions(tx: TxRow): TxActions {
+/**
+ * Việc làm được với một dòng sổ, theo nguồn và loại — cùng luật với `voidTransaction` / `replaceTransaction` ở server. Khoản
+ * chạm tài khoản riêng tư của người khác (`hiddenFromMe` ở bootstrap): chỉ chủ tài khoản sửa / xoá / gỡ gán được (pwa UC-715
+ * AC-16, access UC-504 bước 3 — server 403 `private_account`).
+ */
+export function txActions(tx: TxRow, boot: Pick<Bootstrap, "accounts" | "members">): TxActions {
   const none = { edit: false, remove: false, reassign: false };
   if (tx.status !== "active") return { ...none, note: "Khoản này đã xoá. Sổ giữ lại để xem, không tính vào số nào." };
+  const hidden = boot.accounts.find((a) => a.hiddenFromMe && (a.id === tx.account_id || a.id === tx.counter_account_id));
+  if (hidden) {
+    const owner = boot.members.find((m) => m.id === hidden.ownerMemberId)?.name ?? hidden.ownerMemberId ?? "người khác";
+    return { ...none, note: `Liên quan tài khoản riêng tư của ${owner} — chỉ chủ tài khoản sửa được` };
+  }
   const origin = txOrigin(tx);
   if (origin === "bank") return { ...none, reassign: true, note: "Giao dịch ngân hàng không xoá được, chỉ gán lại cho đúng." };
   if (origin === "system") {
@@ -68,21 +101,21 @@ export function txActions(tx: TxRow): TxActions {
       ...none,
       note:
         tx.meaning === "fund"
-          ? "Bút toán nạp ví của một lần chia lương: muốn gỡ thì xoá khoản thu đó."
+          ? "Bút toán nạp ví theo cách tính cũ: muốn gỡ thì xoá khoản thu đó."
           : "Bút toán do hệ thống ghi (chốt tháng, quyết toán thuế): không sửa, không xoá lẻ được.",
     };
   }
   if (!EDITABLE.includes(tx.meaning)) {
     return { ...none, remove: true, note: "Khoản điều chỉnh sau đếm ví không sửa được: xoá rồi đếm lại ví." };
   }
+  if (isWalletOnlyTransfer(tx)) return { ...none, remove: true, note: "Chuyển giữa hai ví theo cách tính cũ: không sửa được, chỉ xoá." };
   return { ...none, edit: true, remove: true, note: null };
 }
 
-/** Form mở ra khi bấm Sửa: màn Nhập cho khoản chi, sheet Chuyển ngân sách cho chuyển chỉ giữa hai ví, còn lại là Loại khác. */
-export type EditForm = "spend" | "move" | "income" | "refund" | "buy_asset" | "lend" | "collect" | "transfer";
+/** Form mở ra khi bấm Sửa: màn Nhập cho khoản chi, còn lại là Loại khác đúng loại. */
+export type EditForm = "spend" | "income" | "refund" | "buy_asset" | "lend" | "collect" | "transfer";
 
 export function editForm(tx: TxRow): EditForm {
-  if (tx.meaning === "transfer" && !tx.account_id && !tx.counter_account_id) return "move";
   return tx.meaning as EditForm;
 }
 
@@ -93,8 +126,6 @@ export interface TxDraft {
   day: string;
   note: string;
   category_id: string | null;
-  wallet_id: string | null;
-  from_wallet_id: string | null;
   account_id: string | null;
   to_account_id: string | null;
   taxable: boolean;
@@ -106,8 +137,8 @@ export interface TxDraft {
   receivable_id: string | null;
 }
 
-// Quy ước dấu (src/domain/entry.ts): wallet_id = ví được cộng · counter_wallet_id = ví bị trừ ·
-// account_id = tài khoản tiền RA · counter_account_id = tài khoản tiền VÀO.
+// Quy ước dấu (src/domain/entry.ts): account_id = tài khoản tiền RA · counter_account_id = tài khoản tiền VÀO. Sửa khoản cũ
+// không mang ví theo (Đợt C).
 export function draftFromTx(tx: TxRow): TxDraft {
   const moneyIn = tx.meaning === "income" || tx.meaning === "refund" || tx.meaning === "collect";
   const transfer = tx.meaning === "transfer";
@@ -116,8 +147,6 @@ export function draftFromTx(tx: TxRow): TxDraft {
     day: dayKey(tx.at),
     note: tx.note ?? "",
     category_id: tx.category_id,
-    wallet_id: tx.meaning === "spend" ? tx.counter_wallet_id : tx.wallet_id,
-    from_wallet_id: transfer ? tx.counter_wallet_id : null,
     account_id: moneyIn ? tx.counter_account_id : tx.account_id,
     to_account_id: transfer ? tx.counter_account_id : null,
     taxable: Boolean(tx.taxable),
@@ -135,11 +164,10 @@ export function editedAt(day: string, originalAt: string, now: Date): string {
   return day === dayKey(originalAt) ? originalAt : atForDay(day, now);
 }
 
-/** Ví mà toast nói "còn bao nhiêu" sau khi xoá / sửa: ví bị trừ của khoản chi, ví được cộng của hoàn tiền. */
-export function txWalletId(tx: TxRow): string | null {
-  if (tx.meaning === "spend") return tx.counter_wallet_id;
-  if (tx.meaning === "refund") return tx.wallet_id;
-  return null;
+/** " Vận hành còn 21.000.000 ₫ ≈ 700.000/ngày." sau khi sửa / xoá khoản chi / hoàn tiền; rỗng khi không biết. */
+function nearSpendTail(tx: TxRow, ns: EntryNearSpend | null): string {
+  if (!ns || (tx.meaning !== "spend" && tx.meaning !== "refund")) return "";
+  return ` Vận hành còn ${formatVnd(ns.amount)}${ns.perDay !== null ? ` ≈ ${moneyDigits(ns.perDay)}/ngày` : ""}.`;
 }
 
 /**
@@ -152,21 +180,18 @@ export function withChosen<T extends { id: string }>(list: T[], id: string | nul
   return item ? [...list, item] : list;
 }
 
-/** Câu xác nhận trước khi xoá: nói cả hệ quả không thấy được (lần chia của khoản thu cũng bị gỡ). */
+/** Câu xác nhận trước khi xoá: nói cả hệ quả không thấy được (kỳ lương / việc của khoản thu, phần nạp ví cũ). */
 export function voidConfirm(tx: TxRow): string {
-  return tx.meaning === "income" && tx.allocated ? "Xoá hẳn khoản này? Lần chia của khoản này cũng được gỡ: các ví trả lại số đã nạp." : "Xoá hẳn khoản này?";
+  if (tx.meaning !== "income") return "Xoá hẳn khoản này?";
+  return `Xoá hẳn khoản này? Kỳ lương và việc ngày lương sinh từ khoản này (nếu có) cũng bị huỷ${tx.allocated ? "; phần đã nạp vào ví theo cách tính cũ được gỡ" : ""}.`;
 }
 
-/** "Đã xoá 45.000 ₫ Ăn uống. Ăn uống còn 300.000 ₫ tuần này." */
-export function voidToast(tx: TxRow, status: WalletStatus | null): string {
-  const head = `Đã xoá ${formatVnd(tx.amount)} ${txLabel(tx)}.${tx.meaning === "income" && tx.allocated ? " Đã gỡ lần chia." : ""}`;
-  const tail = walletRemain(status);
-  return tail ? `${head} ${tail}` : head;
+/** "Đã xoá 45.000 ₫ Ăn uống. Vận hành còn 3.945.000 ₫ ≈ 136.000/ngày." */
+export function voidToast(tx: TxRow, ns: EntryNearSpend | null): string {
+  return `Đã xoá ${formatVnd(tx.amount)} ${txLabel(tx)}.${nearSpendTail(tx, ns)}`;
 }
 
-/** "Đã sửa thành 120.000 ₫ Xăng xe. Đi lại còn 830.000 ₫ tuần này." */
-export function editToast(tx: TxRow, status: WalletStatus | null): string {
-  const head = `Đã sửa thành ${formatVnd(tx.amount)} ${txLabel(tx)}.`;
-  const tail = walletRemain(status);
-  return tail ? `${head} ${tail}` : head;
+/** "Đã sửa thành 120.000 ₫ Xăng xe. Vận hành còn …" */
+export function editToast(tx: TxRow, ns: EntryNearSpend | null): string {
+  return `Đã sửa thành ${formatVnd(tx.amount)} ${txLabel(tx)}.${nearSpendTail(tx, ns)}`;
 }

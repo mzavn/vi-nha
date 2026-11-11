@@ -5,7 +5,7 @@ import { useEffect, useState } from "preact/hooks";
 import { errorText } from "../lib/api";
 import { shortDate, timeHM } from "../lib/period";
 import { appVersionLabel } from "../lib/settings";
-import { SOURCE_URL } from "../lib/splits";
+import { GUIDE_URL, SOURCE_URL } from "../lib/splits";
 import { PinSheet, usePinSet } from "../screens/pin-sheet";
 import { go, logout, syncNow, toast, useApp, type Tab } from "../state/store";
 import { Icon } from "./icons";
@@ -107,7 +107,6 @@ export function Sidebar() {
   const badges: Partial<Record<Tab, { n: number; label: string }>> = {
     entry: { n: mine.length, label: "chưa lên sổ" },
     assign: { n: a?.pendingLogs ?? 0, label: "chưa gán" },
-    wallets: { n: a?.transferOrdersPending ?? 0, label: "lệnh chuyển tiền chưa làm" },
   };
   const snapAt = app.snap?.at;
 
@@ -119,7 +118,7 @@ export function Sidebar() {
         key={tab}
         class="side-item"
         aria-current={app.tab === tab ? "page" : undefined}
-        onClick={() => (tab === "wallets" && app.tab !== "wallets" ? go("wallets", { tierFilter: null }) : go(tab))}
+        onClick={() => go(tab)}
       >
         <Icon name={icon} size={18} />
         <span class="side-label">{label}</span>
@@ -153,7 +152,11 @@ export function Sidebar() {
         {item("net-worth", "Tài sản & tự do", "trending-up")}
         <div class="side-sep" />
         {item("settings", "Cài đặt", "settings")}
-        {item("guide", "Hướng dẫn", "help")}
+        {/* Hướng dẫn mở GitBook ở tab mới, không phải màn trong app (UC-711 AC-26). */}
+        <a class="side-item" href={GUIDE_URL} target="_blank" rel="noopener">
+          <Icon name="help" size={18} />
+          <span class="side-label">Hướng dẫn</span>
+        </a>
       </nav>
 
       <div class="side-foot">

@@ -1,20 +1,25 @@
-// Màn Cài đặt: tài khoản, ví + luật nạp, thành viên, mã chuyển khoản, tham số, khoá kết nối SePay/Telegram/Zalo.
-// Mọi thay đổi ở đây là cấu hình, không phải sổ: không đụng tới transactions hay bank_logs — trừ một bút toán hệ thống
-// khi một tài khoản thành tài khoản Tích sản với số dư có sẵn (ADR-91, `wealthBuildingOpeningEntry` của ledger).
+// Màn Cài đặt: tài khoản, thành viên, mã chuyển khoản, nguồn thu, tham số, khoá kết nối SePay/Telegram/Zalo.
+// Mọi thay đổi ở đây là cấu hình, không phải sổ: không đụng tới transactions hay bank_logs. Ví, luật nạp, phần khoá và vai
+// trò / công tắc tài khoản đã bỏ (ADR-123, ADR-131): `/v1/settings/wallets*` trả 410, `locks` / `month_close_*` /
+// `spendable` / `locked` / `role` / `surplus_reward_earmark` trả 400 `model_changed`.
 
 import { bankByCode } from "../domain/banks";
-import { DEFAULT_MONTH_CLOSE_WEALTH_PCT, isRewardWalletCandidate } from "../domain/close";
+import { rejectOldFields } from "../domain/entry";
 import { INTEREST_MAX_AMOUNT_LIMIT } from "../domain/interest-deposit";
 import { clockMinutes, NOTIFY_CONFIG_KEYS, parseNotifySchedule, type NotifySchedule } from "../domain/notify-schedule";
 import { dayKey } from "../domain/period";
-import { DomainError, type WalletRef } from "../domain/types";
+import { DEFAULT_SURPLUS_SAVINGS_PCT } from "../domain/pay-cycle";
+import { DEFAULT_PAYDAY_DAY } from "../domain/snapshot";
+import { DomainError } from "../domain/types";
 import type { Env } from "../env";
 import { escapeHtml, sendTelegram } from "../notify/telegram";
+import { DEFAULT_ACCOUNT_POCKET, DEFAULT_SAVINGS_PCT, POCKETS, type Pocket } from "../domain/pockets";
 import { syncSepay } from "../cron/backfill";
 import { DEFAULT_SEPAY_CONNECTION_ID } from "../domain/system-ids";
 import { describeSecret, getSecret, loadSepayConnections, SECRET_NAMES, setSecret, type SecretName, type SepayConnection } from "./secrets";
-import { interestMaxAmount, wealthBuildingOpeningEntry } from "./ledger";
+import { interestMaxAmount } from "./ledger";
 import { hashPassword, PASSWORD_MAX, PASSWORD_MIN } from "./passwords";
+import { assertRowWritable, hiddenAccountIds } from "./privacy";
 import { listBankAccounts, listTransactions, sepayErrorText, type SepayBankAccount } from "./sepay-api";
 
 type Row = Record<string, unknown>;
@@ -60,7 +65,7 @@ const newId = (b: Input, name: string) => {
   if (!/^[a-z0-9-]{1,40}$/.test(id)) fail("invalid_id", "Mã chỉ gồm chữ thường, số và gạch nối.");
   return id;
 };
-const exists = async (db: D1Database, table: "accounts" | "wallets" | "members" | "categories" | "income_streams", id: string | null) =>
+const exists = async (db: D1Database, table: "accounts" | "members" | "categories" | "income_streams", id: string | null) =>
   id === null || Boolean(await db.prepare(`SELECT 1 FROM ${table} WHERE id = ?`).bind(id).first());
 
 /** Câu UPDATE chỉ với các cột có trong input; không có cột nào thì null. */
@@ -79,15 +84,15 @@ async function patchRow(db: D1Database, table: string, id: string | number, cols
 // ── Đọc ─────────────────────────────────────────────────────────────
 // `first_log_at`: log SePay sớm nhất của tài khoản — sheet tài khoản gợi ý đặt mốc theo dõi khi log này sau ngày số dư đầu (ADR-113).
 const ACCOUNT_SQL =
-  "SELECT id, name, kind, bank, account_no, sub_account, sepay_enabled, sepay_out, sepay_connection_id, owner_member_id, opening_balance, opened_at, feed_from, sepay_out_from, active, deactivated_at, locked, spendable, role, (SELECT b.book_balance FROM v_account_book b WHERE b.account_id = accounts.id) AS book_balance, (SELECT MIN(l.at) FROM bank_logs l WHERE l.account_id = accounts.id) AS first_log_at FROM accounts";
+  "SELECT id, name, kind, bank, account_no, sub_account, sepay_enabled, sepay_out, sepay_connection_id, owner_member_id, opening_balance, opened_at, feed_from, sepay_out_from, active, deactivated_at, pocket, pocket_confirmed, private, (SELECT b.book_balance FROM v_account_book b WHERE b.account_id = accounts.id) AS book_balance, (SELECT MIN(l.at) FROM bank_logs l WHERE l.account_id = accounts.id) AS first_log_at FROM accounts";
 const toAccount = (r: Row) => ({
   ...r,
   id: String(r.id),
   sepay_enabled: Boolean(r.sepay_enabled),
   sepay_out: Boolean(r.sepay_out),
   active: Boolean(r.active),
-  locked: Boolean(r.locked),
-  spendable: Boolean(r.spendable),
+  pocket_confirmed: Boolean(r.pocket_confirmed),
+  private: Boolean(r.private),
 });
 
 /** Một tài khoản như màn Cài đặt thấy; không có → null. */
@@ -96,47 +101,61 @@ export async function readAccount(db: D1Database, id: string) {
   return row ? toAccount(row) : null;
 }
 
-const WALLET_SQL = `SELECT w.id, w.name, w.tier, w.must_group, w.kind, w.scope, w.member_id, w.account_id, w.private, w.sort, w.active,
-  a.mode, a.period, a.amount, a.percent, a.target_amount, a.target_date, a.floor_amount, a.priority, a.split_weekly
-  FROM wallets w LEFT JOIN allocations a ON a.wallet_id = w.id AND a.active = 1`;
-const toWallet = (r: Row) => ({
-  id: r.id,
-  name: r.name,
-  tier: r.tier,
-  must_group: r.must_group,
-  kind: r.kind,
-  scope: r.scope,
-  member_id: r.member_id,
-  account_id: r.account_id,
-  private: Boolean(r.private),
-  sort: r.sort,
-  active: Boolean(r.active),
-  allocation: r.mode
-    ? {
-        mode: r.mode,
-        period: r.period,
-        amount: r.amount,
-        percent: r.percent,
-        target_amount: r.target_amount,
-        target_date: r.target_date,
-        floor_amount: r.floor_amount,
-        priority: r.priority,
-        splitWeekly: Boolean(r.split_weekly),
-      }
-    : null,
-});
+/** Mọi tài khoản như màn Cài đặt thấy: đang dùng trước. */
+export async function listAccounts(db: D1Database) {
+  return rows(await db.prepare(`${ACCOUNT_SQL} ORDER BY active DESC, kind, name`).all()).map(toAccount);
+}
+
+// ── Ngăn của tài khoản và mục tiêu Dự phòng gắn với nó (pocket UC-1201, UC-1209) ──
+/** Ngăn gửi lên: một trong ba ngăn hoặc null (ngoài ngăn / theo tài khoản nhận); sai → 400 kèm tên ô. */
+export function pocketValue(v: unknown, field = "pocket"): Pocket | null {
+  if (v === null) return null;
+  if (typeof v === "string" && (POCKETS as readonly string[]).includes(v)) return v as Pocket;
+  return fail("invalid_input", "Ngăn là savings (Tích luỹ), reserve (Dự phòng), operating (Vận hành) hoặc null.", 400, field);
+}
+
+/**
+ * Tài khoản đang gắn mục tiêu Dự phòng đang dùng → 409 account_has_goal: không rời ngăn Dự phòng, không tắt được (UC-1209
+ * bước 3). Trigger trg_accounts_keep_goal chặn ở tầng dữ liệu; hàm này dựng câu báo lỗi.
+ */
+export async function assertNoGoal(db: D1Database, accountId: string): Promise<void> {
+  const goal = await db
+    .prepare("SELECT a.name AS account, g.name FROM reserve_goals g JOIN accounts a ON a.id = g.account_id WHERE g.account_id = ? AND g.active = 1")
+    .bind(accountId)
+    .first<{ account: string; name: string }>();
+  if (!goal) return;
+  fail("account_has_goal", `${goal.account} đang gắn mục tiêu "${goal.name}": bỏ gắn tài khoản hoặc tắt mục tiêu trước.`, 409, "pocket");
+}
+
+/** Chạy batch ghi tài khoản; trigger chặn (hai máy cùng lúc) → 409 account_has_goal, không đổi gì. */
+export async function accountBatch(db: D1Database, statements: D1PreparedStatement[], accountIds: string[]): Promise<void> {
+  try {
+    await db.batch(statements);
+  } catch (err) {
+    if (!/account_has_goal/.test(String(err))) throw err;
+    for (const id of accountIds) await assertNoGoal(db, id);
+    fail("account_has_goal", "Tài khoản đang gắn mục tiêu Dự phòng: bỏ gắn tài khoản hoặc tắt mục tiêu trước.", 409, "pocket");
+  }
+}
+
+/** Vai trò / công tắc tài khoản đã bỏ (ADR-131, access UC-506): gửi lên dù giá trị gì (kể cả null) → 400 model_changed. */
+const OLD_ACCOUNT_FIELDS = ["spendable", "locked", "role"] as const;
+function rejectOldAccountFields(b: Input): void {
+  const fields = OLD_ACCOUNT_FIELDS.filter((k) => has(b, k));
+  if (fields.length) throw new DomainError("model_changed", `Ví nhà v2 xếp tài khoản theo ngăn: bỏ trường ${fields.join(", ")}.`, 400, undefined, fields);
+}
+
 const toRule = (r: Row) => ({ ...r, is_salary: Boolean(r.is_salary), active: Boolean(r.active), incomeStreamId: r.income_stream_id ?? null });
 
-const STREAM_SQL = "SELECT id, name, sort, active FROM income_streams ORDER BY sort, name";
-const LOCK_SQL = "SELECT stream_id, wallet_id, percent FROM income_stream_locks ORDER BY sort, wallet_id";
-const toStreams = (streams: Row[], locks: Row[]) =>
-  streams.map((s) => ({
-    id: s.id as string,
-    name: s.name as string,
-    sort: Number(s.sort),
-    active: Boolean(s.active),
-    locks: locks.filter((l) => l.stream_id === s.id).map((l) => ({ walletId: l.wallet_id as string, percent: Number(l.percent) })),
-  }));
+const STREAM_COLS = "id, name, sort, active, pocket, opens_cycle";
+const toStream = (s: Row) => ({
+  id: s.id as string,
+  name: s.name as string,
+  sort: Number(s.sort),
+  active: Boolean(s.active),
+  pocket: (s.pocket as Pocket | null) ?? null,
+  opens_cycle: Boolean(s.opens_cycle),
+});
 
 /** Giờ nhắc của cả nhà, một câu SELECT; khoá thiếu/hỏng thì lấy mặc định (cùng cách cron đọc). */
 async function readNotifySchedule(db: D1Database): Promise<NotifySchedule> {
@@ -156,25 +175,22 @@ async function configNumber(db: D1Database, k: string, fallback: number) {
 
 export async function getSettings(env: Env, origin: string) {
   const db = env.DB;
-  const [accounts, wallets, members, rules, categories, streams, locks] = await db.batch([
+  const [accounts, members, rules, categories, streams] = await db.batch([
     db.prepare(`${ACCOUNT_SQL} ORDER BY active DESC, kind, name`),
-    db.prepare(`${WALLET_SQL} ORDER BY w.sort, w.name`),
     db.prepare(`SELECT ${MEMBER_COLS} FROM members ORDER BY role = 'owner' DESC, name`),
     db.prepare("SELECT * FROM rules ORDER BY active DESC, priority, id"),
-    db.prepare("SELECT id, name, default_wallet_id AS defaultWalletId FROM categories WHERE active = 1 ORDER BY sort, name"),
-    db.prepare(STREAM_SQL),
-    db.prepare(LOCK_SQL),
+    db.prepare("SELECT id, name, group_id AS groupId FROM categories WHERE active = 1 ORDER BY sort, name"),
+    db.prepare(`SELECT ${STREAM_COLS} FROM income_streams ORDER BY sort, name`),
   ]);
   const secrets = Object.fromEntries(await Promise.all(SECRET_NAMES.map(async (n) => [n, await describeSecret(env, n)] as const)));
   const accountRows = rows(accounts!);
   const connections = (await loadSepayConnections(env)).map((c) => connectionView(c, accountRows));
   return {
     accounts: accountRows.map(toAccount),
-    wallets: rows(wallets!).map(toWallet),
     members: rows<MemberRow>(members!).map(toMember),
     rules: rows(rules!).map(toRule),
     categories: rows(categories!),
-    incomeStreams: toStreams(rows(streams!), rows(locks!)),
+    incomeStreams: rows(streams!).map(toStream),
     config: await readConfig(db),
     notifySchedule: await readNotifySchedule(db),
     integrations: { webhook_url: `${origin}/webhooks/sepay`, zalo_webhook_url: `${origin}/webhooks/zalo`, ...secrets, sepay_connections: connections },
@@ -185,9 +201,6 @@ export async function getSettings(env: Env, origin: string) {
 export const ACCOUNT_KINDS = ["bank", "cash", "ewallet", "credit"] as const;
 /** Tài khoản ngân hàng / thẻ chỉ nhận mã trong danh mục ngân hàng (ADR-66); ví điện tử, tiền mặt giữ tên tự do. */
 export const bankOk = (kind: string, bank: string | null) => (kind !== "bank" && kind !== "credit") || bank === null || Boolean(bankByCode(bank));
-/** Tài khoản Tích sản (ADR-88). Heo đất chỉ do migration tạo; sổ tiết kiệm chỉ đặt lúc thêm (khóa từ đầu). */
-const ACCOUNT_ROLES = ["piggy_bank", "buffer", "term_deposit"] as const;
-const LOCKED_SPENDABLE = "Tài khoản đã khóa (heo đất, sổ tiết kiệm) không tính vào tiền chi được.";
 
 async function accountFields(db: D1Database, b: Input, currentId: string | null) {
   const accountNo = has(b, "account_no") ? text(b, "account_no", { max: 40 }) : undefined;
@@ -214,8 +227,7 @@ async function accountFields(db: D1Database, b: Input, currentId: string | null)
     opening_balance: has(b, "opening_balance") ? integer(b, "opening_balance", { min: -1e12, max: 1e12 }) ?? 0 : undefined,
     opened_at: openedAt,
     active: has(b, "active") ? bool(b, "active") : undefined,
-    spendable: has(b, "spendable") ? bool(b, "spendable") : undefined,
-    role: has(b, "role") ? oneOf(b, "role", ACCOUNT_ROLES) : undefined,
+    pocket: has(b, "pocket") ? pocketValue(b.pocket) : undefined,
   };
 }
 
@@ -274,7 +286,18 @@ function feedFromValue(v: unknown, openedAt: string | null, now: Date): string |
   return new Date(t).toISOString();
 }
 
-export async function createAccount(db: D1Database, b: Input) {
+/** Mã tài khoản thân này sẽ tạo (gửi `id`, hoặc slug của tên) — chưa kiểm thân; không suy ra được → null (pocket UC-1209 bước 8). */
+export function accountIdOf(b: Input): string | null {
+  const id = typeof b.id === "string" && b.id.trim() ? b.id.trim().slice(0, 120) : typeof b.name === "string" ? slug(b.name.trim().slice(0, 60)) : "";
+  return id || null;
+}
+
+/**
+ * Kiểm thân thêm tài khoản (access UC-506) rồi dựng câu chèn. `where`: điều kiện SQL của câu chèn — không khớp thì câu không
+ * chèn gì (tạo + gắn mục tiêu trong một batch, ADR-134).
+ */
+export async function accountInsert(db: D1Database, b: Input, where?: { sql: string; binds: unknown[] }): Promise<{ id: string; statement: D1PreparedStatement }> {
+  rejectOldAccountFields(b);
   const name = text(b, "name", { required: true, max: 60 })!;
   const id = newId(b, name);
   if (await db.prepare("SELECT 1 FROM accounts WHERE id = ?").bind(id).first()) fail("duplicate", "Đã có tài khoản với mã này.", 409);
@@ -282,32 +305,32 @@ export async function createAccount(db: D1Database, b: Input) {
   if (f.sepay_enabled && !f.account_no) fail("missing_account_no", "Bật SePay thì cần số tài khoản để nhận diện giao dịch.");
   const { sepay_out } = sepayFields(f, { kind: "bank", bank: null, sepay_enabled: false, sepay_out: false });
   const connectionId = await sepayConnectionId(db, Boolean(f.sepay_enabled), f.sepay_connection_id, null);
-  if (f.role === "piggy_bank") fail("invalid_role", "Heo đất do app tạo, không thêm tay được.");
-  const locked = f.role === "term_deposit";
-  if (locked && f.spendable) fail("locked_account", LOCKED_SPENDABLE);
-  // Không gửi "Tính vào tiền chi được" thì bật, trừ thẻ tín dụng (số dư thẻ là nợ phải trả — ADR-85) và tài khoản
-  // Tích sản (phao, sổ tiết kiệm — ADR-88): tiền ở đó là để dành, không để tiêu.
-  const spendable = !locked && (f.spendable ?? (f.kind !== "credit" && !f.role));
-  // Tài khoản Tích sản không tính mở với số dư có sẵn: phần chưa là Tích sản vào Tích sản cùng lúc (ADR-91).
-  const opening = f.role && !spendable ? await wealthBuildingOpeningEntry(db, { id, name: f.name!, balance: f.opening_balance ?? 0 }, new Date()) : null;
-  await db.batch([
-    db
-      .prepare(
-        `INSERT INTO accounts (id, name, kind, bank, account_no, sub_account, sepay_enabled, sepay_out, sepay_connection_id, owner_member_id, opening_balance, opened_at, spendable, locked, role)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, date('now')), ?, ?, ?)`,
-      )
-      .bind(
-        id, f.name, f.kind, f.bank ?? null, f.account_no ?? null, f.sub_account ?? null, f.sepay_enabled ? 1 : 0, sepay_out ? 1 : 0, connectionId,
-        f.owner_member_id ?? null, f.opening_balance ?? 0, f.opened_at ?? null, spendable ? 1 : 0, locked ? 1 : 0, f.role ?? null,
-      ),
-    ...(opening ? [opening] : []),
-  ]);
+  // Không gửi ngăn thì Vận hành (mọi loại, kể cả thẻ tín dụng), chưa xác nhận (pocket UC-1201 bước 4); gửi ngăn = đã xác nhận.
+  const pocket = f.pocket !== undefined ? f.pocket : DEFAULT_ACCOUNT_POCKET;
+  // Tài khoản mới luôn công khai (`private` 0, access UC-504): chủ tài khoản tự bật ở sheet tài khoản.
+  const statement = db
+    .prepare(
+      `INSERT INTO accounts (id, name, kind, bank, account_no, sub_account, sepay_enabled, sepay_out, sepay_connection_id, owner_member_id, opening_balance, opened_at, pocket, pocket_confirmed)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, date('now')), ?, ? WHERE ${where?.sql ?? "1"}`,
+    )
+    .bind(
+      id, f.name, f.kind, f.bank ?? null, f.account_no ?? null, f.sub_account ?? null, f.sepay_enabled ? 1 : 0, sepay_out ? 1 : 0, connectionId,
+      f.owner_member_id ?? null, f.opening_balance ?? 0, f.opened_at ?? null, pocket, f.pocket !== undefined ? 1 : 0, ...(where?.binds ?? []),
+    );
+  return { id, statement };
+}
+
+export async function createAccount(db: D1Database, b: Input) {
+  const { id, statement } = await accountInsert(db, b);
+  await statement.run();
   return toAccount((await db.prepare(`${ACCOUNT_SQL} WHERE id = ?`).bind(id).first<Row>())!);
 }
 
-export async function updateAccount(db: D1Database, id: string, b: Input, now: Date = new Date()) {
+/** `actor`: người đang sửa (phiên / X-Member-Id) — chỉ chủ tài khoản bật / tắt riêng tư (access UC-504). */
+export async function updateAccount(db: D1Database, id: string, b: Input, now: Date = new Date(), actor: string | null = null) {
   const current = await db.prepare(`${ACCOUNT_SQL} WHERE id = ?`).bind(id).first<Row>();
   if (!current) fail("not_found", "Không có tài khoản này.", 404);
+  rejectOldAccountFields(b);
   const f = await accountFields(db, b, id);
   if (f.opened_at) {
     // Không giao dịch nào được nằm trước ngày mở sổ (ADR-76): lưu chuyển tiền giữ bất biến đầu kỳ + ba nhóm = cuối kỳ.
@@ -371,184 +394,42 @@ export async function updateAccount(db: D1Database, id: string, b: Input, now: D
   // Bật "báo cả tiền ra" trên tài khoản đã nối: khoản chi trước lúc đó nhập tay, log ra cũ SePay gửi lại không tự gán.
   // Vừa bật SePay thì mốc theo dõi đã lo phần trước đó.
   const sepay_out_from = turningOn ? null : sepay_out && !current!.sepay_out ? now.toISOString() : undefined;
-  if (f.spendable && current!.locked) fail("locked_account", LOCKED_SPENDABLE);
-  // Chỉ đổi qua lại tài khoản thường ↔ phao (không khóa); heo đất và sổ tiết kiệm giữ vai trò từ lúc tạo (ADR-88).
-  const roleChanged = f.role !== undefined && f.role !== current!.role;
-  if (roleChanged && (current!.locked || f.role === "piggy_bank" || f.role === "term_deposit")) {
-    fail("invalid_role", "Chỉ đổi được giữa tài khoản thường và phao dự phòng; heo đất và sổ tiết kiệm giữ nguyên.");
+  // Tài khoản đang gắn mục tiêu Dự phòng đang dùng không rời ngăn Dự phòng, không tắt được (pocket UC-1209 bước 3).
+  if ((f.pocket !== undefined && f.pocket !== "reserve") || f.active === false) await assertNoGoal(db, id);
+  // Tài khoản riêng tư cần có chủ; chỉ chủ (cũ và mới, nếu đổi chủ cùng lúc) đổi được cờ. Gửi lại đúng giá trị đang có
+  // (lưu cả sheet) không phải là đổi.
+  if (has(b, "private") && typeof b.private !== "boolean") fail("invalid_input", "private phải là true hoặc false.", 400, "private");
+  const requested = b.private as boolean | undefined;
+  const currentOwner = (current!.owner_member_id as string | null) ?? null;
+  const owner = f.owner_member_id === undefined ? currentOwner : f.owner_member_id;
+  const privateChanged = requested !== undefined && requested !== Boolean(current!.private);
+  // Đổi chủ tài khoản đang riêng tư mà chủ còn hoạt động: chỉ chủ đổi được (access UC-504 bước 1, ADR-133 (4)). Chủ đã tắt
+  // thì tài khoản không còn bị giấu — ai cũng đổi được.
+  if (owner !== currentOwner && current!.private && currentOwner !== null && currentOwner !== actor) {
+    const ownerActive = await db.prepare("SELECT 1 FROM members WHERE id = ? AND active = 1").bind(currentOwner).first();
+    if (ownerActive) fail("not_owner", "Chỉ chủ tài khoản riêng tư đổi được chủ.", 403, "owner_member_id");
   }
-  // Sang phao mà không nói gì về "Tính vào tiền chi được" thì tắt: tiền phao là để dành.
-  const spendable = f.spendable ?? (roleChanged && f.role === "buffer" ? false : undefined);
-  if (f.active === false) {
-    const used = await db.prepare("SELECT 1 FROM wallets WHERE account_id = ? AND active = 1").bind(id).first();
-    if (used) fail("in_use", "Còn ví đang trú ở tài khoản này; chuyển ví sang tài khoản khác trước.", 409);
+  if ((requested ?? Boolean(current!.private)) && !owner) {
+    fail("private_needs_owner", "Tài khoản riêng tư cần có chủ: chọn chủ tài khoản trước.", 400, "private");
   }
-  // Tài khoản thường thành phao (không tính) mà đang có tiền: phần chưa là Tích sản vào Tích sản cùng lúc (ADR-91).
-  // Đổi phao về thường không gỡ bút toán đó.
-  const becomesOutside = roleChanged && f.role !== null && !(spendable ?? Boolean(current!.spendable)) && (f.active ?? Boolean(current!.active));
-  const balance = Number(current!.book_balance ?? 0) + (f.opening_balance == null ? 0 : f.opening_balance - Number(current!.opening_balance));
-  const opening = becomesOutside ? await wealthBuildingOpeningEntry(db, { id, name: f.name ?? String(current!.name), balance }, new Date()) : null;
+  if (privateChanged && [currentOwner, owner].some((o) => o !== null && o !== actor)) {
+    fail("not_owner", "Chỉ chủ tài khoản bật / tắt được riêng tư.", 403, "private");
+  }
   // Tắt ghi ngày tắt (giờ VN) để bảng cân đối vẫn tính tài khoản ở các tháng trước đó; bật lại xoá ngày tắt.
   const deactivated_at = f.active === false && current!.active ? dayKey(new Date()) : f.active === true ? null : undefined;
-  const patch = patchStatement(db, "accounts", id, { ...f, spendable, sepay_out, sepay_connection_id: connectionId, deactivated_at, feed_from, sepay_out_from });
-  const writes = [patch, opening].filter((s): s is D1PreparedStatement => s !== null);
-  if (writes.length > 0) await db.batch(writes);
-  return toAccount((await db.prepare(`${ACCOUNT_SQL} WHERE id = ?`).bind(id).first<Row>())!);
-}
-
-// ── Ví + luật nạp ───────────────────────────────────────────────────
-const TIERS = ["wealth_building", "tax", "nice", "must"] as const;
-const WALLET_KINDS = ["envelope", "accrual", "bill"] as const;
-const MODES = ["flat", "percent", "goal", "lump"] as const; // 'remainder' chỉ có một, do seed, không tạo/đổi từ đây
-
-function allocationFields(a: Input) {
-  const f = {
-    period: has(a, "period") ? oneOf(a, "period", ["week", "month"] as const) : undefined,
-    amount: has(a, "amount") ? integer(a, "amount", { min: 0, max: 1e12 }) : undefined,
-    percent: undefined as number | null | undefined,
-    target_amount: has(a, "target_amount") ? integer(a, "target_amount", { min: 0, max: 1e12 }) : undefined,
-    target_date: has(a, "target_date") ? text(a, "target_date", { max: 10 }) : undefined,
-    floor_amount: has(a, "floor_amount") ? integer(a, "floor_amount", { min: 0, max: 1e12 }) : undefined,
-    priority: has(a, "priority") ? integer(a, "priority", { min: 0, max: 1000 }) ?? 100 : undefined,
-    split_weekly: has(a, "split_weekly") ? bool(a, "split_weekly") : undefined,
-  };
-  if (has(a, "percent")) {
-    const p = a.percent;
-    if (p !== null && (typeof p !== "number" || !(p >= 0 && p <= 1))) fail("invalid_input", "percent là tỷ lệ từ 0 đến 1 (0.3 = 30%).");
-    f.percent = p as number | null;
-  }
-  if (f.target_date && !/^\d{4}-\d{2}-\d{2}$/.test(f.target_date)) fail("invalid_input", "target_date có dạng 2026-12-31.");
-  return f;
-}
-
-/** Kiểm tra luật nạp sau khi ghép với giá trị cũ — đúng các CHECK của bảng allocations, báo lỗi dễ hiểu. */
-function checkAllocation(a: Record<string, unknown>) {
-  if (a.mode === "flat" && a.amount == null) fail("invalid_allocation", "Nạp cố định cần số tiền.");
-  if (a.mode === "percent" && a.percent == null) fail("invalid_allocation", "Nạp theo phần trăm cần tỷ lệ.");
-  if (a.mode === "goal" && (a.target_amount == null || a.target_date == null)) fail("invalid_allocation", "Mục tiêu cần số tiền đích và hạn.");
-  if (a.mode === "lump" && a.amount == null && a.target_amount == null) fail("invalid_allocation", "Trả cục cần số tiền.");
-}
-
-/** Chia đều theo tuần chỉ có nghĩa với phong bì nạp theo tháng; đổi sang luật khác thì tự tắt. */
-function splitWeekly(kind: unknown, a: Record<string, unknown>, requested: boolean | null | undefined): boolean {
-  const eligible = kind === "envelope" && (a.mode === "flat" || a.mode === "lump") && a.period !== "week";
-  if (requested && !eligible) fail("invalid_allocation", "Chỉ phong bì nạp theo tháng mới chia đều theo tuần được.");
-  return eligible && Boolean(requested ?? a.split_weekly);
-}
-
-/** Kiểm tra TRƯỚC khi ghi: tổng phần trăm Tích sản + Thuế sau thay đổi không được vượt 100% thu nhập. */
-async function percentTotalOk(db: D1Database, walletId: string, tier: unknown, mode: unknown, percent: unknown) {
-  const r = await db
-    .prepare(
-      "SELECT COALESCE(SUM(a.percent), 0) AS p FROM allocations a JOIN wallets w ON w.id = a.wallet_id WHERE a.active = 1 AND w.active = 1 AND a.mode = 'percent' AND w.tier IN ('wealth_building','tax') AND w.id <> ?",
-    )
-    .bind(walletId)
-    .first<{ p: number }>();
-  const mine = mode === "percent" && (tier === "wealth_building" || tier === "tax") ? Number(percent ?? 0) : 0;
-  if (Number(r?.p ?? 0) + mine > 1) fail("invalid_allocation", "Tổng phần trăm Tích sản + Thuế vượt 100% thu nhập.");
-}
-
-export async function createWallet(db: D1Database, b: Input) {
-  const name = text(b, "name", { required: true, max: 60 })!;
-  const id = newId(b, name);
-  if (await db.prepare("SELECT 1 FROM wallets WHERE id = ?").bind(id).first()) fail("duplicate", "Đã có ví với mã này.", 409);
-  const tier = oneOf(b, "tier", TIERS, true)!;
-  const mustGroup = tier === "must" ? oneOf(b, "must_group", ["must", "have"] as const, true) : null;
-  if (tier === "wealth_building" && (await db.prepare("SELECT 1 FROM wallets WHERE tier = 'wealth_building' AND active = 1").first())) {
-    fail("one_wealth_building", "Tích sản là MỘT ví; không tạo ví Tích sản thứ hai.", 409);
-  }
-  const kind = oneOf(b, "kind", WALLET_KINDS, true)!;
-  const scope = oneOf(b, "scope", ["shared", "personal"] as const) ?? "shared";
-  const memberId = text(b, "member_id");
-  if (scope === "personal" && !memberId) fail("invalid_input", "Ví cá nhân cần chọn thành viên.");
-  if (!(await exists(db, "members", memberId))) fail("unknown_member", "Không có thành viên này.");
-  const accountId = text(b, "account_id");
-  if (!(await exists(db, "accounts", accountId))) fail("unknown_account", "Không có tài khoản này.");
-
-  const alloc = (b.allocation ?? null) as Input | null;
-  const statements = [
-    db
-      .prepare("INSERT INTO wallets (id, name, tier, must_group, kind, scope, member_id, account_id, private, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .bind(id, name, tier, mustGroup, kind, scope, scope === "personal" ? memberId : null, accountId, bool(b, "private") ? 1 : 0, integer(b, "sort", { min: 0, max: 10000 }) ?? 100),
-  ];
-  if (alloc) {
-    const mode = oneOf(alloc, "mode", MODES, true)!;
-    const f = allocationFields(alloc);
-    const merged: Record<string, unknown> = { mode, ...Object.fromEntries(Object.entries(f).map(([k, v]) => [k, v ?? null])) };
-    checkAllocation(merged);
-    merged.split_weekly = splitWeekly(kind, merged, f.split_weekly);
-    await percentTotalOk(db, id, tier, mode, merged.percent);
-    statements.push(
-      db
-        .prepare("INSERT INTO allocations (wallet_id, mode, period, amount, percent, target_amount, target_date, floor_amount, priority, split_weekly) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(id, mode, merged.period ?? null, merged.amount ?? null, merged.percent ?? null, merged.target_amount ?? null, merged.target_date ?? null, merged.floor_amount ?? null, merged.priority ?? 100, merged.split_weekly ? 1 : 0),
-    );
-  }
-  await db.batch(statements);
-  return toWallet((await db.prepare(`${WALLET_SQL} WHERE w.id = ?`).bind(id).first<Row>())!);
-}
-
-export async function updateWallet(db: D1Database, id: string, b: Input) {
-  const current = await db.prepare(`${WALLET_SQL} WHERE w.id = ?`).bind(id).first<Row>();
-  if (!current) fail("not_found", "Không có ví này.", 404);
-  const accountId = has(b, "account_id") ? text(b, "account_id") : undefined;
-  if (accountId !== undefined && !(await exists(db, "accounts", accountId))) fail("unknown_account", "Không có tài khoản này.");
-  const memberId = has(b, "member_id") ? text(b, "member_id") : undefined;
-  if (memberId !== undefined && !(await exists(db, "members", memberId))) fail("unknown_member", "Không có thành viên này.");
-  const active = has(b, "active") ? bool(b, "active") : undefined;
-  if (active === false && (current!.mode === "remainder" || current!.tier === "wealth_building" || current!.tier === "holding")) {
-    fail("required_wallet", "Không tắt được ví Thu nhập, Tích sản hay ví nhận phần còn lại.", 409);
-  }
-  await patchRow(db, "wallets", id, {
-    name: has(b, "name") ? text(b, "name", { required: true, max: 60 }) : undefined,
-    account_id: accountId,
-    member_id: current!.scope === "personal" ? memberId : undefined,
-    private: has(b, "private") ? bool(b, "private") : undefined,
-    sort: has(b, "sort") ? integer(b, "sort", { min: 0, max: 10000 }) : undefined,
-    active,
+  const pocket_confirmed = f.pocket !== undefined ? true : undefined;
+  const patch = patchStatement(db, "accounts", id, {
+    ...f,
+    sepay_out,
+    sepay_connection_id: connectionId,
+    deactivated_at,
+    feed_from,
+    sepay_out_from,
+    pocket_confirmed,
+    private: privateChanged ? requested : undefined,
   });
-
-  if (b.allocation && typeof b.allocation === "object") {
-    const a = b.allocation as Input;
-    const currentMode = current!.mode as string | null;
-    if (currentMode === "remainder") {
-      if (has(a, "mode") && a.mode !== "remainder") fail("remainder_fixed", "Ví nhận phần còn lại luôn nhận phần còn lại; không đổi cách nạp được.", 409);
-      if (has(a, "priority")) await patchRow(db, "allocations", await allocationId(db, id), { priority: integer(a, "priority", { min: 0, max: 1000 }) });
-    } else {
-      const mode = has(a, "mode") ? oneOf(a, "mode", MODES, true)! : currentMode;
-      if (!mode) fail("invalid_allocation", "Ví này chưa có luật nạp; chọn cách nạp.");
-      const f = allocationFields(a);
-      const merged: Record<string, unknown> = {
-        mode,
-        period: current!.period,
-        amount: current!.amount,
-        percent: current!.percent,
-        target_amount: current!.target_amount,
-        target_date: current!.target_date,
-        floor_amount: current!.floor_amount,
-        priority: current!.priority ?? 100,
-        split_weekly: Boolean(current!.split_weekly),
-        ...Object.fromEntries(Object.entries(f).filter(([, v]) => v !== undefined)),
-      };
-      checkAllocation(merged);
-      merged.split_weekly = splitWeekly(current!.kind, merged, f.split_weekly);
-      await percentTotalOk(db, id, current!.tier, merged.mode, merged.percent);
-      if (currentMode) {
-        await patchRow(db, "allocations", await allocationId(db, id), merged);
-      } else {
-        await db
-          .prepare("INSERT INTO allocations (wallet_id, mode, period, amount, percent, target_amount, target_date, floor_amount, priority, split_weekly) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-          .bind(id, merged.mode, merged.period ?? null, merged.amount ?? null, merged.percent ?? null, merged.target_amount ?? null, merged.target_date ?? null, merged.floor_amount ?? null, merged.priority ?? 100, merged.split_weekly ? 1 : 0)
-          .run();
-      }
-    }
-  }
-  return toWallet((await db.prepare(`${WALLET_SQL} WHERE w.id = ?`).bind(id).first<Row>())!);
-}
-
-async function allocationId(db: D1Database, walletId: string): Promise<number> {
-  const r = await db.prepare("SELECT id FROM allocations WHERE wallet_id = ? AND active = 1 LIMIT 1").bind(walletId).first<{ id: number }>();
-  return r?.id ?? fail("not_found", "Ví này chưa có luật nạp.", 404);
+  if (patch) await accountBatch(db, [patch], [id]);
+  return toAccount((await db.prepare(`${ACCOUNT_SQL} WHERE id = ?`).bind(id).first<Row>())!);
 }
 
 // ── Thành viên ──────────────────────────────────────────────────────
@@ -662,9 +543,14 @@ export async function setMemberPassword(db: D1Database, id: string, password: st
 }
 
 // ── Mã chuyển khoản (rules) ─────────────────────────────────────────
-export async function updateRule(db: D1Database, id: number, b: Input) {
+/** `actor`: người sửa — mẫu cũ hay giá trị mới có tài khoản riêng tư bị giấu với người đó → 403 private_account (ingest UC-307). */
+export async function updateRule(db: D1Database, id: number, b: Input, actor: string | null = null) {
+  rejectOldFields(b, ["wallet_id", "from_wallet_id"]);
   const current = await db.prepare("SELECT * FROM rules WHERE id = ?").bind(id).first<Row>();
   if (!current) fail("not_found", "Không có mã này.", 404);
+  const hidden = await hiddenAccountIds(db, actor);
+  assertRowWritable(current!, hidden);
+  assertRowWritable({ account_id: has(b, "account_id") ? b.account_id : null, counter_account_id: has(b, "counter_account_id") ? b.counter_account_id : null }, hidden);
   const matchType = has(b, "match_type") ? oneOf(b, "match_type", ["code", "content", "account"] as const, true) : undefined;
   const meaning = has(b, "meaning") ? oneOf(b, "meaning", ["spend", "transfer", "income"] as const, true) : undefined;
   const isSalary = has(b, "is_salary") ? bool(b, "is_salary") : undefined;
@@ -672,8 +558,6 @@ export async function updateRule(db: D1Database, id: number, b: Input) {
   const finalSalary = isSalary ?? Boolean(current!.is_salary);
   // Luật 6: máy chỉ được tự gán thu nhập cho mẫu lương.
   if (finalMeaning === "income" && !finalSalary) fail("income_needs_salary", "Mã tự gán thu nhập phải là mẫu lương.");
-  const walletId = has(b, "wallet_id") ? text(b, "wallet_id") : undefined;
-  if (walletId !== undefined && !(await exists(db, "wallets", walletId))) fail("unknown_wallet", "Không có ví này.");
   const categoryId = has(b, "category_id") ? text(b, "category_id") : undefined;
   if (categoryId !== undefined && !(await exists(db, "categories", categoryId))) fail("unknown_category", "Không có danh mục này.");
   const streamId = has(b, "income_stream_id") ? text(b, "income_stream_id") : undefined;
@@ -686,7 +570,6 @@ export async function updateRule(db: D1Database, id: number, b: Input) {
     pattern,
     meaning,
     is_salary: isSalary,
-    wallet_id: walletId,
     category_id: categoryId,
     income_stream_id: streamId,
     priority: has(b, "priority") ? integer(b, "priority", { min: 0, max: 1000 }) : undefined,
@@ -695,61 +578,51 @@ export async function updateRule(db: D1Database, id: number, b: Input) {
   return toRule((await db.prepare("SELECT * FROM rules WHERE id = ?").bind(id).first<Row>())!);
 }
 
-// ── Nguồn thu: phần khóa riêng của từng nguồn ───────────────────────
-async function getStream(db: D1Database, id: string) {
-  const [streams, locks] = await db.batch([
-    db.prepare("SELECT id, name, sort, active FROM income_streams WHERE id = ?").bind(id),
-    db.prepare("SELECT stream_id, wallet_id, percent FROM income_stream_locks WHERE stream_id = ? ORDER BY sort, wallet_id").bind(id),
-  ]);
-  return toStreams(rows(streams!), rows(locks!))[0] ?? fail("not_found", "Không có nguồn thu này.", 404);
+// ── Nguồn thu: ngăn của tiền về, mở kỳ lương ───────────────────────
+/** Một nguồn thu như màn Cài đặt thấy; không có → 404. */
+export async function getStream(db: D1Database, id: string) {
+  const row = await db.prepare(`SELECT ${STREAM_COLS} FROM income_streams WHERE id = ?`).bind(id).first<Row>();
+  return row ? toStream(row) : fail("not_found", "Không có nguồn thu này.", 404);
 }
 
-/** Lệnh thay toàn bộ phần khóa của một nguồn. Kiểm tra trước khi ghi: ví còn dùng, không phải ví Thu nhập, tổng ≤ 100%. */
-async function lockStatements(db: D1Database, streamId: string, raw: unknown): Promise<D1PreparedStatement[]> {
-  if (!Array.isArray(raw)) fail("invalid_input", "locks phải là danh sách.");
-  const statements = [db.prepare("DELETE FROM income_stream_locks WHERE stream_id = ?").bind(streamId)];
-  const seen = new Set<string>();
-  let total = 0;
-  for (const [i, lock] of (raw as unknown[]).entries()) {
-    if (!lock || typeof lock !== "object") fail("invalid_input", "Mỗi phần khóa gồm wallet_id và percent.");
-    const l = lock as Input;
-    const walletId = text(l, "wallet_id", { required: true })!;
-    if (typeof l.percent !== "number" || !(l.percent > 0 && l.percent <= 1)) fail("invalid_input", "percent là tỷ lệ lớn hơn 0, tối đa 1 (0.45 = 45%).");
-    if (seen.has(walletId)) fail("invalid_input", "Mỗi ví chỉ khóa một lần trong một nguồn.");
-    seen.add(walletId);
-    const w = await db.prepare("SELECT tier, kind FROM wallets WHERE id = ? AND active = 1").bind(walletId).first<Row>();
-    if (!w) fail("unknown_wallet", `Không có ví "${walletId}".`);
-    if (w!.tier === "holding" && w!.kind === "holding") fail("invalid_lock", "Không khóa tiền vào chính ví Thu nhập.");
-    total += l.percent as number;
-    statements.push(
-      db.prepare("INSERT INTO income_stream_locks (stream_id, wallet_id, percent, sort) VALUES (?, ?, ?, ?)").bind(streamId, walletId, l.percent, (i + 1) * 10),
-    );
+/**
+ * "Mở kỳ lương" gửi lên (pocket UC-1205): thiếu → undefined; không phải boolean → 400 invalid_input; nguồn cho thuê
+ * (`config.rental_income_stream_id`) không bật được → 400 cannot_open_cycle. Phần khoá đã bỏ → 400 model_changed.
+ */
+async function streamOpensCycle(db: D1Database, streamId: string, b: Input): Promise<boolean | undefined> {
+  rejectOldFields(b, ["locks"]);
+  if (!has(b, "opens_cycle")) return undefined;
+  if (typeof b.opens_cycle !== "boolean") return fail("invalid_input", "opens_cycle phải là true hoặc false.", 400, "opens_cycle");
+  if (b.opens_cycle) {
+    const rental = await db.prepare("SELECT v FROM config WHERE k = 'rental_income_stream_id'").first<{ v: string }>();
+    if (rental?.v === streamId) fail("cannot_open_cycle", "Tiền cho thuê không mở kỳ lương.", 400, "opens_cycle");
   }
-  if (total > 1 + 1e-9) fail("invalid_lock", "Tổng phần khóa của nguồn thu vượt 100%.");
-  return statements;
+  return b.opens_cycle;
 }
 
 export async function createIncomeStream(db: D1Database, b: Input) {
   const name = text(b, "name", { required: true, max: 60 })!;
   const id = newId(b, name);
+  const opensCycle = await streamOpensCycle(db, id, b);
   if (await exists(db, "income_streams", id)) fail("duplicate", "Đã có nguồn thu với mã này.", 409);
-  const locks = await lockStatements(db, id, b.locks ?? []);
-  await db.batch([
-    db.prepare("INSERT INTO income_streams (id, name, sort) VALUES (?, ?, ?)").bind(id, name, integer(b, "sort", { min: 0, max: 10000 }) ?? 100),
-    ...locks,
-  ]);
+  await db
+    .prepare("INSERT INTO income_streams (id, name, sort, pocket, opens_cycle) VALUES (?, ?, ?, ?, ?)")
+    .bind(id, name, integer(b, "sort", { min: 0, max: 10000 }) ?? 100, has(b, "pocket") ? pocketValue(b.pocket) : null, opensCycle ? 1 : 0)
+    .run();
   return getStream(db, id);
 }
 
 export async function updateIncomeStream(db: D1Database, id: string, b: Input) {
   await getStream(db, id);
-  const locks = has(b, "locks") ? await lockStatements(db, id, b.locks) : [];
+  const opensCycle = await streamOpensCycle(db, id, b);
   await patchRow(db, "income_streams", id, {
     name: has(b, "name") ? text(b, "name", { required: true, max: 60 }) : undefined,
     sort: has(b, "sort") ? integer(b, "sort", { min: 0, max: 10000 }) : undefined,
     active: has(b, "active") ? bool(b, "active") : undefined,
+    // Ngăn của tiền về (UC-506): null = theo tài khoản nhận.
+    pocket: has(b, "pocket") ? pocketValue(b.pocket) : undefined,
+    opens_cycle: opensCycle,
   });
-  if (locks.length) await db.batch(locks);
   return getStream(db, id);
 }
 
@@ -783,42 +656,54 @@ export async function readFiConfig(db: D1Database): Promise<FiConfig> {
 }
 
 async function readConfig(db: D1Database) {
-  const reward = await db.prepare("SELECT v FROM config WHERE k = 'month_close_reward_wallet'").first<{ v: string }>();
+  const reward = await db.prepare("SELECT v FROM config WHERE k = 'surplus_reward_account'").first<{ v: string }>();
   return {
     salary_min_amount: await configNumber(db, "salary_min_amount", 1_000_000),
     interest_max_amount: await interestMaxAmount(db),
     safety_fund_months: await configNumber(db, "safety_fund_months", 6),
+    payday_day: await configNumber(db, "payday_day", DEFAULT_PAYDAY_DAY),
     ...(await readFiConfig(db)),
-    month_close_wealth_pct: await configNumber(db, "month_close_wealth_pct", DEFAULT_MONTH_CLOSE_WEALTH_PCT),
-    // Giá trị đã lưu, không lọc ví đã tắt — để Cài đặt vẫn thấy ví đã chọn; chốt tháng tự coi ví không hợp lệ là chưa đặt.
-    month_close_reward_wallet: reward?.v || null,
+    savings_pct: await configNumber(db, "savings_pct", DEFAULT_SAVINGS_PCT),
+    surplus_savings_pct: await configNumber(db, "surplus_savings_pct", DEFAULT_SURPLUS_SAVINGS_PCT),
+    // Giá trị đã lưu, không lọc tài khoản đã tắt / đổi ngăn — để Cài đặt vẫn thấy đã chọn gì; kỳ lương tự coi là chưa chọn.
+    surplus_reward_account: reward?.v || null,
   };
 }
 
-/** Hai tham số chốt tháng (UC-207): % phần dư vào Tích sản, Ví Thưởng (null / "" → bỏ). Sai → 400 kèm tên ô. */
-async function monthCloseConfigWrites(db: D1Database, b: Input): Promise<D1PreparedStatement[]> {
+/** Tham số chốt tháng đã bỏ (ADR-123): gửi lên dù giá trị gì → 400 model_changed, không ghi gì. */
+const MONTH_CLOSE_KEYS = ["month_close_wealth_pct", "month_close_reward_wallet"] as const;
+
+/**
+ * Dư kỳ trước (pocket UC-1207, UC-1209 bước 4): `surplus_savings_pct` số nguyên 0–100 → 400 invalid_input;
+ * `surplus_reward_account` là tài khoản đang dùng, ngăn Dự phòng, không gắn mục tiêu đang dùng → không thì 400
+ * invalid_account; null / "" = bỏ chọn.
+ */
+async function surplusConfigWrites(db: D1Database, b: Input): Promise<D1PreparedStatement[]> {
   const upsert = (k: string, v: string) => db.prepare("INSERT INTO config (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v").bind(k, v);
   const out: D1PreparedStatement[] = [];
-  if (has(b, "month_close_wealth_pct")) {
-    const v = b.month_close_wealth_pct;
+  if (has(b, "surplus_savings_pct")) {
+    const v = b.surplus_savings_pct;
     if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > 100) {
-      fail("invalid_input", "Phần dư vào Tích sản là số nguyên từ 0 đến 100.", 400, "month_close_wealth_pct");
+      fail("invalid_input", "Phần dư kỳ trước vào Tích luỹ là số nguyên từ 0 đến 100.", 400, "surplus_savings_pct");
     }
-    out.push(upsert("month_close_wealth_pct", String(v)));
+    out.push(upsert("surplus_savings_pct", String(v)));
   }
-  if (has(b, "month_close_reward_wallet")) {
-    const v = b.month_close_reward_wallet;
+  if (has(b, "surplus_reward_account")) {
+    const v = b.surplus_reward_account;
     if (v === null || v === "") {
-      out.push(db.prepare("DELETE FROM config WHERE k = 'month_close_reward_wallet'"));
+      out.push(db.prepare("DELETE FROM config WHERE k = 'surplus_reward_account'"));
     } else {
-      const wallet =
-        typeof v === "string"
-          ? await db.prepare("SELECT tier, kind, scope, private FROM wallets WHERE id = ? AND active = 1").bind(v).first<Pick<WalletRef, "tier" | "kind" | "scope"> & { private: number }>()
-          : null;
-      if (!wallet || !isRewardWalletCandidate({ ...wallet, private: wallet.private === 1 })) {
-        fail("invalid_input", "Ví Thưởng phải là ví chung đang dùng (không riêng tư), phe Must / Hưởng thụ, không phải phong bì.", 400, "month_close_reward_wallet");
-      }
-      out.push(upsert("month_close_reward_wallet", String(v)));
+      const ok =
+        typeof v === "string" &&
+        (await db
+          .prepare(
+            `SELECT 1 FROM accounts a WHERE a.id = ? AND a.active = 1 AND a.pocket = 'reserve'
+               AND NOT EXISTS (SELECT 1 FROM reserve_goals g WHERE g.account_id = a.id AND g.active = 1)`,
+          )
+          .bind(v)
+          .first());
+      if (!ok) fail("invalid_account", "Ví Thưởng phải là một tài khoản đang dùng ở ngăn Dự phòng, không gắn mục tiêu nào.", 400, "surplus_reward_account");
+      out.push(upsert("surplus_reward_account", v as string));
     }
   }
   return out;
@@ -865,8 +750,20 @@ async function fiConfigWrites(db: D1Database, b: Input, now: Date): Promise<D1Pr
 }
 
 export async function updateConfig(db: D1Database, b: Input, now: Date = new Date()) {
+  const old = MONTH_CLOSE_KEYS.filter((k) => has(b, k));
+  if (old.length) {
+    throw new DomainError("model_changed", `Ví nhà v2 đã bỏ chốt tháng: dư kỳ trước chia theo surplus_savings_pct / surplus_reward_account — bỏ trường ${old.join(", ")}.`, 400, undefined, [...old]);
+  }
+  if (has(b, "surplus_reward_earmark")) {
+    throw new DomainError("model_changed", "Ví nhà v2: Ví Thưởng là một tài khoản Dự phòng — gửi surplus_reward_account, bỏ trường surplus_reward_earmark.", 400, undefined, ["surplus_reward_earmark"]);
+  }
   const salary = integer(b, "salary_min_amount", { min: 0, max: 1e12 });
   const months = integer(b, "safety_fund_months", { min: 1, max: 36 });
+  const payday = integer(b, "payday_day", { min: 1, max: 31 });
+  const savingsPct = b.savings_pct;
+  if (has(b, "savings_pct") && (typeof savingsPct !== "number" || !Number.isInteger(savingsPct) || savingsPct < 1 || savingsPct > 100)) {
+    fail("invalid_input", "% Tích luỹ là số nguyên từ 1 đến 100.", 400, "savings_pct");
+  }
   const interest = b.interest_max_amount;
   if (has(b, "interest_max_amount") && (typeof interest !== "number" || !Number.isInteger(interest) || interest < 0 || interest > INTEREST_MAX_AMOUNT_LIMIT)) {
     fail("invalid_input", "Ngưỡng lãi tiền gửi là số nguyên từ 0 đến 10.000.000 (0 = tắt).", 400, "interest_max_amount");
@@ -876,10 +773,18 @@ export async function updateConfig(db: D1Database, b: Input, now: Date = new Dat
     ...(salary !== null ? [upsert("salary_min_amount", salary)] : []),
     ...(has(b, "interest_max_amount") ? [upsert("interest_max_amount", interest as number)] : []),
     ...(months !== null ? [upsert("safety_fund_months", months)] : []),
+    ...(payday !== null ? [upsert("payday_day", payday)] : []),
     ...(await fiConfigWrites(db, b, now)),
-    ...(await monthCloseConfigWrites(db, b)),
+    ...(await surplusConfigWrites(db, b)),
+    ...(has(b, "savings_pct") ? [upsert("savings_pct", savingsPct as number)] : []),
   ];
-  if (statements.length) await db.batch(statements);
+  try {
+    if (statements.length) await db.batch(statements);
+  } catch (err) {
+    // Trigger 0041 (ADR-134): máy khác vừa gắn tài khoản này vào một mục tiêu — không ghi gì.
+    if (!/reward_has_goal/.test(String(err))) throw err;
+    fail("invalid_account", "Ví Thưởng phải là một tài khoản đang dùng ở ngăn Dự phòng, không gắn mục tiêu nào.", 400, "surplus_reward_account");
+  }
   return readConfig(db);
 }
 

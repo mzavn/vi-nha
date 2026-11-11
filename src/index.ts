@@ -48,7 +48,12 @@ app.route("/v1/push", pushRoutes);
 app.onError((err, c) => {
   if (err instanceof DomainError) {
     const field = err.field ? { field: err.field } : {};
-    return c.json({ ok: false, error: { code: err.code, message: err.message, ...field } }, err.status as 400);
+    const fields = err.fields ? { fields: err.fields } : {};
+    return c.json({ ok: false, error: { code: err.code, message: err.message, ...field, ...fields } }, err.status as 400);
+  }
+  // Trigger của 0039 chặn ghi theo mô hình ví cũ (ADR-123): báo rõ thay vì lỗi hệ thống.
+  if (err instanceof Error && /model_changed/.test(err.message)) {
+    return c.json({ ok: false, error: { code: "model_changed", message: "Ví nhà v2 đã bỏ ví và chia tiền." } }, 400);
   }
   console.error(`[${c.req.method} ${new URL(c.req.url).pathname}]`, err instanceof Error ? err.message : err);
   return c.json({ ok: false, error: { code: "internal", message: "Lỗi hệ thống. Thử lại sau." } }, 500);

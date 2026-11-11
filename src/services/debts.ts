@@ -70,7 +70,6 @@ export interface DebtPayment {
   transactionId: number;
   at: string;
   amount: number;
-  walletId: string | null;
   accountId: string | null;
   note: string | null;
   source: string;
@@ -119,7 +118,7 @@ export interface DebtInterest {
 
 /**
  * Một câu cho mọi khoản nợ: dư nợ đầu tháng `month` = Σ dòng nợ có ngày (giờ VN) trước tháng − Σ chi trả gốc có
- * `month_key` trước tháng; lãi đã trả = Σ chi trả lãi trong tháng. Dùng chung cho sổ nợ, ngân sách, snapshot, engine.
+ * `month_key` trước tháng; lãi đã trả = Σ chi trả lãi trong tháng. Dùng chung cho sổ nợ, Nhìn lại (khối Lãi vay), báo cáo.
  */
 export async function debtInterest(db: D1Database, month: string): Promise<DebtInterest[]> {
   const res = await db
@@ -148,9 +147,6 @@ export async function debtInterest(db: D1Database, month: string): Promise<DebtI
   }));
 }
 
-/** Σ lãi dự kiến tháng của các khoản nợ đang bật có lãi — dự kiến tháng của ví "Lãi vay". */
-export const expectedInterestTotal = (list: DebtInterest[]) => list.reduce((s, d) => s + d.expected, 0);
-
 function toDebt({ in: owed, out: paid, movements, extra, ...b }: books.MemoBook<DebtLine>, interest: DebtInterest[]): Debt {
   const rateBps = Number(extra.interestRateBps ?? 0);
   const month = interest.find((i) => i.debtId === b.id);
@@ -162,7 +158,6 @@ function toDebt({ in: owed, out: paid, movements, extra, ...b }: books.MemoBook<
       transactionId: Number(p.id),
       at: String(p.at),
       amount: Number(p.amount),
-      walletId: (p.counter_wallet_id as string | null) ?? null,
       accountId: (p.account_id as string | null) ?? null,
       note: (p.note as string | null) ?? null,
       source: String(p.source),
@@ -177,24 +172,27 @@ function toDebt({ in: owed, out: paid, movements, extra, ...b }: books.MemoBook<
   };
 }
 
-/** Mọi khoản nợ: đang theo dõi trước, chưa trả xong trước, còn nợ nhiều trước. Tổng còn nợ chỉ cộng phần dương của khoản đang theo dõi. */
-export async function getDebts(db: D1Database, now: Date = new Date()): Promise<{ totalBalance: number; debts: Debt[] }> {
-  const [{ totalBalance, books: list }, interest] = await Promise.all([books.listBooks<DebtLine>(db, DEBTS), debtInterest(db, monthKey(now))]);
+/**
+ * Mọi khoản nợ: đang theo dõi trước, chưa trả xong trước, còn nợ nhiều trước. Tổng còn nợ chỉ cộng phần dương của khoản đang theo dõi.
+ * `payments` bỏ khoản bị giấu với `viewerId`; `owed` / `paid` / `balance` vẫn cộng đủ (access UC-504 AC-15).
+ */
+export async function getDebts(db: D1Database, viewerId: string | null, now: Date = new Date()): Promise<{ totalBalance: number; debts: Debt[] }> {
+  const [{ totalBalance, books: list }, interest] = await Promise.all([books.listBooks<DebtLine>(db, DEBTS, viewerId), debtInterest(db, monthKey(now))]);
   return { totalBalance, debts: list.map((d) => toDebt(d, interest)) };
 }
 
-async function oneDebt(db: D1Database, id: string, now: Date): Promise<Debt> {
-  return toDebt(await books.getBook<DebtLine>(db, DEBTS, id), await debtInterest(db, monthKey(now)));
+async function oneDebt(db: D1Database, id: string, now: Date, viewerId: string | null): Promise<Debt> {
+  return toDebt(await books.getBook<DebtLine>(db, DEBTS, id, viewerId), await debtInterest(db, monthKey(now)));
 }
 
 /** Thêm khoản nợ: số tiền đang nợ thành dòng 'opening'. */
-export async function createDebt(db: D1Database, b: books.Input, now: Date): Promise<Debt> {
-  return oneDebt(db, await books.createBook(db, DEBTS, b, now), now);
+export async function createDebt(db: D1Database, b: books.Input, now: Date, viewerId: string | null): Promise<Debt> {
+  return oneDebt(db, await books.createBook(db, DEBTS, b, now), now, viewerId);
 }
 
-export async function updateDebt(db: D1Database, id: string, b: books.Input, now: Date): Promise<Debt> {
+export async function updateDebt(db: D1Database, id: string, b: books.Input, now: Date, viewerId: string | null): Promise<Debt> {
   await books.updateBook(db, DEBTS, id, b, now);
-  return oneDebt(db, id, now);
+  return oneDebt(db, id, now, viewerId);
 }
 
 /** Vay thêm (borrow > 0) hoặc chỉnh tay (adjust ±). */

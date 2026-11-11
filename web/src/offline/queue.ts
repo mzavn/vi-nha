@@ -48,6 +48,19 @@ export function classify(res: RawResponse): SendResult {
   return { kind: "rejected", code, message };
 }
 
+/** Trường ví do app bản cũ lưu trong hàng đợi (UC-704 AC-27): bỏ khi gửi, khoản chi / thu / hoàn / chuyển hai tài khoản vẫn đúng nghĩa. */
+const LEGACY_FIELDS = ["wallet_id", "counter_wallet_id", "from_wallet_id", "wealth_move", "allocate"] as const;
+export const WALLET_TRANSFER_GONE = "Chuyển giữa hai ví không còn ở bản mới — xoá khoản này";
+export const MODEL_CHANGED_KEPT = "Bản mới đã bỏ ví — mở lại app để gửi lại";
+
+/** Thân sẽ gửi của một khoản trong hàng đợi; khoản "chuyển giữa hai ví" (không tài khoản) không đổi được → lý do giữ lại. */
+export function sendableBody(body: EntryBody): { body: EntryBody } | { blocked: string } {
+  if (body.meaning === "transfer" && !body.account_id && !body.to_account_id) return { blocked: WALLET_TRANSFER_GONE };
+  const clean: Record<string, unknown> = { ...body };
+  for (const k of LEGACY_FIELDS) delete clean[k];
+  return { body: clean as unknown as EntryBody };
+}
+
 export interface FlushReport {
   results: Record<string, SendResult>;
   /** Lý do dừng giữa chừng, nếu có. */
@@ -99,7 +112,15 @@ export function createSyncer(deps: SyncerDeps): Syncer {
         report.stopped = "no_member";
         return;
       }
-      const result = classify(await deps.transport(item.body));
+      const sendable = sendableBody(item.body);
+      if ("blocked" in sendable) {
+        report.results[item.clientId] = { kind: "rejected", code: "model_changed", message: sendable.blocked };
+        await deps.store.put({ ...item, status: "rejected", attempts: item.attempts + 1, error: { code: "model_changed", message: sendable.blocked } });
+        continue;
+      }
+      const raw = classify(await deps.transport(sendable.body));
+      // App cũ còn mở gửi trường ví lên (server 400 `model_changed`): giữ khoản lại, không mất.
+      const result = raw.kind === "rejected" && raw.code === "model_changed" ? { ...raw, message: MODEL_CHANGED_KEPT } : raw;
       report.results[item.clientId] = result;
       if (result.kind === "ok") {
         await deps.store.remove(item.clientId);

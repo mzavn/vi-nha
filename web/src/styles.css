@@ -166,50 +166,6 @@
     padding-left: max(12px, env(safe-area-inset-left, 0px));
     padding-right: max(12px, env(safe-area-inset-right, 0px));
   }
-  /* Màn Hướng dẫn (#guide): khung GitBook tràn hết màn, trang không cuộn hai lớp (UC-711 AC-13).
-     Chiều cao cố định theo màn hình, chừa đáy cho thanh dưới; bỏ lề hai bên và bề rộng tối đa; chỉ khung bên trong cuộn. */
-  .app.app-guide {
-    max-width: none;
-    height: 100dvh;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    padding: 0 0 calc(var(--nav-h) + var(--safe-bottom));
-  }
-  .app-guide .topbar {
-    padding-left: max(12px, env(safe-area-inset-left, 0px));
-    padding-right: max(12px, env(safe-area-inset-right, 0px));
-    border-bottom-color: var(--border);
-  }
-  /* Khung nằm trong .guide (ẩn bằng `hidden` khi sang màn khác, giữ khung sống); dòng "Đang tải…" nằm dưới khung tới khi GitBook tải xong. */
-  .app-guide .guide,
-  .app-guide .guide-body {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-  }
-  .app-guide .guide-body {
-    position: relative;
-  }
-  .app-guide .guide-loading {
-    position: absolute;
-    inset: 0;
-    display: grid;
-    place-items: center;
-    margin: 0;
-    color: var(--fg-2);
-    font-size: 14px;
-    pointer-events: none;
-  }
-  .app-guide .guide-frame {
-    position: relative;
-    flex: 1;
-    min-height: 0;
-    width: 100%;
-    border: 0;
-    background: transparent;
-  }
   /* Có nút "+" nổi: chừa thêm chiều cao của nút (56px + 16px cách thanh dưới + 16px thở) để nội dung cuối không bị che. */
   .app.has-fab {
     padding-bottom: calc(var(--nav-h) + var(--safe-bottom) + 88px);
@@ -459,22 +415,6 @@
     align-items: center;
     gap: 2px;
   }
-  /* Tên ví ở bảng Ngân sách mở Sổ giao dịch lọc ví đó (UC-716): chữ như cũ, gạch chân mảnh, vùng chạm 44px. */
-  .wallet-link {
-    text-align: left;
-    font-weight: inherit;
-    text-decoration-color: var(--border-strong);
-  }
-  .tier .nm .wallet-link {
-    min-height: 32px;
-    position: relative;
-  }
-  .tier .nm .wallet-link::after {
-    content: "";
-    position: absolute;
-    inset: -6px 0;
-  }
-
   /* ── Sổ giao dịch (UC-716): đầu màn dính dưới thanh tiêu đề — tháng, tìm, lọc, chip bộ lọc ── */
   .book-bar {
     position: sticky;
@@ -679,27 +619,7 @@
     font-size: 12.5px;
     color: var(--fg-3);
   }
-  .hero .split {
-    display: flex;
-    gap: 10px;
-    margin-top: 14px;
-    padding-top: 13px;
-    border-top: 1px solid var(--border);
-  }
-  .hero .split > div {
-    flex: 1;
-    min-width: 0;
-  }
-  .hero .split .k {
-    font-size: 11.5px;
-    color: var(--fg-3);
-  }
-  .hero .split .v {
-    font-size: 14px;
-    font-weight: 550;
-    margin-top: 1px;
-  }
-  /* Các phong bì cộng thành số hero (điện thoại): ví âm đứng đầu, đỏ, có dấu −. */
+  /* Danh sách nhãn — số trong card (Nợ, Tích sản): số bên phải, âm đỏ. */
   .hero-parts {
     list-style: none;
     margin: 10px 0 0;
@@ -722,43 +642,145 @@
   .hero-parts li > .neg {
     color: var(--bad);
   }
-  /* Tiền chi được (ADR-85): card báo cáo dưới hero — số lớn nhưng nhỏ hơn hero (chỉ một hero mỗi màn), kê từng tài khoản. */
-  .cash-big {
+  /* Thẻ Vận hành: một dòng nhỏ đậm "Còn {tổng}", một dòng to "Chi khoảng X/ngày" (chủ nhà 12/11: hai dòng cùng to là quá to);
+     không ngắt giữa số. Dòng to: điện thoại 26px; 1024–1279px 32px; ≥1280px 40px. */
+  .near-total {
+    margin-top: 4px;
+    font-size: 17px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .near-total.out {
+    color: var(--bad);
+  }
+  .near-big {
+    margin-top: 2px;
+    font-size: 26px;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    line-height: 1.2;
+    font-variant-numeric: tabular-nums;
+  }
+  .near-big .nowrap {
+    white-space: nowrap;
+  }
+  .near-big.out {
+    color: var(--bad);
+  }
+  /* Câu thay số to thứ hai khi hết tiền / chưa tới 1.000 ₫ mỗi ngày. */
+  .near-say {
+    margin-top: 4px;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+  .near-debt {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--fg);
+  }
+  .near-debt .near-foot {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+    font-size: 13px;
+    color: var(--fg);
+  }
+  .near-debt .sub-line {
+    margin-top: 2px;
+    font-size: 12px;
+  }
+  .near-chip {
+    margin-top: 8px;
+    min-height: 32px;
+  }
+  /* Thẻ Tích luỹ / Dự phòng (ADR-122): tiêu đề bấm được, tổng 28px như số tóm tắt. */
+  .pocket-h {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    padding: 12px 14px 0;
+    background: none;
+    border: 0;
+    text-align: left;
+    color: inherit;
+  }
+  .pocket-h h2 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .pocket-total {
+    padding: 2px 14px 4px;
     font-size: 28px;
     font-weight: 600;
     letter-spacing: -0.03em;
     line-height: 1.15;
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
   }
-  .cash-big .cur {
-    font-size: 15px;
-    color: var(--fg-3);
+  .pocket .hero-parts {
+    margin: 6px 14px 0;
   }
-  .cash-big.neg {
+  .pocket-meta {
+    padding: 6px 14px 12px;
+    font-size: 12.5px;
+    color: var(--fg-2);
+  }
+  .pocket-meta p {
+    margin: 2px 0 0;
+  }
+  .pocket .tier {
+    border-top: 1px solid var(--border);
+  }
+  .pocket .tier .link {
+    min-height: 32px;
+    justify-self: start;
+    grid-column: 1 / -1;
+    font-size: 12px;
+  }
+  .pocket .tier .amt.bad,
+  .pocket .tier .nm.bad {
     color: var(--bad);
   }
-  .cash-meta {
-    margin: 4px 0 0;
+  .pocket-empty {
+    padding: 6px 14px 12px;
+    font-size: 13px;
+    color: var(--fg-2);
+  }
+  .near-meals {
+    margin: 10px 0 0;
+    font-size: 14px;
+    font-weight: 550;
+    color: var(--fg);
+  }
+  .near-note {
+    margin: 6px 0 0;
     font-size: 12.5px;
-    color: var(--fg-3);
+    color: var(--fg-2);
   }
-  .cash-warn {
-    display: block;
-    font-size: 12px;
-    color: var(--warn);
-  }
-  .cash-foot {
+  .near-foot {
     display: flex;
-    align-items: center;
+    align-items: baseline;
     justify-content: space-between;
     gap: 10px;
-    margin-top: 6px;
+    margin-top: 10px;
+    padding-top: 8px;
     border-top: 1px solid var(--border);
     font-size: 12.5px;
-    color: var(--fg-3);
+    color: var(--fg-2);
   }
-  .cash-foot .link {
+  .near-foot .link {
     flex: none;
     color: var(--fg-2);
+  }
+  .near-hint {
+    margin-top: 0;
+    color: var(--fg-3);
   }
 
   /* ── banner ── */
@@ -863,7 +885,15 @@
     justify-content: space-between;
     gap: 8px;
   }
-  /* Ngân sách trên điện thoại: hàng tầng thay bảng; nhóm phe là dải nền như header bảng. */
+  /* Hàng "Tiền thật đang có" đầu tab Tài khoản (pwa UC-707). */
+  .blist .tier.accounts-total {
+    background: var(--surface-2);
+  }
+  .tier.accounts-total .nm,
+  .tier.accounts-total .amt {
+    font-weight: 650;
+  }
+  /* Danh sách hàng tầng trên điện thoại (Nhìn lại, báo cáo, tài sản): nhóm là dải nền như header bảng. */
   .blist .tier {
     border-top: 1px solid var(--border);
   }
@@ -884,7 +914,7 @@
   .btotal .nm {
     font-weight: 600;
   }
-  /* Dòng "ví đang âm" + nút Bù: số dư thật, khác "còn lại" của kỳ (DESIGN.md §5 Pattern "Ví âm"). */
+  /* Dòng hành động dưới một hàng (vd "Nhập số dư" ở Tài khoản). */
   .bneg {
     grid-column: 1 / -1;
     display: flex;
@@ -902,11 +932,11 @@
   td > .bneg {
     justify-content: flex-start;
   }
-  /* Cùng bố cục hàng-hành-động nhưng không phải cảnh báo (vd "Nhập số dư" ở Tài khoản). */
+  /* Màu thường, không phải cảnh báo. */
   .bneg.calm {
     color: var(--fg-2);
   }
-  /* Ví "Lãi vay" ở Ngân sách: mỗi khoản nợ có lãi một dòng phụ (pwa UC-707 AC-25). */
+  /* Hàng "Lãi vay" ở Nhìn lại: mỗi khoản nợ có lãi một dòng phụ (pwa UC-707 AC-34). */
   .interest-lines {
     grid-column: 1 / -1;
     list-style: none;
@@ -1117,20 +1147,6 @@
   .d-have {
     background: var(--border-strong);
     box-shadow: inset 0 0 0 1px var(--fg-3);
-  }
-  .legend {
-    display: flex;
-    gap: 12px;
-    flex-wrap: wrap;
-    font-size: 11.5px;
-    color: var(--fg-3);
-    padding: 10px 14px 12px;
-    border-top: 1px solid var(--border);
-  }
-  .legend span {
-    display: flex;
-    align-items: center;
-    gap: 5px;
   }
 
   /* ── chip: nhãn trạng thái, không phải nút ── */
@@ -1868,76 +1884,6 @@
   .pad {
     padding: 12px 16px 4px;
   }
-  .wf {
-    padding: 4px 16px 0;
-    font-size: 13px;
-  }
-  .wf .r {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 7px 0;
-    border-bottom: 1px dashed var(--border);
-  }
-  .wf .r.total {
-    border-bottom: 0;
-    border-top: 1px solid var(--border);
-    margin-top: 4px;
-    font-weight: 600;
-  }
-
-  /* Có / Không Tích sản khi chia (ADR-112) và thanh tỷ lệ khi chốt tháng (ADR-111). */
-  .wealth-pick {
-    padding: 6px 16px 0;
-  }
-  .wealth-pick > .seg {
-    width: 100%;
-  }
-  .wealth-pick > .seg button {
-    flex: 1;
-  }
-  .wealth-pick .field {
-    padding-left: 0;
-    padding-right: 0;
-  }
-  .wealth-pick .fhint {
-    padding: 0 0 6px;
-  }
-  .wealth-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 0 0;
-  }
-  .wealth-pct {
-    flex: none;
-    min-width: 3.2em;
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-  }
-  .wealth-range {
-    flex: 1;
-    width: 100%;
-    min-height: 44px;
-    accent-color: var(--primary);
-  }
-  .close-pct {
-    display: grid;
-    gap: 4px;
-    padding: 12px 16px 0;
-    font-size: 13.5px;
-  }
-  .close-detail {
-    padding: 8px 16px 0;
-    font-size: 13px;
-  }
-  .close-detail summary {
-    cursor: pointer;
-    color: var(--fg-2);
-  }
-  .close-detail .wf {
-    padding: 4px 0 0;
-  }
 
   /* ── thanh điều hướng + FAB ── */
   .nav {
@@ -2136,15 +2082,6 @@
   .dk-main .topbar h1 {
     font-size: 21px;
   }
-  /* Máy tính: không có thanh dưới, khung xuống sát đáy, tràn hết phần bên phải thanh bên. */
-  .app.dk-main.app-guide {
-    max-width: none;
-    padding: 0;
-  }
-  .dk-main.app-guide .topbar {
-    padding: 10px 20px;
-    align-items: center;
-  }
 
   /* ── thanh bên ── */
   .side {
@@ -2209,6 +2146,7 @@
     color: var(--fg-2);
     font-size: 13.5px;
     text-align: left;
+    text-decoration: none;
   }
   .side-item:hover {
     background: var(--surface-3);
@@ -2222,22 +2160,6 @@
   .side-label {
     flex: 1;
     min-width: 0;
-  }
-  /* Số lệnh chuyển tiền chờ trên tab Ví & quỹ (pwa UC-707) — cùng kiểu huy hiệu cột bên. */
-  .tab-badge {
-    display: inline-grid;
-    place-items: center;
-    min-width: 20px;
-    height: 20px;
-    margin-left: 6px;
-    padding: 0 6px;
-    border-radius: 99px;
-    background: var(--warn-bg);
-    color: var(--warn);
-    font-size: 11.5px;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-    vertical-align: 1px;
   }
   /* Mã QR chuyển tiền: nền trắng cố định để app ngân hàng quét được cả khi app ở nền tối. */
   .qr-block {
@@ -2394,19 +2316,16 @@
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-template-areas:
-      "hero todo"
-      "cash cash"
-      "wallets wallets"
-      "tiers goals"
+      "operating todo"
+      "savings reserve"
       "recent recent";
     gap: 12px;
     align-items: start;
   }
   .dash.no-todo {
     grid-template-areas:
-      "hero cash"
-      "wallets wallets"
-      "tiers goals"
+      "operating operating"
+      "savings reserve"
       "recent recent";
   }
   .dash-main,
@@ -2417,74 +2336,25 @@
   .dash .card {
     margin: 0;
   }
-  .dash .dk-hero {
-    grid-area: hero;
+  .dash .near {
+    grid-area: operating;
   }
   .dash .dash-todo-card {
     grid-area: todo;
   }
-  .dash .dash-wallets {
-    grid-area: wallets;
-  }
   .dash .dash-recent {
     grid-area: recent;
   }
-  .dash-tiers {
-    grid-area: tiers;
+  .dash .pocket-savings {
+    grid-area: savings;
     min-width: 0;
   }
-  .dash-goals {
-    grid-area: goals;
-    min-width: 0;
-  }
-  .dash-cash {
-    grid-area: cash;
+  .dash .pocket-reserve {
+    grid-area: reserve;
     min-width: 0;
   }
   .dash-todo > .set-sub:first-child {
     border-top: 0;
-  }
-  .dk-hero {
-    container-type: inline-size;
-  }
-  .dk-hero-in {
-    display: grid;
-    gap: 14px 28px;
-  }
-  .dk-hero-side {
-    border-top: 1px solid var(--border);
-    padding-top: 12px;
-    min-width: 0;
-  }
-  .dk-hero-side > .k {
-    font-size: 11.5px;
-    color: var(--fg-2);
-    margin-bottom: 2px;
-  }
-  .dk-parts {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    font-size: 13px;
-  }
-  .dk-parts li {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 12px;
-    padding: 7px 0;
-    border-top: 1px solid var(--border);
-    font-weight: 500;
-  }
-  .dk-parts li:first-child {
-    border-top: 0;
-  }
-  .dk-parts .sub-line {
-    display: block;
-    margin-top: 1px;
-  }
-  .dk-parts .num {
-    font-weight: 600;
   }
   .srow-amt {
     font-weight: 600;
@@ -2650,18 +2520,10 @@
     border: 1.5px solid var(--fg-3);
   }
 
-  @container (min-width: 560px) {
-    .dk-hero-in {
-      grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
-    }
-    .dk-hero-side {
-      border-top: 0;
-      padding-top: 0;
-      padding-left: 24px;
-      border-left: 1px solid var(--border);
-    }
-  }
   @media (min-width: 1024px) {
+    .near-big {
+      font-size: 32px;
+    }
     .toast {
       bottom: 24px;
       left: calc(50% + 116px);
@@ -2726,6 +2588,9 @@
     }
   }
   @media (min-width: 1280px) {
+    .near-big {
+      font-size: 40px;
+    }
     .dash,
     .dash.no-todo {
       grid-template-columns: minmax(0, 1fr) 360px;

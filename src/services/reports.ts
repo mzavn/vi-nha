@@ -16,9 +16,11 @@ import {
   type ClassifiedRow,
   type IncomeStatement,
   type ReportClass,
+  type SpendKind,
   type StatementRow,
 } from "../domain/reports";
 import { DomainError } from "../domain/types";
+import { assertTxChangeable, hiddenAccountIds, hiddenTxSql, txNotFound } from "./privacy";
 
 type Row = Record<string, unknown>;
 const rows = <T = Row>(r: D1Result) => (r.results ?? []) as T[];
@@ -26,18 +28,48 @@ const fail = (code: string, message: string, status = 400): never => {
   throw new DomainError(code, message, status);
 };
 
-/** Dòng chi theo phe của ví bị trừ. */
-const SPEND_LINE = `CASE w.tier WHEN 'must' THEN CASE w.must_group WHEN 'have' THEN 'spend_have' ELSE 'spend_must' END
-  WHEN 'nice' THEN 'spend_nice' WHEN 'tax' THEN 'spend_tax' WHEN 'wealth_building' THEN 'spend_wealth' ELSE 'spend_other' END`;
+/**
+ * Khoản gốc của khoản hoàn (`link_id`), danh mục (khoản hoàn có `link_id` lấy danh mục khoản gốc), nhóm danh mục đang dùng,
+ * mốc khoản cũ (`config.legacy_max_tx_id`, ADR-131) và mục tiêu Thuế (theo % thu chịu thuế, đang dùng) gắn tài khoản `a`.
+ * Người gọi join `a` = tài khoản của khoản (trả, nhận hoàn, nhận thu) trước các join này.
+ */
+const SPEND_JOINS = `
+  LEFT JOIN transactions o ON o.id = t.link_id AND t.meaning = 'refund'
+  LEFT JOIN categories c ON c.id = CASE WHEN o.id IS NOT NULL THEN o.category_id ELSE t.category_id END
+  LEFT JOIN category_groups g ON g.id = c.group_id AND g.active = 1
+  LEFT JOIN config lm ON lm.k = 'legacy_max_tx_id'
+  LEFT JOIN reserve_goals tg ON tg.account_id = a.id AND tg.active = 1 AND tg.target_pct IS NOT NULL`;
 
-/** Bảng phân loại mặc định (proposal UC-1105): xét từ trên xuống, dòng khớp đầu tiên thắng. */
+/**
+ * Loại chi (balance UC-1105 / UC-1106, ADR-128) — dừng ở luật đầu tiên khớp; khoản hoàn đi cùng luật. Khoản cũ (`id` ≤ mốc)
+ * chỉ đọc `legacy_class` (`tax` → Thuế đã nộp, `savings` → Chi từ Tích luỹ); khoản mới: chi từ tài khoản của mục tiêu Thuế →
+ * Thuế đã nộp, tài khoản trả / nhận hoàn thuộc ngăn Tích luỹ → Chi từ Tích luỹ. Thiết yếu / Mong muốn theo nhóm danh mục cho cả hai.
+ */
+const SPEND_KIND = `CASE
+  WHEN COALESCE(o.interest_debt_id, t.interest_debt_id) IS NOT NULL THEN 'interest'
+  WHEN CASE WHEN t.id <= CAST(lm.v AS INTEGER) THEN t.legacy_class = 'tax' ELSE tg.id IS NOT NULL END THEN 'tax'
+  WHEN CASE WHEN t.id <= CAST(lm.v AS INTEGER) THEN t.legacy_class = 'savings' ELSE a.pocket = 'savings' END THEN 'savings'
+  WHEN c.id IS NULL THEN 'other'
+  WHEN g.essential = 1 THEN 'essential'
+  ELSE 'flex' END`;
+
+/** Khoản thu không nguồn, không người thuê, vào tài khoản ngăn Tích luỹ / Dự phòng (thu nhập thụ động không cần xếp tay). */
+const PASSIVE_INCOME = "t.meaning = 'income' AND t.tenant_id IS NULL AND t.income_stream_id IS NULL AND a.pocket IN ('savings', 'reserve')";
+
+/** Dòng chi của Lưu chuyển tiền theo loại chi. */
+const SPEND_LINE = `CASE ${SPEND_KIND} WHEN 'interest' THEN 'loan_interest' WHEN 'essential' THEN 'spend_essential' WHEN 'flex' THEN 'spend_flex'
+  WHEN 'tax' THEN 'spend_tax' WHEN 'savings' THEN 'spend_savings' ELSE 'spend_other' END`;
+
+/**
+ * Bảng phân loại mặc định (proposal UC-1105): xét từ trên xuống, dòng khớp đầu tiên thắng. Khoản hoàn ở "Hoàn tiền", trừ khi
+ * khớp Thuế đã nộp / Chi từ Tích luỹ — khi đó cộng ngược vào dòng đó.
+ */
 const DEFAULT_LINE = `CASE
   WHEN t.meaning = 'income' AND t.tenant_id IS NOT NULL THEN 'rental_income'
-  WHEN t.meaning = 'income' AND ca.role IN ('buffer', 'term_deposit') THEN 'passive_income'
+  WHEN ${PASSIVE_INCOME} THEN 'passive_income'
   WHEN t.meaning = 'income' THEN 'salary_other'
-  WHEN t.meaning = 'refund' THEN 'refund'
+  WHEN t.meaning = 'refund' THEN CASE ${SPEND_KIND} WHEN 'tax' THEN 'spend_tax' WHEN 'savings' THEN 'spend_savings' ELSE 'refund' END
   WHEN t.meaning = 'spend' AND t.debt_id IS NOT NULL THEN 'debt_principal'
-  WHEN t.meaning = 'spend' AND t.interest_debt_id IS NOT NULL THEN 'loan_interest'
   WHEN t.meaning = 'spend' THEN ${SPEND_LINE}
   WHEN t.meaning = 'buy_asset' THEN 'buy_asset'
   WHEN t.meaning = 'lend' THEN 'lend'
@@ -51,8 +83,7 @@ const DEFAULT_LINE = `CASE
  */
 const cashFrom = (extraJoins = "") => `FROM transactions t
   JOIN accounts a ON a.id = COALESCE(t.account_id, t.counter_account_id)
-  LEFT JOIN accounts ca ON ca.id = t.counter_account_id
-  LEFT JOIN wallets w ON w.id = t.counter_wallet_id
+  ${SPEND_JOINS}
   LEFT JOIN transaction_report_classes rc ON rc.transaction_id = t.id ${extraJoins}
   WHERE t.status = 'active' AND (t.account_id IS NULL) <> (t.counter_account_id IS NULL)
     AND (a.active = 1 OR a.deactivated_at IS NOT NULL)`;
@@ -117,7 +148,7 @@ export async function getCashFlow(db: D1Database, period: string | undefined, no
   });
 }
 
-/** `GET /v1/reports/income-statement?period=` — một câu gộp theo tháng × loại × phe ví × phân loại lại. */
+/** `GET /v1/reports/income-statement?period=` — một câu gộp theo tháng × loại × loại chi × nhóm danh mục × phân loại lại. */
 export async function getIncomeStatement(db: D1Database, period: string | undefined, now: Date): Promise<IncomeStatement> {
   const p = parsePeriod(period, dayKey(now));
   return buildIncomeStatement(p, await statementRows(db, p.fromMonth, p.toMonth));
@@ -127,16 +158,19 @@ export async function getIncomeStatement(db: D1Database, period: string | undefi
 export async function statementRows(db: D1Database, fromMonth: string, toMonth: string): Promise<StatementRow[]> {
   const res = await db
     .prepare(
-      `SELECT t.month_key AS month, t.meaning, rc.report_class AS rc, t.tenant_id IS NOT NULL AS tenant,
-              COALESCE(ca.role IN ('buffer', 'term_deposit'), 0) AS passiveAccount, t.debt_id IS NOT NULL AS principal,
-              t.interest_debt_id IS NOT NULL AS interest, w.tier, w.must_group AS mustGroup,
-              SUM(t.amount) AS amount, SUM(${SIGNED}) AS signed
-       FROM transactions t
-       LEFT JOIN accounts ca ON ca.id = t.counter_account_id
-       LEFT JOIN wallets w ON w.id = CASE t.meaning WHEN 'refund' THEN t.wallet_id ELSE t.counter_wallet_id END
-       LEFT JOIN transaction_report_classes rc ON rc.transaction_id = t.id
-       WHERE t.status = 'active' AND t.meaning IN ('income', 'spend', 'refund', 'buy_asset', 'adjust') AND t.month_key BETWEEN ?1 AND ?2
-       GROUP BY month, t.meaning, rc, tenant, passiveAccount, principal, interest, w.tier, mustGroup`,
+      `SELECT month, meaning, rc, tenant, passiveAccount, principal, kind, groupId, groupName, groupSort, SUM(amount) AS amount, SUM(signed) AS signed
+       FROM (
+         SELECT t.month_key AS month, t.meaning, rc.report_class AS rc, t.tenant_id IS NOT NULL AS tenant,
+                COALESCE(${PASSIVE_INCOME}, 0) AS passiveAccount, t.debt_id IS NOT NULL AS principal,
+                CASE WHEN t.meaning IN ('spend', 'refund') THEN ${SPEND_KIND} END AS kind, g.id AS groupId, g.name AS groupName, g.sort AS groupSort,
+                t.amount, ${SIGNED} AS signed
+         FROM transactions t
+         LEFT JOIN accounts a ON a.id = COALESCE(t.account_id, t.counter_account_id)
+         ${SPEND_JOINS}
+         LEFT JOIN transaction_report_classes rc ON rc.transaction_id = t.id
+         WHERE t.status = 'active' AND t.meaning IN ('income', 'spend', 'refund', 'buy_asset', 'adjust') AND t.month_key BETWEEN ?1 AND ?2
+       )
+       GROUP BY month, meaning, rc, tenant, passiveAccount, principal, kind, groupId, groupName, groupSort`,
     )
     .bind(fromMonth, toMonth)
     .all();
@@ -148,9 +182,8 @@ export async function statementRows(db: D1Database, fromMonth: string, toMonth: 
       tenant: Boolean(r.tenant),
       passiveAccount: Boolean(r.passiveAccount),
       principal: Boolean(r.principal),
-      interest: Boolean(r.interest),
-      tier: (r.tier as string | null) ?? null,
-      mustGroup: (r.mustGroup as string | null) ?? null,
+      kind: (r.kind as SpendKind | null) ?? null,
+      group: r.groupId === null ? null : { id: String(r.groupId), name: String(r.groupName), sort: Number(r.groupSort) },
       amount: Number(r.amount),
       signed: Number(r.signed),
     }),
@@ -164,27 +197,33 @@ export interface ReportTx {
   amount: number;
   meaning: string;
   note: string | null;
+  /** Danh mục (khoản hoàn có `link_id`: của khoản gốc). */
   categoryName: string | null;
-  walletName: string | null;
+  /** Nhóm danh mục đang dùng của danh mục đó; null = không danh mục / chưa xếp nhóm. */
+  groupName: string | null;
   accountName: string | null;
   reportClass: ReportClass | null;
   defaultLine: CashFlowLineKey;
 }
 
-/** `GET /v1/reports/transactions?period=&line=` — các giao dịch của một dòng Lưu chuyển tiền (sau phân loại lại), mới nhất trước. */
-export async function reportTransactions(db: D1Database, period: string | undefined, line: string | undefined, now: Date) {
+/**
+ * `GET /v1/reports/transactions?period=&line=` — các giao dịch của một dòng Lưu chuyển tiền (sau phân loại lại), mới nhất trước.
+ * Bỏ khoản bị giấu với người xem; tổng dòng ở `getCashFlow` vẫn cộng đủ (balance UC-1105 bước 9, access UC-504 AC-15).
+ */
+export async function reportTransactions(db: D1Database, period: string | undefined, line: string | undefined, now: Date, viewerId: string | null) {
   const p = parsePeriod(period, dayKey(now));
   if (!line || !isLineKey(line)) fail("invalid_input", "line là một dòng của báo cáo lưu chuyển tiền.");
+  const priv = hiddenTxSql("t", await hiddenAccountIds(db, viewerId));
   const res = await db
     .prepare(
       `SELECT t.id, t.at, t.meaning, t.note, ${SIGNED} AS amount, ${DEFAULT_LINE} AS line,
               CASE WHEN t.meaning = 'spend' THEN ${SPEND_LINE} END AS spendLine, rc.report_class AS rc, t.meaning = 'income' AS isIncome,
-              c.name AS categoryName, COALESCE(w.name, wr.name) AS walletName, a.name AS accountName
-       ${cashFrom("LEFT JOIN categories c ON c.id = t.category_id LEFT JOIN wallets wr ON wr.id = t.wallet_id")}
-         AND t.month_key BETWEEN ?1 AND ?2
+              c.name AS categoryName, g.name AS groupName, a.name AS accountName
+       ${cashFrom()}
+         AND t.month_key BETWEEN ?1 AND ?2 AND NOT ${priv.sql}
        ORDER BY t.at DESC, t.id DESC`,
     )
-    .bind(p.fromMonth, p.toMonth)
+    .bind(p.fromMonth, p.toMonth, ...priv.binds)
     .all();
   const transactions: ReportTx[] = rows(res)
     .filter((r) => finalLine(toClassified(r)) === line)
@@ -195,7 +234,7 @@ export async function reportTransactions(db: D1Database, period: string | undefi
       meaning: String(r.meaning),
       note: (r.note as string | null) ?? null,
       categoryName: (r.categoryName as string | null) ?? null,
-      walletName: (r.walletName as string | null) ?? null,
+      groupName: (r.groupName as string | null) ?? null,
       accountName: (r.accountName as string | null) ?? null,
       reportClass: (r.rc as ReportClass | null) ?? null,
       defaultLine: r.line as CashFlowLineKey,
@@ -203,21 +242,25 @@ export async function reportTransactions(db: D1Database, period: string | undefi
   return { period: p.period, line, group: LINE_GROUP[line as CashFlowLineKey], transactions };
 }
 
-/** Giao dịch phân loại lại được: còn hiệu lực, đúng một phía tài khoản; Thu nhập thụ động chỉ cho khoản thu. */
-async function cashTx(db: D1Database, id: number) {
+/**
+ * Giao dịch phân loại lại được: còn hiệu lực, đúng một phía tài khoản; Thu nhập thụ động chỉ cho khoản thu. Khoản bị giấu
+ * với người làm → 404 trước mọi lỗi khác; chạm tài khoản riêng tư của người khác → 403 (balance UC-1105 bước 4, access UC-504 AC-11).
+ */
+async function cashTx(db: D1Database, id: number, viewerId: string | null) {
   const tx = await db.prepare("SELECT id, meaning, status, account_id, counter_account_id FROM transactions WHERE id = ?").bind(id).first<Row>();
-  if (!tx) fail("not_found", "Không có giao dịch này.", 404);
-  if (tx!.status !== "active") fail("already_void", "Giao dịch đã huỷ: báo cáo không tính nó.", 409);
-  if ((tx!.account_id === null) === (tx!.counter_account_id === null)) {
+  if (!tx) throw txNotFound();
+  assertTxChangeable(tx, await hiddenAccountIds(db, viewerId));
+  if (tx.status !== "active") fail("already_void", "Giao dịch đã huỷ: báo cáo không tính nó.", 409);
+  if ((tx.account_id === null) === (tx.counter_account_id === null)) {
     fail("not_cash_flow", "Chuyển giữa hai tài khoản của nhà hoặc khoản không chạm tài khoản nào không phải tiền vào ra — không xếp nhóm được.");
   }
-  return tx!;
+  return tx;
 }
 
-/** `PUT /v1/transactions/:id/report-class` — chỉ đổi báo cáo; ví, số dư, lần chia tiền không đổi. */
+/** `PUT /v1/transactions/:id/report-class` — chỉ đổi báo cáo; số dư, ngăn, snapshot không đổi. */
 export async function setReportClass(db: D1Database, id: number, cls: unknown, memberId: string | null) {
   if (!REPORT_CLASSES.includes(cls as ReportClass)) fail("invalid_class", `class phải là một trong: ${REPORT_CLASSES.join(", ")}.`);
-  const tx = await cashTx(db, id);
+  const tx = await cashTx(db, id, memberId);
   if (cls === "passive_income" && tx.meaning !== "income") fail("invalid_class", "Thu nhập thụ động chỉ dành cho khoản thu.");
   await db
     .prepare(
@@ -230,8 +273,8 @@ export async function setReportClass(db: D1Database, id: number, cls: unknown, m
 }
 
 /** `DELETE /v1/transactions/:id/report-class` — về phân loại mặc định. */
-export async function clearReportClass(db: D1Database, id: number) {
-  await cashTx(db, id);
+export async function clearReportClass(db: D1Database, id: number, viewerId: string | null) {
+  await cashTx(db, id, viewerId);
   await db.prepare("DELETE FROM transaction_report_classes WHERE transaction_id = ?").bind(id).run();
   return { transactionId: id, reportClass: null };
 }

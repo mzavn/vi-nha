@@ -1,10 +1,12 @@
-// Mốc tự do, kế hoạch thu nhập năm — lát 3 của change 261008-bang-can-doi.
+// Mốc tự do, kế hoạch thu nhập năm — lát 3 của change 261008-bang-can-doi; E / E_must theo nhóm Thiết yếu, phần trích trước
+// theo % Tích luỹ + mục tiêu Thuế (261112-ba-ngan-nhin-lai, ADR-128).
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import { app } from "../src/index";
 import type { Freedom, IncomePlanSummary, IncomePlanYear, SettingsConfig, Snapshot } from "../web/src/lib/types";
-import { asD1, readSql } from "./helpers/d1-sqlite";
+import { asD1 } from "./helpers/d1-sqlite";
+import { legacyEmptyDb, openLegacyDb, upgradingD1 } from "./helpers/legacy";
 
 let raw: DatabaseSync;
 let env: Env;
@@ -13,8 +15,8 @@ const at = (iso: string) => vi.setSystemTime(new Date(iso));
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   at("2026-11-15T05:00:00.000Z");
-  raw = new DatabaseSync(":memory:");
-  raw.exec(readSql("docs/schema.sql"));
+  // Lịch sử trước v2 (giao dịch trừ ví): nạp vào DB 1.38, app lên 1.39 ở câu đầu tiên (ADR-123).
+  raw = legacyEmptyDb();
   raw.exec(`
     INSERT INTO members (id, name, role) VALUES ('chong', 'Chồng', 'owner'), ('vo', 'Vợ', 'adult');
     INSERT INTO accounts (id, name, kind, opening_balance, opened_at, owner_member_id) VALUES
@@ -28,11 +30,11 @@ beforeEach(() => {
       ('food', 'Ăn uống', 'must', 'must', 'envelope', 'vcb', 40),
       ('have', 'Có thì tốt', 'must', 'have', 'envelope', 'vcb', 50);
     UPDATE wallets SET account_id = 'vcb' WHERE id = 'loan-interest';
-    INSERT INTO allocations (wallet_id, mode, period, percent, priority) VALUES ('wb', 'percent', 'month', 0.3, 10), ('tax', 'percent', 'month', 0.1, 20);
-    INSERT INTO allocations (wallet_id, mode, period, priority) VALUES ('have', 'remainder', 'month', 99);
-    INSERT INTO categories (id, name, default_wallet_id) VALUES ('an', 'Ăn', 'food');
+    INSERT INTO category_groups (id, name, essential, sort) VALUES ('g-an', 'Ăn uống', 1, 1), ('g-mua', 'Mua sắm', 0, 2);
+    INSERT INTO categories (id, name, default_wallet_id, group_id) VALUES
+      ('an', 'Ăn', 'food', 'g-an'), ('mua', 'Mua đồ', 'fun', 'g-mua'), ('bo-me', 'Phụ giúp bố mẹ', 'have', 'g-mua');
     INSERT INTO tenants (id, name) VALUES ('t1', 'Người thuê');`);
-  env = { DB: asD1(raw), API_TOKEN: "tok" } as Env;
+  env = { DB: upgradingD1(raw), API_TOKEN: "tok" } as Env;
 });
 afterEach(() => vi.useRealTimers());
 
@@ -49,15 +51,17 @@ const freedom = async () => (await call<Freedom>("GET", "/v1/freedom")).json.dat
 const config = (b: Record<string, unknown>) => call<SettingsConfig>("PUT", "/v1/settings/config", b);
 const byKey = <T extends { key: string }>(list: T[], key: string) => list.find((m) => m.key === key)!;
 
-const COLS = ["at", "amount", "meaning", "wallet_id", "counter_wallet_id", "account_id", "counter_account_id", "category_id", "tenant_id", "debt_id", "interest_debt_id"] as const;
-function tx(t: Partial<Record<(typeof COLS)[number], string | number>>) {
+type Tx = Partial<Record<"at" | "amount" | "meaning" | "wallet_id" | "counter_wallet_id" | "account_id" | "counter_account_id" | "category_id" | "tenant_id" | "debt_id" | "interest_debt_id", string | number>>;
+/** Chỉ ghi các cột được truyền — cột ví chỉ có trước khi app lên 1.40 (khoản cũ). */
+function tx(t: Tx) {
   const month = new Date(Date.parse(String(t.at)) + 7 * 3600_000).toISOString().slice(0, 7);
+  const cols = Object.keys(t) as (keyof Tx)[];
   raw
-    .prepare(`INSERT INTO transactions (${COLS.join(", ")}, week_key, month_key, source) VALUES (${COLS.map(() => "?").join(", ")}, 'x', ?, 'manual')`)
-    .run(...COLS.map((c) => t[c] ?? null), month);
+    .prepare(`INSERT INTO transactions (${cols.join(", ")}, week_key, month_key, source) VALUES (${cols.map(() => "?").join(", ")}, 'x', ?, 'manual')`)
+    .run(...cols.map((c) => t[c] ?? null), month);
 }
 const income = (month: string, amount: number, account = "vcb", extra: Record<string, string> = {}) =>
-  tx({ at: `${month}-10T03:00:00.000Z`, amount, meaning: "income", wallet_id: "income", counter_account_id: account, ...extra });
+  tx({ at: `${month}-10T03:00:00.000Z`, amount, meaning: "income", counter_account_id: account, ...extra });
 const spend = (month: string, amount: number, wallet: string, extra: Record<string, string> = {}) =>
   tx({ at: `${month}-12T03:00:00.000Z`, amount, meaning: "spend", counter_wallet_id: wallet, account_id: "vcb", category_id: "an", ...extra });
 
@@ -102,7 +106,7 @@ describe("UC-1103 Mốc tự do", () => {
     expect(byKey((await freedom()).freedom, "F1").need).toBe(6_000_000_000);
   });
 
-  it("UC-1103 AC-3 (Mốc an tâm — vàng là tiền lỏng): Q_lỏng 156.000.000 = 7,8 tháng; A1 120.000.000 đạt, A2 65,0%, A3 32,5%; Tiền chi được, Quỹ an tâm không đổi; tắt cờ Vàng → 30.000.000 = 1,5 tháng, A1 25,0%", async () => {
+  it("UC-1103 AC-3 (Mốc an tâm — vàng là tiền lỏng): Q_lỏng 156.000.000 = 7,8 tháng; A1 120.000.000 đạt, A2 65,0%, A3 32,5%; tiền vận hành và phần an tâm không đổi; tắt cờ Vàng → 30.000.000 = 1,5 tháng, A1 25,0%", async () => {
     await sampleSheet();
     await config({ fi_expense_monthly: 20_000_000, fi_expense_must_monthly: 15_000_000 });
     const snapBefore = (await call<Snapshot>("GET", "/v1/snapshot")).json.data;
@@ -114,14 +118,16 @@ describe("UC-1103 Mốc tự do", () => {
       { key: "A3", months: 24, need: 480_000_000, have: 156_000_000, pct: 32.5, reached: false },
     ]);
     const snapAfter = (await call<Snapshot>("GET", "/v1/snapshot")).json.data;
-    expect([snapAfter.spendableCash, snapAfter.safetyFund, snapAfter.spendableThisWeek]).toEqual([snapBefore.spendableCash, snapBefore.safetyFund, snapBefore.spendableThisWeek]);
+    expect([snapAfter.nearSpend, snapAfter.pockets]).toEqual([snapBefore.nearSpend, snapBefore.pockets]);
     await call("PATCH", "/v1/balance-items/vang", { liquid: false });
     const off = await freedom();
     expect([off.liquid, off.monthsCovered, byKey(off.safety, "A1").pct]).toEqual([30_000_000, 1.5, 25]);
   });
 
-  it("UC-1103 AC-4 (mốc thu nhập): thu nhập TB 3 tháng trọn 45.000.000, E 20.000.000, khoá 40% → M2, M2′ (33.333.334), M3 đạt; chưa đủ 3 tháng → theo kế hoạch; không có cả hai → chưa có số", async () => {
-    await config({ fi_expense_monthly: 20_000_000 });
+  it("UC-1103 AC-4 (mốc thu nhập): thu nhập TB 3 tháng trọn 45.000.000, E 20.000.000, % Tích luỹ 30 + mục tiêu Thuế 10% → phần trích trước 40%; M2, M2′ (33.333.334), M3 đạt; chưa đủ 3 tháng → theo kế hoạch; không có cả hai → chưa có số", async () => {
+    await config({ fi_expense_monthly: 20_000_000, savings_pct: 30 });
+    // Mục tiêu Thuế chưa gắn tài khoản vẫn vào phần trích trước (ADR-128 (5): p là kế hoạch, không phải tiền đã có).
+    raw.exec("INSERT INTO reserve_goals (id, name, target_pct) VALUES ('thue', 'Thuế', 10)");
     // Chưa có sổ, chưa có kế hoạch: chưa có số.
     let f = await freedom();
     expect([f.params.incomeMonthly, f.params.incomeSource]).toEqual([null, null]);
@@ -141,24 +147,33 @@ describe("UC-1103 Mốc tự do", () => {
       { key: "M2p", need: 33_333_334, have: 45_000_000, reached: true },
       { key: "M3", need: 40_000_000, have: 45_000_000, reached: true },
     ]);
+    // Mục tiêu Thuế tắt thì không còn trong phần trích trước; tổng chặn ở 99%.
+    raw.exec("UPDATE reserve_goals SET active = 0 WHERE id = 'thue'");
+    expect((await freedom()).params.lockedBps).toBe(3000);
+    raw.exec("INSERT INTO reserve_goals (id, name, target_pct) VALUES ('thue-2', 'Thuế khác', 80)");
+    expect((await freedom()).params.lockedBps).toBe(9900);
   });
 
-  it("UC-1103 AC-5 (chi phí từ sổ, gồm lãi vay): E 20.000.000, E_must 15.000.000 theo sổ 3 tháng (lãi vay vào cả hai, Có thì tốt chỉ E, trả gốc không vào); chưa đủ 3 tháng → mốc theo E cần chi phí", async () => {
+  it("UC-1103 AC-5 (chi phí từ sổ, gồm lãi vay): chưa đủ 3 tháng → mốc theo E cần chi phí", async () => {
     raw.exec("INSERT INTO debts (id, name, interest_rate_bps) VALUES ('vay', 'Vay tiêu dùng', 1800)");
     spend("2026-10", 1_000, "food");
     let f = await freedom();
     expect([f.params.expenseMonthly, f.params.expenseSource, f.params.expenseMustMonthly]).toEqual([null, null, null]);
     expect(byKey(f.safety, "A1").need).toBeNull();
     expect(byKey(f.freedom, "F1").need).toBeNull();
-    raw.exec("DELETE FROM transactions");
+  });
+
+  it("UC-1103 AC-5 (chi phí từ sổ, gồm lãi vay): đủ 3 tháng trọn → E 20.000.000, E_must = Thiết yếu 15.000.000 (gồm lãi vay 300.000), Mong muốn 5.000.000 (gồm phụ giúp bố mẹ 1.000.000) chỉ vào E, trả gốc không vào", async () => {
+    raw.exec("INSERT INTO debts (id, name, interest_rate_bps) VALUES ('vay', 'Vay tiêu dùng', 1800)");
     for (const m of ["2026-08", "2026-09", "2026-10"]) {
       spend(m, 14_700_000, "food");
       spend(m, 300_000, "loan-interest", { interest_debt_id: "vay" });
-      spend(m, 3_000_000, "have");
-      spend(m, 2_000_000, "fun");
+      spend(m, 4_000_000, "fun", { category_id: "mua" });
+      // Ví Must / Có thì tốt cũ không kéo khoản về Thiết yếu: danh mục nhóm Mong muốn quyết.
+      spend(m, 1_000_000, "have", { category_id: "bo-me" });
       spend(m, 2_000_000, "food", { debt_id: "vay" });
     }
-    f = await freedom();
+    const f = await freedom();
     expect(f.params).toMatchObject({ expenseMonthly: 20_000_000, expenseSource: "ledger", expenseMustMonthly: 15_000_000, expenseMustSource: "ledger" });
   });
 
@@ -168,6 +183,24 @@ describe("UC-1103 Mốc tự do", () => {
       swrBps: 350, inflationBps: 350, fatBps: 11000, legacyRateBps: 300, highInterestBps: 1500, safetyMonths: [6, 12, 24],
       expenseMonthly: null, expenseMustMonthly: null, birthYear: null, targetAges: { f1: null, f2: null, f3: null },
     });
+  });
+
+  it("UC-1103 AC-7 (E không tụt sau v2): tháng 8 chỉ khoản cũ trừ ví, tháng 9, 10 chỉ khoản mới không ví, cùng danh mục, cùng số → E 20.000.000, E_must 15.000.000 theo sổ 3 tháng gần nhất; không mục tiêu Thuế, % Tích luỹ 10 → phần trích trước 10%", async () => {
+    const cols = "at, amount, meaning, account_id, category_id, week_key, month_key, source";
+    const legacy = openLegacyDb((db) => {
+      const old = db.prepare(`INSERT INTO transactions (${cols}, counter_wallet_id) VALUES (?, ?, 'spend', 'vcb-anh', ?, 'x', '2026-08', 'manual', ?)`);
+      old.run("2026-08-12T03:00:00.000Z", 15_000_000, "cho-nau", "an"); // ví Must, nhóm Thiết yếu "Ăn uống" (0038)
+      old.run("2026-08-13T03:00:00.000Z", 5_000_000, "xe-co", "co-thi-tot"); // ví Có thì tốt, nhóm Mong muốn "Có thì tốt" (0038)
+    });
+    legacy.exec("UPDATE reserve_goals SET active = 0 WHERE target_pct IS NOT NULL; INSERT OR REPLACE INTO config (k, v) VALUES ('savings_pct', '10')");
+    const fresh = legacy.prepare(`INSERT INTO transactions (${cols}) VALUES (?, ?, 'spend', 'vcb-anh', ?, 'x', ?, 'manual')`);
+    for (const m of ["2026-09", "2026-10"]) {
+      fresh.run(`${m}-12T03:00:00.000Z`, 15_000_000, "cho-nau", m);
+      fresh.run(`${m}-13T03:00:00.000Z`, 5_000_000, "xe-co", m);
+    }
+    env = { DB: asD1(legacy), API_TOKEN: "tok" } as Env;
+    const f = await freedom();
+    expect(f.params).toMatchObject({ expenseMonthly: 20_000_000, expenseSource: "ledger", expenseMustMonthly: 15_000_000, expenseMustSource: "ledger", lockedBps: 1000 });
   });
 
   it("projectionStart (UC-1107): điểm xuất phát là số thật — A, L, dòng thu nhập theo kế hoạch năm nay, E, lợi suất kỳ vọng bình quân theo giá trị", async () => {

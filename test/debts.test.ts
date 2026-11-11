@@ -61,14 +61,51 @@ describe("sổ nợ", () => {
     expect(raw.prepare("SELECT COUNT(*) n FROM debts").get()).toEqual({ n: 1 });
   });
 
-  it("khoản chi có debt_id làm giảm số còn nợ", async () => {
+  it("khoản chi có debt_id làm giảm số còn nợ; không ví", async () => {
     await seedDebt();
-    const res = await pay(4_000_000, { category_id: "debt-payment", wallet_id: "rental-income" });
+    const res = await pay(4_000_000, { category_id: "debt-payment" });
     expect(res.status).toBe(201);
-    expect(res.json.data.tx).toMatchObject({ debt_id: "co-lan", meaning: "spend", counter_wallet_id: "rental-income" });
+    expect(res.json.data.tx).toMatchObject({ debt_id: "co-lan", meaning: "spend" });
+    expect(res.json.data.tx).not.toHaveProperty("wallet_id");
+    expect(res.json.data.tx).not.toHaveProperty("counter_wallet_id");
     const d = await debt();
     expect(d).toMatchObject({ owed: 10_000_000, paid: 4_000_000, balance: 6_000_000, done: false });
-    expect(d.payments).toMatchObject([{ transactionId: res.json.data.tx.id, amount: 4_000_000, walletId: "rental-income", source: "manual" }]);
+    expect(d.payments).toMatchObject([{ transactionId: res.json.data.tx.id, amount: 4_000_000, source: "manual" }]);
+    expect(d.payments[0]).not.toHaveProperty("walletId");
+    // Trường ví cũ → 400 model_changed, không ghi gì.
+    expect((await pay(1_000, { wallet_id: "rental-income" })).json.error?.code).toBe("model_changed");
+  });
+
+  it("UC-902 AC-13: trả nợ từ tài khoản của mục tiêu Trả nợ → held và shortDebt heldFor theo số dư tài khoản; dòng lãi không ví; earmark_id → 400 model_changed", async () => {
+    raw.exec(`
+      INSERT INTO accounts (id, name, kind, owner_member_id, opening_balance, opened_at, pocket, pocket_confirmed)
+        VALUES ('tra-no-acc', 'Tài khoản trả nợ', 'bank', 'husband', 1000000, '2026-01-01', 'reserve', 1);
+    `);
+    expect((await call<Debt>("POST", "/v1/debts", { name: "Vay người thân", amount: 5_000_000, term: "short" })).status).toBe(201);
+    raw.exec("INSERT INTO reserve_goals (id, name, account_id, target_amount, debt_id, sort) VALUES ('tra-no', 'Trả nợ', 'tra-no-acc', 5000000, 'vay-nguoi-than', 40)");
+    const txCount = () => (raw.prepare("SELECT COUNT(*) n FROM transactions").get() as { n: number }).n;
+
+    const before = txCount();
+    const withEarmark = await call("POST", "/v1/transactions", { meaning: "spend", amount: 1_000_000, debt_id: "vay-nguoi-than", account_id: "tra-no-acc", earmark_id: "tra-no" });
+    expect(withEarmark.status).toBe(400);
+    expect(withEarmark.json.error?.code).toBe("model_changed");
+    expect(txCount()).toBe(before);
+
+    const principal = await call<EntryData>("POST", "/v1/transactions", { meaning: "spend", amount: 1_000_000, debt_id: "vay-nguoi-than", account_id: "tra-no-acc" });
+    expect(principal.status).toBe(201);
+    const interest = await call<EntryData>("POST", "/v1/transactions", { meaning: "spend", amount: 50_000, interest_debt_id: "vay-nguoi-than", account_id: "cash-husband" });
+    expect(interest.status).toBe(201);
+    expect(interest.json.data.tx).toMatchObject({ interest_debt_id: "vay-nguoi-than", category_id: "loan-interest", debt_id: null });
+    expect(interest.json.data.tx).not.toHaveProperty("wallet_id");
+    expect(interest.json.data.tx).not.toHaveProperty("counter_wallet_id");
+
+    const d = await debt("vay-nguoi-than");
+    expect(d.balance).toBe(4_000_000);
+    expect(d.payments.map((p) => p.accountId)).toEqual(["tra-no-acc"]);
+    const settings = await call<{ goals: { id: string; held: number | null }[] }>("GET", "/v1/settings");
+    expect(settings.json.data.goals.find((g) => g.id === "tra-no")?.held).toBe(0);
+    const snap = await call<{ pockets: { shortDebt: { items: { id: string; goalId: string | null; heldFor: number }[] } } }>("GET", "/v1/snapshot");
+    expect(snap.json.data.pockets.shortDebt.items.find((i) => i.id === "vay-nguoi-than")).toMatchObject({ goalId: "tra-no", heldFor: 0 });
   });
 
   it("huỷ khoản trả nợ thì số còn nợ trở lại", async () => {
@@ -155,8 +192,8 @@ describe("sổ nợ", () => {
     await seedDebt();
     const res = await pay(300_000);
     expect(res.status).toBe(201);
-    // Danh mục Trả nợ trỏ về ví Thu cho thuê; tài khoản mặc định là tiền mặt của người ghi.
-    expect(res.json.data.tx).toMatchObject({ category_id: "debt-payment", counter_wallet_id: "rental-income", account_id: "cash-husband", debt_id: "co-lan" });
+    // Tài khoản mặc định là tiền mặt của người ghi; không ví.
+    expect(res.json.data.tx).toMatchObject({ category_id: "debt-payment", account_id: "cash-husband", debt_id: "co-lan" });
     // Chọn danh mục khác thì giữ nguyên lựa chọn.
     expect((await pay(100_000, { category_id: "eating-out" })).json.data.tx).toMatchObject({ category_id: "eating-out", debt_id: "co-lan" });
   });

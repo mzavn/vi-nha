@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   generatedPasswordMessage,
   generatePassword,
+  NEXT_STEPS,
   parseArgs,
   passwordFilePath,
   readConfigString,
@@ -139,5 +140,12 @@ describe("setup: mật khẩu tự sinh khi không có terminal", () => {
     const human = generatedPasswordMessage({ password, interactive: true, savedPath: null });
     expect(human).toContain(password);
     expect(human.split(password).length).toBe(2);
+  });
+});
+
+describe("setup: câu cuối", () => {
+  it("UC-510: chỉ việc tiếp theo ở màn Thiết lập — người, tài khoản, ba ngăn; không còn bộ ví", () => {
+    expect(NEXT_STEPS).toContain("thêm người trong nhà, tài khoản, ba ngăn.");
+    expect(NEXT_STEPS).not.toMatch(/bộ ví/);
   });
 });

@@ -57,31 +57,6 @@ export function timeHM(iso: string): string {
   return `${String(t.getUTCHours()).padStart(2, "0")}:${String(t.getUTCMinutes()).padStart(2, "0")}`;
 }
 
-/** Số ngày còn lại của tuần, tính cả hôm nay. */
-export function daysLeftInWeek(today: string, weekEnd: string): number {
-  return Math.round((Date.parse(`${weekEnd}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000) + 1;
-}
-
-/**
- * Dòng phụ dưới số hero, viết đủ chữ để không đọc nhầm: "Tuần này còn 3 ngày (hết CN 4/10) · tháng 10 còn 4 tuần nữa".
- * `weeksLeftInMonth` tính cả tuần đang chạy (domain/period), nên số tuần *sau* tuần này là `weeksLeftInMonth − 1`.
- */
-export function weekMetaText(today: string, weekEnd: string, weeksLeftInMonth: number): string {
-  const days = daysLeftInWeek(today, weekEnd);
-  const [, em, ed] = weekEnd.split("-").map(Number);
-  const week = days <= 1 ? `Hôm nay là ngày cuối tuần (CN ${ed}/${em})` : `Tuần này còn ${days} ngày (hết CN ${ed}/${em})`;
-  const month = Number(today.split("-")[1]);
-  const after = weeksLeftInMonth - 1;
-  return `${week} · ${after <= 0 ? `đây là tuần cuối của tháng ${month}` : `tháng ${month} còn ${after} tuần nữa`}`;
-}
-
-/** Số hero âm không viết "Còn để chi … −X": đổi nhãn thành "đã chi vượt" và hiện số dương (đỏ). */
-export function heroLabel(spendable: number): { label: string; amount: number; over: boolean } {
-  return spendable < 0
-    ? { label: "Tuần này đã chi vượt", amount: -spendable, over: true }
-    : { label: "Còn để chi tuần này", amount: spendable, over: false };
-}
-
 /** ISO cho một ngày được chọn lùi lại: giữ giờ hiện tại nếu là hôm nay, còn lại lấy 12:00 giờ VN. */
 export function atForDay(day: string, now: Date): string {
   if (day === dayKey(now)) return now.toISOString();

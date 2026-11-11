@@ -1,10 +1,10 @@
 // Cài đặt (#settings): mở từ nút bánh răng ở Hôm nay, không phải tab thứ năm.
 // Mười hai phần, mỗi phần một card (Thông báo có hai: giờ nhắc của cả nhà và thông báo trên máy này);
 // mọi chỗ sửa nằm trong sheet (DESIGN.md §4: sheet là nơi mọi edge case được giải).
-// Thứ tự theo mức hay sửa của nhà (audit 261001 F05): ví & số nạp trước, khoá kết nối, Claude, tham số, nhật ký thay đổi và cập nhật bản mới gom vào "Nâng cao".
+// Thứ tự theo mức hay sửa của nhà (audit 261001 F05): ba ngăn và tài khoản trước; khoá kết nối, Claude, tham số, nhật ký thay đổi và cập nhật bản mới gom vào "Nâng cao".
 // Điện thoại: các card xếp dọc, hàng chip dính dưới thanh tiêu đề để nhảy tới phần cần sửa; "Nâng cao" gập sẵn;
 // cuối trang là "Máy này" (giao diện sáng/tối, đăng xuất).
-// Máy tính (≥1024px): hai cột — danh sách phần bên trái, nội dung phần đang chọn bên phải; tài khoản, ví, mã là bảng.
+// Máy tính (≥1024px): hai cột — danh sách phần bên trái, nội dung phần đang chọn bên phải; tài khoản, mã là bảng.
 // Cần mạng: offline thì hiện bản tải gần nhất, chỉ xem.
 
 import { Fragment, type ComponentChildren } from "preact";
@@ -15,17 +15,39 @@ import { connectionRows } from "../lib/ai-connections";
 import { canAddMember, passwordLine } from "../lib/members";
 import { formatVnd } from "../lib/money";
 import { dayKey, previousDay, shortDate } from "../lib/period";
-import { ACCOUNT_KIND_LABEL, allocationSummary, appVersionLabel, auditView, bankName, fiConfigSummary, formatPercent, groupWallets, MATCH_LABEL, MEANING_LABEL, scheduleRows, secretLabel, sepayLabel, sepaySyncText, streamSummary, syncRangeError } from "../lib/settings";
+import { conversionSettingsRow } from "../lib/convert";
+import { groupAccountsByPocket, groupSummary, unconfirmedChip } from "../lib/pockets";
+import {
+  ACCOUNT_KIND_LABEL,
+  appVersionLabel,
+  auditView,
+  bankName,
+  cycleStreamReminder,
+  debtGoalSuggestions,
+  fiConfigSummary,
+  type GoalForm,
+  goalLineText,
+  MATCH_LABEL,
+  MEANING_LABEL,
+  scheduleRows,
+  secretLabel,
+  sepayLabel,
+  sepaySyncText,
+  streamSummary,
+  syncRangeError,
+} from "../lib/settings";
 import { deviceLabel, isIos, lastOkText, seriesView, sqliteUtcToIso, type PushState } from "../lib/push";
 import { balanceText } from "../lib/rental";
-import { SEPAY_REGISTER_URL, SOURCE_URL } from "../lib/splits";
+import { GUIDE_URL, SEPAY_REGISTER_URL, SOURCE_URL } from "../lib/splits";
 import type {
-  Allocation,
   AuditEntry,
+  CategoryGroup,
+  DebtsData,
   IncomeStream,
   McpSettings,
   PushInfo,
   Rental,
+  ReserveGoal,
   Rule,
   Secret,
   SecretKey,
@@ -37,7 +59,6 @@ import type {
   SettingsAccount,
   SettingsData,
   SettingsMember,
-  SettingsWallet,
   Tenant,
   TenantFee,
   ZaloWebhookResult,
@@ -54,23 +75,26 @@ import { PinRow } from "./pin-sheet";
 import {
   AccountSheet,
   ConfigSheet,
+  GoalSheet,
   FiConfigSheet,
   FeeSheet,
+  GroupSheet,
   MemberNewSheet,
   MemberPasswordSheet,
   MemberSheet,
   NotifyScheduleSheet,
+  PocketsSheet,
   RentalConfigSheet,
   RuleSheet,
   SecretSheet,
   SepayConnectionSheet,
   StreamSheet,
   TenantSheet,
-  WalletSheet,
 } from "./settings-sheets";
 
 const SECTIONS = [
-  { id: "wallets-allocation", label: "Ví & số tiền nạp", advanced: false },
+  // Ba ngăn (v2, UC-709 AC-35…39, AC-46): xếp tài khoản vào ngăn, mục tiêu Dự phòng (mỗi mục tiêu một tài khoản thật), nhóm danh mục.
+  { id: "pockets", label: "Ba ngăn", advanced: false },
   { id: "accounts", label: "Tài khoản", advanced: false },
   { id: "rental", label: "Cho thuê", advanced: false },
   { id: "income-streams", label: "Nguồn thu", advanced: false },
@@ -95,7 +119,6 @@ const NO_SECRET: Secret = { set: false, hint: null };
 
 export type Edit =
   | { kind: "account"; item: SettingsAccount | null }
-  | { kind: "wallet"; item: SettingsWallet | null }
   | { kind: "rule"; item: Rule | null }
   | { kind: "member"; item: SettingsMember }
   | { kind: "member-new" }
@@ -109,7 +132,10 @@ export type Edit =
   | { kind: "stream"; item: IncomeStream | null }
   | { kind: "tenant"; item: Tenant | null }
   | { kind: "fee"; tenant: Tenant; item: TenantFee | null }
-  | { kind: "rental-config"; rental: Rental };
+  | { kind: "rental-config"; rental: Rental }
+  | { kind: "pockets" }
+  | { kind: "goal"; item: ReserveGoal | null; prefill?: GoalForm }
+  | { kind: "group"; item: CategoryGroup | null };
 
 interface SectionProps {
   d: SettingsData;
@@ -141,11 +167,12 @@ export function Settings() {
   const { online, settingsFocus, member } = useApp();
   const s = useSettings();
   const wide = useWide();
-  const [section, setSection] = useState<SectionId>(settingsFocus ?? "wallets-allocation");
-  const [advanced, setAdvanced] = useState(false);
+  const [section, setSection] = useState<SectionId>(settingsFocus === "pocket-goals" ? "pockets" : settingsFocus === "streams" ? "income-streams" : (settingsFocus ?? "pockets"));
+  const [advanced, setAdvanced] = useState(settingsFocus === "parameters");
   const [edit, setEdit] = useState<Edit | null>(null);
   const ro = !online || s.stale;
-  // Mở thẳng một phần (vd "Đổi tài khoản" ở Hôm nay): màn rộng chọn sẵn phần đó; điện thoại cuộn tới khi cài đặt đã có.
+  // Mở thẳng một phần (vd "Đổi ngăn" ở Hôm nay, "Đổi" % Tích luỹ ở Ví & quỹ): màn rộng chọn sẵn phần đó; điện thoại mở Nâng cao
+  // nếu cần rồi cuộn tới khi cài đặt đã có.
   const loaded = Boolean(s.data);
   useEffect(() => {
     if (!settingsFocus || !loaded) return;
@@ -162,7 +189,7 @@ export function Settings() {
   const header = (
     <PageHeader
       title="Cài đặt"
-      sub="Ví, tài khoản, cho thuê, thông báo"
+      sub="Ba ngăn, tài khoản, cho thuê, thông báo"
       action={
         <button type="button" class="btn" onClick={() => go("today")}>
           Xong
@@ -217,7 +244,7 @@ export function Settings() {
         </>
       ),
       "accounts": <Accounts {...props} />,
-      "wallets-allocation": <Wallets {...props} />,
+      "pockets": <Pockets {...props} />,
       "transfer-codes": <Rules {...props} />,
       "income-streams": <Streams {...props} />,
       "rental": <RentalSettings {...props} />,
@@ -265,7 +292,7 @@ export function Settings() {
             <button type="button" class="srow" aria-expanded={advanced} onClick={() => setAdvanced((v) => !v)}>
               <span class="srow-main">
                 <span class="srow-t">Nâng cao</span>
-                <span class="srow-s">{ADVANCED.map((x) => x.label).join(" · ")}: khoá SePay, Telegram, Zalo, nối Claude, ngưỡng tự chia, Quỹ an tâm, ai đổi gì lúc nào, bản mới</span>
+                <span class="srow-s">{ADVANCED.map((x) => x.label).join(" · ")}: khoá SePay, Telegram, Zalo, nối Claude, ngưỡng tự chia, phần an tâm, ai đổi gì lúc nào, bản mới</span>
               </span>
               <span class="srow-r">
                 <Icon name={advanced ? "chevron-up" : "chevron-down"} size={16} />
@@ -281,7 +308,6 @@ export function Settings() {
       )}
 
       {edit?.kind === "account" && <AccountSheet d={s.data} item={edit.item} onClose={() => setEdit(null)} onSaved={saved} />}
-      {edit?.kind === "wallet" && <WalletSheet d={s.data} item={edit.item} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "rule" && <RuleSheet d={s.data} item={edit.item} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "member" && (
         <MemberSheet
@@ -300,13 +326,16 @@ export function Settings() {
       {edit?.kind === "sepay-secret" && (
         <SecretSheet secretKey={edit.key} secret={edit.connection[edit.key]} connection={edit.connection} onClose={() => setEdit(null)} onSaved={saved} />
       )}
-      {edit?.kind === "config" && <ConfigSheet config={s.data.config} wallets={s.data.wallets} onClose={() => setEdit(null)} onSaved={saved} />}
+      {edit?.kind === "config" && <ConfigSheet d={s.data} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "fi-config" && <FiConfigSheet config={s.data.config} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "notify" && s.data.notifySchedule && <NotifyScheduleSheet schedule={s.data.notifySchedule} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "stream" && <StreamSheet d={s.data} item={edit.item} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "tenant" && <TenantSheet item={edit.item} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "fee" && <FeeSheet tenant={edit.tenant} item={edit.item} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "rental-config" && <RentalConfigSheet d={s.data} rental={edit.rental} onClose={() => setEdit(null)} onSaved={saved} />}
+      {edit?.kind === "pockets" && <PocketsSheet d={s.data} onClose={() => setEdit(null)} onSaved={saved} />}
+      {edit?.kind === "goal" && <GoalSheet d={s.data} item={edit.item} prefill={edit.prefill} onClose={() => setEdit(null)} onSaved={saved} />}
+      {edit?.kind === "group" && <GroupSheet d={s.data} item={edit.item} onClose={() => setEdit(null)} onSaved={saved} />}
     </>
   );
 }
@@ -317,7 +346,7 @@ export function Settings() {
  */
 function JumpBar({ onAdvanced }: { onAdvanced: () => void }) {
   const bar = useRef<HTMLElement>(null);
-  const [current, setCurrent] = useState<string>("wallets-allocation");
+  const [current, setCurrent] = useState<string>("pockets");
   useEffect(() => {
     let frame = 0;
     const on = () => {
@@ -380,9 +409,9 @@ function DeviceCard() {
       <PinRow />
       <div class="field">
         <span class="k">Hướng dẫn</span>
-        <button type="button" class="btn" onClick={() => go("guide")}>
+        <a class="btn" href={GUIDE_URL} target="_blank" rel="noopener">
           Mở hướng dẫn
-        </button>
+        </a>
       </div>
       <div class="field">
         <span class="k">Về Ví nhà · {appVersionLabel(__APP_VERSION__)}</span>
@@ -1148,116 +1177,86 @@ function Accounts({ d, ro, wide, open }: SectionProps) {
   );
 }
 
-// ── 3. Ví & số tiền nạp ──────────────────────────────────────────
+// ── Ba ngăn ──────────────────────────────────────────────────────
 
-/** Tách cách nạp thành các ô cho bảng máy tính. */
-function allocCells(a: Allocation | null): { how: string; value: ComponentChildren; floor: ComponentChildren; when: string } {
-  const money = (n: number | null) => (n ? <Money value={n} unit={false} mono /> : "—");
-  if (!a) return { how: "không nạp tự động", value: "—", floor: "—", when: "—" };
-  switch (a.mode) {
-    case "flat":
-      return { how: "cố định", value: money(a.amount), floor: money(a.floor_amount), when: a.period === "week" ? "mỗi tuần" : "mỗi tháng" };
-    case "percent":
-      return { how: "theo %", value: <span class="num">{formatPercent(a.percent ?? 0)}%</span>, floor: "—", when: "mỗi khoản thu" };
-    case "goal":
-      return { how: "mục tiêu", value: money(a.target_amount), floor: "—", when: a.target_date ? `trước ${a.target_date.split("-").reverse().join("/")}` : "—" };
-    case "lump":
-      return { how: "một cục", value: money(a.amount ?? a.target_amount), floor: money(a.floor_amount), when: "mỗi tháng" };
-    case "remainder":
-      return { how: "nhận phần còn lại", value: "—", floor: "—", when: "—" };
-  }
-}
-
-function Wallets({ d, ro, wide, open }: SectionProps) {
-  const groups = groupWallets(d.wallets);
-  const account = (w: SettingsWallet) => nameOf(d.accounts, w.account_id) ?? "chưa gán tài khoản";
-  const chips = (w: SettingsWallet) => (
-    <>
-      {w.scope === "personal" && <span class="chip">riêng {nameOf(d.members, w.member_id)}</span>} {!w.active && <span class="chip">ngừng dùng</span>}
-    </>
-  );
+/**
+ * Ba ngăn (UC-709 AC-35…39, AC-46): hàng "Chuyển sang ba ngăn · còn N bước ›" khi đang chuyển đổi, xếp tài khoản vào ngăn
+ * (chip "N chưa xác nhận"), mục tiêu Dự phòng (mỗi mục tiêu một tài khoản thật) kèm gợi ý "Tạo mục tiêu Trả nợ" từ sổ nợ,
+ * nhóm danh mục & hạn mức mềm. Số tiền đều qua bộ định dạng có che số (UC-718).
+ */
+function Pockets({ d, ro, open }: SectionProps) {
+  const conversion = conversionSettingsRow(useApp().snap?.conversion);
+  const chip = unconfirmedChip(d.accounts);
+  const counts = groupAccountsByPocket(d.accounts, Object.fromEntries(d.accounts.map((a) => [a.id, a.pocket ?? null])))
+    .map((g) => `${g.label} ${g.accounts.length}`)
+    .join(" · ");
+  const goals = [...d.goals].sort((a, b) => Number(b.active) - Number(a.active) || a.sort - b.sort || a.name.localeCompare(b.name, "vi"));
+  const groups = [...(d.categoryGroups ?? [])].sort((a, b) => Number(b.active) - Number(a.active) || a.sort - b.sort);
+  const debts = useResource<DebtsData>(ro ? null : "/v1/debts");
+  const suggestions = debts.data ? debtGoalSuggestions(debts.data.debts, d.goals, dayKey(new Date())) : [];
   return (
-    <Card
-      id="wallets-allocation"
-      title="Ví & số tiền nạp"
-      right={<AddButton ro={ro} label="Thêm ví" onClick={() => open({ kind: "wallet", item: null })} />}
-      flush
-      note="Mỗi lần chia tiền rót theo thứ tự Tích sản → Thuế → Hưởng thụ → Vận hành (Must rồi Có thì tốt); trong một tầng, ưu tiên số nhỏ được rót trước. Đổi số nạp có hiệu lực từ lần chia tiền tới."
-    >
-      {wide ? (
-        <div class="table-wrap">
-          <table class="data">
-            <thead>
-              <tr>
-                <th>Ví</th>
-                <th class="l">Cách nạp</th>
-                <th>Số (₫)</th>
-                <th>Sàn (₫)</th>
-                <th class="l">Kỳ / hạn</th>
-                <th>Ưu tiên</th>
-                <th class="l">Nằm ở tài khoản</th>
-                <th>
-                  <span class="sr-only">Sửa</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {groups.map((g) => (
-                <Fragment key={g.key}>
-                  <tr class="group">
-                    <td colSpan={8}>
-                      <span class="set-gl">
-                        <i class={`dot ${g.lock ? "d-lock" : g.key === "have" ? "d-have" : g.key === "must" ? "d-must" : "d-nice"}`} aria-hidden="true" />
-                        {g.label}
-                      </span>
-                    </td>
-                  </tr>
-                  {g.wallets.map((w) => {
-                    const c = allocCells(w.allocation);
-                    return (
-                      <tr key={w.id}>
-                        <td>
-                          {w.name} {chips(w)}
-                        </td>
-                        <td class="l">{c.how}</td>
-                        <td class="num">{c.value}</td>
-                        <td class="num">{c.floor}</td>
-                        <td class="l">{c.when}</td>
-                        <td class="num">{w.allocation && w.allocation.mode !== "remainder" ? w.allocation.priority : "—"}</td>
-                        <td class="l">{account(w)}</td>
-                        <EditCell ro={ro} label={`Sửa ví ${w.name}`} onClick={() => open({ kind: "wallet", item: w })} />
-                      </tr>
-                    );
-                  })}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        groups.map((g) => (
-          <div key={g.key}>
-            <div class="set-sub set-gl">
-              <i class={`dot ${g.lock ? "d-lock" : g.key === "have" ? "d-have" : g.key === "must" ? "d-must" : "d-nice"}`} aria-hidden="true" />
-              {g.label}
-            </div>
-            {g.wallets.map((w) => (
-              <Row
-                key={w.id}
-                title={
-                  <>
-                    {w.name} {chips(w)}
-                  </>
-                }
-                sub={allocationSummary(w.allocation)}
-                sub2={`${account(w)}${w.allocation && w.allocation.mode !== "remainder" ? ` · ưu tiên ${w.allocation.priority}` : ""}`}
-                onClick={ro ? undefined : () => open({ kind: "wallet", item: w })}
-              />
-            ))}
-          </div>
-        ))
-      )}
-    </Card>
+    <>
+      <Card id="pockets" title="Ba ngăn" flush note="Tiền về tài khoản nào là tiền của ngăn đó. Thẻ tín dụng để ở Vận hành.">
+        {conversion && <Row title={conversion} sub="Năm bước một lần: xếp ngăn, gắn mục tiêu với tài khoản thật, đối chiếu Tích luỹ" onClick={() => go("convert")} />}
+        <Row
+          title={
+            <>
+              Xếp tài khoản vào ngăn {chip && <span class="chip warn">{chip}</span>}
+            </>
+          }
+          sub={counts}
+          onClick={ro ? undefined : () => open({ kind: "pockets" })}
+        />
+      </Card>
+      <Card
+        id="pocket-goals"
+        title="Mục tiêu Dự phòng"
+        right={<AddButton ro={ro} label="Thêm" onClick={() => open({ kind: "goal", item: null })} />}
+        flush
+        note="Mỗi mục tiêu là một tài khoản thật ở ngăn Dự phòng; số đã có là số dư của tài khoản đó"
+      >
+        {goals.length === 0 && suggestions.length === 0 && <p class="empty">Chưa có mục tiêu nào.</p>}
+        {goals.map((g) => (
+          <Row
+            key={g.id}
+            title={
+              <>
+                {goalLineText(g, d.accounts)} {!g.active && <span class="chip">ngừng dùng</span>}
+              </>
+            }
+            sub={g.active && !g.account_id ? <span class="chip warn">Mở tài khoản thật</span> : undefined}
+            onClick={ro ? undefined : () => open({ kind: "goal", item: g })}
+          />
+        ))}
+        {suggestions.map((s) => (
+          <Row key={s.debt.id} title={s.text} sub="Gợi ý từ sổ nợ: nợ ngắn hạn chưa có mục tiêu" onClick={ro ? undefined : () => open({ kind: "goal", item: null, prefill: s.prefill })} />
+        ))}
+      </Card>
+      <Card
+        title="Nhóm danh mục & hạn mức mềm"
+        right={<AddButton ro={ro} label="Thêm nhóm" onClick={() => open({ kind: "group", item: null })} />}
+        flush
+        note="Hạn mức mềm chỉ để nhìn lại, không giữ tiền, không âm, không bù"
+      >
+        {groups.length === 0 && <p class="empty">Chưa có nhóm danh mục nào.</p>}
+        {groups.map((g) => {
+          const cats = d.categories.filter((c) => c.groupId === g.id);
+          return (
+            <Row
+              key={g.id}
+              title={
+                <>
+                  {g.name} {!g.active && <span class="chip">ngừng dùng</span>}
+                </>
+              }
+              sub={groupSummary(g, cats.length)}
+              sub2={cats.length ? cats.map((c) => c.name).join(", ") : undefined}
+              onClick={ro ? undefined : () => open({ kind: "group", item: g })}
+            />
+          );
+        })}
+      </Card>
+    </>
   );
 }
 
@@ -1265,7 +1264,9 @@ function Wallets({ d, ro, wide, open }: SectionProps) {
 
 function Rules({ d, ro, wide, open }: SectionProps) {
   const rows = [...d.rules].sort((a, b) => Number(b.active) - Number(a.active) || a.priority - b.priority);
-  const target = (r: Rule) => [nameOf(d.wallets, r.wallet_id), nameOf(d.categories, r.category_id)].filter(Boolean).join(" · ") || "—";
+  // Rule chi cũ chỉ có ví, không danh mục: không còn tự gán (ingest UC-307) — nhắc chọn danh mục.
+  const needsCategory = (r: Rule) => r.meaning === "spend" && !r.category_id;
+  const target = (r: Rule) => nameOf(d.categories, r.category_id) || "—";
   const streamName = (r: Rule) => (r.meaning === "income" ? nameOf(d.incomeStreams ?? [], r.incomeStreamId) : null);
   return (
     <Card
@@ -1273,7 +1274,7 @@ function Rules({ d, ro, wide, open }: SectionProps) {
       title="Mã chuyển khoản"
       right={<AddButton ro={ro} label="Thêm mã" onClick={() => open({ kind: "rule", item: null })} />}
       flush
-      note="Mã theo quy ước của nhà: ba chữ cái, bắt đầu bằng Q hoặc E (EXE xăng, EMS mua sắm online), ghi trong nội dung chuyển khoản. Giao dịch khớp mã tự gán ví và danh mục; không khớp thì chờ ở màn Gán."
+      note="Mã theo quy ước của nhà: ba chữ cái, bắt đầu bằng Q hoặc E (EXE xăng, EMS mua sắm online), ghi trong nội dung chuyển khoản. Giao dịch khớp mã tự gán danh mục; không khớp thì chờ ở màn Gán."
     >
       {rows.length === 0 && <p class="empty">Chưa có mã nào.</p>}
       {wide && rows.length > 0 ? (
@@ -1284,7 +1285,7 @@ function Rules({ d, ro, wide, open }: SectionProps) {
                 <th>Mẫu</th>
                 <th class="l">Khớp theo</th>
                 <th class="l">Nghĩa</th>
-                <th class="l">Ví · danh mục</th>
+                <th class="l">Danh mục</th>
                 <th class="l">Người chi</th>
                 <th>Ưu tiên</th>
                 <th class="l">Trạng thái</th>
@@ -1302,7 +1303,7 @@ function Rules({ d, ro, wide, open }: SectionProps) {
                     {MEANING_LABEL[r.meaning]}
                     {streamName(r) && <div class="sub-line">{streamName(r)}</div>}
                   </td>
-                  <td class="l">{target(r)}</td>
+                  <td class="l">{needsCategory(r) ? <span class="chip">Cần chọn danh mục</span> : target(r)}</td>
                   <td class="l">{nameOf(d.members, r.by_member_id) ?? "—"}</td>
                   <td class="num">{r.priority}</td>
                   <td class="l">{r.active ? "đang dùng" : <span class="chip">ngừng dùng</span>}</td>
@@ -1318,7 +1319,8 @@ function Rules({ d, ro, wide, open }: SectionProps) {
             key={r.id}
             title={
               <>
-                <span class="num">{r.pattern}</span> <span class="chip">{MATCH_LABEL[r.match_type].toLowerCase()}</span> {!r.active && <span class="chip">ngừng dùng</span>}
+                <span class="num">{r.pattern}</span> <span class="chip">{MATCH_LABEL[r.match_type].toLowerCase()}</span> {!r.active && <span class="chip">ngừng dùng</span>}{" "}
+                {needsCategory(r) && <span class="chip">Cần chọn danh mục</span>}
               </>
             }
             sub={`${MEANING_LABEL[r.meaning]}${streamName(r) ? ` · ${streamName(r)}` : ""} → ${target(r)}`}
@@ -1341,8 +1343,9 @@ function Streams({ d, ro, open }: SectionProps) {
       title="Nguồn thu"
       right={<AddButton ro={ro} label="Thêm nguồn" onClick={() => open({ kind: "stream", item: null })} />}
       flush
-      note="Mỗi nguồn có phần khóa riêng, cắt trước dòng thác. Khoản thu không chọn nguồn thì chia theo luật % chung như cũ. Chọn nguồn cho mã lương ở Mã chuyển khoản."
+      note="Nguồn bật Mở kỳ lương: lương về từ nguồn đó mở kỳ lương mới và danh sách việc ở Hôm nay. Chọn nguồn cho mã lương ở Mã chuyển khoản."
     >
+      {cycleStreamReminder(streams) && <p class="note">{cycleStreamReminder(streams)}</p>}
       {streams.length === 0 && <p class="empty">Chưa có nguồn thu nào.</p>}
       {streams.map((s) => (
         <Row
@@ -1352,7 +1355,7 @@ function Streams({ d, ro, open }: SectionProps) {
               {s.name} {!s.active && <span class="chip">ngừng dùng</span>}
             </>
           }
-          sub={streamSummary(s, d.wallets)}
+          sub={streamSummary(s)}
           onClick={ro ? undefined : () => open({ kind: "stream", item: s })}
         />
       ))}
@@ -1471,8 +1474,8 @@ function Params({ d, ro, open }: SectionProps) {
   return (
     <Card id="parameters" title="Tham số" flush>
       <Row
-        title="Ngưỡng tự chia lương"
-        sub="Khoản khớp mẫu lương từ mức này trở lên thì tự ghi và tự chia; nhỏ hơn thì chờ ở màn Gán"
+        title="Ngưỡng tự nhận lương"
+        sub="Khoản khớp mẫu lương từ mức này trở lên thì tự ghi (mở kỳ lương theo nguồn); nhỏ hơn thì chờ ở màn Gán"
         right={<span class="srow-v">{c.salary_min_amount ? formatVnd(c.salary_min_amount) : "không ngưỡng"}</span>}
         onClick={edit}
       />
@@ -1480,27 +1483,33 @@ function Params({ d, ro, open }: SectionProps) {
       {c.interest_max_amount !== undefined && (
         <Row
           title="Lãi tiền gửi: tự ghi khoản dưới"
-          sub="Lãi ngân hàng trả nhỏ hơn mức này thì máy tự ghi vào ví của chính tài khoản nhận"
+          sub="Lãi ngân hàng trả nhỏ hơn mức này thì máy tự ghi vào tài khoản nhận"
           right={<span class="srow-v">{c.interest_max_amount ? formatVnd(c.interest_max_amount) : "tắt"}</span>}
           onClick={edit}
         />
       )}
       <Row
-        title="Quỹ an tâm"
-        sub="Số tháng chi Must giữ trong Tích sản trước khi mua tài sản"
+        title="Phần an tâm"
+        sub="Số tháng vận hành muốn có ở Dự phòng, ngoài các mục tiêu"
         right={<span class="srow-v">{c.safety_fund_months} tháng</span>}
         onClick={edit}
       />
-      {/* Bản cài đặt lưu offline từ trước 0034 thiếu khoá chốt tháng thì chưa hiện hai hàng này. */}
-      {c.month_close_wealth_pct !== undefined && (
+      {/* Bản cài đặt lưu offline từ trước ngày lương (ADR-118) thiếu khoá này thì chưa hiện hàng. */}
+      {c.payday_day !== undefined && (
+        <Row title="Ngày lương" sub="Thẻ Vận hành ở Hôm nay đếm ngược tới ngày này; tháng ít ngày hơn lấy ngày cuối tháng" right={<span class="srow-v">ngày {c.payday_day}</span>} onClick={edit} />
+      )}
+      {/* Bản cài đặt lưu offline từ trước v2 thiếu khoá này thì chưa hiện hàng. */}
+      {c.savings_pct !== undefined && <Row title="% Tích luỹ mỗi kỳ lương" sub="Số gợi ý trích sang Tích luỹ khi lương về" right={<span class="srow-v">{c.savings_pct}%</span>} onClick={edit} />}
+      {/* Bản cài đặt lưu offline từ trước Đợt C thiếu khoá dư cuối kỳ thì chưa hiện hai hàng này. */}
+      {c.surplus_savings_pct !== undefined && (
         <>
+          <Row title="Dư cuối kỳ vào Tích luỹ (%)" sub="Phần còn lại vào Ví Thưởng khi lương mở kỳ mới" right={<span class="srow-v">{c.surplus_savings_pct}%</span>} onClick={edit} />
           <Row
             title="Ví Thưởng"
-            sub="Nhận phần dư khi chốt tháng, cùng Tích sản; chưa đặt thì cả phần dư vào Tích sản"
-            right={<span class="srow-v">{c.month_close_reward_wallet ? (d.wallets.find((w) => w.id === c.month_close_reward_wallet)?.name ?? c.month_close_reward_wallet) : "chưa đặt"}</span>}
+            sub="Tài khoản ngăn Dự phòng nhận phần dư kỳ trước; chưa chọn thì phần đó ở lại Vận hành"
+            right={<span class="srow-v">{c.surplus_reward_account ? (nameOf(d.accounts, c.surplus_reward_account) ?? c.surplus_reward_account) : "Chưa chọn"}</span>}
             onClick={edit}
           />
-          <Row title="Chốt tháng: phần dư vào Tích sản" sub="Mặc định của thanh kéo khi chốt tháng" right={<span class="srow-v">{c.month_close_wealth_pct}%</span>} onClick={edit} />
         </>
       )}
       {/* Bản cài đặt lưu offline từ trước 0031 thiếu các khoá fi_* thì chưa hiện hàng này. */}

@@ -10,7 +10,7 @@ export interface FreedomParams {
   expenseMustSource: "manual" | "ledger" | null;
   incomeMonthly: number | null;
   incomeSource: "ledger" | "plan" | null;
-  /** Σ phần trăm luật `percent` đang bật của ví Tích sản và Thuế (phần vạn). */
+  /** Phần trích trước của M2′ (phần vạn): `savings_pct` + Σ `target_pct` của mục tiêu Thuế đang dùng, tối đa 99%. */
   lockedBps: number;
   swrBps: number;
   inflationBps: number;

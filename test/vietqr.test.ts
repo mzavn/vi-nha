@@ -19,6 +19,11 @@ describe("mã QR chuyển tiền (VietQR)", () => {
     expect(qrMemo("Đ đ")).toBe("D d");
   });
 
+  it("UC-1206 AC-6: nội dung QR của việc ngày lương giữ gạch nối của kỳ (\"Tich luy ky 10-11\")", () => {
+    expect(qrMemo("Tích luỹ kỳ 10-11")).toBe("Tich luy ky 10-11");
+    expect(qrMemo("Học phí kỳ 10-11")).toBe("Hoc phi ky 10-11");
+  });
+
   it("UC-707 AC-28: mọi ngân hàng trừ 'Ngân hàng khác' có mã NAPAS 6 chữ số", () => {
     for (const b of BANKS) {
       if (b.code === "Khac") expect(b.napasBin).toBeUndefined();

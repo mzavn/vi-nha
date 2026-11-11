@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { bookPath, clearFilters, defaultFilter, entryDay, filterChips, groupByDay, removeChip, stepMonth, summaryParts, summaryPath, toggleMeaning, type BookFilter } from "./tx-filter";
+import { isLegacyTx, LEGACY_LABEL } from "./transactions";
+import { bookFromHashQuery, bookHashQuery, bookPath, clearFilters, cycleFilter, defaultFilter, entryDay, filterChips, groupByDay, privateAccountLine, removeChip, stepMonth, summaryParts, summaryPath, toggleMeaning, type BookFilter } from "./tx-filter";
 import type { Bootstrap, TxRow } from "./types";
 
 const now = new Date("2026-10-06T03:00:00Z");
 const f0 = defaultFilter(now);
 const boot = {
   categories: [{ id: "medicine", name: "Thuốc thang" }],
-  wallets: [{ id: "nice-to-have", name: "Có thì tốt" }],
-  accounts: [{ id: "cash-wife", name: "Tiền mặt (vợ)" }],
+  accounts: [
+    { id: "cash-wife", name: "Tiền mặt (vợ)" },
+    { id: "mb-wife", name: "MB (vợ)", private: true, hiddenFromMe: true },
+  ],
   members: [{ id: "wife", name: "Vợ" }],
 } as unknown as Bootstrap;
 const row = (id: number, at: string, meaning: string, amount: number, status = "active") =>
@@ -47,7 +50,59 @@ describe("Sổ giao dịch: bộ lọc (change 261006-so-giao-dich)", () => {
     // clearFilters: đang có khoảng ngày thì quay về tháng 10 (tháng hiện tại)
     expect(clearFilters(fRange, now)).toMatchObject({ month: "2026-10", fromDate: null, toDate: null });
   });
+  it("UC-716 AC-21: không có bộ lọc Ví; bộ lọc đã lưu có wallet=food → bỏ qua, không lỗi", () => {
+    const old = { ...f0, walletId: "food" } as unknown as BookFilter;
+    expect(bookPath(old)).toBe("/v1/transactions?month=2026-10&limit=51");
+    expect(filterChips(old, boot)).toEqual([]);
+    expect("walletId" in f0).toBe(false);
+  });
 
+  it("UC-716 AC-22: lọc theo tài khoản riêng tư của người khác → dòng đầu 'Tài khoản riêng tư: chỉ chủ tài khoản thấy từng khoản'; tài khoản thường → không", () => {
+    expect(privateAccountLine({ accountId: "mb-wife" }, boot)).toBe("Tài khoản riêng tư: chỉ chủ tài khoản thấy từng khoản");
+    expect(privateAccountLine({ accountId: "cash-wife" }, boot)).toBeNull();
+    expect(privateAccountLine({ accountId: null }, boot)).toBeNull();
+  });
+
+  it("UC-716 AC-9: từ Nhìn lại chạm danh mục Ăn ngoài → Sổ giao dịch chip \"Kỳ từ 10/11\" + Ăn ngoài, tổng Chi đọc cùng kỳ (cycle thay tháng)", () => {
+    const today = new Date("2026-11-25T03:00:00Z");
+    const cur = { payday: "2026-11-10", start: "2026-11-10T01:00:00.000Z", end: null };
+    const f = cycleFilter(cur, "eating-out", today);
+    expect(f).toMatchObject({ month: null, fromDate: null, toDate: null, categoryId: "eating-out", cycle: { payday: "2026-11-10", from: "2026-11-10", to: null } });
+    expect(filterChips(f, { ...boot, categories: [{ id: "eating-out", name: "Ăn ngoài" }] } as unknown as Bootstrap).map((c) => c.label)).toEqual(["Kỳ từ 10/11", "Ăn ngoài"]);
+    expect(summaryPath(f)).toBe("/v1/transactions/summary?cycle=2026-11-10&category_id=eating-out");
+  });
+
+  it("UC-716 AC-23: chip kỳ + danh mục; F5 (địa chỉ #ledger?…) giữ cả hai; × trên chip kỳ → tháng hiện tại, bỏ cycle", () => {
+    const today = new Date("2026-11-25T03:00:00Z");
+    const f = cycleFilter({ payday: "2026-11-10", start: "2026-11-10T01:00:00.000Z", end: null }, "eating-out", today);
+    const q = bookHashQuery(f, today);
+    expect(q).toBe("category_id=eating-out&cycle=2026-11-10&cycle_from=2026-11-10");
+    expect(bookFromHashQuery(q, today)).toEqual(f);
+    const chips = filterChips(f, boot);
+    expect(chips[0]).toEqual({ key: "cycle", label: "Kỳ từ 10/11" });
+    const back = removeChip(f, chips[0]!, today);
+    expect(back).toMatchObject({ cycle: null, month: "2026-11", categoryId: "eating-out" });
+    expect(bookPath(back)).toBe("/v1/transactions?month=2026-11&category_id=eating-out&limit=51");
+    // Bỏ hết bộ lọc khi đang lọc kỳ cũng về tháng hiện tại.
+    expect(clearFilters(f, today)).toMatchObject({ cycle: null, month: "2026-11", categoryId: null });
+    // Kỳ đã kết thúc: chip "Kỳ 10/10 – 9/11"; ghi thêm điền sẵn ngày cuối kỳ.
+    const oct = cycleFilter({ payday: "2026-10-10", start: "2026-10-10T01:00:00.000Z", end: "2026-11-10T01:00:00.000Z" }, null, today);
+    expect(filterChips(oct, boot)).toEqual([{ key: "cycle", label: "Kỳ 10/10 – 9/11" }]);
+    expect(bookFromHashQuery(bookHashQuery(oct, today), today)).toEqual(oct);
+    expect(entryDay(oct, today)).toBe("2026-11-09");
+    expect(entryDay(f, today)).toBe("2026-11-25");
+  });
+
+  it("UC-716 AC-23: địa chỉ chỉ mang bộ lọc khác mặc định, đọc lại đủ mọi ô; chữ lạ trên địa chỉ bị bỏ qua", () => {
+    expect(bookHashQuery(f0, now)).toBe("");
+    expect(bookFromHashQuery("", now)).toEqual(f0);
+    const full: BookFilter = { ...f0, month: "2026-09", meanings: ["spend", "refund"], categoryId: "medicine", accountId: "cash-wife", memberId: "wife", source: "bank", q: "thuốc ", showVoid: true };
+    expect(bookFromHashQuery(bookHashQuery(full, now), now)).toEqual(full);
+    const range: BookFilter = { ...f0, month: null, fromDate: "2026-09-01", toDate: "2026-09-15" };
+    expect(bookFromHashQuery(bookHashQuery(range, now), now)).toEqual(range);
+    expect(bookFromHashQuery("month=all", now)).toEqual({ ...f0, month: null });
+    expect(bookFromHashQuery("month=13-2026&source=x&cycle=10-11-2026&from_date=hôm-qua", now)).toEqual(f0);
+  });
 
   it("chữ tìm: gửi khi đủ 2 ký tự (đã cắt khoảng trắng, mã hoá URL), ngắn hơn thì chưa tìm", () => {
     expect(bookPath({ ...f0, month: null, q: "  shopee " })).toBe("/v1/transactions?q=shopee&limit=51");
@@ -56,13 +111,13 @@ describe("Sổ giao dịch: bộ lọc (change 261006-so-giao-dich)", () => {
   });
 
   it("bộ lọc đang bật thành chip có tên dễ đọc; chạm × bỏ đúng bộ lọc đó; loại giữ thứ tự của danh sách", () => {
-    const f: BookFilter = { ...toggleMeaning(toggleMeaning(f0, "refund"), "spend"), categoryId: "medicine", walletId: "nice-to-have", accountId: "cash-wife", memberId: "wife", source: "bank", showVoid: true };
+    const f: BookFilter = { ...toggleMeaning(toggleMeaning(f0, "refund"), "spend"), categoryId: "medicine", accountId: "cash-wife", memberId: "wife", source: "bank", showVoid: true };
     expect(f.meanings).toEqual(["spend", "refund"]);
     const chips = filterChips(f, boot);
-    expect(chips.map((c) => c.label)).toEqual(["Chi tiêu", "Hoàn tiền", "Thuốc thang", "Ví Có thì tốt", "Tiền mặt (vợ)", "Vợ ghi", "Từ ngân hàng", "Có khoản đã xoá"]);
+    expect(chips.map((c) => c.label)).toEqual(["Chi tiêu", "Hoàn tiền", "Thuốc thang", "Tiền mặt (vợ)", "Vợ ghi", "Từ ngân hàng", "Có khoản đã xoá"]);
     expect(removeChip(f, chips[1]!).meanings).toEqual(["spend"]);
     expect(removeChip(f, chips[2]!).categoryId).toBeNull();
-    expect(removeChip(f, chips[7]!).showVoid).toBe(false);
+    expect(removeChip(f, chips[6]!).showVoid).toBe(false);
     expect(toggleMeaning(f, "spend").meanings).toEqual(["refund"]);
     expect(filterChips(f0, boot)).toEqual([]);
   });
@@ -117,5 +172,15 @@ describe("Sổ giao dịch: bộ lọc (change 261006-so-giao-dich)", () => {
       { label: "Nhận lại", amount: 100_000 },
       { label: "Chuyển nội bộ", amount: 700_000 },
     ]);
+  });
+
+  it("UC-716 AC-24: tháng có khoản cũ (legacy, legacy_class) và khoản mới → dòng cũ có nhãn 'cách tính cũ', dòng mới không; tiêu đề ngày và tổng Chi tính như nhau, không phụ thuộc ví", () => {
+    const old = { ...row(2, "2026-10-05T08:00:00Z", "spend", 150_000), legacy: true, legacy_class: "essential" as const };
+    const fresh = { ...row(3, "2026-10-05T10:00:00Z", "spend", 400_000), legacy: false, legacy_class: null };
+    expect(LEGACY_LABEL).toBe("cách tính cũ");
+    expect([old, fresh].map(isLegacyTx)).toEqual([true, false]);
+    expect(groupByDay([fresh, old]).map((g) => g.heading)).toEqual(["Thứ Hai 5/10 · chi 550.000\u00a0₫"]);
+    const zero = { count: 0, spend: 0, refund: 0, income: 0, lend: 0, collect: 0, transfer: 0, buy_asset: 0, adjust_in: 0, adjust_out: 0 };
+    expect(summaryParts({ ...zero, count: 2, spend: 550_000 })[0]).toEqual({ label: "Chi", amount: 550_000 });
   });
 });

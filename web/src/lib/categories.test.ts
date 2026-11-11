@@ -1,27 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { defaultAccountFor, defaultBankFor, defaultWalletFor, manualAccounts, spendableWallets, topCategories, walletOfMember } from "./categories";
-import type { AccountRef, CategoryRef, Wallet } from "./types";
+import { defaultAccountFor, defaultBankFor, manualAccounts, topCategories } from "./categories";
+import type { AccountRef, CategoryRef } from "./types";
 
-const cat = (id: string, sort: number, defaultWalletId: string | null = null): CategoryRef => ({ id, name: id, defaultWalletId, icon: null, sort });
+const cat = (id: string, sort: number): CategoryRef => ({ id, name: id, icon: null, sort, groupId: null });
 
-const wallet = (id: string, over: Partial<Wallet> = {}): Wallet => ({
+const acct = (id: string, kind: AccountRef["kind"], ownerMemberId: string | null, over: Partial<Pick<AccountRef, "sepayEnabled" | "sepayOut" | "pocket" | "feedFrom" | "sepayOutFrom" | "private" | "hiddenFromMe">> = {}): AccountRef => ({
   id,
   name: id,
-  tier: "must",
-  mustGroup: "must",
-  kind: "envelope",
-  scope: "shared",
-  memberId: null,
-  accountId: null,
-  private: false,
-  sort: 0,
-  hidden: false,
-  ...over,
-});
-
-const acct = (id: string, kind: AccountRef["kind"], ownerMemberId: string | null, over: Partial<Pick<AccountRef, "sepayEnabled" | "sepayOut" | "locked" | "role" | "feedFrom" | "sepayOutFrom">> = {}): AccountRef => ({
-  id,
-  name: id,
+  pocket: null,
   kind,
   ownerMemberId,
   sepayEnabled: false,
@@ -29,8 +15,7 @@ const acct = (id: string, kind: AccountRef["kind"], ownerMemberId: string | null
   openedAt: null,
   feedFrom: null,
   sepayOutFrom: null,
-  locked: false,
-  role: null,
+  private: false,
   ...over,
 });
 
@@ -57,45 +42,18 @@ describe("6 danh mục hay dùng nhất", () => {
   });
 });
 
-describe("tự điền ví và tài khoản", () => {
+describe("tự điền tài khoản", () => {
   const boot = {
-    wallets: [
-      wallet("fun-husband", { tier: "nice", mustGroup: null, scope: "personal", memberId: "husband" }),
-      wallet("fun-wife", { tier: "nice", mustGroup: null, scope: "personal", memberId: "wife" }),
-      wallet("transport"),
-      wallet("income", { tier: "holding", kind: "holding" }),
-      wallet("wealth-building", { tier: "wealth_building", kind: "accrual" }),
-      wallet("rental-income", { tier: "holding", mustGroup: null, kind: "accrual" }),
-    ],
-    categories: [cat("hangouts", 1, "fun-husband"), cat("ride-hailing", 2, "transport"), cat("other", 3, null)],
     accounts: [acct("vcb-husband", "bank", "husband"), acct("vcb-wife", "bank", "wife"), acct("cash-husband", "cash", "husband"), acct("cash-wife", "cash", "wife")],
   };
 
-  it("vợ chọn Tụ tập / cà phê → ví Chơi (vợ), tài khoản Tiền mặt (vợ)", () => {
-    expect(defaultWalletFor(boot, boot.categories[0]!, "wife")?.id).toBe("fun-wife");
+  it("vợ nhập khoản chi → tài khoản Tiền mặt (vợ)", () => {
     expect(defaultAccountFor(boot, "wife", "out")).toBe("cash-wife");
-  });
-
-  it("chồng giữ ví của mình, ví chung không đổi", () => {
-    expect(defaultWalletFor(boot, boot.categories[0]!, "husband")?.id).toBe("fun-husband");
-    expect(defaultWalletFor(boot, boot.categories[1]!, "wife")?.id).toBe("transport");
-    expect(defaultWalletFor(boot, boot.categories[2]!, "wife")).toBeNull();
-  });
-
-  it("hoàn tiền cho khoản chi gốc ở ví cá nhân người kia → điền ví cùng phe của người đang nhập (đúng ví server sẽ ghi)", () => {
-    expect(walletOfMember(boot, "fun-husband", "wife")?.id).toBe("fun-wife");
-    expect(walletOfMember(boot, "transport", "wife")?.id).toBe("transport");
-    expect(walletOfMember(boot, "khong-co", "wife")).toBeNull();
-    expect(walletOfMember(boot, null, "wife")).toBeNull();
   });
 
   it("tài khoản nhận thu nhập mặc định là ngân hàng của người đang nhập", () => {
     expect(defaultBankFor(boot.accounts, "wife")).toBe("vcb-wife");
     expect(defaultBankFor(boot.accounts, null)).toBe("vcb-husband");
-  });
-
-  it("danh sách ví chi được: bỏ Thu nhập, Tích sản, ví cá nhân người kia; ví giữ riêng chi được (trả nợ)", () => {
-    expect(spendableWallets(boot.wallets, "wife").map((w) => w.id)).toEqual(["fun-wife", "transport", "rental-income"]);
   });
 });
 
@@ -118,25 +76,57 @@ describe("tài khoản nhập tay được", () => {
     expect(manualAccounts(outLater, "out", "2026-10-18").map((a) => a.id)).toEqual(["mb-wife"]);
     expect(manualAccounts(outLater, "in", "2026-10-18").map((a) => a.id)).toEqual([]);
     // mặc định không bao giờ rơi vào tài khoản mà chiều đó tự về
-    expect(defaultAccountFor({ wallets: [], categories: [], accounts }, "wife", "in")).toBe("bidv-husband");
-    expect(defaultAccountFor({ wallets: [], categories: [], accounts: accounts.slice(1) }, "wife", "out")).toBe("bidv-husband");
+    expect(defaultAccountFor({ accounts }, "wife", "in")).toBe("bidv-husband");
+    expect(defaultAccountFor({ accounts: accounts.slice(1) }, "wife", "out")).toBe("bidv-husband");
   });
 
   it("nhà dùng chung một ví tiền mặt (không gắn chủ) thì ai nhập cũng mặc định vào ví đó, không rơi sang ngân hàng", () => {
     const accounts = [acct("bidv-husband", "bank", "husband"), acct("cash", "cash", null)];
-    expect(defaultAccountFor({ wallets: [], categories: [], accounts }, "husband", "out")).toBe("cash");
-    expect(defaultAccountFor({ wallets: [], categories: [], accounts }, "wife", "in")).toBe("cash");
+    expect(defaultAccountFor({ accounts }, "husband", "out")).toBe("cash");
+    expect(defaultAccountFor({ accounts }, "wife", "in")).toBe("cash");
   });
 
-  it("tài khoản Tích sản (heo đất, phao — ADR-88) không bao giờ là mặc định khi còn tài khoản khác, dù tên đứng trước", () => {
+  it("UC-703 AC-15: ưu tiên tài khoản ngăn Vận hành — heo đất (Tích luỹ, xếp trước) không bao giờ là mặc định khi người nhập có tiền mặt Vận hành; không tài khoản Vận hành nào → tài khoản đầu tiên nhập tay được", () => {
     const accounts = [
-      acct("piggy-bank-husband", "bank", "husband", { locked: true, role: "piggy_bank" }),
-      acct("a-buffer-husband", "bank", "husband", { role: "buffer" }),
-      acct("bidv-husband", "bank", "husband"),
-      acct("vcb-husband", "bank", "husband", { sepayEnabled: true }),
+      acct("piggy-bank-husband", "cash", "husband", { pocket: "savings" }),
+      acct("a-buffer-husband", "bank", "husband", { pocket: "reserve" }),
+      acct("cash-husband", "cash", "husband", { pocket: "operating" }),
+      acct("bidv-husband", "bank", "husband", { pocket: "operating" }),
+      acct("vcb-husband", "bank", "husband", { pocket: "operating", sepayEnabled: true }),
     ];
-    expect(defaultBankFor(manualAccounts(accounts, "in"), "husband")).toBe("bidv-husband");
-    expect(defaultAccountFor({ wallets: [], categories: [], accounts }, "husband", "in")).toBe("bidv-husband");
-    expect(defaultBankFor([acct("piggy-bank-husband", "bank", "husband", { locked: true, role: "piggy_bank" })], "husband")).toBe("piggy-bank-husband");
+    expect(defaultAccountFor({ accounts }, "husband", "out")).toBe("cash-husband");
+    expect(defaultAccountFor({ accounts }, "husband", "in")).toBe("cash-husband");
+    // Không có tiền mặt Vận hành → tài khoản Vận hành của người nhập, không rơi về heo đất / phao.
+    const noCash = accounts.filter((a) => a.id !== "cash-husband");
+    expect(defaultAccountFor({ accounts: noCash }, "husband", "out")).toBe("bidv-husband");
+    expect(defaultBankFor(manualAccounts(noCash, "in"), "husband")).toBe("bidv-husband");
+    // AC-3 giữ: tài khoản Vận hành duy nhất tự về tiền vào → không mặc định vào đó, về luật cũ.
+    const onlyFeed = [acct("a-buffer-husband", "bank", "husband", { pocket: "reserve" }), acct("vcb-husband", "bank", "husband", { pocket: "operating", sepayEnabled: true })];
+    expect(defaultAccountFor({ accounts: onlyFeed }, "husband", "in")).toBe("a-buffer-husband");
+    // Không tài khoản Vận hành nào → tài khoản đầu tiên nhập tay được.
+    const none = [acct("piggy-bank-husband", "bank", "husband", { pocket: "savings" }), acct("a-buffer-husband", "bank", "husband", { pocket: "reserve" })];
+    expect(defaultAccountFor({ accounts: none }, "husband", "out")).toBe("piggy-bank-husband");
+    expect(defaultBankFor(none, "husband")).toBe("piggy-bank-husband");
+  });
+
+  it("UC-703 AC-16: bootstrap của chồng (hộ mẫu P) — ô tài khoản khi Nhập chi, Chuyển (từ / tới) và tài khoản chọn sẵn không có Tiền mặt (vợ), VCB (vợ); bootstrap của vợ → có", () => {
+    const view = (hidden: boolean) => [
+      acct("vcb-husband", "bank", "husband", { pocket: "operating", sepayEnabled: true }),
+      acct("cash-husband", "cash", "husband", { pocket: "operating" }),
+      acct("mb-husband", "bank", "husband", { pocket: "operating" }),
+      acct("vcb-wife", "bank", "wife", { pocket: "operating", sepayEnabled: true, private: true, hiddenFromMe: hidden }),
+      acct("cash-wife", "cash", "wife", { pocket: "operating", private: true, hiddenFromMe: hidden }),
+    ];
+    const husband = view(true);
+    expect(manualAccounts(husband, "out").map((a) => a.id)).toEqual(["vcb-husband", "cash-husband", "mb-husband"]);
+    expect(manualAccounts(husband, "in").map((a) => a.id)).toEqual(["cash-husband", "mb-husband"]);
+    // Chồng chọn "của vợ" làm người nhập (ví dụ máy chung) vẫn không rơi vào tài khoản bị giấu.
+    expect(defaultAccountFor({ accounts: husband }, "wife", "out")).toBe("cash-husband");
+    expect(defaultAccountFor({ accounts: husband.filter((a) => a.pocket !== "operating" || a.hiddenFromMe) }, "wife", "out")).toBeNull();
+    const wife = view(false);
+    expect(manualAccounts(wife, "out").map((a) => a.id)).toContain("cash-wife");
+    expect(manualAccounts(wife, "out").map((a) => a.id)).toContain("vcb-wife");
+    expect(manualAccounts(wife, "in").map((a) => a.id)).toContain("cash-wife");
+    expect(defaultAccountFor({ accounts: wife }, "wife", "out")).toBe("cash-wife");
   });
 });

@@ -16,11 +16,10 @@ const LINES = {
     rental_income: "Thu cho thuê lại",
     refund: "Hoàn tiền",
     loan_interest: "Lãi vay",
-    spend_must: "Chi Must",
-    spend_have: "Chi Có thì tốt",
-    spend_nice: "Chi Hưởng thụ",
+    spend_essential: "Chi thiết yếu",
+    spend_flex: "Chi mong muốn",
     spend_tax: "Thuế đã nộp",
-    spend_wealth: "Chi từ Tích sản",
+    spend_savings: "Chi từ Tích luỹ",
     spend_other: "Chi khác",
     adjust: "Điều chỉnh khi đếm số dư",
     other: "Khác",
@@ -54,7 +53,7 @@ export interface ClassifiedRow {
   month: string;
   /** Dòng mặc định (SQL CASE). */
   line: CashFlowLineKey;
-  /** Dòng theo phe ví của khoản chi (null khi không phải chi) — dùng khi xếp lại về Sinh hoạt. */
+  /** Dòng chi theo luật chung (nhóm Thiết yếu / ngăn) của khoản chi (null khi không phải chi) — dùng khi xếp lại về Sinh hoạt. */
   spendLine: CashFlowLineKey | null;
   reportClass: ReportClass | null;
   isIncome: boolean;
@@ -65,7 +64,7 @@ export interface ClassifiedRow {
 
 /**
  * Dòng cuối cùng sau phân loại lại. Cùng nhóm với mặc định → giữ dòng mặc định; Thu nhập thụ động chỉ cho khoản thu
- * (khoản khác giữ mặc định — API đã chặn); Sinh hoạt → dòng chi theo phe ví / Lương và thu khác / Khác; Đầu tư, Tài chính →
+ * (khoản khác giữ mặc định — API đã chặn); Sinh hoạt → dòng chi theo luật chung / Lương và thu khác / Khác; Đầu tư, Tài chính →
  * dòng vào / ra của nhóm.
  */
 export function finalLine(r: Pick<ClassifiedRow, "line" | "spendLine" | "reportClass" | "isIncome" | "amount">): CashFlowLineKey {
@@ -278,26 +277,32 @@ export function buildCashFlow(input: {
 
 // ── Kết quả thu chi (Công thức 15) ──────────────────────────────────
 
+/**
+ * Loại chi của một khoản chi / hoàn (ADR-128; khoản cũ chỉ đọc `legacy_class`, ADR-131), dừng ở luật đầu tiên khớp: lãi vay →
+ * Thuế đã nộp → Chi từ Tích luỹ → nhóm Thiết yếu → nhóm Mong muốn / chưa xếp nhóm → không danh mục.
+ */
+export type SpendKind = "interest" | "tax" | "savings" | "essential" | "flex" | "other";
+
 /** Một hàng đã gộp cho Kết quả thu chi. */
 export interface StatementRow {
   month: string;
   meaning: "income" | "spend" | "refund" | "buy_asset" | "adjust";
   reportClass: ReportClass | null;
   tenant: boolean;
-  /** Khoản thu vào tài khoản phao / sổ tiết kiệm. */
+  /** Khoản thu không nguồn, không người thuê, vào tài khoản ngăn Tích luỹ / Dự phòng. */
   passiveAccount: boolean;
   principal: boolean;
-  interest: boolean;
-  /** Phe / nhóm của ví bị trừ (chi) hoặc được hoàn (hoàn tiền). */
-  tier: string | null;
-  mustGroup: string | null;
+  /** Loại chi của khoản chi / hoàn (null với khoản khác). */
+  kind: SpendKind | null;
+  /** Nhóm danh mục đang dùng của khoản (khoản hoàn: của khoản gốc); null = không danh mục / chưa xếp nhóm. */
+  group: { id: string; name: string; sort: number } | null;
   /** Số tiền dương; `signed` có dấu theo tài khoản (cho điều chỉnh). */
   amount: number;
   signed: number;
 }
 
 export type IncomeLineKey = "salary_other" | "rental_income" | "passive_income";
-export type ExpenseLineKey = "must" | "have" | "nice" | "tax" | "wealth_building" | "other";
+export type ExpenseLineKey = "essential" | "flex" | "tax" | "savings" | "other";
 export interface StatementLine {
   line: string;
   label: string;
@@ -324,24 +329,25 @@ export interface IncomeStatement {
 
 const INCOME_LABEL: Record<IncomeLineKey, string> = { salary_other: "Lương và thu khác", rental_income: "Cho thuê lại", passive_income: "Thu nhập thụ động" };
 const EXPENSE_LABEL: Record<ExpenseLineKey, string> = {
-  must: "Must",
-  have: "Có thì tốt",
-  nice: "Hưởng thụ",
+  essential: "Thiết yếu",
+  flex: "Mong muốn",
   tax: "Thuế đã nộp",
-  wealth_building: "Chi từ Tích sản",
+  savings: "Chi từ Tích luỹ",
   other: "Khác",
 };
 
-const expenseLine = (r: StatementRow): ExpenseLineKey =>
-  r.tier === "must" ? (r.mustGroup === "have" ? "have" : "must") : r.tier === "nice" ? "nice" : r.tier === "tax" ? "tax" : r.tier === "wealth_building" ? "wealth_building" : "other";
-
 const outOfStatement = (r: StatementRow) => r.reportClass === "investing" || r.reportClass === "financing";
 
-/** Thu nhập − Chi tiêu = Để dành; trả nợ gốc, mua tài sản, khoản xếp lại Đầu tư / Tài chính, điều chỉnh chỉ ở chân. */
+/**
+ * Thu nhập − Chi tiêu = Để dành; trả nợ gốc, mua tài sản, khoản xếp lại Đầu tư / Tài chính, điều chỉnh chỉ ở chân. Thiết yếu có
+ * dòng con từng nhóm Thiết yếu và Lãi vay; Mong muốn có dòng con từng nhóm Mong muốn và "Chưa xếp nhóm".
+ */
 export function buildIncomeStatement(period: Period, rows: StatementRow[]): IncomeStatement {
   const income: Record<IncomeLineKey, number> = { salary_other: 0, rental_income: 0, passive_income: 0 };
-  const expense: Record<ExpenseLineKey, number> = { must: 0, have: 0, nice: 0, tax: 0, wealth_building: 0, other: 0 };
+  const expense: Record<ExpenseLineKey, number> = { essential: 0, flex: 0, tax: 0, savings: 0, other: 0 };
   let interest = 0;
+  let ungrouped: number | null = null;
+  const groups = new Map<string, { line: "essential" | "flex"; label: string; sort: number; total: number }>();
   const excluded = { debtPrincipal: 0, buyAsset: 0, reclassifiedInvesting: 0, reclassifiedFinancing: 0, adjust: 0 };
   const perMonth = new Map<string, { income: number; expense: number }>();
   for (const r of rows) {
@@ -360,12 +366,27 @@ export function buildIncomeStatement(period: Period, rows: StatementRow[]): Inco
       m.income += r.amount;
     } else {
       const signed = r.meaning === "refund" ? -r.amount : r.amount;
-      const line = expenseLine(r);
+      const kind = r.kind ?? "other";
+      const line: ExpenseLineKey = kind === "interest" ? "essential" : kind;
       expense[line] += signed;
-      if (line === "must" && r.interest) interest += signed;
       m.expense += signed;
+      if (kind === "interest") interest += signed;
+      else if ((line === "essential" || line === "flex") && r.group) {
+        const g = groups.get(r.group.id) ?? { line, label: r.group.name, sort: r.group.sort, total: 0 };
+        g.total += signed;
+        groups.set(r.group.id, g);
+      } else if (line === "flex") ungrouped = (ungrouped ?? 0) + signed;
     }
   }
+  const children = (line: "essential" | "flex"): StatementLine[] =>
+    [...groups.entries()]
+      .filter(([, g]) => g.line === line)
+      .sort(([a, x], [b, y]) => x.sort - y.sort || x.label.localeCompare(y.label, "vi") || a.localeCompare(b))
+      .map(([id, g]) => ({ line: `group:${id}`, label: g.label, total: g.total }));
+  const childLines: Record<"essential" | "flex", StatementLine[]> = {
+    essential: [...children("essential"), { line: "loan_interest", label: "Lãi vay", total: interest }],
+    flex: [...children("flex"), ...(ungrouped !== null ? [{ line: "ungrouped", label: "Chưa xếp nhóm", total: ungrouped }] : [])],
+  };
   const incomeTotal = Object.values(income).reduce((s, v) => s + v, 0);
   const expenseTotal = Object.values(expense).reduce((s, v) => s + v, 0);
   const months =
@@ -385,7 +406,7 @@ export function buildIncomeStatement(period: Period, rows: StatementRow[]): Inco
         line,
         label: EXPENSE_LABEL[line],
         total: expense[line],
-        ...(line === "must" ? { children: [{ line: "loan_interest", label: "Lãi vay", total: interest }] } : {}),
+        ...(line === "essential" || line === "flex" ? { children: childLines[line] } : {}),
       })),
     },
     savings: incomeTotal - expenseTotal,

@@ -60,7 +60,7 @@ export async function runScheduledDigests(env: Env, now: Date, state: NotifyStat
   const today = dayKey(now);
   const jobs: Promise<void>[] = [];
 
-  // Tin sáng. Tắt tin sáng thì không chạy gì, kể cả ngày 1 — chốt tháng do người bấm trên app (ADR-111).
+  // Tin sáng. Tắt tin sáng thì không chạy gì, kể cả ngày 1.
   if (schedule.dailyEnabled && state.lastDailyRun !== today && minute >= clockMinutes(schedule.dailyTime)!) {
     jobs.push(runClaimed(env.DB, "daily_run", today, () => daily(env, now)));
   }

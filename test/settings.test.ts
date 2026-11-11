@@ -4,6 +4,7 @@ import { app } from "../src/index";
 import { notifyMembers } from "../src/notify/telegram";
 import { testSepay, testTelegram, updateAccount } from "../src/services/settings";
 import { asD1, openDb } from "./helpers/d1-sqlite";
+import { client, householdP } from "./helpers/household-p";
 
 let env: Env;
 let raw: ReturnType<typeof openDb>;
@@ -14,28 +15,29 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-type Json = { ok: boolean; data: any; error?: { code: string; message: string } };
-async function call(method: string, path: string, body?: unknown, auth = true) {
+type Json = { ok: boolean; data: any; error?: { code: string; message: string; field?: string } };
+async function call(method: string, path: string, body?: unknown, auth = true, headers: Record<string, string> = {}) {
   const res = await app.request(
     `https://app.example.com${path}`,
     {
       method,
-      headers: { ...(auth ? { Authorization: "Bearer tok" } : {}), ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
+      headers: { ...(auth ? { Authorization: "Bearer tok" } : {}), ...(body !== undefined ? { "Content-Type": "application/json" } : {}), ...headers },
       body: body === undefined ? undefined : JSON.stringify(body),
     },
     env,
   );
   return { status: res.status, json: (await res.json()) as Json };
 }
+const as = (member: string) => ({ "X-Member-Id": member });
 
 describe("đọc cài đặt", () => {
   it("cần đăng nhập", async () => {
     expect((await call("GET", "/v1/settings", undefined, false)).status).toBe(401);
   });
 
-  it("trả đủ các phần, kèm URL webhook để dán vào SePay", async () => {
+  it("UC-505 AC-1: trả đúng mười phần, kèm URL webhook để dán vào SePay", async () => {
     const { json } = await call("GET", "/v1/settings");
-    expect(Object.keys(json.data).sort()).toEqual(["accounts", "categories", "config", "incomeStreams", "integrations", "members", "notifySchedule", "rules", "wallets"]);
+    expect(Object.keys(json.data).sort()).toEqual(["accounts", "categories", "categoryGroups", "config", "goals", "incomeStreams", "integrations", "members", "notifySchedule", "rules"]);
     expect(json.data.integrations.webhook_url).toBe("https://app.example.com/webhooks/sepay");
     expect(json.data.config).toMatchObject({ salary_min_amount: 1_000_000, safety_fund_months: 6, fi_swr_bps: 350, fi_safety_months: "6,12,24", fi_birth_year: null });
     expect(json.data.notifySchedule).toEqual({
@@ -48,8 +50,35 @@ describe("đọc cài đặt", () => {
       weeklyEnabled: true,
       pendingEnabled: true,
     });
-    const have = json.data.wallets.find((w: any) => w.id === "nice-to-have");
-    expect(have.allocation.mode).toBe("remainder");
+  });
+
+  it("UC-505 AC-16: hộ mẫu sau 0040 → có opens_cycle, private, surplus_* (gồm surplus_reward_account); không có wallets, allocations, locks, month_close_*", async () => {
+    const { data } = (await call("GET", "/v1/settings")).json;
+    expect(data).not.toHaveProperty("wallets");
+    expect(data).not.toHaveProperty("allocations");
+    expect(data.incomeStreams.map((s: any) => [s.id, s.opens_cycle, "locks" in s])).toEqual([
+      ["salary-husband", true, false],
+      ["salary-wife", false, false],
+      ["rental", false, false],
+    ]);
+    expect(data.accounts.every((a: any) => a.private === false)).toBe(true);
+    expect(data.config).toMatchObject({ surplus_savings_pct: 50, surplus_reward_account: "mb-reward" });
+    expect(data.config).not.toHaveProperty("surplus_reward_earmark");
+    expect(Object.keys(data.config).filter((k) => k.startsWith("month_close_"))).toEqual([]);
+    expect(data.categories.every((c: any) => !("defaultWalletId" in c) && !("default_wallet_id" in c))).toBe(true);
+  });
+
+  it("UC-505 AC-17: hộ mẫu sau 0040 → không wallets / allocations / earmarks; nguồn thu không locks; tài khoản không spendable / locked / role, có pocket, pocket_confirmed, private; có goals[] và config.surplus_reward_account", async () => {
+    const { data } = (await call("GET", "/v1/settings")).json;
+    for (const k of ["wallets", "allocations", "earmarks"]) expect(data).not.toHaveProperty(k);
+    expect(data.incomeStreams.length).toBeGreaterThan(0);
+    expect(data.incomeStreams.every((s: any) => !("locks" in s))).toBe(true);
+    for (const a of data.accounts) {
+      for (const k of ["spendable", "locked", "role"]) expect(a, a.id).not.toHaveProperty(k);
+      for (const k of ["pocket", "pocket_confirmed", "private"]) expect(a, a.id).toHaveProperty(k);
+    }
+    expect(data.goals.map((g: any) => g.id)).toEqual(["tuition", "income-tax", "car-service"]);
+    expect(data.config.surplus_reward_account).toBe("mb-reward");
   });
 });
 
@@ -182,10 +211,86 @@ describe("tài khoản", () => {
     expect((await call("POST", "/v1/settings/accounts", { name: "Trùng", account_no: "0987654321" })).status).toBe(409);
   });
 
-  it("sửa số tài khoản mẫu thành số thật; không tắt được tài khoản còn ví trú ở đó", async () => {
+  it("sửa số tài khoản mẫu thành số thật", async () => {
     const res = await call("PATCH", "/v1/settings/accounts/vcb-husband", { account_no: "1234567890", name: "MB (chồng)" });
     expect(res.json.data).toMatchObject({ account_no: "1234567890", name: "MB (chồng)" });
-    expect((await call("PATCH", "/v1/settings/accounts/vcb-husband", { active: false })).json.error?.code).toBe("in_use");
+  });
+
+  it("UC-506 AC-31: tài khoản gắn Học phí — spendable / role trong thân sửa, role khi thêm → 400 model_changed, không đổi gì; đổi tên → lưu; đổi sang Tích luỹ → 409 account_has_goal", async () => {
+    const before = raw.prepare("SELECT * FROM accounts ORDER BY id").all();
+    for (const [method, path, body, field] of [
+      ["PATCH", "/v1/settings/accounts/mb-tuition", { spendable: true }, "spendable"],
+      ["PATCH", "/v1/settings/accounts/mb-tuition", { role: null }, "role"],
+      ["PATCH", "/v1/settings/accounts/mb-tuition", { name: "Sổ", locked: false }, "locked"],
+      ["POST", "/v1/settings/accounts", { name: "Sổ 6 tháng", role: "term_deposit" }, "role"],
+    ] as const) {
+      const res = await call(method, path, body);
+      expect([res.status, res.json.error?.code, (res.json.error as { fields?: string[] } | undefined)?.fields], JSON.stringify(body)).toEqual([400, "model_changed", [field]]);
+      expect(res.json.error?.message).toBe(`Ví nhà v2 xếp tài khoản theo ngăn: bỏ trường ${field}.`);
+    }
+    expect(raw.prepare("SELECT * FROM accounts ORDER BY id").all()).toEqual(before);
+    expect((await call("PATCH", "/v1/settings/accounts/mb-tuition", { name: "Sổ học phí" })).json.data).toMatchObject({ name: "Sổ học phí", pocket: "reserve" });
+    const moved = await call("PATCH", "/v1/settings/accounts/mb-tuition", { pocket: "savings" });
+    expect([moved.status, moved.json.error?.code]).toEqual([409, "account_has_goal"]);
+    expect(raw.prepare("SELECT pocket FROM accounts WHERE id = 'mb-tuition'").get()).toEqual({ pocket: "reserve" });
+  });
+
+  it("UC-504 AC-8: chủ tài khoản bật / tắt riêng tư → lưu, nhật ký account.update changes.private; người khác → 403 not_owner; tài khoản không chủ → 400 private_needs_owner; tài khoản mới mặc định tắt", async () => {
+    const on = await call("PATCH", "/v1/settings/accounts/vcb-wife", { private: true }, true, as("wife"));
+    expect([on.status, on.json.data?.private]).toEqual([200, true]);
+    const audit = raw.prepare("SELECT member_id, detail FROM audit_log WHERE action = 'account.update' ORDER BY id DESC LIMIT 1").get() as { member_id: string; detail: string };
+    expect(audit.member_id).toBe("wife");
+    expect(JSON.parse(audit.detail)).toEqual({ fields: ["private"], changes: { private: { from: false, to: true } } });
+    const husband = await call("PATCH", "/v1/settings/accounts/vcb-wife", { private: false }, true, as("husband"));
+    expect([husband.status, husband.json.error?.code]).toEqual([403, "not_owner"]);
+    // Gửi lại đúng giá trị đang có (lưu sheet) thì không phải đổi: người khác vẫn sửa được tên.
+    expect((await call("PATCH", "/v1/settings/accounts/vcb-wife", { private: true, name: "VCB vợ" }, true, as("husband"))).status).toBe(200);
+    expect(raw.prepare("SELECT private FROM accounts WHERE id = 'vcb-wife'").get()).toEqual({ private: 1 });
+    const off = await call("PATCH", "/v1/settings/accounts/vcb-wife", { private: false }, true, as("wife"));
+    expect([off.status, off.json.data?.private]).toEqual([200, false]);
+    raw.prepare("UPDATE accounts SET owner_member_id = NULL WHERE id = 'cash-wife'").run();
+    const shared = await call("PATCH", "/v1/settings/accounts/cash-wife", { private: true }, true, as("wife"));
+    expect([shared.status, shared.json.error?.code]).toEqual([400, "private_needs_owner"]);
+    expect((await call("PATCH", "/v1/settings/accounts/vcb-wife", { private: "yes" }, true, as("wife"))).json.error?.code).toBe("invalid_input");
+    const created = await call("POST", "/v1/settings/accounts", { name: "MoMo vợ", kind: "ewallet", bank: "MoMo", owner_member_id: "wife", private: true });
+    expect(created.json.data).toMatchObject({ private: false });
+  });
+
+  it("UC-504 AC-10: chỉ chủ đổi chủ tài khoản riêng tư — chồng → 403 not_owner, không nhật ký; vợ đổi được, nhật ký changes.owner_member_id; tài khoản công khai ghi cũ → mới; chủ đã tắt thì người khác đổi được", async () => {
+    const db = householdP();
+    const api = client(db);
+    const ownerOf = (id: string) => (db.prepare("SELECT owner_member_id AS o FROM accounts WHERE id = ?").get(id) as { o: string }).o;
+    const updates = () =>
+      (db.prepare("SELECT member_id, target, detail FROM audit_log WHERE action = 'account.update' ORDER BY id").all() as { member_id: string; target: string; detail: string }[]).map((r) => ({
+        ...r,
+        detail: JSON.parse(r.detail),
+      }));
+    for (const body of [{ owner_member_id: "husband" }, { owner_member_id: "husband", private: false }]) {
+      const r = await api("PATCH", "/v1/settings/accounts/vcb-wife", body, "husband");
+      expect([r.status, r.json.error?.code], JSON.stringify(body)).toEqual([403, "not_owner"]);
+    }
+    expect(ownerOf("vcb-wife")).toBe("wife");
+    expect(db.prepare("SELECT private FROM accounts WHERE id = 'vcb-wife'").get()).toEqual({ private: 1 });
+    expect(updates()).toEqual([]);
+
+    const moved = await api("PATCH", "/v1/settings/accounts/vcb-wife", { owner_member_id: "husband" }, "wife");
+    expect([moved.status, moved.json.data?.owner_member_id, moved.json.data?.private]).toEqual([200, "husband", true]);
+    const pub = await api("PATCH", "/v1/settings/accounts/cash-husband", { owner_member_id: "wife" }, "wife");
+    expect([pub.status, pub.json.data?.owner_member_id]).toEqual([200, "wife"]);
+    expect(updates()).toEqual([
+      { member_id: "wife", target: "account:vcb-wife", detail: { fields: ["owner_member_id"], changes: { owner_member_id: { from: "wife", to: "husband" } } } },
+      { member_id: "wife", target: "account:cash-husband", detail: { fields: ["owner_member_id"], changes: { owner_member_id: { from: "husband", to: "wife" } } } },
+    ]);
+
+    // Chủ đã tắt (ADR-96): tài khoản không còn bị giấu, người khác đổi được chủ.
+    db.exec("UPDATE members SET active = 0 WHERE id = 'husband'");
+    const back = await api("PATCH", "/v1/settings/accounts/vcb-wife", { owner_member_id: "wife" }, "wife");
+    expect([back.status, back.json.data?.owner_member_id]).toEqual([200, "wife"]);
+    expect(updates().at(-1)).toEqual({
+      member_id: "wife",
+      target: "account:vcb-wife",
+      detail: { fields: ["owner_member_id"], changes: { owner_member_id: { from: "husband", to: "wife" } } },
+    });
   });
 
   it("ngân hàng phải chọn trong danh mục; SePay chỉ bật được cho ngân hàng SePay hỗ trợ", async () => {
@@ -246,37 +351,16 @@ describe("tài khoản", () => {
   });
 });
 
-describe("ví & số tiền nạp", () => {
-  it("sửa số tiền phong bì Ăn uống", async () => {
-    const res = await call("PATCH", "/v1/settings/wallets/food", { allocation: { amount: 700_000, floor_amount: 550_000 } });
-    expect(res.json.data.allocation).toMatchObject({ mode: "flat", period: "week", amount: 700_000, floor_amount: 550_000 });
-  });
-
-  it("tổng % Tích sản + Thuế vượt 100% thì từ chối — và không ghi gì", async () => {
-    const res = await call("PATCH", "/v1/settings/wallets/wealth-building", { allocation: { percent: 0.95 } });
-    expect(res.json.error?.code).toBe("invalid_allocation");
-    expect(raw.prepare("SELECT percent FROM allocations WHERE wallet_id = 'wealth-building'").get()).toEqual({ percent: 0.3 });
-  });
-
-  it("ví nhận phần còn lại không đổi cách nạp được; không tắt được", async () => {
-    expect((await call("PATCH", "/v1/settings/wallets/nice-to-have", { allocation: { mode: "flat", amount: 1 } })).json.error?.code).toBe("remainder_fixed");
-    expect((await call("PATCH", "/v1/settings/wallets/nice-to-have", { active: false })).json.error?.code).toBe("required_wallet");
-  });
-
-  it("thêm ví tích dồn Bảo hiểm (quyết định D10) có mục tiêu; không tạo được ví Tích sản thứ hai", async () => {
-    const res = await call("POST", "/v1/settings/wallets", {
-      name: "Bảo hiểm",
-      tier: "must",
-      must_group: "must",
-      kind: "accrual",
-      account_id: "vcb-husband",
-      allocation: { mode: "goal", target_amount: 12_000_000, target_date: "2027-06-30", priority: 45 },
-    });
-    expect(res.status).toBe(201);
-    expect(res.json.data).toMatchObject({ id: "bao-hiem", allocation: { mode: "goal", target_amount: 12_000_000 } });
-    const goalMissingDate = await call("POST", "/v1/settings/wallets", { name: "X", tier: "nice", kind: "accrual", allocation: { mode: "goal", target_amount: 1 } });
-    expect(goalMissingDate.json.error?.code).toBe("invalid_allocation");
-    expect((await call("POST", "/v1/settings/wallets", { name: "Tích sản 2", tier: "wealth_building", kind: "accrual" })).status).toBe(409);
+describe("ví & luật nạp đã bỏ (ADR-123)", () => {
+  it("UC-506 AC-29: POST / PATCH /v1/settings/wallets → 410 model_changed, không ghi gì", async () => {
+    for (const [method, path, body] of [
+      ["POST", "/v1/settings/wallets", { name: "Bảo hiểm", tier: "must", kind: "accrual" }],
+      ["PATCH", "/v1/settings/wallets/food", { allocation: { amount: 700_000 } }],
+    ] as const) {
+      const res = await call(method, path, body);
+      expect([res.status, res.json.ok, res.json.error?.code], path).toEqual([410, false, "model_changed"]);
+    }
+    expect(raw.prepare("SELECT name FROM sqlite_master WHERE name IN ('wallets', 'allocations')").all()).toEqual([]);
   });
 });
 
@@ -286,11 +370,14 @@ describe("thành viên, mã chuyển khoản, tham số", () => {
     expect((await call("PATCH", "/v1/settings/members/wife", { tg_chat_id: "987654321" })).json.data.tg_chat_id).toBe("987654321");
   });
 
-  it("sửa mã chuyển khoản; mã tự gán thu nhập phải là mẫu lương (luật 6)", async () => {
+  it("sửa mã chuyển khoản; mã tự gán thu nhập phải là mẫu lương (luật 6); ví mặc định → 400 model_changed", async () => {
     const rule = raw.prepare("SELECT id FROM rules WHERE pattern = 'EAN'").get() as { id: number };
     const res = await call("PATCH", `/v1/settings/rules/${rule.id}`, { pattern: "ean", priority: 5 });
     expect(res.json.data).toMatchObject({ pattern: "EAN", priority: 5 });
     expect((await call("PATCH", `/v1/settings/rules/${rule.id}`, { meaning: "income" })).json.error?.code).toBe("income_needs_salary");
+    const wallet = await call("PATCH", `/v1/settings/rules/${rule.id}`, { wallet_id: "food", priority: 7 });
+    expect([wallet.status, wallet.json.error?.code]).toEqual([400, "model_changed"]);
+    expect(raw.prepare("SELECT priority FROM rules WHERE id = ?").get(rule.id)).toEqual({ priority: 5 });
   });
 
   it("ngưỡng lương và số tháng phao", async () => {
@@ -302,55 +389,37 @@ describe("thành viên, mã chuyển khoản, tham số", () => {
     expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ salary_min_amount: 0, safety_fund_months: 3 });
   });
 
-  it("UC-507: PUT month_close_reward_wallet — ví tích dồn phe must đang dùng → lưu; phong bì chung / Tích sản / Thuế / ví đã tắt / id không có → 400 invalid_input; null → xoá dòng", async () => {
-    const saved = await call("PUT", "/v1/settings/config", { month_close_reward_wallet: "hometown" });
-    expect(saved.status).toBe(200);
-    expect(saved.json.data).toMatchObject({ month_close_reward_wallet: "hometown" });
-    // Ví chung phe nice (tích dồn) cũng được.
-    expect((await call("PUT", "/v1/settings/config", { month_close_reward_wallet: "travel" })).status).toBe(200);
-    raw.prepare("UPDATE wallets SET active = 0 WHERE id = 'hometown'").run();
-    for (const id of ["food", "nice-to-have", "wealth-building", "tax", "income", "hometown", "khong-co", 5]) {
-      const res = await call("PUT", "/v1/settings/config", { month_close_reward_wallet: id });
-      expect(res.status, String(id)).toBe(400);
-      expect(res.json.error, String(id)).toMatchObject({ code: "invalid_input", field: "month_close_reward_wallet" });
+  it("UC-507 AC-22: surplus_savings_pct 0–100 nguyên; surplus_reward_account theo UC-1209 AC-4; surplus_reward_earmark / month_close_* → 400 model_changed; nhật ký ghi giá trị", async () => {
+    for (const v of [101, -1, 2.5, "50", null]) {
+      const res = await call("PUT", "/v1/settings/config", { surplus_savings_pct: v });
+      expect([res.status, res.json.error?.code, res.json.error?.field], String(v)).toEqual([400, "invalid_input", "surplus_savings_pct"]);
     }
-    expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ month_close_reward_wallet: "travel" });
-    // Ví đã chọn rồi bị tắt: Cài đặt vẫn thấy id đã lưu (chốt tháng mới coi như chưa đặt).
-    raw.prepare("UPDATE wallets SET active = 0 WHERE id = 'travel'").run();
-    expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ month_close_reward_wallet: "travel" });
-    expect((await call("PUT", "/v1/settings/config", { month_close_reward_wallet: null })).json.data).toMatchObject({ month_close_reward_wallet: null });
-    expect(raw.prepare("SELECT COUNT(*) n FROM config WHERE k = 'month_close_reward_wallet'").get()).toEqual({ n: 0 });
-    raw.prepare("UPDATE wallets SET active = 1 WHERE id = 'travel'").run();
-    await call("PUT", "/v1/settings/config", { month_close_reward_wallet: "travel" });
-    expect((await call("PUT", "/v1/settings/config", { month_close_reward_wallet: "" })).json.data).toMatchObject({ month_close_reward_wallet: null });
-  });
+    expect((await call("PUT", "/v1/settings/config", { surplus_savings_pct: 0 })).json.data).toMatchObject({ surplus_savings_pct: 0 });
+    expect((await call("PUT", "/v1/settings/config", { surplus_savings_pct: 100 })).json.data).toMatchObject({ surplus_savings_pct: 100 });
 
-  it("UC-507: Ví Thưởng không được là ví cá nhân hay ví riêng tư → 400 invalid_input; nhật ký ghi giá trị tham số chốt tháng", async () => {
-    raw.prepare("INSERT INTO wallets (id, name, tier, kind, scope, private, sort) VALUES ('secret-fund', 'Quỹ riêng', 'nice', 'accrual', 'shared', 1, 70)").run();
-    for (const id of ["fun-husband", "fun-wife", "secret-fund"]) {
-      const res = await call("PUT", "/v1/settings/config", { month_close_reward_wallet: id });
-      expect(res.status, id).toBe(400);
-      expect(res.json.error, id).toMatchObject({ code: "invalid_input", field: "month_close_reward_wallet" });
+    // Tài khoản Dự phòng không gắn mục tiêu, đang dùng → được; gắn mục tiêu / Vận hành / đã tắt → 400 invalid_account.
+    raw.exec("INSERT INTO accounts (id, name, kind, pocket, pocket_confirmed) VALUES ('phao', 'Phao', 'bank', 'reserve', 1), ('cu', 'Cũ', 'bank', 'reserve', 1)");
+    raw.exec("UPDATE accounts SET active = 0 WHERE id = 'cu'");
+    const saved = await call("PUT", "/v1/settings/config", { surplus_reward_account: "phao" });
+    expect([saved.status, saved.json.data?.surplus_reward_account]).toEqual([200, "phao"]);
+    for (const id of ["mb-tuition", "vcb-husband", "cu", "khong-co", 5]) {
+      const res = await call("PUT", "/v1/settings/config", { surplus_reward_account: id });
+      expect([res.status, res.json.error?.code, res.json.error?.field], String(id)).toEqual([400, "invalid_account", "surplus_reward_account"]);
     }
-    await call("PUT", "/v1/settings/config", { month_close_reward_wallet: "travel", month_close_wealth_pct: 40 });
+    expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ surplus_savings_pct: 100, surplus_reward_account: "phao" });
+    expect((await call("PUT", "/v1/settings/config", { surplus_reward_account: null })).json.data).toMatchObject({ surplus_reward_account: null });
+    expect(raw.prepare("SELECT COUNT(*) AS n FROM config WHERE k = 'surplus_reward_account'").get()).toEqual({ n: 0 });
+
+    await call("PUT", "/v1/settings/config", { surplus_reward_account: "mb-reward", surplus_savings_pct: 40 });
     const row = raw.prepare("SELECT detail FROM audit_log WHERE action = 'config.update' ORDER BY id DESC LIMIT 1").get();
-    expect(JSON.parse(String(row?.detail))).toEqual({
-      fields: ["month_close_reward_wallet", "month_close_wealth_pct"],
-      month_close_reward_wallet: "travel",
-      month_close_wealth_pct: 40,
-    });
-  });
+    expect(JSON.parse(String(row?.detail))).toEqual({ fields: ["surplus_reward_account", "surplus_savings_pct"], surplus_reward_account: "mb-reward", surplus_savings_pct: 40 });
 
-  it("UC-507: month_close_wealth_pct số nguyên 0–100, sai → 400; chưa đặt thì GET /v1/settings trả 50 và null", async () => {
-    expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ month_close_wealth_pct: 50, month_close_reward_wallet: null });
-    expect((await call("PUT", "/v1/settings/config", { month_close_wealth_pct: 0 })).json.data).toMatchObject({ month_close_wealth_pct: 0 });
-    expect((await call("PUT", "/v1/settings/config", { month_close_wealth_pct: 35 })).json.data).toMatchObject({ month_close_wealth_pct: 35 });
-    for (const v of [101, -1, 2.5, "50"]) {
-      const res = await call("PUT", "/v1/settings/config", { month_close_wealth_pct: v });
-      expect(res.status, String(v)).toBe(400);
-      expect(res.json.error, String(v)).toMatchObject({ code: "invalid_input", field: "month_close_wealth_pct" });
+    for (const body of [{ surplus_reward_earmark: "tuition" }, { surplus_reward_earmark: null, salary_min_amount: 5 }, { month_close_wealth_pct: 50 }, { month_close_reward_wallet: "travel" }, { month_close_reward_wallet: null, salary_min_amount: 5 }]) {
+      const res = await call("PUT", "/v1/settings/config", body);
+      expect([res.status, res.json.error?.code], JSON.stringify(body)).toEqual([400, "model_changed"]);
     }
-    expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ month_close_wealth_pct: 35 });
+    expect(raw.prepare("SELECT COUNT(*) AS n FROM config WHERE k LIKE 'month_close_%' OR k = 'surplus_reward_earmark'").get()).toEqual({ n: 0 });
+    expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ salary_min_amount: 1_000_000, surplus_savings_pct: 40, surplus_reward_account: "mb-reward" });
   });
 });
 
@@ -391,21 +460,41 @@ describe("giờ nhắc (cả nhà)", () => {
   });
 });
 
-describe("nguồn thu và chia phong bì theo tuần", () => {
-  it("đọc hồ sơ nguồn thu seed; thêm/sửa nguồn; tổng khóa vượt 100% hay khóa vào ví Thu nhập bị từ chối", async () => {
-    const { json } = await call("GET", "/v1/settings");
-    expect(json.data.incomeStreams.find((s: { id: string }) => s.id === "salary-wife")).toEqual({ id: "salary-wife", name: "Lương vợ", sort: 20, active: true, locks: [{ walletId: "wealth-building", percent: 0.45 }] });
-
-    const over = await call("POST", "/v1/settings/income-streams", { name: "Thưởng", locks: [{ wallet_id: "wealth-building", percent: 0.6 }, { wallet_id: "travel", percent: 0.5 }] });
-    expect(over.json.error?.code).toBe("invalid_lock");
-    const created = await call("POST", "/v1/settings/income-streams", { name: "Thưởng", locks: [{ wallet_id: "wealth-building", percent: 0.5 }] });
+describe("nguồn thu", () => {
+  it("thêm / sửa nguồn; không có thì 404", async () => {
+    const created = await call("POST", "/v1/settings/income-streams", { name: "Thưởng" });
     expect(created.status).toBe(201);
-    expect(created.json.data).toMatchObject({ id: "thuong", active: true, locks: [{ walletId: "wealth-building", percent: 0.5 }] });
-
-    expect((await call("PATCH", "/v1/settings/income-streams/thuong", { locks: [{ wallet_id: "income", percent: 0.1 }] })).json.error?.code).toBe("invalid_lock");
-    const patched = await call("PATCH", "/v1/settings/income-streams/thuong", { name: "Thưởng Tết", locks: [{ wallet_id: "rental-income", percent: 1 }], active: false });
-    expect(patched.json.data).toEqual({ id: "thuong", name: "Thưởng Tết", sort: 100, active: false, locks: [{ walletId: "rental-income", percent: 1 }] });
+    expect(created.json.data).toEqual({ id: "thuong", name: "Thưởng", sort: 100, active: true, pocket: null, opens_cycle: false });
+    const patched = await call("PATCH", "/v1/settings/income-streams/thuong", { name: "Thưởng Tết", active: false });
+    expect(patched.json.data).toEqual({ id: "thuong", name: "Thưởng Tết", sort: 100, active: false, pocket: null, opens_cycle: false });
     expect((await call("PATCH", "/v1/settings/income-streams/khong-co", { name: "X" })).status).toBe(404);
+  });
+
+  it("UC-506 AC-29: PATCH nguồn Lương { opens_cycle: false } → lưu; locks trong thân → 400 model_changed, không ghi gì; opens_cycle không phải boolean → 400 invalid_input", async () => {
+    const off = await call("PATCH", "/v1/settings/income-streams/salary-husband", { opens_cycle: false });
+    expect([off.status, off.json.data?.opens_cycle]).toEqual([200, false]);
+    expect(raw.prepare("SELECT opens_cycle FROM income_streams WHERE id = 'salary-husband'").get()).toEqual({ opens_cycle: 0 });
+    const locks = await call("PATCH", "/v1/settings/income-streams/salary-husband", { name: "Lương", locks: [{ wallet_id: "wealth-building", percent: 0.3 }] });
+    expect([locks.status, locks.json.error?.code]).toEqual([400, "model_changed"]);
+    expect(raw.prepare("SELECT name FROM income_streams WHERE id = 'salary-husband'").get()).toEqual({ name: "Lương chồng" });
+    const createLocks = await call("POST", "/v1/settings/income-streams", { name: "Thưởng", locks: [{ wallet_id: "wealth-building", percent: 0.5 }] });
+    expect([createLocks.status, createLocks.json.error?.code]).toEqual([400, "model_changed"]);
+    expect(raw.prepare("SELECT COUNT(*) AS n FROM income_streams WHERE id = 'thuong'").get()).toEqual({ n: 0 });
+    const bad = await call("PATCH", "/v1/settings/income-streams/salary-husband", { opens_cycle: "true" });
+    expect([bad.status, bad.json.error?.code, bad.json.error?.field]).toEqual([400, "invalid_input", "opens_cycle"]);
+    const on = await call("POST", "/v1/settings/income-streams", { name: "Lương vợ mới", opens_cycle: true });
+    expect(on.json.data).toMatchObject({ id: "luong-vo-moi", opens_cycle: true });
+  });
+
+  it("UC-1205 AC-3: tắt Mở kỳ lương của nguồn duy nhất → paySetup.hasCycleStream false; nguồn cho thuê bật opens_cycle → 400 cannot_open_cycle", async () => {
+    expect((await call("GET", "/v1/snapshot")).json.data.paySetup).toEqual({ hasCycleStream: true });
+    await call("PATCH", "/v1/settings/income-streams/salary-husband", { opens_cycle: false });
+    expect((await call("GET", "/v1/snapshot")).json.data.paySetup).toEqual({ hasCycleStream: false });
+    const rental = await call("PATCH", "/v1/settings/income-streams/rental", { opens_cycle: true });
+    expect([rental.status, rental.json.error?.code]).toEqual([400, "cannot_open_cycle"]);
+    expect(raw.prepare("SELECT opens_cycle FROM income_streams WHERE id = 'rental'").get()).toEqual({ opens_cycle: 0 });
+    // Tắt thì luôn được.
+    expect((await call("PATCH", "/v1/settings/income-streams/rental", { opens_cycle: false })).status).toBe(200);
   });
 
   it("mẫu lương gắn nguồn thu; mã chi thì không gắn được", async () => {
@@ -415,16 +504,6 @@ describe("nguồn thu và chia phong bì theo tuần", () => {
     expect((await call("PATCH", `/v1/settings/rules/${salary.id}`, { income_stream_id: null })).json.data.incomeStreamId).toBeNull();
     const spend = raw.prepare("SELECT id FROM rules WHERE pattern = 'EAN'").get() as { id: number };
     expect((await call("PATCH", `/v1/settings/rules/${spend.id}`, { income_stream_id: "salary-husband" })).status).toBe(400);
-  });
-
-  it("phong bì tháng bật chia theo tuần; ví tích dồn hay phong bì tuần thì không", async () => {
-    const res = await call("PATCH", "/v1/settings/wallets/food", { allocation: { period: "month", amount: 2_800_000, split_weekly: true } });
-    expect(res.json.data.allocation).toMatchObject({ mode: "flat", period: "month", amount: 2_800_000, splitWeekly: true });
-    expect((await call("PATCH", "/v1/settings/wallets/transport", { allocation: { split_weekly: true } })).json.error?.code).toBe("invalid_allocation");
-    expect((await call("PATCH", "/v1/settings/wallets/hometown", { allocation: { split_weekly: true } })).json.error?.code).toBe("invalid_allocation");
-    // Đổi về phong bì tuần thì tự tắt chia tuần.
-    const back = await call("PATCH", "/v1/settings/wallets/food", { allocation: { period: "week", amount: 625_000 } });
-    expect(back.json.data.allocation.splitWeekly).toBe(false);
   });
 });
 
@@ -436,8 +515,8 @@ describe("mốc theo dõi SePay của tài khoản đã dùng (ADR-113)", () => 
   });
   const spend = (at: string, status = "active") =>
     raw.prepare(
-      `INSERT INTO transactions (at, amount, meaning, counter_wallet_id, account_id, category_id, week_key, month_key, status)
-       VALUES (?, 50000, 'spend', 'food', 'mb-husband', 'groceries', '2026-W41', '2026-10', ?)`,
+      `INSERT INTO transactions (at, amount, meaning, account_id, category_id, week_key, month_key, status)
+       VALUES (?, 50000, 'spend', 'mb-husband', 'groceries', '2026-W41', '2026-10', ?)`,
     ).run(at, status);
   const stored = () => raw.prepare("SELECT sepay_enabled, feed_from, sepay_out_from FROM accounts WHERE id = 'mb-husband'").get();
   const bankLog = (id: string, at: string, source: string, status = "assigned") =>
@@ -550,5 +629,101 @@ describe("tham số lãi tiền gửi (261018-lai-tien-gui)", () => {
     expect((await call("PUT", "/v1/settings/config", { interest_max_amount: 10_000_000 })).json.data).toMatchObject({ interest_max_amount: 10_000_000 });
     raw.prepare("UPDATE config SET v = 'abc' WHERE k = 'interest_max_amount'").run();
     expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ interest_max_amount: 10_000 });
+  });
+});
+
+describe("ba ngăn: cấu hình (261112-ba-ngan-nen-du-lieu)", () => {
+  const auditOf = (action: string) =>
+    (raw.prepare("SELECT target, detail FROM audit_log WHERE action = ? ORDER BY id").all(action) as { target: string; detail: string }[]).map((r) => ({
+      target: r.target,
+      detail: JSON.parse(r.detail),
+    }));
+
+  it("UC-505 AC-15: GET /v1/settings trên hộ mẫu có ngăn tài khoản, ngăn nguồn thu, goals[] (held = số dư sổ tài khoản gắn, chưa gắn → null), nhóm danh mục, % Tích luỹ", async () => {
+    raw.exec("UPDATE accounts SET opening_balance = 2500000 WHERE id = 'mb-tuition'");
+    const { data } = (await call("GET", "/v1/settings")).json;
+    expect(data.accounts.find((a: any) => a.id === "vcb-husband")).toMatchObject({ pocket: "operating", pocket_confirmed: true });
+    expect(data.accounts.find((a: any) => a.id === "mb-tuition")).toMatchObject({ pocket: "reserve", book_balance: 2_500_000 });
+    expect(data.incomeStreams.every((s: any) => "pocket" in s)).toBe(true);
+    expect(data.config.savings_pct).toBe(30);
+    for (const g of data.goals) {
+      expect(Object.keys(g).sort()).toEqual(
+        ["account_id", "active", "debt_id", "due_date", "held", "id", "monthly_amount", "name", "repeat_months", "sort", "suggested_account_id", "target_amount", "target_pct"].sort(),
+      );
+    }
+    expect(data.goals).toEqual([
+      { id: "tuition", name: "Học phí", account_id: "mb-tuition", suggested_account_id: null, held: 2_500_000, target_amount: 6_000_000, target_pct: null, monthly_amount: 2_000_000, repeat_months: 3, due_date: "2027-01-15", debt_id: null, sort: 10, active: true },
+      { id: "income-tax", name: "Thuế thu nhập", account_id: null, suggested_account_id: null, held: null, target_amount: null, target_pct: 10, monthly_amount: null, repeat_months: null, due_date: null, debt_id: null, sort: 20, active: true },
+      { id: "car-service", name: "Bảo dưỡng xe", account_id: null, suggested_account_id: null, held: null, target_amount: 4_800_000, target_pct: null, monthly_amount: null, repeat_months: null, due_date: "2027-03-31", debt_id: null, sort: 30, active: true },
+    ]);
+    // Mục tiêu đã tắt vẫn có trong danh sách.
+    raw.exec("UPDATE reserve_goals SET active = 0 WHERE id = 'car-service'");
+    expect((await call("GET", "/v1/settings")).json.data.goals.find((g: any) => g.id === "car-service")).toMatchObject({ active: false });
+    expect(data.categoryGroups.find((g: any) => g.id === "food")).toEqual({ id: "food", name: "Ăn uống", essential: true, cycle_limit: 2_709_000, sort: 41, active: true });
+    expect(data.categories.find((c: any) => c.id === "groceries").groupId).toBe("food");
+  });
+
+  it("UC-1204 AC-2: nhóm danh mục — tạo, trùng, bỏ hạn mức, hạn mức 0, tắt khi còn danh mục", async () => {
+    const created = await call("POST", "/v1/settings/category-groups", { name: "Đi lại xa", cycle_limit: 800_000 });
+    expect(created.status).toBe(201);
+    expect(created.json.data).toEqual({ id: "di-lai-xa", name: "Đi lại xa", essential: false, cycle_limit: 800_000, sort: 100, active: true });
+    expect((await call("GET", "/v1/settings")).json.data.categoryGroups.some((g: any) => g.id === "di-lai-xa")).toBe(true);
+    expect(auditOf("category_group.create")).toEqual([{ target: "category_group:di-lai-xa", detail: { fields: ["cycle_limit", "name"] } }]);
+    expect((await call("POST", "/v1/settings/category-groups", { name: "Đi lại xa" })).json.error?.code).toBe("duplicate");
+    expect((await call("PATCH", "/v1/settings/category-groups/di-lai-xa", { cycle_limit: null })).json.data.cycle_limit).toBeNull();
+    expect((await call("PATCH", "/v1/settings/category-groups/di-lai-xa", { cycle_limit: 0 })).json.error?.code).toBe("invalid_input");
+    expect((await call("PATCH", "/v1/categories/ride-hailing", { group_id: "di-lai-xa" })).status).toBe(200);
+    const inUse = await call("PATCH", "/v1/settings/category-groups/di-lai-xa", { active: false });
+    expect([inUse.status, inUse.json.error?.code]).toEqual([409, "group_in_use"]);
+    await call("PATCH", "/v1/categories/ride-hailing", { group_id: "transport" });
+    expect((await call("PATCH", "/v1/settings/category-groups/di-lai-xa", { active: false })).json.data.active).toBe(false);
+    expect(auditOf("category_group.update").map((r) => r.detail)).toEqual([{ fields: ["cycle_limit"] }, { fields: ["active"] }]);
+  });
+
+  it("UC-109 AC-8: danh mục nhận group_id — nhóm đang dùng thì lưu; nhóm lạ / đã tắt 400 unknown_group; null bỏ nhóm; GET /v1/categories và /v1/bootstrap trả groupId", async () => {
+    expect((await call("PATCH", "/v1/categories/shopping", { group_id: "nice-to-have" })).json.data).toMatchObject({ group_id: "nice-to-have" });
+    expect((await call("GET", "/v1/categories")).json.data.find((c: any) => c.id === "shopping").groupId).toBe("nice-to-have");
+    expect((await call("PATCH", "/v1/categories/shopping", { group_id: "khong-co" })).json.error?.code).toBe("unknown_group");
+    raw.exec("INSERT INTO category_groups (id, name, active) VALUES ('cu', 'Nhóm cũ', 0)");
+    expect((await call("PATCH", "/v1/categories/shopping", { group_id: "cu" })).json.error?.code).toBe("unknown_group");
+    expect((await call("PATCH", "/v1/categories/shopping", { group_id: null })).json.data.group_id).toBeNull();
+    expect((await call("GET", "/v1/bootstrap")).json.data.categories.find((c: any) => c.id === "groceries").groupId).toBe("food");
+  });
+
+  it("UC-109 AC-9: PATCH danh mục kèm default_wallet_id → 400 model_changed, không đổi gì; GET /v1/categories không có ví mặc định; danh mục mới không ví → khoản chi danh mục đó ghi được", async () => {
+    const old = await call("PATCH", "/v1/categories/eating-out", { name: "Ăn hàng", default_wallet_id: "food" });
+    expect([old.status, old.json.error?.code, (old.json.error as { fields?: string[] } | undefined)?.fields]).toEqual([400, "model_changed", ["default_wallet_id"]]);
+    expect(raw.prepare("SELECT name FROM categories WHERE id = 'eating-out'").get()).toEqual({ name: "Ăn ngoài" });
+    const list = (await call("GET", "/v1/categories")).json.data as Record<string, unknown>[];
+    expect(list.every((c) => !("default_wallet_id" in c) && !("defaultWalletId" in c))).toBe(true);
+    expect((await call("POST", "/v1/categories", { id: "pets", name: "Thú cưng", default_wallet_id: "food" })).json.error?.code).toBe("model_changed");
+    expect((await call("POST", "/v1/categories", { id: "pets", name: "Thú cưng" })).status).toBe(201);
+    const spend = await call("POST", "/v1/transactions", { meaning: "spend", amount: 150_000, category_id: "pets", account_id: "cash-husband" });
+    expect([spend.status, spend.json.data.tx.category_id]).toEqual([201, "pets"]);
+    expect(spend.json.data.tx).not.toHaveProperty("wallet_id");
+  });
+
+  it("UC-111 AC-16: bootstrap sau 0040 — không wallets; categories[] không ví mặc định; accounts[] có private, hiddenFromMe, không locked / role", async () => {
+    const boot = (await call("GET", "/v1/bootstrap")).json.data as { categories: object[]; accounts: object[] };
+    expect(boot).not.toHaveProperty("wallets");
+    expect(boot.categories.every((c) => !("defaultWalletId" in c) && !("default_wallet_id" in c))).toBe(true);
+    expect(boot.accounts.every((a) => "private" in a && "hiddenFromMe" in a && !("locked" in a) && !("role" in a))).toBe(true);
+  });
+
+  it("UC-506 AC-28: nguồn thu lưu ngăn của tiền về; ngăn lạ 400; null = theo tài khoản nhận", async () => {
+    expect((await call("PATCH", "/v1/settings/income-streams/salary-husband", { pocket: "savings" })).json.data.pocket).toBe("savings");
+    expect((await call("GET", "/v1/settings")).json.data.incomeStreams.find((s: any) => s.id === "salary-husband").pocket).toBe("savings");
+    expect((await call("PATCH", "/v1/settings/income-streams/salary-husband", { pocket: "spend" })).json.error?.code).toBe("invalid_input");
+    expect((await call("PATCH", "/v1/settings/income-streams/salary-husband", { pocket: null })).json.data.pocket).toBeNull();
+  });
+
+  it("UC-507 AC-20: % Tích luỹ là số nguyên 1–100", async () => {
+    expect((await call("PUT", "/v1/settings/config", { savings_pct: 15 })).json.data.savings_pct).toBe(15);
+    expect((await call("GET", "/v1/settings")).json.data.config.savings_pct).toBe(15);
+    expect(auditOf("config.update").at(-1)!.detail).toEqual({ fields: ["savings_pct"], savings_pct: 15 });
+    for (const v of [0, 101, 12.5, "10"]) {
+      const r = await call("PUT", "/v1/settings/config", { savings_pct: v });
+      expect([r.status, r.json.error?.code]).toEqual([400, "invalid_input"]);
+    }
   });
 });

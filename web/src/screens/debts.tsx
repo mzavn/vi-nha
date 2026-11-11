@@ -26,7 +26,7 @@ import { LinkSourcePicker } from "./ref-pickers";
 
 const DEBT: BookLabels = {
   title: "Mình nợ",
-  note: "Còn nợ = đã vay − đã trả. Trả nợ là khoản chi danh mục Trả nợ từ ví giữ riêng; trả qua tài khoản SePay báo cả tiền ra thì gán ở màn Gán.",
+  note: "Còn nợ = đã vay − đã trả. Trả nợ là khoản chi danh mục Trả nợ từ tài khoản trả; trả qua tài khoản SePay báo cả tiền ra thì gán ở màn Gán.",
   emptyTitle: "Chưa ghi khoản nợ nào.",
   emptyBody: "Thêm từng khoản nợ với số còn nợ hôm nay; mỗi lần trả nợ, số này tự giảm.",
   noun: "khoản nợ",
@@ -442,7 +442,7 @@ function DebtTermsFields({ f, onChange }: { f: DebtTermsForm; onChange: (f: Debt
         <label for="n-due">Ngày trả (1–28)</label>
         <input id="n-due" class="ctl" inputMode="numeric" placeholder="để trống nếu không cố định" value={f.dueDay} onInput={(e) => onChange({ ...f, dueDay: e.currentTarget.value })} />
       </div>
-      <p class="fhint">Khoản có lãi: mỗi tháng có dòng "Lãi vay" dự kiến trong ngân sách; trả nợ thì tách lãi (chi phí) và gốc (giảm nợ). Lãi không tự cộng vào số còn nợ.</p>
+      <p class="fhint">Khoản có lãi: lãi dự kiến mỗi tháng hiện ở Ví & quỹ › Nhìn lại (hàng Lãi vay); trả nợ thì tách lãi (chi phí) và gốc (giảm nợ). Lãi không tự cộng vào số còn nợ.</p>
     </>
   );
 }

@@ -1,11 +1,15 @@
-// Khung app: 4 tab cố định (không router), FAB "+" ở mọi màn trừ Nhập, Cài đặt, Sổ giao dịch, Hướng dẫn và Tài sản & tự do, toast đáy màn.
-// Cài đặt (#settings), Sổ giao dịch (#ledger), Hướng dẫn (#guide) và Tài sản & tự do (#net-worth) là màn phụ mở từ màn khác, không chiếm tab thứ năm.
+// Khung app: 4 tab cố định (không router), FAB "+" ở mọi màn trừ Nhập, Cài đặt, Sổ giao dịch, Tài sản & tự do và màn chuyển đổi, toast đáy màn.
+// Cài đặt (#settings), Sổ giao dịch (#ledger), Tài sản & tự do (#net-worth) và "Chuyển sang ba ngăn" (#convert, pwa UC-711 AC-28) là màn
+// phụ mở từ màn khác, không chiếm tab thứ năm. Màn chuyển đổi tự mở một lần trên mỗi máy khi snapshot còn `conversion` (pocket UC-1208).
+// Hướng dẫn không phải màn trong app: mục thanh bên và nút ở Cài đặt › Máy này mở GitBook ở tab mới (UC-711 AC-26).
 // Máy tính (≥1024px): thanh bên thay thanh dưới và FAB, phím N mở màn Nhập, Hôm nay thành bảng điều khiển.
 
 import { useEffect, useRef } from "preact/hooks";
+import { markInvited, shouldInvite } from "./lib/convert";
+import { deviceStorage } from "./lib/pin";
 import { Assign } from "./screens/assign";
+import { Convert } from "./screens/convert";
 import { Entry } from "./screens/entry";
-import { GuideSlot } from "./screens/guide";
 import { LedgerBook } from "./screens/ledger-book";
 import { Login } from "./screens/login";
 import { Lock } from "./screens/lock";
@@ -16,7 +20,7 @@ import { Today } from "./screens/today";
 import { TodayDesk } from "./screens/today-desktop";
 import { TxSheet } from "./screens/tx-sheet";
 import { Wallets } from "./screens/wallets";
-import { go, setState, useApp, type Tab } from "./state/store";
+import { getState, go, setState, useApp, type Tab } from "./state/store";
 import { applyUpdate } from "./state/sw-update";
 import { Icon } from "./ui/icons";
 import { Sidebar, useQuickEntryKey, useWide } from "./ui/shell";
@@ -27,6 +31,8 @@ const NAV: { tab: Tab; label: string; icon: string }[] = [
   { tab: "assign", label: "Gán", icon: "inbox" },
   { tab: "wallets", label: "Ví & quỹ", icon: "wallet" },
 ];
+/** Màn không có FAB "+" trên điện thoại (Cài đặt riêng: thêm `app-wide`). Màn chuyển đổi ẩn cả thanh dưới. */
+const SUB_SCREENS: Tab[] = ["entry", "ledger", "net-worth", "convert"];
 
 export function App() {
   const app = useApp();
@@ -43,6 +49,15 @@ export function App() {
     if (app.tab === "entry") return;
     document.getElementById("page-title")?.focus({ preventScroll: true });
   }, [app.tab]);
+
+  // Mời chuyển sang ba ngăn một lần trên máy này (UC-1208 AC-7): đã vào app, snapshot còn bước chuyển đổi, máy chưa được mời.
+  const conversion = app.phase === "app" && !app.locked ? app.snap?.conversion : null;
+  useEffect(() => {
+    const storage = deviceStorage();
+    if (!shouldInvite(storage, conversion)) return;
+    markInvited(storage);
+    if (getState().tab !== "convert") go("convert");
+  }, [conversion]);
 
   if (app.phase === "boot") {
     return (
@@ -79,7 +94,7 @@ export function App() {
   return (
     <>
       <UpdateBar />
-      <main class={app.tab === "settings" ? "app app-wide" : app.tab === "guide" ? "app app-guide" : app.tab === "entry" || app.tab === "ledger" || app.tab === "net-worth" ? "app" : "app has-fab"} id="main">
+      <main class={app.tab === "settings" ? "app app-wide" : SUB_SCREENS.includes(app.tab) ? "app" : "app has-fab"} id="main">
         {app.tab === "today" && <Today />}
         {app.tab === "entry" && <Entry />}
         {app.tab === "assign" && <Assign />}
@@ -87,35 +102,37 @@ export function App() {
         {app.tab === "settings" && <Settings />}
         {app.tab === "ledger" && <LedgerBook />}
         {app.tab === "net-worth" && <NetWorth />}
-        <GuideSlot />
+        {app.tab === "convert" && <Convert />}
       </main>
 
-      {app.tab !== "entry" && app.tab !== "settings" && app.tab !== "ledger" && app.tab !== "guide" && app.tab !== "net-worth" && (
+      {app.tab !== "settings" && !SUB_SCREENS.includes(app.tab) && (
         <button type="button" class="fab" aria-label="Nhập khoản chi" onClick={() => go("entry")}>
           <Icon name="plus" size={26} />
         </button>
       )}
 
-      <nav class="nav" aria-label="Màn chính">
-        <div class="nav-inner">
-          {NAV.map((n) => (
-            <button
-              type="button"
-              key={n.tab}
-              aria-current={app.tab === n.tab ? "page" : undefined}
-              onClick={() => (n.tab === "wallets" && app.tab !== "wallets" ? go("wallets", { tierFilter: null }) : go(n.tab))}
-            >
-              <Icon name={n.icon} size={22} />
-              {n.label}
-              {!!badges[n.tab] && (
-                <span class="badge" aria-label={n.tab === "assign" ? `${badges[n.tab]} chưa gán` : `${badges[n.tab]} chưa lên sổ`}>
-                  {badges[n.tab]}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-      </nav>
+      {app.tab !== "convert" && (
+        <nav class="nav" aria-label="Màn chính">
+          <div class="nav-inner">
+            {NAV.map((n) => (
+              <button
+                type="button"
+                key={n.tab}
+                aria-current={app.tab === n.tab ? "page" : undefined}
+                onClick={() => go(n.tab)}
+              >
+                <Icon name={n.icon} size={22} />
+                {n.label}
+                {!!badges[n.tab] && (
+                  <span class="badge" aria-label={n.tab === "assign" ? `${badges[n.tab]} chưa gán` : `${badges[n.tab]} chưa lên sổ`}>
+                    {badges[n.tab]}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        </nav>
+      )}
 
       <TxSheet />
       <Toast />
@@ -130,7 +147,7 @@ function DesktopApp() {
     <div class="dk-shell">
       <UpdateBar />
       <Sidebar />
-      <main class={app.tab === "settings" ? "app dk-main app-wide" : app.tab === "guide" ? "app dk-main app-guide" : "app dk-main"} id="main">
+      <main class={app.tab === "settings" ? "app dk-main app-wide" : "app dk-main"} id="main">
         {app.tab === "today" && <TodayDesk />}
         {app.tab === "entry" && <Entry />}
         {app.tab === "assign" && <Assign />}
@@ -138,7 +155,7 @@ function DesktopApp() {
         {app.tab === "settings" && <Settings />}
         {app.tab === "ledger" && <LedgerBook />}
         {app.tab === "net-worth" && <NetWorth />}
-        <GuideSlot />
+        {app.tab === "convert" && <Convert />}
       </main>
       <TxSheet />
       <Toast />

@@ -103,11 +103,18 @@ tắt để họ gõ vào màn **Thiết lập**:
 2. **Tiền nằm ở đâu?** Từng tài khoản: tên (ví dụ "VCB của Bố", "Tiền mặt"), loại (Ngân hàng, Tiền mặt, Ví điện tử,
    Thẻ tín dụng), ngân hàng nào, của ai hay của chung. Chỉ hỏi tên, **không hỏi số tài khoản hay số dư** (nhập sau trong
    app). Tối đa 20 tài khoản; tên người / tài khoản không trùng nhau.
-3. **Khoản chi bắt buộc hằng tháng** (ví Must) có những gì: ăn uống, nhà ở, đi lại, điện nước?
-4. **Có thu nhập phải tự nộp thuế** (làm tự do, cho thuê…)? Có → app trích ví Thuế 10% mỗi lần có thu nhập.
+3. **Mỗi tài khoản thuộc ngăn nào**: Vận hành (tiền chi hằng ngày — mặc định, thẻ tín dụng cũng để ở đây), Tích luỹ (tiền
+   để dành lâu dài), Dự phòng (các khoản đã biết sẽ phải trả như học phí, thuế; tài khoản Dự phòng không gắn mục tiêu là
+   phần an tâm) hay ngoài ngăn? Không chắc thì để Vận hành.
+4. **Ngày lương** hằng tháng (mặc định ngày 10) và **% Tích luỹ** trích mỗi kỳ lương (mặc định 10%).
+5. **Có thu nhập phải tự nộp thuế** (làm tự do, cho thuê…)? Có → app tạo mục tiêu Dự phòng "Thuế" (10% thu chịu thuế).
+6. Tuỳ chọn: **nhóm chi thiết yếu** (ăn uống, nhà ở, đi lại, điện nước — mặc định cả bốn) và **mục tiêu Dự phòng** (tên,
+   số mỗi tháng, mấy tháng một lần — ví dụ học phí 2.000.000 mỗi tháng, đóng 3 tháng một lần). **Mỗi mục tiêu là một tài
+   khoản thật** ở ngăn Dự phòng (tài khoản phụ, sổ tiết kiệm…): số "đã có" là số dư tài khoản đó. Chưa có tài khoản riêng
+   cho mục tiêu thì để chưa gắn, mở tài khoản sau rồi gắn trong app (Cài đặt › Ba ngăn).
 
 Rồi nói với người dùng: mở địa chỉ ở bước 5 → màn **Thiết lập** → ô **Mật khẩu chung**: dán mật khẩu từ file → điền theo
-bản tóm tắt (người, tài khoản, bộ ví mẫu). Mật khẩu riêng từng người: tuỳ chọn, đặt ngay ở bước Thành viên hoặc sau trong
+bản tóm tắt (người, tài khoản, ba ngăn). Mật khẩu riêng từng người: tuỳ chọn, đặt ngay ở bước Thành viên hoặc sau trong
 app (Cài đặt › Thành viên). Màn báo sai mật khẩu chung → nhờ người dùng kiểm lại file, đừng thử đoán (sai nhiều lần sẽ bị
 chặn một lúc).
 
@@ -120,3 +127,15 @@ chặn một lúc).
   Kết nối › SePay).
 - Cập nhật bản mới sau này: `git pull --autostash && npm ci && npm run deploy` (`--autostash` vì setup đã ghi `account_id` vào
   `wrangler.jsonc`). App báo có bản mới ở Cài đặt › Nâng cao › Cập nhật Ví nhà.
+- **Lên 2.0 từ bản 1.x** (bản nâng database lớn, không lùi được bằng nút Cập nhật): **sao lưu trước** bằng lệnh dưới; người
+  dùng tự mở file thấy hàng nghìn dòng `INSERT` thì mới chạy lệnh cập nhật ở trên. Nhờ người dùng chọn lúc cả nhà không ghi
+  chép (~15 phút). Bạn không mở file sao lưu (chứa mọi giao dịch và khoá kết nối); không commit, không gửi đi. Máy đăng nhập
+  nhiều tài khoản Cloudflare: đặt `CLOUDFLARE_ACCOUNT_ID` trước.
+
+  ```bash
+  mkdir -p .wrangler/backups
+  npx wrangler d1 export vi-nha --remote --output .wrangler/backups/vi-nha-truoc-2.0.sql
+  ```
+
+  Bước nâng database lỗi thì chạy lại `npm run deploy` (tiếp từ chỗ dừng); **không** đưa code về 1.8 khi database chưa được
+  khôi phục. Cập nhật xong, người dùng tự làm màn **Chuyển sang ba ngăn** trong app (5 bước, app tự mở lần đầu).

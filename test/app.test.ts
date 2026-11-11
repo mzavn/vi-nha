@@ -4,6 +4,8 @@ import { app } from "../src/index";
 import type { Env } from "../src/env";
 import { SECURITY_HEADERS } from "../src/security-headers";
 import { asD1, openDb, readSql } from "./helpers/d1-sqlite";
+import { householdE } from "./helpers/household-e";
+import { legacyEmptyDb, upgradingD1 } from "./helpers/legacy";
 
 const env = (over: Partial<Env> = {}) => ({ DB: asD1(openDb()), API_TOKEN: "test-token", ...over }) as Env;
 
@@ -11,7 +13,14 @@ describe("GET /v1/health", () => {
   it("trả phiên bản schema, không cần token", async () => {
     const res = await app.request("/v1/health", {}, env());
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, db: "v1.37" });
+    expect(await res.json()).toEqual({ ok: true, db: "v1.41" });
+  });
+
+  it("UC-509 AC-3: D1 trống áp 0030_baseline + 0031…0041, và hộ mẫu E áp 0038…0041 → cả hai v1.41", async () => {
+    for (const DB of [upgradingD1(legacyEmptyDb()), asD1(householdE())]) {
+      const res = await app.request("/v1/health", {}, env({ DB }));
+      expect(await res.json()).toEqual({ ok: true, db: "v1.41" });
+    }
   });
 
   it("báo 503 khi D1 chưa chạy migration", async () => {
@@ -61,8 +70,8 @@ describe("header bảo mật (ADR-89)", () => {
     expectSecure(page);
     expect(SECURITY_HEADERS["Content-Security-Policy"]).toContain("script-src 'self';");
     expect(SECURITY_HEADERS["Content-Security-Policy"]).toContain("frame-ancestors 'none'");
-    // Màn Hướng dẫn nhúng GitBook (UC-711 AC-13): chỉ đúng origin của GUIDE_URL được làm khung.
-    expect(SECURITY_HEADERS["Content-Security-Policy"]).toContain("frame-src https://mzavn.gitbook.io;");
+    // access UC-503 AC-6 (Đợt E): Hướng dẫn mở tab mới (UC-711 AC-26) nên không còn `frame-src`; trình duyệt dùng default-src 'self'.
+    expect(SECURITY_HEADERS["Content-Security-Policy"]).not.toContain("frame-src");
   });
 
   it("web/public/_headers (app shell do Static Assets phục vụ thẳng) giống hệt header Worker gắn", () => {

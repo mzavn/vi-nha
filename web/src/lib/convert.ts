@@ -1,0 +1,261 @@
+// Logic thuần của màn "Chuyển sang ba ngăn" (`#convert`, pocket UC-1208, pwa UC-702 AC-27, UC-711 AC-28): bước kế tiếp,
+// chữ banner / hàng Cài đặt, cờ mời một lần trên máy, số bước 3 (đối chiếu Tích luỹ), điều kiện nút Tiếp của bước 2 / 4,
+// thứ tự yêu cầu khi Tiếp ở bước 2, xử lý 409 theo `next`. Mọi số tiền qua bộ định dạng có che số (UC-718); "Bước 3/5",
+// "15%" không phải số tiền nên không che.
+
+import { ApiError } from "./api";
+import { formatVnd, moneyDigits } from "./money";
+import { dueText } from "./pockets";
+import { goalAccountOptions } from "./settings";
+import type { IncomeStream, ReserveGoal, SettingsAccount } from "./types";
+
+/** Năm bước theo thứ tự server (`conversion_claims`). */
+export const CONVERSION_STEPS = ["pockets", "goals", "savings_gap", "pay_cycle", "savings_pct"] as const;
+export type ConversionStep = (typeof CONVERSION_STEPS)[number];
+
+/** Tiến độ trong snapshot (`conversion`); null = không có / đã xong. */
+export type ConversionProgress = { done: number; total: number; next: string };
+
+/** Số đối chiếu bước 3 (`GET /v1/conversion` › `savingsGap`). */
+export interface SavingsGap {
+  legacyCash: number;
+  legacyAssets: number;
+  realSavings: number;
+  diff: number;
+  hasSavingsAccount: boolean;
+}
+
+/** `GET /v1/conversion` và thân 200 của `POST /v1/conversion/steps/:step`. */
+export interface ConversionStatus {
+  state: "pending" | "done" | null;
+  steps: string[];
+  next: string | null;
+  savingsGap: SavingsGap | null;
+}
+
+export const isConversionStep = (s: unknown): s is ConversionStep => (CONVERSION_STEPS as readonly unknown[]).includes(s);
+
+/** Số thứ tự 1–5 của bước; bước lạ / null → 0. */
+export const stepNumber = (step: string | null | undefined): number => (CONVERSION_STEPS as readonly (string | null | undefined)[]).indexOf(step) + 1;
+
+/** Tiêu đề màn: "Chuyển sang ba ngăn · Bước {n}/5". */
+export const convertTitle = (step: ConversionStep): string => `Chuyển sang ba ngăn · Bước ${stepNumber(step)}/${CONVERSION_STEPS.length}`;
+
+/** Banner đầu tiên ở Hôm nay (pwa UC-702): "Hoàn tất chuyển sang ba ngăn · còn {total − done} bước ›"; xong / không có → null. */
+export function conversionBanner(c: { done: number; total: number; next: string } | null | undefined): string | null {
+  return c ? `Hoàn tất chuyển sang ba ngăn · còn ${c.total - c.done} bước ›` : null;
+}
+
+/** Hàng ở Cài đặt › Ba ngăn khi đang chuyển đổi (pwa UC-709 AC-46): "Chuyển sang ba ngăn · còn {N} bước ›"; xong → null. */
+export function conversionSettingsRow(c: { done: number; total: number } | null | undefined): string | null {
+  return c ? `Chuyển sang ba ngăn · còn ${c.total - c.done} bước ›` : null;
+}
+
+// ── Mời một lần trên mỗi máy (như cờ che số, UC-718) ─────────────────
+
+export const CONVERT_INVITED_KEY = "vi-nha:convert-invited";
+
+type FlagStorage = Pick<Storage, "getItem" | "setItem">;
+
+/**
+ * App tải xong, snapshot có `conversion` ≠ null và máy này chưa từng được mời → tự mở `#convert` một lần. localStorage bị chặn
+ * (null hay ném lỗi) → không tự mở (không ghi được cờ thì lần nào cũng mời, phiền hơn là banner).
+ */
+export function shouldInvite(storage: FlagStorage | null, conversion: ConversionProgress | null | undefined): boolean {
+  if (!conversion || !storage) return false;
+  try {
+    return storage.getItem(CONVERT_INVITED_KEY) !== "1";
+  } catch {
+    return false;
+  }
+}
+
+export function markInvited(storage: FlagStorage | null): void {
+  try {
+    storage?.setItem(CONVERT_INVITED_KEY, "1");
+  } catch {
+    // không ghi được cờ — shouldInvite cũng không đọc được, nên không mời lại
+  }
+}
+
+// ── 409 theo `next` ─────────────────────────────────────────────────
+
+/**
+ * Gửi bước `sent` bị 409: vẽ lại theo `next` trong thân lỗi. `silent` = không báo lỗi — `next` đã qua bước vừa gửi (gửi lại
+ * sau khi mất phản hồi, hay máy khác vừa làm) hoặc đã xong hết (`next` null, `conversion_not_pending`). Lỗi khác (không phải
+ * 409 có `next`) → null: hiện lỗi như thường.
+ */
+export function stepConflict(sent: ConversionStep, err: unknown): { next: ConversionStep | null; silent: boolean } | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null;
+  if (err.code === "conversion_not_pending") return { next: null, silent: true };
+  const next = err.body?.next;
+  if (next === null) return { next: null, silent: true };
+  if (!isConversionStep(next)) return null;
+  return { next, silent: stepNumber(next) > stepNumber(sent) };
+}
+
+// ── Bước 2: mỗi mục tiêu một tài khoản thật ─────────────────────────
+
+/** Lựa chọn của một dòng mục tiêu: gắn tài khoản · không dùng (tắt) · để sau. "Tạo tài khoản mới" lưu xong thành gắn tài khoản. */
+export type GoalChoice = { kind: "account"; accountId: string } | { kind: "off" } | { kind: "later" };
+
+/** Dòng phụ của một mục tiêu ở bước 2: cách đặt số và hạn — "2.000.000/tháng, 3 tháng một lần · hạn 15/01/2027", "10% thu chịu thuế", "cần 4.800.000". */
+export function goalTerms(g: ReserveGoal): string {
+  const parts: string[] = [];
+  if (g.target_pct !== null) parts.push(`${g.target_pct}% thu chịu thuế`);
+  else if (g.monthly_amount !== null && g.repeat_months !== null)
+    parts.push(g.repeat_months === 1 ? `${moneyDigits(g.monthly_amount)}/tháng` : `${moneyDigits(g.monthly_amount)}/tháng, ${g.repeat_months} tháng một lần`);
+  else if (g.target_amount !== null) parts.push(`cần ${moneyDigits(g.target_amount)}`);
+  if (g.due_date) parts.push(`hạn ${dueText(g.due_date)}`);
+  return parts.join(" · ");
+}
+
+/**
+ * Lựa chọn sẵn khi mở bước 2: mục tiêu đã gắn → tài khoản đó; còn lại chọn sẵn tài khoản đề xuất khi nó còn đang dùng, ở ngăn
+ * Dự phòng, chưa gắn mục tiêu khác, không phải Ví Thưởng (và chưa được dòng trước chọn sẵn); không thì chưa chọn (null).
+ */
+export function initialGoalChoices(goals: ReserveGoal[], accounts: SettingsAccount[], rewardAccountId: string | null | undefined): Record<string, GoalChoice | null> {
+  const active = goals.filter((g) => g.active);
+  const out: Record<string, GoalChoice | null> = {};
+  for (const g of active) if (g.account_id) out[g.id] = { kind: "account", accountId: g.account_id };
+  for (const g of active) {
+    if (g.account_id) continue;
+    const taken = new Set(Object.values(out).flatMap((c) => (c?.kind === "account" ? [c.accountId] : [])));
+    const ok = goalAccountOptions(accounts, goals, rewardAccountId, g.id).some((a) => a.id === g.suggested_account_id && !taken.has(a.id));
+    out[g.id] = ok ? { kind: "account", accountId: g.suggested_account_id! } : null;
+  }
+  return out;
+}
+
+/** Mục tiêu sau khi áp các lựa chọn đang chọn (chưa gửi): gắn tài khoản đã chọn, tắt / để sau thì chưa gắn. */
+function pendingGoals(goals: ReserveGoal[], choices: Record<string, GoalChoice | null>): ReserveGoal[] {
+  return goals.map((g) => {
+    const c = choices[g.id];
+    return !c ? g : { ...g, account_id: c.kind === "account" ? c.accountId : null };
+  });
+}
+
+/** Tài khoản chọn được cho một dòng: như sheet mục tiêu, theo lựa chọn đang chọn của các dòng khác và Ví Thưởng đang chọn. */
+export function goalRowAccounts(
+  goalId: string,
+  goals: ReserveGoal[],
+  accounts: SettingsAccount[],
+  choices: Record<string, GoalChoice | null>,
+  reward: string | null,
+): SettingsAccount[] {
+  return goalAccountOptions(accounts, pendingGoals(goals, choices), reward, goalId);
+}
+
+/** Tài khoản chọn được cho Ví Thưởng ở bước 2: Dự phòng đang dùng, không thuộc mục tiêu nào theo lựa chọn đang chọn. */
+export function rewardRowAccounts(accounts: SettingsAccount[], goals: ReserveGoal[], choices: Record<string, GoalChoice | null>): SettingsAccount[] {
+  return goalAccountOptions(accounts, pendingGoals(goals, choices), null);
+}
+
+/** Nút Tiếp ở bước 2 chỉ bật khi mọi mục tiêu đang dùng đã có lựa chọn. */
+export function goalsReady(goals: ReserveGoal[], choices: Record<string, GoalChoice | null>): boolean {
+  return goals.filter((g) => g.active).every((g) => choices[g.id] != null);
+}
+
+export interface StepRequest {
+  method: "POST" | "PATCH" | "PUT";
+  path: string;
+  body: Record<string, unknown>;
+}
+
+/**
+ * Các yêu cầu khi bấm Tiếp ở bước 2, đúng thứ tự để server không báo trùng: (1) tắt / bỏ gắn trước cho tài khoản rảnh ra,
+ * (2) đổi Ví Thưởng, (3) gắn tài khoản. Dòng không đổi gì thì không gửi.
+ */
+export function goalStepRequests(goals: ReserveGoal[], choices: Record<string, GoalChoice | null>, reward: { current: string | null; next: string | null }): StepRequest[] {
+  const path = (id: string) => `/v1/settings/goals/${encodeURIComponent(id)}`;
+  const free: StepRequest[] = [];
+  const attach: StepRequest[] = [];
+  for (const g of goals.filter((x) => x.active)) {
+    const c = choices[g.id];
+    if (!c) continue;
+    if (c.kind === "off") free.push({ method: "PATCH", path: path(g.id), body: { active: false } });
+    else if (c.kind === "later" && g.account_id) free.push({ method: "PATCH", path: path(g.id), body: { account_id: null } });
+    else if (c.kind === "account" && c.accountId !== g.account_id) {
+      // Đổi từ tài khoản này sang tài khoản khác: bỏ gắn trước để tài khoản cũ rảnh cho dòng khác.
+      if (g.account_id) free.push({ method: "PATCH", path: path(g.id), body: { account_id: null } });
+      attach.push({ method: "PATCH", path: path(g.id), body: { account_id: c.accountId } });
+    }
+  }
+  const rewardReq: StepRequest[] = reward.next === reward.current ? [] : [{ method: "PUT", path: "/v1/settings/config", body: { surplus_reward_account: reward.next } }];
+  return [...free, ...rewardReq, ...attach];
+}
+
+/** Thân 201 / 200 của `POST /v1/settings/goals/:id/account` (pocket UC-1209 bước 8). */
+export interface GoalAccountResult {
+  goal: ReserveGoal;
+  account: SettingsAccount;
+  created: boolean;
+}
+
+/**
+ * "Tạo tài khoản mới" cho một mục tiêu (pocket UC-1208 bước 2.2, AC-9; ADR-134): một yêu cầu vừa tạo tài khoản vừa gắn mục
+ * tiêu, thân = thân sheet tài khoản, nguyên vẹn — không thêm `id`, không đổi tên. Mã tài khoản (slug tên) là khoá idempotency
+ * ở server, nên Lưu lại sau lỗi mạng gửi đúng thân này và không sinh tài khoản thứ hai.
+ */
+export function goalAccountRequest(goalId: string, account: Record<string, unknown>): StepRequest {
+  return { method: "POST", path: `/v1/settings/goals/${encodeURIComponent(goalId)}/account`, body: account };
+}
+
+/** Bước một của sheet thêm mục tiêu mới kèm "Tạo tài khoản mới": tạo mục tiêu không `account_id` (bước hai là `goalAccountRequest`). */
+export function goalCreateRequest(goal: Record<string, unknown>): StepRequest {
+  const { account_id: _, ...body } = goal;
+  return { method: "POST", path: "/v1/settings/goals", body };
+}
+
+/** Câu khi nhà chưa có tài khoản Dự phòng nào đang dùng (bước 2). */
+export const NO_RESERVE_ACCOUNT =
+  "Nhà chưa có tài khoản nào ở ngăn Dự phòng: mở một tài khoản thật (tài khoản phụ, sổ tiết kiệm…) cho từng mục tiêu, hoặc để sau.";
+
+// ── Bước 3: Tích luỹ — tiền thật khác ví cũ ─────────────────────────
+
+export const SAVINGS_GAP_EXPLAIN =
+  "Bản cũ chia lương vào ví Tích sản ngay khi lương về, kể cả khi tiền chưa chuyển sang tài khoản tích luỹ (lệnh chuyển bị bỏ qua hay chưa làm), và tính cả các lần chuyển giữa ví. Từ bản 2.0, Tích luỹ là tiền thật đang nằm ở các tài khoản ngăn Tích luỹ. Số ví cũ chỉ còn ở màn này; giao dịch cũ vẫn xem được trong Sổ với nhãn 'cách tính cũ'.";
+
+export const SAVINGS_GAP_NO_ACCOUNT =
+  "Chưa có tài khoản Tích luỹ: mở một tài khoản thật cho Tích luỹ (tài khoản phụ, sổ tích luỹ…), rồi xếp vào ngăn Tích luỹ ở Cài đặt › Ba ngăn.";
+
+/** Chữ bước 3 (chỉ đọc). Chênh có dấu: "+500.000 ₫" / "−1.000.000 ₫" / "0 ₫". */
+export function savingsGapLines(gap: SavingsGap): { legacy: string; assets: string; real: string; diff: string; noAccount: string | null } {
+  return {
+    legacy: `Ví Tích sản cũ (số app chia trên giấy): ${formatVnd(gap.legacyCash)}`,
+    assets: `không gồm ${formatVnd(gap.legacyAssets)} tài sản đã mua`,
+    real: `Tích luỹ thật hôm nay: ${formatVnd(gap.realSavings)}`,
+    diff: `Chênh: ${gap.diff > 0 ? "+" : ""}${formatVnd(gap.diff)}`,
+    noAccount: gap.hasSavingsAccount ? null : SAVINGS_GAP_NO_ACCOUNT,
+  };
+}
+
+// ── Bước 4: bật "Mở kỳ lương" ───────────────────────────────────────
+
+/** Nguồn thu đang dùng có công tắc "Mở kỳ lương" (nguồn cho thuê không có). */
+export const cycleSwitchStreams = (streams: IncomeStream[], rentalStreamId: string | null | undefined): IncomeStream[] =>
+  streams.filter((s) => s.active && s.id !== rentalStreamId);
+
+/** "Đang bật {N} nguồn: …" khi từ hai nguồn trở lên; ít hơn → null. */
+export function cycleStreamsNote(on: number): string | null {
+  return on >= 2 ? `Đang bật ${on} nguồn: khoản về trước trong 7 ngày quanh ngày lương mở kỳ` : null;
+}
+
+/** Nút Tiếp ở bước 4: ≥ 1 nguồn đang dùng bật, hoặc chọn "Nhà mình không có lương cố định". */
+export const payCycleReady = (on: number, noSalary: boolean): boolean => on > 0 || noSalary;
+
+// ── Bước 5: % Tích luỹ mỗi kỳ lương ─────────────────────────────────
+
+/** Lương mẫu cho ví dụ ở bước 5. */
+const EXAMPLE_SALARY = 20_000_000;
+
+/** Câu bước 5 theo % đang gõ (1–100); % sai → null (nút Xong khoá). */
+export function savingsPctLines(pct: number | null): { line: string; example: string } | null {
+  if (pct === null) return null;
+  return {
+    line: `Lương về, việc đầu tiên là trích ${pct}% sang Tích luỹ. Kỳ nào không trích được thì bỏ qua và ghi lý do.`,
+    example: `Lương ${moneyDigits(EXAMPLE_SALARY)} → trích ${moneyDigits(Math.round((EXAMPLE_SALARY * pct) / 100))}`,
+  };
+}
+
+export const CONVERT_DONE_TOAST = "Xong. Từ giờ Hôm nay là tiền thật của ba ngăn.";

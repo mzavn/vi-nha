@@ -5,6 +5,7 @@ import { listMemberGrants, MCP_PATH, oauthApi, revokeMemberGrants, type GrantMet
 import { actorOf, fieldNames, listAudit, recordChange, type Alert } from "../services/audit";
 import { householdPasswordOk, memberPasswordOk } from "../services/passwords";
 import { SECRET_NAMES, type SecretName } from "../services/secrets";
+import * as pockets from "../services/pockets";
 import * as settings from "../services/settings";
 import { createZaloLinkCode, setZaloWebhook, testZalo } from "../services/zalo";
 import { clearSession, issueSession, loginBlocked, passwordAccepted, wrongPassword } from "./auth";
@@ -20,7 +21,14 @@ async function body(c: Context<AppEnv>): Promise<Record<string, unknown>> {
   return data as Record<string, unknown>;
 }
 
-settingsRoutes.get("/", async (c) => ok(c, await settings.getSettings(c.env, new URL(c.req.url).origin)));
+// Mục tiêu Dự phòng và nhóm danh mục (pocket UC-1209, UC-1204) đọc ở services/pockets, cùng một phản hồi (UC-505).
+settingsRoutes.get("/", async (c) =>
+  ok(c, {
+    ...(await settings.getSettings(c.env, new URL(c.req.url).origin)),
+    goals: await pockets.listGoals(c.env.DB),
+    categoryGroups: await pockets.listCategoryGroups(c.env.DB),
+  }),
+);
 settingsRoutes.get("/audit", async (c) => ok(c, await listAudit(c.env.DB)));
 
 /**
@@ -75,8 +83,11 @@ settingsRoutes.post("/accounts", async (c) => {
   return ok(c, account, 201);
 });
 
-/** Trường tài khoản đụng tới số tiền / phạm vi đối soát: nhật ký ghi cũ → mới khi đổi (ADR-90, ADR-113). */
-const ACCOUNT_TRACKED = ["feed_from", "sepay_out_from", "opened_at", "opening_balance"] as const;
+/**
+ * Trường tài khoản đụng tới số tiền / phạm vi đối soát / ngăn / ai thấy từng khoản: nhật ký ghi cũ → mới khi đổi (ADR-90,
+ * ADR-113, pocket UC-1201, access UC-504 — mọi lần đổi chủ).
+ */
+const ACCOUNT_TRACKED = ["feed_from", "sepay_out_from", "opened_at", "opening_balance", "pocket", "private", "owner_member_id"] as const;
 
 /** Mốc theo dõi SePay để người đọc: "22:25:00 15/10/2026" giờ VN; null = từ ngày số dư đầu. */
 function feedFromLabel(iso: unknown): string {
@@ -90,7 +101,7 @@ settingsRoutes.patch("/accounts/:id", async (c) => {
   const b = await body(c);
   // Đọc theo tên cột như API trả (snake_case); toAccount không khai báo từng cột.
   const before: Record<string, unknown> | null = await settings.readAccount(c.env.DB, c.req.param("id"));
-  const account = await settings.updateAccount(c.env.DB, c.req.param("id"), b);
+  const account = await settings.updateAccount(c.env.DB, c.req.param("id"), b, new Date(), c.get("memberId") ?? null);
   const after: Record<string, unknown> = account;
   const changes = Object.fromEntries(
     ACCOUNT_TRACKED.filter((k) => before && before[k] !== after[k]).map((k) => [k, { from: before![k] ?? null, to: after[k] ?? null }]),
@@ -103,11 +114,74 @@ settingsRoutes.patch("/accounts/:id", async (c) => {
   return ok(c, account);
 });
 
-settingsRoutes.post("/wallets", async (c) => ok(c, await settings.createWallet(c.env.DB, await body(c)), 201));
-settingsRoutes.patch("/wallets/:id", async (c) => ok(c, await settings.updateWallet(c.env.DB, c.req.param("id"), await body(c))));
+// Ví và luật nạp đã bỏ (ADR-123, access UC-506): mọi đường sửa → 410, không ghi gì.
+const walletsGone = (c: Context<AppEnv>) =>
+  c.json({ ok: false, error: { code: "model_changed", message: "Ví nhà v2 đã bỏ ví và luật nạp: tiền nằm ở ba ngăn theo tài khoản, lương về mở kỳ lương và danh sách việc." } }, 410);
+settingsRoutes.all("/wallets", walletsGone);
+settingsRoutes.all("/wallets/*", walletsGone);
 
-settingsRoutes.post("/income-streams", async (c) => ok(c, await settings.createIncomeStream(c.env.DB, await body(c)), 201));
-settingsRoutes.patch("/income-streams/:id", async (c) => ok(c, await settings.updateIncomeStream(c.env.DB, c.req.param("id"), await body(c))));
+/** Nguồn thu (access UC-506): nhật ký ghi tên trường; "Mở kỳ lương" thật sự đổi thì kèm `changes.opens_cycle` (quyết việc mở kỳ). */
+settingsRoutes.post("/income-streams", async (c) => {
+  const b = await body(c);
+  const stream = await settings.createIncomeStream(c.env.DB, b);
+  await recordChange(c, "income_stream.create", `income_stream:${stream.id}`, { fields: fieldNames(b) });
+  return ok(c, stream, 201);
+});
+settingsRoutes.patch("/income-streams/:id", async (c) => {
+  const b = await body(c);
+  const before = await settings.getStream(c.env.DB, c.req.param("id"));
+  const stream = await settings.updateIncomeStream(c.env.DB, c.req.param("id"), b);
+  const changes = before.opens_cycle !== stream.opens_cycle ? { opens_cycle: { from: before.opens_cycle, to: stream.opens_cycle } } : null;
+  await recordChange(c, "income_stream.update", `income_stream:${stream.id}`, { fields: fieldNames(b), ...(changes ? { changes } : {}) });
+  return ok(c, stream);
+});
+
+// ── Ba ngăn (pocket UC-1201…1204) ───────────────────────────────────
+/** Xác nhận cả bảng ngăn một lần: nhật ký `pockets.confirm` chỉ ghi tài khoản đổi ngăn. */
+settingsRoutes.put("/pockets", async (c) => {
+  const { count, changes } = await pockets.confirmPockets(c.env.DB, await body(c));
+  await recordChange(c, "pockets.confirm", null, { accounts: count, changes });
+  return ok(c, { accounts: await settings.listAccounts(c.env.DB) });
+});
+
+/** Mục tiêu Dự phòng (UC-1209): không xoá, chỉ tắt; nhật ký ghi tên trường, đổi tài khoản thì kèm `changes.account_id`. */
+settingsRoutes.post("/goals", async (c) => {
+  const b = await body(c);
+  const goal = await pockets.createGoal(c.env.DB, b);
+  await recordChange(c, "goal.create", `goal:${goal.id}`, { fields: fieldNames(b) });
+  return ok(c, { goal }, 201);
+});
+settingsRoutes.patch("/goals/:id", async (c) => {
+  const b = await body(c);
+  const { goal, changes } = await pockets.updateGoal(c.env.DB, c.req.param("id"), b);
+  await recordChange(c, "goal.update", `goal:${goal.id}`, { fields: fieldNames(b), ...(Object.keys(changes).length ? { changes } : {}) });
+  return ok(c, { goal });
+});
+/**
+ * Tạo tài khoản cho mục tiêu trong một lần ghi (UC-1209 bước 8, ADR-134): 201 khi vừa tạo, 200 `created: false` khi gửi lại.
+ * Nhật ký `account.create` + `goal.update` (`changes.account_id`) chỉ khi vừa tạo.
+ */
+settingsRoutes.post("/goals/:id/account", async (c) => {
+  const b = await body(c);
+  const result = await pockets.createGoalAccount(c.env.DB, c.req.param("id"), b);
+  if (!result.created) return ok(c, result);
+  await recordChange(c, "account.create", `account:${result.account.id}`, { fields: fieldNames(b) });
+  await recordChange(c, "goal.update", `goal:${result.goal.id}`, { fields: ["account_id"], changes: { account_id: { from: null, to: result.account.id } } });
+  return ok(c, result, 201);
+});
+
+settingsRoutes.post("/category-groups", async (c) => {
+  const b = await body(c);
+  const group = await pockets.createCategoryGroup(c.env.DB, b);
+  await recordChange(c, "category_group.create", `category_group:${group.id}`, { fields: fieldNames(b) });
+  return ok(c, group, 201);
+});
+settingsRoutes.patch("/category-groups/:id", async (c) => {
+  const b = await body(c);
+  const group = await pockets.updateCategoryGroup(c.env.DB, c.req.param("id"), b);
+  await recordChange(c, "category_group.update", `category_group:${group.id}`, { fields: fieldNames(b) });
+  return ok(c, group);
+});
 
 /** Thêm người (UC-507): nhật ký + báo cả nhà — người lạ được thêm vào nhà là việc cả nhà phải biết (ADR-90). */
 settingsRoutes.post("/members", async (c) => {
@@ -197,15 +271,15 @@ settingsRoutes.post("/members/:id/zalo-code", async (c) => {
 settingsRoutes.patch("/rules/:id", async (c) => {
   const id = Number(c.req.param("id"));
   if (!Number.isInteger(id) || id <= 0) throw new DomainError("invalid_input", "id không hợp lệ.");
-  return ok(c, await settings.updateRule(c.env.DB, id, await body(c)));
+  return ok(c, await settings.updateRule(c.env.DB, id, await body(c), c.get("memberId") ?? null));
 });
 
 settingsRoutes.put("/config", async (c) => {
   const b = await body(c);
   const config = await settings.updateConfig(c.env.DB, b);
-  // Tham số chốt tháng không bí mật: ghi luôn giá trị mới để biết ai đổi Ví Thưởng / tỷ lệ thành gì.
-  const monthClose = Object.fromEntries((["month_close_reward_wallet", "month_close_wealth_pct"] as const).filter((k) => k in b).map((k) => [k, config[k]]));
-  await recordChange(c, "config.update", null, { fields: Object.keys(b).filter((k) => /^[a-z0-9_]{1,40}$/.test(k)).sort(), ...monthClose });
+  // Tham số dư kỳ trước và % Tích luỹ không bí mật: ghi luôn giá trị mới để biết ai đổi Ví Thưởng / tỷ lệ thành gì.
+  const values = Object.fromEntries((["surplus_reward_account", "surplus_savings_pct", "savings_pct"] as const).filter((k) => k in b).map((k) => [k, config[k]]));
+  await recordChange(c, "config.update", null, { fields: Object.keys(b).filter((k) => /^[a-z0-9_]{1,40}$/.test(k)).sort(), ...values });
   return ok(c, config);
 });
 settingsRoutes.patch("/notify-schedule", async (c) => ok(c, await settings.updateNotifySchedule(c.env.DB, await body(c))));

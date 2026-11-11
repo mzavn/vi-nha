@@ -5,6 +5,7 @@
 import { monthsBack } from "../domain/balance";
 import { milestones, type Freedom, type FreedomParams, type ProjectionIncomeLine } from "../domain/freedom";
 import { dayKey } from "../domain/period";
+import { DEFAULT_SAVINGS_PCT } from "../domain/pockets";
 import { buildIncomeStatement } from "../domain/reports";
 import { getBalanceSheet } from "./balance";
 import { getYear } from "./income-plans";
@@ -24,23 +25,27 @@ export async function getFreedom(db: D1Database, now: Date): Promise<Freedom> {
     statementRows(db, last3[0]!, last3[2]!),
     db.batch([
       db.prepare("SELECT MIN(month_key) AS m FROM transactions WHERE status = 'active'"),
+      // Phần trích trước (UC-1103 bước 2, ADR-128 (5)): % Tích luỹ + Σ % của các mục tiêu Thuế đang dùng, kể cả chưa gắn tài khoản.
       db.prepare(
-        `SELECT COALESCE(SUM(a.percent), 0) AS p FROM allocations a JOIN wallets w ON w.id = a.wallet_id
-         WHERE a.active = 1 AND w.active = 1 AND a.mode = 'percent' AND w.tier IN ('wealth_building', 'tax')`,
+        `SELECT (SELECT v FROM config WHERE k = 'savings_pct') AS savingsPct,
+                (SELECT COALESCE(SUM(target_pct), 0) FROM reserve_goals WHERE target_pct IS NOT NULL AND active = 1) AS taxPct`,
       ),
     ]),
   ]);
   const firstMonth = (meta[0]!.results?.[0] as { m: string | null } | undefined)?.m ?? null;
-  const lockedBps = Math.round(Number((meta[1]!.results?.[0] as { p: number } | undefined)?.p ?? 0) * 10_000);
+  const pre = meta[1]!.results?.[0] as { savingsPct: string | null; taxPct: number } | undefined;
+  const savingsPct = Number(pre?.savingsPct ?? Number.NaN);
+  const lockedBps = Math.min(99, (Number.isInteger(savingsPct) ? savingsPct : DEFAULT_SAVINGS_PCT) + Number(pre?.taxPct ?? 0)) * 100;
 
-  // E, E_must, I theo sổ (Công thức 8, 9): TB 3 tháng trọn của Kết quả thu chi.
+  // E, E_must, I theo sổ (Công thức 8, 9): TB 3 tháng trọn của Kết quả thu chi — E = Thiết yếu + Mong muốn, E_must = Thiết yếu
+  // (cả hai gồm Lãi vay; không gồm Thuế đã nộp, Chi từ Tích luỹ, Khác).
   const full = firstMonth !== null && firstMonth <= last3[0]!;
   const st = buildIncomeStatement({ period: "", kind: "month", fromMonth: last3[0]!, toMonth: last3[2]!, from: "", to: "" }, rows3);
   const line = (k: string) => st.expense.lines.find((l) => l.line === k)!.total;
   const ledger = full
     ? {
-        expense: Math.round((line("must") + line("have") + line("nice")) / 3),
-        must: Math.round(line("must") / 3),
+        expense: Math.round((line("essential") + line("flex")) / 3),
+        must: Math.round(line("essential") / 3),
         income: Math.round(st.income.total / 3),
         savingsRatePct: st.savingsRate,
       }

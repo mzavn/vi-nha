@@ -1,6 +1,7 @@
 // Kiểu cho phần thuần của scripts/setup.mjs (test/setup-script.test.ts import).
 export declare const USAGE: string;
 export declare const EXIT: { error: 1; usage: 2; notLoggedIn: 3; chooseAccount: 4; noSubdomain: 5; needInput: 6 };
+export declare const NEXT_STEPS: string;
 export type SetupOptions = {
   accountId: string | null;
   name: string | null;

@@ -1,7 +1,7 @@
 // Tài sản & tự do › Lưu chuyển tiền và Thu chi (pwa UC-717 AC-3; balance UC-1105, UC-1106).
-// Hai phần dùng chung một hàng chọn kỳ (Tháng / Năm, ‹ kỳ ›). Mọi số tính ở server, theo `month_key` như Ngân sách.
+// Hai phần dùng chung một hàng chọn kỳ (Tháng / Năm, ‹ kỳ ›). Mọi số tính ở server, theo `month_key`.
 // Chạm một dòng của Lưu chuyển tiền → danh sách giao dịch của dòng; mỗi giao dịch "Xếp vào nhóm…" — chỉ đổi báo cáo,
-// không đổi ví, số dư hay lần chia tiền. Ghi cần mạng.
+// không đổi số dư hay ngăn. Ghi cần mạng.
 
 import { Fragment } from "preact";
 import { useState } from "preact/hooks";
@@ -136,7 +136,7 @@ export function CashFlowSection({ period }: { period: string }) {
               </Card>
             )}
             <p class="hint" style={{ margin: "0 4px 12px" }}>
-              Chuyển giữa hai tài khoản của nhà không vào nhóm nào. Xếp lại một giao dịch chỉ đổi báo cáo — ví, số dư, chia tiền giữ nguyên.
+              Chuyển giữa hai tài khoản của nhà không vào nhóm nào. Xếp lại một giao dịch chỉ đổi báo cáo — số dư và ngăn giữ nguyên.
             </p>
           </>
         )}

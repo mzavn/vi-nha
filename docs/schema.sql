@@ -1,5 +1,5 @@
 -- ============================================================
---  PROFIT FIRST — HỘ GIA ĐÌNH · SCHEMA (D1 / SQLite)  v1.37
+--  PROFIT FIRST — HỘ GIA ĐÌNH · SCHEMA (D1 / SQLite)  v1.40
 --  v1.2 (20/9/2026): danh mục · tiền mặt · đa TK · thuế taxable ·
 --  lệnh chuyển tiền · thông báo
 --  v1.3 (21/9/2026): ngân sách theo kỳ chuyển sang query có tham số ·
@@ -70,6 +70,23 @@
 --                     "báo cả tiền ra" không tự gán); số theo ngân hàng tính động: sổ trước mốc + log trong phạm vi (ADR-113)
 --  v1.37 (17/10/2026): nối log vào khoản nhập tay (UPDATE log_id) chỉ khi log còn 'pending' — trigger
 --                     trg_tx_log_id_needs_pending_log, như chân thứ hai (ADR-113, webhook trước mốc)
+--  v1.38 (12/11/2026): ba ngăn Tích luỹ · Dự phòng · Vận hành, nền dữ liệu (chỉ thêm, mô hình ví chạy song song) —
+--                     accounts.pocket + pocket_confirmed (đề xuất theo luật chung, chưa xác nhận) · income_streams.pocket ·
+--                     reserve_goals (mục tiêu Dự phòng gắn một tài khoản thật, chỉ đề xuất tài khoản; sửa trước khi phát
+--                     hành, ADR-132) · category_groups + categories.group_id (nhóm danh mục, hạn mức mềm mỗi kỳ lương) ·
+--                     config savings_pct (ADR-119, ADR-120, ADR-121)
+--  v1.39 (12/11/2026): ba ngăn, đường ghi — bỏ ví khỏi đường ghi: transactions dựng lại không còn CHECK ví, dòng mới không
+--                     mang ví / fund, bỏ trg_fund_void_needs_unsettled_batch; transfer_orders / allocation_runs / month_closes
+--                     chỉ còn lịch sử (chặn ghi) · kỳ lương pay_cycles + việc ngày lương pay_cycle_tasks (② theo mục tiêu,
+--                     ④ theo tài khoản Ví Thưởng) + pay_cycle_task_tx · income_streams.opens_cycle · accounts.private ·
+--                     config surplus_savings_pct / surplus_reward_account (ADR-123, ADR-124, ADR-125, ADR-126, ADR-132)
+--  v1.40 (12/11/2026): xoá sạch mô hình ví — transactions dựng lại bỏ wallet_id / counter_wallet_id, thêm legacy_class
+--                     (loại chi cũ chép từ phe ví; trg_tx_no_legacy, trg_tx_legacy_frozen) · xoá wallets, allocations,
+--                     income_stream_locks, transfer_orders, month_closes và các view ví · categories / rules bỏ cột ví ·
+--                     accounts bỏ role, locked, spendable · conversion_claims (màn chuyển đổi) · config legacy_* và
+--                     conversion_state cho nhà lên từ 1.x (ADR-130, ADR-131)
+--  v1.41 (12/11/2026): Ví Thưởng ↔ tài khoản mục tiêu giữ bằng trigger hai chiều — trg_reserve_goals_not_reward(_insert)
+--                     (account_is_reward), trg_config_reward(_insert) (reward_has_goal) (ADR-134)
 -- ============================================================
 --  NGUYÊN TẮC ENCODE:
 --   1. Hai lớp: bank_logs (thô, BẤT BIẾN) vs transactions (đã diễn giải)
@@ -77,14 +94,11 @@
 --   3. Hướng tiền ≠ ý nghĩa → `meaning` quyết định, không phải `direction`
 --   4. Chỉ lưu SỰ THẬT THÔ. Số dư / đã tiêu / tiến độ = TÍNH RA bằng VIEW
 --   5. Đơn vị là HỘ GIA ĐÌNH; `by_member_id` chỉ là nhãn "ai chi"
---   6. BA TRỤC ĐỘC LẬP: ví (ngân sách) · tài khoản (tiền nằm đâu) · danh mục (loại chi)
+--   6. HAI TRỤC ĐỘC LẬP: tài khoản (tiền nằm đâu, thuộc ngăn nào — accounts.pocket) · danh mục (loại chi). Ví đã xoá ở
+--      v1.40: dòng trước đó chỉ còn loại chi cũ (transactions.legacy_class) và lần chia cũ (allocation_runs)
 --
---  QUY ƯỚC DẤU — MỘT LUẬT, KHÔNG NGOẠI LỆ (v1.2 dọn lại từ v1.1):
---   wallet_id          = ví ĐƯỢC CỘNG  (+)
---   counter_wallet_id  = ví BỊ TRỪ     (-)
---   => spend: counter_wallet_id = ví bị trừ, wallet_id = NULL
---      refund: wallet_id = ví được hoàn, counter_wallet_id = NULL
---      lend / collect: KHÔNG ví nào; lend: account_id = tiền ra · collect: counter_account_id = tiền về
+--  QUY ƯỚC DẤU — MỘT LUẬT, KHÔNG NGOẠI LỆ:
+--      lend / collect: lend: account_id = tiền ra · collect: counter_account_id = tiền về
 --   account_id         = tài khoản tiền RA
 --   counter_account_id = tài khoản tiền VÀO
 --  Tiền: INTEGER VND, không dùng float.
@@ -157,68 +171,36 @@ CREATE TABLE accounts (
   opening_balance INTEGER NOT NULL DEFAULT 0, -- số dư lúc bắt đầu ngày opened_at: gồm mọi khoản trước ngày đó
   opened_at       TEXT,                       -- 'YYYY-MM-DD' giờ VN; log/giao dịch trước ngày này không vào sổ (ADR-76)
   active          INTEGER NOT NULL DEFAULT 1,
-  locked          INTEGER NOT NULL DEFAULT 0      -- 1 -> tiền thật nhưng chưa rút ngay được (heo đất, ADR-77)
-                  CHECK (locked IN (0,1)),
-  spendable       INTEGER NOT NULL DEFAULT 1      -- 1 -> số dư sổ tính vào "Tiền chi được"; locked = 1 thì không bao giờ (ADR-85)
-                  CHECK (spendable IN (0,1)),
-  role            TEXT                            -- tài khoản Tích sản (ADR-88): NULL thường · piggy_bank (heo đất) · buffer (phao dự phòng) · term_deposit (sổ tiết kiệm)
-                  CHECK (role IS NULL OR (role IN ('piggy_bank','term_deposit') AND locked = 1) OR (role = 'buffer' AND locked = 0)),
   deactivated_at  TEXT,                           -- 'YYYY-MM-DD' giờ VN lúc tắt; bật lại -> NULL; tắt từ trước v1.31 -> NULL
   feed_from       TEXT,                           -- lúc bắt đầu theo dõi SePay (toISOString); log lịch sử (backfill) at < mốc như trước ngày mở sổ, webhook vẫn tính; NULL = từ opened_at (ADR-113)
-  sepay_out_from  TEXT                            -- lúc bật "SePay báo cả tiền ra"; log ra trước mốc không tự gán (như "chỉ tiền vào"); NULL = không có mốc
+  sepay_out_from  TEXT,                           -- lúc bật "SePay báo cả tiền ra"; log ra trước mốc không tự gán (như "chỉ tiền vào"); NULL = không có mốc
+  pocket          TEXT                            -- ngăn (pocket UC-1201): savings Tích luỹ · reserve Dự phòng · operating Vận hành · NULL ngoài ngăn
+                  CHECK (pocket IS NULL OR pocket IN ('savings','reserve','operating')),
+  pocket_confirmed INTEGER NOT NULL DEFAULT 0    -- 0 = ngăn do app đề xuất, chưa xác nhận; 1 = người dùng đã xác nhận / tự chọn
+                  CHECK (pocket_confirmed IN (0,1)),
+  private         INTEGER NOT NULL DEFAULT 0      -- tài khoản riêng tư (access UC-504): người khác chỉ thấy tổng; chỉ chủ tài khoản bật
+                  CHECK (private IN (0,1))
 );
 CREATE UNIQUE INDEX idx_acct_no ON accounts(account_no) WHERE account_no IS NOT NULL;
 
--- 3. VÍ — ĐƠN VỊ NGÂN SÁCH ------------------------------------
---    tier = PHE, thứ tự RÓT: wealth_building -> tax -> nice -> must
---    (holding = trạm trung chuyển, không thuộc dòng rót)
-CREATE TABLE wallets (
-  id         TEXT PRIMARY KEY,
-  name       TEXT NOT NULL,
-  tier       TEXT NOT NULL
-             CHECK (tier IN ('holding','wealth_building','tax','nice','must')),
-  must_group TEXT CHECK (must_group IN ('must','have')),  -- chỉ dùng khi tier='must'
-  kind       TEXT NOT NULL
-             CHECK (kind IN ('envelope','accrual','bill','holding')),
-  scope      TEXT NOT NULL DEFAULT 'shared' CHECK (scope IN ('shared','personal')),
-  member_id  TEXT REFERENCES members(id),     -- khi scope='personal'
-  account_id TEXT REFERENCES accounts(id),    -- ví này TRÚ ở tài khoản nào
-  private    INTEGER NOT NULL DEFAULT 0,      -- ẩn số dư với người khác
-  sort       INTEGER NOT NULL DEFAULT 100,
-  active     INTEGER NOT NULL DEFAULT 1,
-  CHECK (scope <> 'personal' OR member_id IS NOT NULL),
-  CHECK (tier  <> 'must'     OR must_group IS NOT NULL)
+-- 5a. NHÓM DANH MỤC (v1.38, pocket UC-1204) — gom danh mục chi để nhìn lại; hạn mức mềm chỉ để so, không giữ tiền ---
+CREATE TABLE category_groups (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  essential   INTEGER NOT NULL DEFAULT 0 CHECK (essential IN (0,1)),          -- 1 = Thiết yếu, 0 = Mong muốn: dòng chi báo cáo, E_must Mốc tự do
+  cycle_limit INTEGER CHECK (cycle_limit IS NULL OR cycle_limit > 0),          -- hạn mức mềm mỗi kỳ lương; NULL = không đặt
+  sort        INTEGER NOT NULL DEFAULT 100,
+  active      INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1))
 );
-
--- 4. LUẬT NẠP + MỤC TIÊU — target nằm ở LUẬT NẠP, không ở ví ---
-CREATE TABLE allocations (
-  id            INTEGER PRIMARY KEY,
-  wallet_id     TEXT NOT NULL REFERENCES wallets(id),
-  mode          TEXT NOT NULL CHECK (mode IN ('flat','percent','goal','lump','remainder')),
-  period        TEXT CHECK (period IN ('week','month')),
-  amount        INTEGER,        -- flat
-  percent       REAL,           -- percent (0.30)
-  target_amount INTEGER,        -- goal / lump
-  target_date   TEXT,
-  floor_amount  INTEGER,        -- SÀN CỨNG — không bóp xuống dưới
-  priority      INTEGER NOT NULL DEFAULT 100,
-  start_date    TEXT,
-  active        INTEGER NOT NULL DEFAULT 1,
-  split_weekly  INTEGER NOT NULL DEFAULT 0 CHECK (split_weekly IN (0,1)),  -- phong bì tháng: dự kiến tuần = tháng ÷ số thứ Hai
-  CHECK (mode <> 'flat'    OR amount  IS NOT NULL),
-  CHECK (mode <> 'percent' OR percent IS NOT NULL),
-  CHECK (mode <> 'goal'    OR (target_amount IS NOT NULL AND target_date IS NOT NULL))
-);
-CREATE INDEX idx_alloc_wallet ON allocations(wallet_id, active);
 
 -- 5. DANH MỤC CHI — nhãn phân tích, KHÔNG có ngân sách riêng ---
 CREATE TABLE categories (
   id                TEXT PRIMARY KEY,
   name              TEXT NOT NULL,
-  default_wallet_id TEXT REFERENCES wallets(id),
   icon              TEXT,                    -- tên icon trong web/src/ui/icons.tsx; NULL / tên lạ = icon nhãn
   sort              INTEGER NOT NULL DEFAULT 100,
-  active            INTEGER NOT NULL DEFAULT 1
+  active            INTEGER NOT NULL DEFAULT 1,
+  group_id          TEXT REFERENCES category_groups(id)  -- nhóm danh mục (pocket UC-1204); NULL = chưa xếp nhóm
 );
 
 -- 6. LOG NGÂN HÀNG (LỚP 1) — BẤT BIẾN -------------------------
@@ -255,8 +237,6 @@ CREATE TABLE transactions (
   meaning     TEXT NOT NULL CHECK (meaning IN (
                 'spend','income','refund','transfer','fund',
                 'buy_asset','lend','collect','adjust')),
-  wallet_id          TEXT REFERENCES wallets(id),
-  counter_wallet_id  TEXT REFERENCES wallets(id),
   account_id         TEXT REFERENCES accounts(id),
   counter_account_id TEXT REFERENCES accounts(id),
   category_id  TEXT REFERENCES categories(id),   -- BẮT BUỘC khi meaning='spend' (enforce ở BE)
@@ -273,20 +253,14 @@ CREATE TABLE transactions (
   note         TEXT,
   created_at   TEXT NOT NULL DEFAULT (datetime('now')),
   client_id    TEXT,                                 -- UUID sinh ở máy khi nhập offline -> gửi lại không ghi trùng
-  income_stream_id TEXT REFERENCES income_streams(id), -- income: nguồn thu quyết phần khóa; NULL = luật percent toàn cục
+  income_stream_id TEXT REFERENCES income_streams(id), -- income: nguồn thu (mở kỳ lương, ngăn của tiền về)
   tenant_id    TEXT REFERENCES tenants(id),           -- income: tiền người thuê trả (trừ vào sổ người thuê)
   debt_id      TEXT REFERENCES debts(id),             -- spend: khoản trả nợ (trừ vào sổ nợ)
   receivable_id TEXT REFERENCES receivables(id),      -- lend: cho vay thêm · collect: nhận lại (sổ phải thu)
   interest_debt_id TEXT REFERENCES debts(id),         -- spend: trả LÃI cho khoản nợ (chi phí, không giảm nợ)
-  CHECK (meaning <> 'refund' OR wallet_id IS NOT NULL),
-  CHECK (meaning <> 'spend'  OR counter_wallet_id IS NOT NULL),
-  CHECK (meaning <> 'spend'  OR category_id IS NOT NULL),
-  CHECK (meaning <> 'fund'   OR (wallet_id IS NOT NULL AND counter_wallet_id IS NOT NULL))
+  legacy_class TEXT CHECK (legacy_class IS NULL OR legacy_class IN ('essential','flex','tax','savings','holding')),  -- loại chi cũ (ADR-131): chỉ dòng trước v1.40
+  CHECK (meaning <> 'spend'  OR category_id IS NOT NULL)
 );
-CREATE INDEX idx_tx_wallet_week  ON transactions(wallet_id, week_key)  WHERE status='active';
-CREATE INDEX idx_tx_wallet_month ON transactions(wallet_id, month_key) WHERE status='active';
-CREATE INDEX idx_tx_cw_week      ON transactions(counter_wallet_id, week_key)  WHERE status='active';
-CREATE INDEX idx_tx_cw_month     ON transactions(counter_wallet_id, month_key) WHERE status='active';
 CREATE INDEX idx_tx_cat          ON transactions(category_id, month_key) WHERE status='active';
 CREATE INDEX idx_tx_log          ON transactions(log_id);
 CREATE INDEX idx_tx_at           ON transactions(at DESC);
@@ -315,7 +289,6 @@ CREATE TABLE rules (
   pattern     TEXT NOT NULL,
   meaning     TEXT NOT NULL CHECK (meaning IN ('spend','transfer','income')),
   is_salary   INTEGER NOT NULL DEFAULT 0,   -- chỉ rule lương mới được gán income
-  wallet_id   TEXT REFERENCES wallets(id),
   category_id TEXT REFERENCES categories(id),
   by_member_id TEXT REFERENCES members(id),
   active      INTEGER NOT NULL DEFAULT 1,
@@ -323,7 +296,6 @@ CREATE TABLE rules (
   tenant_id   TEXT REFERENCES tenants(id),              -- chỉ để GỢI Ý "thu từ người thuê", không tự gán
   account_id  TEXT REFERENCES accounts(id),             -- chỉ áp cho log của tài khoản này; NULL = mọi tài khoản
   counter_account_id TEXT REFERENCES accounts(id),      -- transfer: tài khoản đầu kia (NULL = rút tiền mặt như cũ)
-  from_wallet_id TEXT REFERENCES wallets(id),           -- transfer: chuyển ví from_wallet_id -> wallet_id (ADR-77)
   CHECK (meaning <> 'income' OR is_salary = 1)
 );
 
@@ -335,20 +307,6 @@ CREATE TABLE cash_counts (
   counted      INTEGER NOT NULL,
   book         INTEGER NOT NULL,
   adjust_tx_id INTEGER REFERENCES transactions(id)
-);
-
--- 10. LỆNH CHUYỂN TIỀN THẬT (phân bổ ảo -> tiền phải đi thật) --
-CREATE TABLE transfer_orders (
-  id              INTEGER PRIMARY KEY,
-  batch_id        TEXT NOT NULL,
-  from_account_id TEXT NOT NULL REFERENCES accounts(id),
-  to_account_id   TEXT NOT NULL REFERENCES accounts(id),
-  amount          INTEGER NOT NULL CHECK (amount > 0),
-  memo            TEXT NOT NULL,            -- 'PF XXXXXX' ngẫu nhiên, riêng từng lệnh -> khớp log về
-  status          TEXT NOT NULL DEFAULT 'pending'
-                  CHECK (status IN ('pending','done','skipped')),
-  matched_log_id  TEXT REFERENCES bank_logs(id),
-  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- 11. QUYẾT TOÁN THUẾ NĂM --------------------------------------
@@ -386,19 +344,14 @@ CREATE TABLE notifications (
 --  secret:session_key: khoá ký phiên ngẫu nhiên app tự sinh lần đầu cần (UC-501); không API nào trả ra.
 CREATE TABLE config (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 
--- 14. NGUỒN THU — phần khóa riêng từng nguồn (không có dòng lock = khóa 0%) ---
+-- 14. NGUỒN THU — ngăn của tiền về, nguồn mở kỳ lương ---
 CREATE TABLE income_streams (
   id     TEXT PRIMARY KEY,
   name   TEXT NOT NULL,
   sort   INTEGER NOT NULL DEFAULT 100,
-  active INTEGER NOT NULL DEFAULT 1
-);
-CREATE TABLE income_stream_locks (
-  stream_id TEXT NOT NULL REFERENCES income_streams(id),
-  wallet_id TEXT NOT NULL REFERENCES wallets(id),
-  percent   REAL NOT NULL CHECK (percent > 0 AND percent <= 1),
-  sort      INTEGER NOT NULL DEFAULT 100,
-  PRIMARY KEY (stream_id, wallet_id)
+  active INTEGER NOT NULL DEFAULT 1,
+  pocket TEXT CHECK (pocket IS NULL OR pocket IN ('savings','reserve','operating')),  -- ngăn của tiền về; NULL = theo tài khoản nhận
+  opens_cycle INTEGER NOT NULL DEFAULT 0 CHECK (opens_cycle IN (0,1))  -- khoản thu từ nguồn này mở kỳ lương (pocket UC-1205)
 );
 
 -- 15. SỔ NGƯỜI THUÊ — phải thu, ngoài sổ cái, chỉ ghi thêm ------------
@@ -552,88 +505,6 @@ CREATE TRIGGER audit_log_no_delete BEFORE DELETE ON audit_log BEGIN SELECT RAISE
 --  VIEW — MỌI CON SỐ TỔNG HỢP ĐỀU TÍNH RA, KHÔNG LƯU
 -- ============================================================
 
--- Dòng tiền vào/ra từng ví (buy_asset, lend & collect KHÔNG đổi số dư ví)
-CREATE VIEW v_wallet_flow AS
-  SELECT wallet_id AS wallet_id, week_key, month_key, at, meaning, category_id, amount AS delta
-  FROM transactions
-  WHERE status='active' AND wallet_id IS NOT NULL AND meaning NOT IN ('buy_asset','lend','collect')
-  UNION ALL
-  SELECT counter_wallet_id, week_key, month_key, at, meaning, category_id, -amount
-  FROM transactions
-  WHERE status='active' AND counter_wallet_id IS NOT NULL AND meaning NOT IN ('buy_asset','lend','collect');
-
-CREATE VIEW v_wallet_balance AS
-  SELECT w.id AS wallet_id, w.name, w.tier, w.must_group,
-         COALESCE(SUM(f.delta), 0) AS balance
-  FROM wallets w LEFT JOIN v_wallet_flow f ON f.wallet_id = w.id
-  GROUP BY w.id;
-
--- Đã tiêu ròng (chi trừ hoàn về) theo kỳ
-CREATE VIEW v_spent_raw AS
-  SELECT counter_wallet_id AS wallet_id, week_key, month_key, amount AS spent
-  FROM transactions WHERE status='active' AND meaning='spend'
-  UNION ALL
-  SELECT wallet_id, week_key, month_key, -amount
-  FROM transactions WHERE status='active' AND meaning='refund';
-
-CREATE VIEW v_spent_week AS
-  SELECT wallet_id, week_key, SUM(spent) AS spent FROM v_spent_raw GROUP BY wallet_id, week_key;
-
-CREATE VIEW v_spent_month AS
-  SELECT wallet_id, month_key, SUM(spent) AS spent FROM v_spent_raw GROUP BY wallet_id, month_key;
-
--- Ngân sách theo kỳ (dự kiến / thực tế / còn lại) KHÔNG phải view: nó cần tham số kỳ,
--- và dự kiến tháng của phong bì tuần = số tiền tuần × số thứ Hai của tháng (app tính).
--- Query nằm ở src/db/queries.ts, JOIN v_spent_week / v_spent_month theo đúng kỳ được hỏi.
-
--- Tiến độ mục tiêu + cần để dành mỗi kỳ để kịp hạn
-CREATE VIEW v_goal_progress AS
-  SELECT w.id AS wallet_id, w.name, a.target_amount, a.target_date,
-         COALESCE(b.balance,0) AS balance,
-         a.target_amount - COALESCE(b.balance,0) AS missing,
-         ROUND(100.0*COALESCE(b.balance,0)/a.target_amount, 1) AS pct,
-         MAX(CAST(julianday(a.target_date) - julianday('now') AS INTEGER), 0) AS days_left
-  FROM wallets w
-  JOIN allocations a ON a.wallet_id=w.id AND a.active=1 AND a.mode='goal'
-  LEFT JOIN v_wallet_balance b ON b.wallet_id=w.id;
-
--- TÍCH SẢN: một ví, hai trạng thái tiền (cash -> assets)
-CREATE VIEW v_wealth_building AS
-  SELECT w.id AS wallet_id, w.name,
-         COALESCE(b.balance,0) AS total,
-         COALESCE((SELECT SUM(t.amount) FROM transactions t
-                   WHERE t.status='active' AND t.meaning='buy_asset' AND t.wallet_id=w.id),0) AS assets,
-         COALESCE(b.balance,0)
-           - COALESCE((SELECT SUM(t.amount) FROM transactions t
-                       WHERE t.status='active' AND t.meaning='buy_asset' AND t.wallet_id=w.id),0) AS cash
-  FROM wallets w LEFT JOIN v_wallet_balance b ON b.wallet_id=w.id
-  WHERE w.tier='wealth_building';
-
--- QUỸ AN TÂM — target TÍNH ĐỘNG: N tháng × chi Must trung bình 3 tháng gần nhất
---   N lấy từ config('safety_fund_months'). Không hardcode con số nào.
---   "Chi Must" = CHỈ nhóm Must (mức sống tối thiểu), không gồm Có-thì-tốt.
---   Chỉ tính THÁNG ĐÃ KẾT THÚC (giờ VN): tháng đang chạy mới có vài khoản chi, tính vào là Quỹ an tâm "đầy" giả.
-CREATE VIEW v_must_monthly_avg AS
-  SELECT AVG(m.total) AS avg_must, COUNT(*) AS months
-  FROM (SELECT s.month_key, SUM(s.spent) AS total
-        FROM v_spent_month s JOIN wallets w ON w.id=s.wallet_id
-        WHERE w.tier='must' AND w.must_group='must'
-          AND s.month_key < strftime('%Y-%m','now','+7 hours')
-        GROUP BY s.month_key
-        ORDER BY s.month_key DESC LIMIT 3) m;
-
--- Chưa đủ 3 tháng trọn -> target/months_covered/pct = NULL; app thay bằng tổng dự kiến tháng của các ví Must.
-CREATE VIEW v_safety_fund AS
-  SELECT t.wallet_id, t.cash, a.months AS months_of_data,
-         CASE WHEN a.months < 3 THEN NULL
-              ELSE CAST(a.avg_must * n.months AS INTEGER) END AS target,
-         CASE WHEN a.months < 3 OR a.avg_must <= 0 THEN NULL
-              ELSE ROUND(t.cash / a.avg_must, 1) END AS months_covered,
-         CASE WHEN a.months < 3 OR a.avg_must <= 0 THEN NULL
-              ELSE MIN(ROUND(100.0 * t.cash / (a.avg_must * n.months), 1), 100.0) END AS pct
-  FROM v_wealth_building t, v_must_monthly_avg a,
-       (SELECT CAST(v AS INTEGER) AS months FROM config WHERE k='safety_fund_months') n;
-
 -- Chi theo DANH MỤC × tháng
 CREATE VIEW v_spend_by_category AS
   SELECT t.category_id, c.name, t.month_key,
@@ -745,19 +616,16 @@ BEGIN
   SELECT RAISE(ABORT, 'log_not_pending');
 END;
 
--- Một lệnh chuyển tiền chỉ được hoàn tất một lần (trả về 'pending' khi gỡ gán thì vẫn được).
-CREATE TRIGGER trg_transfer_order_settles_once BEFORE UPDATE OF status ON transfer_orders
-WHEN NEW.status <> 'pending' AND OLD.status <> 'pending'
+-- Không còn ví (v1.40, ADR-131): dòng mới không có bút toán nạp ví, không có loại chi cũ; loại chi của dòng cũ không sửa.
+CREATE TRIGGER trg_tx_no_legacy BEFORE INSERT ON transactions
+WHEN NEW.meaning = 'fund' OR NEW.legacy_class IS NOT NULL
 BEGIN
-  SELECT RAISE(ABORT, 'order_not_pending');
+  SELECT RAISE(ABORT, 'model_changed');
 END;
-
--- Không gỡ được một lần chia khi tiền của nó đã chuyển thật (có lệnh chuyển 'done' cùng batch).
-CREATE TRIGGER trg_fund_void_needs_unsettled_batch BEFORE UPDATE OF status ON transactions
-WHEN NEW.status = 'void' AND OLD.status = 'active' AND OLD.meaning = 'fund' AND OLD.batch_id IS NOT NULL
-  AND EXISTS (SELECT 1 FROM transfer_orders o WHERE o.batch_id = OLD.batch_id AND o.status = 'done')
+CREATE TRIGGER trg_tx_legacy_frozen BEFORE UPDATE ON transactions
+WHEN NEW.meaning IS NOT OLD.meaning OR NEW.legacy_class IS NOT OLD.legacy_class
 BEGIN
-  SELECT RAISE(ABORT, 'allocation_settled');
+  SELECT RAISE(ABORT, 'model_changed');
 END;
 
 -- Sổ người thuê chỉ được đổi status active -> void; không sửa, không xoá.
@@ -923,9 +791,9 @@ BEGIN
   SELECT RAISE(ABORT, 'balance_value_append_only');
 END;
 
--- Dữ liệu hệ thống (ADR-94): ví + danh mục "Lãi vay" — dự kiến tháng của ví = Σ lãi dự kiến các khoản nợ có lãi.
-INSERT INTO wallets (id, name, tier, must_group, kind, sort) VALUES ('loan-interest', 'Lãi vay', 'must', 'must', 'bill', 49);
-INSERT INTO categories (id, name, default_wallet_id, icon, sort) VALUES ('loan-interest', 'Lãi vay', 'loan-interest', 'percent', 100);
+-- Dữ liệu hệ thống (ADR-94): danh mục "Lãi vay" là danh mục mặc định của khoản chi lãi — lãi dự kiến từ sổ nợ ở khối Lãi
+-- vay của Nhìn lại (ADR-127).
+INSERT INTO categories (id, name, icon, sort) VALUES ('loan-interest', 'Lãi vay', 'percent', 100);
 
 -- Tham số bảng cân đối / Mốc tự do — mặc định, mỗi nhà đổi trong app (PUT /v1/settings/config).
 INSERT INTO config (k,v) VALUES
@@ -979,13 +847,170 @@ BEGIN
   SELECT RAISE(ABORT, 'income_plan_append_only');
 END;
 
--- CHỐT THÁNG (ADR-111) — mỗi tháng đã chốt một dòng; INSERT đầu batch chốt nên trùng khoá chính = đã chốt.
-CREATE TABLE month_closes (
-  month        TEXT PRIMARY KEY CHECK (month GLOB '[0-9][0-9][0-9][0-9]-[01][0-9]'),
-  closed_at    TEXT NOT NULL DEFAULT (datetime('now')),
-  by_member_id TEXT REFERENCES members(id),
-  wealth_pct   INTEGER NOT NULL CHECK (wealth_pct BETWEEN 0 AND 100)
+-- BA NGĂN (v1.38, ADR-119, ADR-132) — ngăn là nhóm tài khoản thật (accounts.pocket). Mục tiêu Dự phòng là một tài khoản
+--  thật ngăn Dự phòng: A = số dư sổ của tài khoản gắn (v_account_book), không lưu. Tổng ngăn, phần an tâm (tài khoản Dự
+--  phòng không gắn mục tiêu, không phải Ví Thưởng), nợ ngắn hạn TÍNH RA ở src/domain/pockets.ts.
+CREATE TABLE reserve_goals (
+  id                   TEXT PRIMARY KEY,                    -- slug của tên; điền sẵn từ ví cũ = mã ví
+  name                 TEXT NOT NULL,
+  account_id           TEXT REFERENCES accounts(id),        -- tài khoản thật của mục tiêu (ngăn Dự phòng); NULL = chưa gắn
+  suggested_account_id TEXT REFERENCES accounts(id),        -- chỉ bản cập nhật 0038 điền: gợi ý cho màn chuyển đổi, không ràng buộc
+  target_amount        INTEGER CHECK (target_amount IS NULL OR target_amount > 0),           -- B
+  target_pct           INTEGER CHECK (target_pct IS NULL OR target_pct BETWEEN 1 AND 100),   -- % thu chịu thuế
+  monthly_amount       INTEGER CHECK (monthly_amount IS NULL OR monthly_amount > 0),
+  repeat_months        INTEGER CHECK (repeat_months IS NULL OR repeat_months BETWEEN 1 AND 12),
+  due_date             TEXT,                                -- 'YYYY-MM-DD'; NULL = chưa đặt
+  debt_id              TEXT REFERENCES debts(id),           -- mục tiêu Trả nợ
+  sort                 INTEGER NOT NULL DEFAULT 100,
+  active               INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
+  created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK ((target_amount IS NULL) <> (target_pct IS NULL)),
+  CHECK ((monthly_amount IS NULL) = (repeat_months IS NULL)),
+  CHECK (monthly_amount IS NULL OR target_amount = monthly_amount * repeat_months),
+  CHECK (target_pct IS NULL OR repeat_months IS NULL)
 );
+CREATE UNIQUE INDEX idx_reserve_goals_account ON reserve_goals(account_id) WHERE active = 1 AND account_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_reserve_goals_debt ON reserve_goals(debt_id) WHERE active = 1 AND debt_id IS NOT NULL;
+
+-- Tài khoản gắn mục tiêu đang dùng phải đang dùng và ở ngăn Dự phòng; tài khoản đó không rời ngăn / không tắt được.
+CREATE TRIGGER trg_reserve_goals_account_insert BEFORE INSERT ON reserve_goals
+WHEN NEW.active = 1 AND NEW.account_id IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM accounts a WHERE a.id = NEW.account_id AND a.active = 1 AND a.pocket = 'reserve')
+BEGIN
+  SELECT RAISE(ABORT, 'account_not_reserve');
+END;
+CREATE TRIGGER trg_reserve_goals_account BEFORE UPDATE OF account_id, active ON reserve_goals
+WHEN NEW.active = 1 AND NEW.account_id IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM accounts a WHERE a.id = NEW.account_id AND a.active = 1 AND a.pocket = 'reserve')
+BEGIN
+  SELECT RAISE(ABORT, 'account_not_reserve');
+END;
+CREATE TRIGGER trg_accounts_keep_goal BEFORE UPDATE OF pocket, active ON accounts
+WHEN (NEW.pocket IS NOT 'reserve' OR NEW.active = 0)
+  AND EXISTS (SELECT 1 FROM reserve_goals g WHERE g.account_id = NEW.id AND g.active = 1)
+BEGIN
+  SELECT RAISE(ABORT, 'account_has_goal');
+END;
+-- Tài khoản của mục tiêu đang dùng không phải tài khoản Ví Thưởng, và ngược lại (UC-1209, ADR-134): hai máy ghi cùng lúc thì
+--  câu ghi sau bị huỷ. INSERT … ON CONFLICT DO UPDATE vào config chạy trigger UPDATE.
+CREATE TRIGGER trg_reserve_goals_not_reward_insert BEFORE INSERT ON reserve_goals
+WHEN NEW.active = 1 AND NEW.account_id = (SELECT v FROM config WHERE k = 'surplus_reward_account')
+BEGIN
+  SELECT RAISE(ABORT, 'account_is_reward');
+END;
+CREATE TRIGGER trg_reserve_goals_not_reward BEFORE UPDATE OF account_id, active ON reserve_goals
+WHEN NEW.active = 1 AND NEW.account_id = (SELECT v FROM config WHERE k = 'surplus_reward_account')
+BEGIN
+  SELECT RAISE(ABORT, 'account_is_reward');
+END;
+CREATE TRIGGER trg_config_reward_insert BEFORE INSERT ON config
+WHEN NEW.k = 'surplus_reward_account'
+  AND EXISTS (SELECT 1 FROM reserve_goals g WHERE g.account_id = NEW.v AND g.active = 1)
+BEGIN
+  SELECT RAISE(ABORT, 'reward_has_goal');
+END;
+CREATE TRIGGER trg_config_reward BEFORE UPDATE OF v ON config
+WHEN NEW.k = 'surplus_reward_account'
+  AND EXISTS (SELECT 1 FROM reserve_goals g WHERE g.account_id = NEW.v AND g.active = 1)
+BEGIN
+  SELECT RAISE(ABORT, 'reward_has_goal');
+END;
+
+-- % Tích luỹ mỗi kỳ lương (UC-507), "1".."100"; D1 trống không có luật Tích sản nên mặc định.
+INSERT INTO config (k,v) VALUES ('savings_pct','10');
+
+-- KỲ LƯƠNG (v1.39, ADR-124) — kỳ mở tại thời điểm khoản lương của nguồn "Mở kỳ lương", mỗi ngày lương danh nghĩa tối đa
+--  một kỳ còn hiệu lực. Kỳ hiện tại = kỳ active có payday lớn nhất. Huỷ khoản lương mở kỳ → kỳ void cùng mọi việc.
+CREATE TABLE pay_cycles (
+  id             INTEGER PRIMARY KEY,
+  income_tx_id   INTEGER NOT NULL UNIQUE REFERENCES transactions(id),  -- khoản lương mở kỳ
+  started_at     TEXT NOT NULL,                                        -- = thời điểm khoản lương đó (ISO UTC), không dời
+  payday         TEXT NOT NULL CHECK (payday GLOB '[0-9][0-9][0-9][0-9]-[01][0-9]-[0-3][0-9]'),  -- ngày lương danh nghĩa
+  prev_operating INTEGER NOT NULL,                                     -- dư kỳ trước: ngăn Vận hành theo sổ tại started_at
+  status         TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX idx_pay_cycles_payday ON pay_cycles(payday) WHERE status = 'active';
+CREATE INDEX idx_pay_cycles_status ON pay_cycles(status, started_at);
+CREATE TRIGGER trg_pay_cycles_one_way BEFORE UPDATE ON pay_cycles
+WHEN NEW.id IS NOT OLD.id OR NEW.income_tx_id IS NOT OLD.income_tx_id OR NEW.started_at IS NOT OLD.started_at
+  OR NEW.payday IS NOT OLD.payday OR NEW.prev_operating IS NOT OLD.prev_operating OR NEW.created_at IS NOT OLD.created_at
+  OR NOT (OLD.status = 'active' AND NEW.status = 'void')
+BEGIN
+  SELECT RAISE(ABORT, 'pay_cycle_append_only');
+END;
+CREATE TRIGGER trg_pay_cycles_no_delete BEFORE DELETE ON pay_cycles
+BEGIN
+  SELECT RAISE(ABORT, 'pay_cycle_append_only');
+END;
+
+-- Việc ngày lương: ① savings trích Tích luỹ · ② goal nạp mục tiêu Dự phòng · ③ move chuyển theo ngăn của nguồn ·
+--  ④ surplus dư kỳ trước (→ Tích luỹ hoặc → tài khoản Ví Thưởng). status 'done' chỉ là tick tay; tự tick tính từ
+--  pay_cycle_task_tx. ② đích là tài khoản của mục tiêu (đọc lúc ghép), ④ → Ví Thưởng đích là to_account_id ghi lúc sinh việc.
+CREATE TABLE pay_cycle_tasks (
+  id              INTEGER PRIMARY KEY,
+  cycle_id        INTEGER NOT NULL REFERENCES pay_cycles(id),
+  kind            TEXT NOT NULL CHECK (kind IN ('savings','goal','move','surplus')),
+  source_tx_id    INTEGER REFERENCES transactions(id),   -- khoản thu sinh việc; NULL cho ② cố định và ④
+  goal_id         TEXT REFERENCES reserve_goals(id),     -- ②
+  to_account_id   TEXT REFERENCES accounts(id),          -- ④ → Ví Thưởng
+  to_pocket       TEXT CHECK (to_pocket IS NULL OR to_pocket IN ('savings','reserve','operating')),  -- ①, ③, ④ → Tích luỹ
+  pct             INTEGER CHECK (pct IS NULL OR pct BETWEEN 0 AND 100),  -- ① % đã áp; ② theo % thu chịu thuế
+  suggested       INTEGER NOT NULL CHECK (suggested >= 0),
+  amount          INTEGER NOT NULL CHECK (amount >= 0),
+  status          TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','done','skipped','void')),
+  reason          TEXT CHECK (reason IS NULL OR length(reason) BETWEEN 1 AND 500),
+  done_at         TEXT,
+  by_member_id    TEXT REFERENCES members(id),
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  CHECK (kind <> 'goal' OR goal_id IS NOT NULL),
+  CHECK (kind <> 'savings' OR to_pocket IS 'savings'),
+  CHECK (kind <> 'move' OR to_pocket IS NOT NULL),
+  CHECK (kind <> 'surplus' OR ((to_pocket IS 'savings') <> (to_account_id IS NOT NULL))),
+  CHECK (kind <> 'savings' OR reason IS NOT NULL OR (status <> 'skipped' AND amount > 0))
+);
+CREATE INDEX idx_pay_cycle_tasks ON pay_cycle_tasks(cycle_id, status);
+CREATE INDEX idx_pay_cycle_tasks_source ON pay_cycle_tasks(source_tx_id) WHERE source_tx_id IS NOT NULL;
+CREATE TRIGGER trg_pay_cycle_tasks_no_delete BEFORE DELETE ON pay_cycle_tasks
+BEGIN
+  SELECT RAISE(ABORT, 'pay_cycle_append_only');
+END;
+
+-- Liên kết việc ↔ chuyển khoản đã ghép (tự tick). Phần đã dùng của một chuyển khoản = Σ liên kết của việc chưa void.
+CREATE TABLE pay_cycle_task_tx (
+  task_id         INTEGER NOT NULL REFERENCES pay_cycle_tasks(id),
+  tx_id           INTEGER NOT NULL REFERENCES transactions(id),
+  amount          INTEGER NOT NULL CHECK (amount > 0),
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (task_id, tx_id)
+);
+CREATE INDEX idx_pay_cycle_task_tx ON pay_cycle_task_tx(tx_id);
+
+-- Lần chia cũ chỉ còn lịch sử (ADR-123, ADR-131): không ghi thêm / sửa / xoá được nữa.
+CREATE TRIGGER trg_allocation_runs_no_insert BEFORE INSERT ON allocation_runs BEGIN SELECT RAISE(ABORT, 'model_changed'); END;
+CREATE TRIGGER trg_allocation_runs_no_update BEFORE UPDATE ON allocation_runs BEGIN SELECT RAISE(ABORT, 'model_changed'); END;
+CREATE TRIGGER trg_allocation_runs_no_delete BEFORE DELETE ON allocation_runs BEGIN SELECT RAISE(ABORT, 'model_changed'); END;
+
+-- Dư cuối kỳ: % vào Tích luỹ, phần còn lại vào tài khoản Ví Thưởng (config surplus_reward_account, thiếu = chưa chọn) — UC-1207.
+INSERT INTO config (k,v) VALUES ('surplus_savings_pct','50');
+
+-- MÀN CHUYỂN ĐỔI (v1.40, pocket UC-1208, ADR-130) — mỗi bước đã xong một dòng; INSERT đầu batch của bước nên gửi trùng
+--  bước thì cả batch huỷ. Chỉ nhà lên từ 1.x mới có config conversion_state 'pending' (0040); D1 trống / Thiết lập v2 không có.
+--  Config 0040 ghi cho nhà đã có tài khoản: legacy_savings_cash / legacy_savings_assets (số ví Tích sản cũ, chỉ để đối chiếu),
+--  legacy_max_tx_id (khoản id ≤ mốc là khoản cũ, ADR-131), conversion_done_at khi xong.
+CREATE TABLE conversion_claims (
+  step         TEXT PRIMARY KEY CHECK (step IN ('pockets','goals','savings_gap','pay_cycle','savings_pct')),
+  at           TEXT NOT NULL,
+  by_member_id TEXT REFERENCES members(id)
+);
+CREATE TRIGGER trg_conversion_claims_no_update BEFORE UPDATE ON conversion_claims
+BEGIN
+  SELECT RAISE(ABORT, 'conversion_append_only');
+END;
+CREATE TRIGGER trg_conversion_claims_no_delete BEFORE DELETE ON conversion_claims
+BEGIN
+  SELECT RAISE(ABORT, 'conversion_append_only');
+END;
 
 -- Phiên bản schema — /v1/health đọc từ đây
-INSERT INTO config (k,v) VALUES ('schema_version','1.37');
+INSERT INTO config (k,v) VALUES ('schema_version','1.41');

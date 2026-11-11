@@ -1,31 +1,13 @@
-// Dữ liệu tham chiếu đọc từ D1, dùng chung cho các hàm thuần.
-
-import type { WalletRule } from "./allocation";
-
-export interface WalletRef {
-  id: string;
-  name: string;
-  tier: "holding" | "wealth_building" | "tax" | "nice" | "must";
-  mustGroup: "must" | "have" | null;
-  kind: "envelope" | "accrual" | "bill" | "holding";
-  scope: "shared" | "personal";
-  memberId: string | null;
-  accountId: string | null;
-  /** Đang ẩn số với người khác ngoài chủ ví: ví `private` VÀ chủ ví còn hoạt động (UC-504). */
-  private: boolean;
-  sort: number;
-}
+// Dữ liệu tham chiếu đọc từ D1, dùng chung cho các hàm thuần. Không còn ví (v1.40, ADR-131): tiền thuộc ngăn của tài khoản.
 
 export interface CategoryRef {
   id: string;
   name: string;
-  defaultWalletId: string | null;
   icon: string | null;
   sort: number;
+  /** Nhóm danh mục (pocket UC-1204); null = chưa xếp nhóm. */
+  groupId: string | null;
 }
-
-/** Tài khoản Tích sản (ADR-88): tiền chuyển vào từ tài khoản thường là Tích sản. Heo và sổ tiết kiệm khóa, phao thì không. */
-export type AccountRole = "piggy_bank" | "buffer" | "term_deposit";
 
 export interface AccountRef {
   id: string;
@@ -42,10 +24,10 @@ export interface AccountRef {
   feedFrom: string | null;
   /** Lúc bật "SePay báo cả tiền ra" (ISO): khoản chi trước mốc nhập tay được; NULL = không có mốc. */
   sepayOutFrom: string | null;
-  /** Heo đất, sổ tiết kiệm (ADR-77, ADR-88): tiền thật nhưng chưa rút ngay được. */
-  locked: boolean;
-  /** Tài khoản Tích sản (ADR-88); null = tài khoản thường. Không bao giờ là tài khoản mặc định khi nhập tay. */
-  role: AccountRole | null;
+  /** Ngăn (pocket UC-1201): savings Tích luỹ · reserve Dự phòng · operating Vận hành · null ngoài ngăn. */
+  pocket: "savings" | "reserve" | "operating" | null;
+  /** Tài khoản riêng tư (access UC-504): người khác chỉ thấy tổng. */
+  private: boolean;
 }
 
 export interface MemberRef {
@@ -58,8 +40,10 @@ export interface IncomeStreamRef {
   id: string;
   name: string;
   active: boolean;
-  /** Phần khóa của nguồn; rỗng = toàn bộ vào dòng thác. */
-  locks: { walletId: string; percent: number }[];
+  /** Ngăn của tiền về (NULL = theo tài khoản nhận, access UC-506). */
+  pocket: "savings" | "reserve" | "operating" | null;
+  /** Khoản thu từ nguồn này mở kỳ lương (pocket UC-1205). */
+  opensCycle: boolean;
 }
 
 export interface TenantRef {
@@ -77,11 +61,9 @@ export interface BookRef {
 }
 
 export interface Refs {
-  wallets: WalletRef[];
   categories: CategoryRef[];
   accounts: AccountRef[];
   members: MemberRef[];
-  rules: WalletRule[];
   incomeStreams: IncomeStreamRef[];
   tenants: TenantRef[];
   /** Khoản hộ đang nợ người khác (v_debt_balance). */
@@ -92,11 +74,6 @@ export interface Refs {
   rentalIncomeStreamId: string | null;
 }
 
-/** Ví Thu nhập: duy nhất một ví tier='holding' AND kind='holding'. */
-export const isIncomeHolding = (w: Pick<WalletRef, "tier" | "kind">) => w.tier === "holding" && w.kind === "holding";
-/** Ví quỹ giữ riêng (vd "Thu cho thuê"): tier='holding' nhưng không phải ví Thu nhập. */
-export const isReserve = (w: Pick<WalletRef, "tier" | "kind">) => w.tier === "holding" && w.kind !== "holding";
-
 export class DomainError extends Error {
   constructor(
     readonly code: string,
@@ -104,6 +81,8 @@ export class DomainError extends Error {
     readonly status = 400,
     /** Ô lỗi theo dạng dấu chấm (vd "members.0.name") để app tô đúng ô; chỉ đặt khi lỗi nằm ở một ô cụ thể. */
     readonly field?: string,
+    /** Tên các trường cũ bị từ chối (400 `model_changed`, ADR-123). */
+    readonly fields?: string[],
   ) {
     super(message);
   }

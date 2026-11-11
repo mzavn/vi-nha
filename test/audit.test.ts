@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import { app } from "../src/index";
 import { asD1, openDb } from "./helpers/d1-sqlite";
+import { client, householdP, P_NOW } from "./helpers/household-p";
 
 // Nhật ký thay đổi và cảnh báo cả nhà khi kênh báo tin / khoá đổi (ADR-90).
 
@@ -108,6 +109,23 @@ describe("nhật ký thay đổi", () => {
     expect(json.data[0]).toEqual({ id: 60, at: expect.any(String), memberId: "wife", memberName: "Vợ", via: "session", action: "tx.void", target: "tx:60", detail: null });
     expect(json.data[49]!.id).toBe(11);
   });
+
+  it("UC-1209 AC-2: mục tiêu Dự phòng ghi goal.create (tên trường), goal.update (tên trường, changes.account_id khi gắn / bỏ gắn tài khoản); nhóm danh mục ghi category_group.*", async () => {
+    raw.exec("UPDATE accounts SET pocket = 'reserve' WHERE id = 'mb-husband'");
+    expect((await call("POST", "/v1/settings/goals", { name: "Sửa nhà", account_id: "mb-husband", target_amount: 6_000_000 })).status).toBe(201);
+    expect((await call("PATCH", "/v1/settings/goals/sua-nha", { name: "Sửa nhà bếp" })).status).toBe(200);
+    expect((await call("PATCH", "/v1/settings/goals/sua-nha", { account_id: null })).status).toBe(200);
+    expect((await call("POST", "/v1/settings/category-groups", { name: "Học hành" })).status).toBe(201);
+    expect((await call("PATCH", "/v1/settings/category-groups/hoc-hanh", { essential: true })).status).toBe(200);
+
+    expect(auditRows()).toEqual([
+      { member_id: "husband", via: "token", action: "goal.create", target: "goal:sua-nha", detail: '{"fields":["account_id","name","target_amount"]}' },
+      { member_id: "husband", via: "token", action: "goal.update", target: "goal:sua-nha", detail: '{"fields":["name"]}' },
+      { member_id: "husband", via: "token", action: "goal.update", target: "goal:sua-nha", detail: '{"fields":["account_id"],"changes":{"account_id":{"from":"mb-husband","to":null}}}' },
+      { member_id: "husband", via: "token", action: "category_group.create", target: "category_group:hoc-hanh", detail: '{"fields":["name"]}' },
+      { member_id: "husband", via: "token", action: "category_group.update", target: "category_group:hoc-hanh", detail: '{"fields":["essential"]}' },
+    ]);
+  });
 });
 
 describe("cảnh báo cả nhà khi kênh báo tin hay khoá đổi", () => {
@@ -182,5 +200,68 @@ describe("cảnh báo cả nhà khi kênh báo tin hay khoá đổi", () => {
     await call("PATCH", "/v1/settings/accounts/vcb-husband", { name: "VCB", feed_from: "2026-10-15T15:25:00.000Z", opening_balance: 500_000 });
     expect(telegram).toEqual([]);
     expect(auditRows().at(-1)).toMatchObject({ action: "account.update", detail: '{"fields":["feed_from","name","opening_balance"]}' });
+  });
+});
+
+describe("nhật ký nguồn thu, bỏ qua log, danh mục (hộ mẫu P)", () => {
+  let p: DatabaseSync;
+  let api: ReturnType<typeof client>;
+  const rows = () =>
+    (p.prepare("SELECT member_id, via, action, target, detail FROM audit_log ORDER BY id").all() as { detail: string | null }[]).map((r) => ({
+      ...r,
+      detail: r.detail === null ? null : JSON.parse(r.detail),
+    }));
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(P_NOW);
+    p = householdP();
+    api = client(p);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("UC-506 AC-32: tạo nguồn thu ghi income_stream.create { fields }; đổi Mở kỳ lương ghi changes.opens_cycle cũ → mới; đổi tên chỉ fields; nguồn cho thuê bật mở kỳ → 400 cannot_open_cycle, không có dòng", async () => {
+    expect((await api("POST", "/v1/settings/income-streams", { name: "Lương vợ", opens_cycle: true })).status).toBe(201);
+    expect((await api("PATCH", "/v1/settings/income-streams/salary-husband", { opens_cycle: false })).status).toBe(200);
+    expect((await api("PATCH", "/v1/settings/income-streams/salary-husband", { name: "Lương chồng mới" })).status).toBe(200);
+    const rental = await api("PATCH", "/v1/settings/income-streams/rental", { opens_cycle: true });
+    expect([rental.status, rental.json.error?.code]).toEqual([400, "cannot_open_cycle"]);
+    expect(rows()).toEqual([
+      { member_id: "husband", via: "token", action: "income_stream.create", target: "income_stream:luong-vo", detail: { fields: ["name", "opens_cycle"] } },
+      {
+        member_id: "husband",
+        via: "token",
+        action: "income_stream.update",
+        target: "income_stream:salary-husband",
+        detail: { fields: ["opens_cycle"], changes: { opens_cycle: { from: true, to: false } } },
+      },
+      { member_id: "husband", via: "token", action: "income_stream.update", target: "income_stream:salary-husband", detail: { fields: ["name"] } },
+    ]);
+  });
+
+  it("UC-305 AC-35: vợ bỏ qua log L4 (token) → 200, L4 ignored, nhật ký log.ignore chi tiết null; gửi lại → 409 not_pending, không thêm dòng", async () => {
+    expect((await api("POST", "/v1/logs/L4/ignore", {}, "wife")).status).toBe(200);
+    expect(p.prepare("SELECT status FROM bank_logs WHERE id = 'L4'").get()).toEqual({ status: "ignored" });
+    const again = await api("POST", "/v1/logs/L4/ignore", {}, "wife");
+    expect([again.status, again.json.error?.code]).toEqual([409, "not_pending"]);
+    expect(rows()).toEqual([{ member_id: "wife", via: "token", action: "log.ignore", target: "log:L4", detail: null }]);
+  });
+
+  it("UC-109 AC-10: chồng (phiên) tạo / sửa danh mục ghi category.create / category.update { fields }; lần lỗi không có dòng", async () => {
+    const pEnv = { DB: asD1(p), API_TOKEN: "tok", APP_PASSWORD: "mat-khau-chung" } as Env;
+    const login = await app.request(
+      "/v1/session",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ member_id: "husband", password: "mat-khau-chung" }) },
+      pEnv,
+    );
+    const cookie = login.headers.get("Set-Cookie")!.split(";")[0]!;
+    const session = (method: string, path: string, body: unknown) =>
+      app.request(path, { method, headers: { Cookie: cookie, "Content-Type": "application/json" }, body: JSON.stringify(body) }, pEnv);
+    expect((await session("POST", "/v1/categories", { name: "Quà tặng", group_id: "nice-to-have" })).status).toBe(201);
+    expect((await session("PATCH", "/v1/categories/qua-tang", { active: false })).status).toBe(200);
+    expect((await session("POST", "/v1/categories", { name: "" })).status).toBe(400);
+    expect(rows()).toEqual([
+      { member_id: "husband", via: "session", action: "category.create", target: "category:qua-tang", detail: { fields: ["group_id", "name"] } },
+      { member_id: "husband", via: "session", action: "category.update", target: "category:qua-tang", detail: { fields: ["active"] } },
+    ]);
   });
 });

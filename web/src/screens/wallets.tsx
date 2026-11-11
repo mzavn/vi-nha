@@ -1,498 +1,399 @@
-// Ví & Quỹ: ngân sách theo phe (tuần / tháng) kèm chuyển ngân sách và ví giữ riêng, Tích sản, Tài khoản, Người thuê, Nợ, Phân tích, Chuyển tiền cần làm.
-// Ba trục tách bạch: ví kèm "còn lại", tài khoản kèm "lệch", danh mục kèm "kỳ trước".
+// Ví & quỹ (pwa UC-707): Nhìn lại (chi theo nhóm danh mục trong kỳ lương, so hạn mức mềm và kỳ trước), Tích luỹ, Tài khoản,
+// Người thuê, Nợ. Ba trục tách bạch: nhóm kèm "còn / vượt" hạn mức mềm, tài khoản kèm "lệch", danh mục kèm "kỳ trước".
 
-import { Fragment } from "preact";
-import { useMemo, useState } from "preact/hooks";
-import { encode } from "uqr";
-import { LOAN_INTEREST_ID } from "../../../src/domain/system-ids";
-import { transferQr } from "../../../src/domain/vietqr";
-import { api, errorText } from "../lib/api";
-import { budgetTotals, coverPrefill, type MoveDraft } from "../lib/budget";
+import { useEffect, useState } from "preact/hooks";
+import type { LookBack, LookBackCategory, LookBackGroup } from "../../../src/domain/look-back";
 import { DRIFT_LABEL, driftOf } from "../lib/drift";
-import { formatVnd, maskAmounts, moneyDigits } from "../lib/money";
+import { formatVnd, maskAmounts } from "../lib/money";
 import { interestLineText } from "../lib/interest";
-import { applyQueueToBudget } from "../lib/pending";
-import { monthKey, monthLabel, previousMonth, shortDate, weekLabel, weekRange } from "../lib/period";
-import { safetyFundCashText, safetyFundMonthsText, skippedRunLines, wealthBuildingKinds, wealthBuildingPlaces, wealthBuildingSources, type AssetLabels, type WealthBuildingLine } from "../lib/wealth-building";
-import { defaultFilter } from "../lib/tx-filter";
-import type { AccountRow, Budget, BudgetLine, InterestLine, Reserve, SpendByCategory, WealthBuildingBreakdown, TransferOrder, TxRow } from "../lib/types";
+import { accountsTotal } from "../lib/accounts-total";
+import { barPct, compareText, cycleHeading, excludedText, isEmptyLookBack, limitText, LOOK_BACK_EMPTY, LOOK_BACK_NOTE, lookBackPath, queueNote, stepCycle } from "../lib/look-back";
+import { monthKey, monthLabel, shortDate } from "../lib/period";
+import { NO_SAVINGS_ACCOUNT, savingsCard } from "../lib/pocket-cards";
+import { cycleFilter } from "../lib/tx-filter";
+import type { AccountRow, TxRow } from "../lib/types";
 import { useResource } from "../state/resource";
-import { go, openTx, refresh, setState, setWalletsTab, toast, useApp, viewSnapshot, type WalletsTab } from "../state/store";
-import { copyText } from "../ui/clipboard";
+import { go, openTx, setLookBackCycle, setWalletsTab, useApp, viewSnapshot, type WalletsTab } from "../state/store";
 import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
-import { Bar, Card, Empty, Loadable, NeedsNetwork, PageHeader, Seg, Skeleton } from "../ui/parts";
+import { Bar, Card, Empty, Loadable, PageHeader, Skeleton } from "../ui/parts";
 import { useWide } from "../ui/shell";
-import { DebtSheet, MoveBudgetSheet } from "./budget-sheets";
 import { CountSheet } from "./count-sheet";
 import { DebtsTab } from "./debts";
 import { ASSET_KINDS, OtherEntrySheet } from "./other-entry-sheet";
 import { TenantsTab } from "./tenants";
 
 const TABS: { value: WalletsTab; label: string }[] = [
-  { value: "budget", label: "Ngân sách" },
-  { value: "wealth-building", label: "Tích sản" },
+  { value: "analysis", label: "Nhìn lại" },
+  { value: "wealth-building", label: "Tích luỹ" },
   { value: "accounts", label: "Tài khoản" },
   { value: "tenants", label: "Người thuê" },
   { value: "debts", label: "Nợ" },
-  { value: "analysis", label: "Phân tích" },
-  { value: "transfers", label: "Chuyển tiền" },
 ];
 
 export function Wallets() {
   const { walletsTab, snap } = useApp();
   const now = new Date();
-  const orders = snap?.attention.transferOrdersPending ?? 0;
   return (
     <>
       <PageHeader title="Ví & quỹ" sub={monthLabel(snap?.month ?? monthKey(now))} />
-      {/* Bảy mục phải thấy hết trên điện thoại: xuống dòng, không cuộn ngang (mục đang chọn không bao giờ khuất). */}
+      {/* Năm mục phải thấy hết trên điện thoại: xuống dòng, không cuộn ngang (mục đang chọn không bao giờ khuất). */}
       <div class="tabs wrap" role="group" aria-label="Mục">
         {TABS.map((t) => (
           <button type="button" key={t.value} aria-pressed={walletsTab === t.value} onClick={() => setWalletsTab(t.value)}>
             {t.label}
-            {t.value === "transfers" && orders > 0 && (
-              <span class="tab-badge">
-                {orders}
-                <span class="sr-only"> lệnh chờ</span>
-              </span>
-            )}
           </button>
         ))}
       </div>
-      {walletsTab === "budget" && <BudgetTab />}
+      {walletsTab === "analysis" && <LookBackTab />}
       {walletsTab === "wealth-building" && <WealthBuildingTab />}
       {walletsTab === "accounts" && <AccountsTab />}
-      {walletsTab === "analysis" && <AnalysisTab />}
-      {walletsTab === "transfers" && <TransfersTab />}
       {walletsTab === "tenants" && <TenantsTab />}
       {walletsTab === "debts" && <DebtsTab />}
     </>
   );
 }
 
-// ── Ngân sách ──────────────────────────────────────────────────────
-const TIER_GROUPS: { key: string; label: string; match: (l: BudgetLine) => boolean }[] = [
-  { key: "wealth_building", label: "Tích sản", match: (l) => l.tier === "wealth_building" },
-  { key: "tax", label: "Thuế", match: (l) => l.tier === "tax" },
-  { key: "nice", label: "Hưởng thụ", match: (l) => l.tier === "nice" },
-  { key: "must", label: "Must", match: (l) => l.tier === "must" && l.mustGroup !== "have" },
-  { key: "have", label: "Có thì tốt", match: (l) => l.tier === "must" && l.mustGroup === "have" },
-];
+// ── Nhìn lại ───────────────────────────────────────────────────────
+type CycleLookBack = Extract<LookBack, { kind: "cycle" }>;
 
-type MoveOpen = { draft: MoveDraft; title: string };
+/**
+ * Nhìn lại theo kỳ lương (pwa UC-707, ledger UC-108): kỳ chọn nằm trên địa chỉ `#wallets/analysis/<ngày lương>`; ngày đó không
+ * phải kỳ nào (server `invalid_cycle`, UC-711 AC-27) thì về kỳ hiện tại. Số của server — khoản chờ đồng bộ chưa tính.
+ */
+function LookBackTab() {
+  const { lookBackCycle, queue } = useApp();
+  const res = useResource<LookBack>(lookBackPath(lookBackCycle));
+  useEffect(() => {
+    if (lookBackCycle && res.error?.code === "invalid_cycle") setLookBackCycle(null);
+  }, [lookBackCycle, res.error]);
+  const d = res.data?.kind === "cycle" ? res.data : null;
+  const prev = d && stepCycle(d, -1);
+  const next = d && stepCycle(d, 1);
+  const queued = queueNote(queue.length);
+  return (
+    <Card
+      title={d ? cycleHeading(d.cycle) : "Nhìn lại"}
+      right={
+        d && (
+          <div class="book-month" role="group" aria-label="Kỳ lương">
+            <button type="button" class="btn book-step" aria-label="Kỳ trước" disabled={!prev} onClick={() => prev && setLookBackCycle(prev.cycle)}>
+              <Icon name="chevron-left" size={18} />
+            </button>
+            {next && (
+              <button type="button" class="btn book-step" aria-label="Kỳ sau" onClick={() => setLookBackCycle(next.cycle)}>
+                <Icon name="chevron-right" size={18} />
+              </button>
+            )}
+          </div>
+        )
+      }
+      flush
+      note={LOOK_BACK_NOTE}
+    >
+      <Loadable res={res}>{(raw) => (raw.kind === "cycle" ? <LookBackBody d={raw} queued={queued} /> : null)}</Loadable>
+    </Card>
+  );
+}
 
-function BudgetTab() {
-  const app = useApp();
-  const [kind, setKind] = useState<"week" | "month">("month");
-  const [move, setMove] = useState<MoveOpen | null>(null);
-  const [paying, setPaying] = useState<Reserve | null>(null);
-  const now = new Date();
-  const wk = weekRange(now);
-  const period = kind === "week" ? wk.key : monthKey(now);
-  const res = useResource<Budget>(`/v1/budget?period=${period}`);
-  // Máy tính: thêm cột kỳ trước để thấy xu hướng — cùng endpoint, kỳ liền trước.
+function LookBackBody({ d, queued }: { d: CycleLookBack; queued: string | null }) {
   const wide = useWide();
-  const prev = useResource<Budget>(wide ? `/v1/budget?period=${kind === "week" ? weekRange(new Date(now.getTime() - 7 * 86_400_000)).key : previousMonth(monthKey(now))}` : null);
-  const filter = app.tierFilter;
-  const groups = TIER_GROUPS.filter((g) => !filter || g.key === filter);
-  const view = viewSnapshot(app);
-  const balances: Record<string, number | null> = Object.fromEntries((view?.wallets ?? []).map((w) => [w.id, w.balance]));
-  const memberId = app.member?.id ?? null;
-  const cover = (l: BudgetLine, balance: number) =>
-    setMove({ draft: coverPrefill(l.walletId, balance, app.boot?.wallets ?? [], balances, memberId), title: `Bù ${l.name}` });
-  const reserves = (view?.reserves ?? []).map((r) => ({ ...r, balance: balances[r.walletId] ?? r.balance }));
-  // Chạm tên ví: Sổ giao dịch lọc sẵn ví đó, tháng này (UC-716) — xem các khoản làm nên số "đã chi".
-  const openBook = (walletId: string) => go("ledger", { book: { ...defaultFilter(now), walletId } });
-  const wealthBuilding = app.boot?.wallets.find((w) => w.tier === "wealth_building");
-
+  const [open, setOpen] = useState<string | null>(null);
+  const toggle = (id: string) => setOpen(open === id ? null : id);
+  // Chạm danh mục → Sổ giao dịch lọc danh mục đó và đúng kỳ (mốc giờ của kỳ), nên Chi của Sổ bằng số ở đây.
+  const drill = (c: LookBackCategory) => {
+    if (c.categoryId) go("ledger", { book: cycleFilter(d.cycle, c.categoryId, new Date()) });
+  };
+  const excluded = excludedText(d.excluded.debtPrincipal);
+  const rows: Rows = {
+    open,
+    toggle,
+    drill,
+    interest: d.interest.lines.length > 0 || d.interest.spent !== 0 || d.interest.previousSpent !== 0,
+    ungrouped: d.ungrouped.categories.length > 0 || d.ungrouped.spent !== 0 || d.ungrouped.previousSpent !== 0,
+  };
   return (
     <>
-      <Card
-        title={kind === "week" ? weekLabel(wk.key, wk.start, wk.end) : monthLabel(monthKey(now))}
-        right={
-          <Seg
-            label="Kỳ"
-            value={kind}
-            onChange={setKind}
-            options={[
-              { value: "week", label: "Tuần" },
-              { value: "month", label: "Tháng" },
-            ]}
-          />
-        }
-        flush
-        note="Có thì tốt là ví nhận phần còn lại — vượt ở đây nghĩa là tháng sau phải bóp, không phải rút Tích sản. Ví âm thì bấm Bù để chuyển ngân sách từ ví khác sang."
-      >
-        {filter && (
-          <div class="status-row" style={{ padding: "0 14px", margin: "0 0 8px" }}>
-            <span>Đang xem một phe.</span>
-            <button type="button" class="link" onClick={() => setState({ tierFilter: null })}>
-              Xem tất cả
-            </button>
-          </div>
-        )}
-        <Loadable res={res}>
-          {(raw) => {
-            const b = applyQueueToBudget(raw, app.queue);
-            const shown = groups.map((g) => ({ g, lines: b.lines.filter(g.match) })).filter((x) => x.lines.length > 0);
-            if (shown.length === 0) return <Empty title="Không có ví nào có số dự kiến trong kỳ này." />;
-            const total = budgetTotals(shown.flatMap((x) => x.lines));
-            // Điện thoại: mỗi ví một hàng, "còn lại" là số to bên phải — bảng bốn cột không vừa 390px (audit 261001 F01).
-            if (!wide) {
-              return (
-                <div class="blist">
-                  {shown.map(({ g, lines }) => (
-                    <Fragment key={g.key}>
-                      <div class="set-sub bgroup">
-                        <span>{g.label}</span>
-                        <span>còn lại</span>
-                      </div>
-                      {lines.map((l) => (
-                        <BudgetItem key={l.walletId} l={l} onCover={cover} onOpen={openBook} interest={l.walletId === LOAN_INTEREST_ID ? b.interestLines : undefined} />
-                      ))}
-                    </Fragment>
-                  ))}
-                  {total && (
-                    <div class="tier btotal">
-                      <div class="nm">Tổng chi tiêu</div>
-                      <div class="amt">
-                        <Money value={total.remaining} />
-                      </div>
-                      <div class="tsub">
-                        <span>
-                          đã chi {moneyDigits(total.spent)} / {formatVnd(total.target)}
-                        </span>
-                        <span>còn lại</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            }
-            return (
-              <div class="table-wrap">
-                <table class="data dk-table">
-                  <thead>
-                    <tr>
-                      <th scope="col">Ví</th>
-                      <th scope="col">Dự kiến</th>
-                      <th scope="col">Thực tế</th>
-                      <th scope="col">Còn lại ₫</th>
-                      <th scope="col">Đã dùng</th>
-                      <th scope="col">{kind === "week" ? "Tuần trước" : "Tháng trước"}</th>
-                      <th scope="col">So kỳ trước</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {shown.map(({ g, lines }) => [
-                      <tr class="group" key={g.key}>
-                        <td colSpan={7}>{g.label}</td>
-                      </tr>,
-                      ...lines.map((l) => (
-                        <BudgetRow
-                          key={l.walletId}
-                          l={l}
-                          onCover={cover}
-                          onOpen={openBook}
-                          interest={l.walletId === LOAN_INTEREST_ID ? b.interestLines : undefined}
-                          prev={prev.data ? (prev.data.lines.find((x) => x.walletId === l.walletId)?.spent ?? 0) : null}
-                        />
-                      )),
-                    ])}
-                    {total && (
-                      <tr class="dk-total">
-                        <td>Tổng chi tiêu</td>
-                        <td class="num">
-                          <Money value={total.target} unit={false} mono />
-                        </td>
-                        <td class="num">
-                          <Money value={total.spent} unit={false} mono tone={false} />
-                        </td>
-                        <td class="num">
-                          <Money value={total.remaining} unit={false} mono />
-                        </td>
-                        <td colSpan={3} />
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            );
-          }}
-        </Loadable>
-        <div class="pad">
-          <button type="button" class="btn btn-wide" onClick={() => setMove({ draft: { fromWalletId: null, toWalletId: null, amount: 0 }, title: "Chuyển ngân sách" })}>
-            <Icon name="swap" size={16} /> Chuyển ngân sách
-          </button>
+      <div class="tier btotal">
+        <div class="nm">Đã chi kỳ này</div>
+        <div class="amt">
+          <Money value={d.total} tone={false} />
         </div>
-      </Card>
-
-      {!filter &&
-        reserves.map((r) => (
-          <Card key={r.walletId} title={r.name} right={<span class="chip">giữ riêng</span>} note="Không vào ví chi tiêu. Trả nợ hay chuyển sang Tích sản là việc cả nhà quyết từng lần.">
-            <div class="flex justify-between items-baseline" style={{ margin: "2px 0 12px" }}>
-              <span style={{ color: "var(--fg-2)" }}>Số dư</span>
-              {r.balance === null ? <span>—</span> : <Money value={r.balance} class="font-semibold" />}
+        <div class="tsub">
+          <span>Kỳ trước {formatVnd(d.previousTotal)}</span>
+        </div>
+      </div>
+      {queued && (
+        <p class="status-row" style={{ padding: "10px 14px 0" }}>
+          {queued}
+        </p>
+      )}
+      {isEmptyLookBack(d) ? (
+        <Empty title={LOOK_BACK_EMPTY} />
+      ) : wide ? (
+        <LookBackTable d={d} rows={rows} />
+      ) : (
+        <div class="blist">
+          {d.groups.map((g) => (
+            <GroupItem key={g.id} id={g.id} g={g} rows={rows} />
+          ))}
+          {rows.interest && (
+            <div class="tier">
+              <div class="nm">Lãi vay</div>
+              <div class="amt">
+                <Money value={d.interest.spent} tone={false} />
+              </div>
+              <div class="tsub">
+                <span>{compareText(d.interest.spent, d.interest.previousSpent)}</span>
+              </div>
+              <InterestLines d={d} />
             </div>
-            <div class="grid grid-cols-2 gap-2">
-              <button type="button" class="btn" onClick={() => setPaying(r)}>
-                Trả nợ
-              </button>
-              <button
-                type="button"
-                class="btn"
-                disabled={!wealthBuilding}
-                onClick={() =>
-                  setMove({ draft: { fromWalletId: r.walletId, toWalletId: wealthBuilding?.id ?? null, amount: Math.max(0, r.balance ?? 0) }, title: `Chuyển sang ${wealthBuilding?.name ?? "Tích sản"}` })
-                }
-              >
-                Chuyển sang Tích sản
-              </button>
-            </div>
-          </Card>
-        ))}
-
-      {move && <MoveBudgetSheet key={move.title} initial={move.draft} title={move.title} onClose={() => setMove(null)} />}
-      {paying && <DebtSheet reserve={paying} onClose={() => setPaying(null)} />}
+          )}
+          {rows.ungrouped && (
+            <>
+              <GroupItem id="ungrouped" g={{ name: "Chưa xếp nhóm", essential: false, pct: null, left: null, over: null, ...d.ungrouped }} rows={rows} />
+              <div class="srow" style={{ justifyContent: "flex-end", minHeight: "44px", borderTop: 0 }}>
+                <SortLink />
+              </div>
+            </>
+          )}
+        </div>
+      )}
+      {excluded && (
+        <p class="status-row" style={{ padding: "10px 14px 0" }}>
+          {excluded}
+        </p>
+      )}
     </>
   );
 }
 
-/** Điện thoại: một ví một hàng theo kiểu hàng tầng — tên, còn lại, "đã chi / dự kiến", thanh; ví âm có dòng Bù riêng. */
-function BudgetItem({ l, onCover, onOpen, interest }: { l: BudgetLine; onCover: (l: BudgetLine, balance: number) => void; onOpen: (walletId: string) => void; interest?: InterestLine[] }) {
-  const over = l.remaining !== null && l.remaining < 0;
-  const used = l.target && l.spent !== null ? Math.round((100 * l.spent) / l.target) : null;
-  const negative = typeof l.balance === "number" && l.balance < 0 ? l.balance : null;
+/** Trạng thái chung của các hàng: nhóm đang mở, chạm nhóm / danh mục, có hàng Lãi vay / Chưa xếp nhóm không. */
+interface Rows {
+  open: string | null;
+  toggle: (id: string) => void;
+  drill: (c: LookBackCategory) => void;
+  interest: boolean;
+  ungrouped: boolean;
+}
+
+/** "Xếp nhóm ›": Cài đặt › Nhóm danh mục & hạn mức mềm (pwa UC-709). */
+const SortLink = () => (
+  <button type="button" class="link" onClick={() => go("settings", { settingsFocus: "pockets" })}>
+    Xếp nhóm ›
+  </button>
+);
+
+type GroupLike = Pick<LookBackGroup, "name" | "essential" | "spent" | "previousSpent" | "pct" | "left" | "over" | "categories">;
+
+/** Điện thoại: một nhóm một hàng — tên, chip Thiết yếu, đã chi; thanh (đầy tối đa 100%) và "còn / vượt"; so kỳ trước. Chạm → danh mục. */
+function GroupItem({ id, g, rows }: { id: string; g: GroupLike; rows: Rows }) {
+  const bar = barPct(g);
+  const limit = limitText(g);
+  const open = rows.open === id;
   return (
-    <div class="tier">
-      <div class="nm">
-        <WalletLink l={l} onOpen={onOpen} />
-        {over && used !== null && <span class="chip bad">{used}%</span>}
-      </div>
-      <div class="amt">
-        <Money value={l.remaining} />
-      </div>
-      <div class="tsub">
-        <span>
-          {l.spent === null ? "" : l.target !== null ? `đã chi ${moneyDigits(l.spent)} / ${formatVnd(l.target)}` : `đã chi ${formatVnd(l.spent)}`}
-        </span>
-        <span>{!over && used !== null ? `${used}% đã dùng` : ""}</span>
-      </div>
-      {used !== null && <Bar pct={used} tone={over ? "bad" : undefined} />}
-      <InterestLines lines={interest} />
-      {negative !== null && <NegativeLine amount={negative} onCover={() => onCover(l, negative)} />}
-    </div>
+    <>
+      <button type="button" class="tier" aria-expanded={open} onClick={() => rows.toggle(id)}>
+        <div class="nm">
+          <span>{g.name}</span>
+          {g.essential && <span class="chip">Thiết yếu</span>}
+        </div>
+        <div class="amt">
+          <Money value={g.spent} tone={false} />
+        </div>
+        <div class="tsub">
+          <span>{compareText(g.spent, g.previousSpent)}</span>
+          <span>{limit && `${limit} · ${g.pct}%`}</span>
+        </div>
+        {bar !== null && <Bar pct={bar} tone={g.over ? "bad" : undefined} />}
+      </button>
+      {open &&
+        g.categories.map((c) => (
+          <button type="button" key={c.categoryId ?? "none"} class="srow" style={{ paddingLeft: "28px" }} disabled={!c.categoryId} onClick={() => rows.drill(c)}>
+            <span class="srow-main">
+              <span class="srow-t">{c.name}</span>
+              <span class="srow-s">{compareText(c.spent, c.previousSpent)}</span>
+            </span>
+            <Money value={c.spent} tone={false} />
+          </button>
+        ))}
+    </>
   );
 }
 
-/** Ví "Lãi vay" (pwa UC-707 AC-25): mỗi khoản nợ có lãi một dòng phụ — ngày trả, lãi dự kiến tháng, đã trả. */
-function InterestLines({ lines }: { lines?: InterestLine[] }) {
-  if (!lines?.length) return null;
+/** Hàng Lãi vay: mỗi khoản nợ có lãi một dòng phụ — ngày trả, lãi dự kiến, đã trả (ledger UC-108 bước 4). */
+function InterestLines({ d }: { d: CycleLookBack }) {
+  if (d.interest.lines.length === 0) return null;
   return (
     <ul class="interest-lines">
-      {lines.map((x) => (
+      {d.interest.lines.map((x) => (
         <li key={x.debtId}>{interestLineText(x)}</li>
       ))}
     </ul>
   );
 }
 
-/**
- * Ví đang âm dù kỳ này vẫn còn trong dự kiến: nói rõ là số dư thật của ví (chi vượt chưa bù), kèm nút Bù đủ 44px —
- * để "còn lại 500.000" và "âm 150.000" trên cùng một hàng không còn mâu thuẫn (audit 261001 F15).
- */
-function NegativeLine({ amount, onCover }: { amount: number; onCover: () => void }) {
-  return (
-    <div class="bneg">
-      <span>
-        Số dư thật <Money value={amount} /> — vượt từ trước, chưa bù
-      </span>
-      <button type="button" class="btn" onClick={onCover}>
-        Bù
+/** Máy tính: bảng nhóm cột Kỳ này / Kỳ trước / Hạn mức; chạm nhóm mở danh mục ngay dưới. */
+function LookBackTable({ d, rows }: { d: CycleLookBack; rows: Rows }) {
+  const cell = (v: number | null) => (v === null ? "" : <Money value={v} unit={false} mono tone={false} />);
+  const categoryRows = (id: string, categories: LookBackCategory[]) =>
+    rows.open === id &&
+    categories.map((c) => (
+      <tr key={`${id}:${c.categoryId ?? "none"}`}>
+        <td style={{ paddingLeft: "28px" }}>
+          {c.categoryId ? (
+            <button type="button" class="link" onClick={() => rows.drill(c)}>
+              {c.name}
+            </button>
+          ) : (
+            c.name
+          )}
+        </td>
+        <td class="num">{cell(c.spent)}</td>
+        <td class="num">{cell(c.previousSpent)}</td>
+        <td />
+      </tr>
+    ));
+  const groupCell = (id: string, name: string, sub: preact.ComponentChildren) => (
+    <td>
+      <button type="button" class="link" aria-expanded={rows.open === id} onClick={() => rows.toggle(id)}>
+        {name}
       </button>
+      {sub && " "}
+      {sub}
+    </td>
+  );
+  return (
+    <div class="table-wrap">
+      <table class="data dk-table">
+        <thead>
+          <tr>
+            <th scope="col">Nhóm</th>
+            <th scope="col">Kỳ này ₫</th>
+            <th scope="col">Kỳ trước ₫</th>
+            <th scope="col">Hạn mức ₫</th>
+          </tr>
+        </thead>
+        <tbody>
+          {d.groups.map((g) => {
+            const bar = barPct(g);
+            const limit = limitText(g);
+            return [
+              <tr key={g.id}>
+                {groupCell(g.id, g.name, g.essential && <span class="chip">Thiết yếu</span>)}
+                <td class="num">{cell(g.spent)}</td>
+                <td class="num">{cell(g.previousSpent)}</td>
+                <td class="num">
+                  {cell(g.limit)}
+                  {bar !== null && (
+                    <div class="dk-pct">
+                      {g.over ? <span class="chip bad" style={{ justifySelf: "end" }}>{g.pct}%</span> : <span class="tnum">{g.pct}%</span>}
+                      <Bar pct={bar} tone={g.over ? "bad" : undefined} />
+                    </div>
+                  )}
+                  {limit && <div class="sub-line">{limit}</div>}
+                </td>
+              </tr>,
+              categoryRows(g.id, g.categories),
+            ];
+          })}
+          {rows.interest && (
+            <tr>
+              <td>
+                Lãi vay
+                <InterestLines d={d} />
+              </td>
+              <td class="num">{cell(d.interest.spent)}</td>
+              <td class="num">{cell(d.interest.previousSpent)}</td>
+              <td />
+            </tr>
+          )}
+          {rows.ungrouped && [
+            <tr key="ungrouped">
+              {groupCell(
+                "ungrouped",
+                "Chưa xếp nhóm",
+                <div>
+                  <SortLink />
+                </div>,
+              )}
+              <td class="num">{cell(d.ungrouped.spent)}</td>
+              <td class="num">{cell(d.ungrouped.previousSpent)}</td>
+              <td />
+            </tr>,
+            categoryRows("ungrouped", d.ungrouped.categories),
+          ]}
+          <tr class="dk-total">
+            <td>Đã chi kỳ này</td>
+            <td class="num">{cell(d.total)}</td>
+            <td class="num">{cell(d.previousTotal)}</td>
+            <td />
+          </tr>
+        </tbody>
+      </table>
     </div>
   );
 }
 
-/** Tên ví trong bảng Ngân sách: chạm mở Sổ giao dịch lọc ví đó, tháng này. */
-function WalletLink({ l, onOpen }: { l: BudgetLine; onOpen: (walletId: string) => void }) {
-  return (
-    <button type="button" class="link wallet-link" aria-label={`${l.name}: xem các khoản tháng này`} onClick={() => onOpen(l.walletId)}>
-      {l.name}
-    </button>
-  );
-}
-
-/** Máy tính: một hàng của bảng ngân sách đủ cột — dự kiến, thực tế, còn lại, % đã dùng, kỳ trước. */
-function BudgetRow({ l, prev, onCover, onOpen, interest }: { l: BudgetLine; prev: number | null; onCover: (l: BudgetLine, balance: number) => void; onOpen: (walletId: string) => void; interest?: InterestLine[] }) {
-  const over = l.remaining !== null && l.remaining < 0;
-  const used = l.target && l.spent !== null ? Math.round((100 * l.spent) / l.target) : null;
-  const secret = l.spent === null;
-  const negative = typeof l.balance === "number" && l.balance < 0 ? l.balance : null;
-  return (
-    <tr>
-      <td>
-        <WalletLink l={l} onOpen={onOpen} />
-        {negative !== null && <NegativeLine amount={negative} onCover={() => onCover(l, negative)} />}
-        <InterestLines lines={interest} />
-      </td>
-      <td class="num">
-        <Money value={l.target} unit={false} mono />
-      </td>
-      <td class="num">
-        <Money value={l.spent} unit={false} mono tone={false} />
-      </td>
-      <td class="num">
-        <Money value={l.remaining} unit={false} mono />
-      </td>
-      <td>
-        {used !== null && (
-          <div class="dk-pct">
-            {over ? <span class="chip bad" style={{ justifySelf: "end" }}>{used}%</span> : <span class="tnum">{used}%</span>}
-            <Bar pct={used} tone={over ? "bad" : undefined} />
-          </div>
-        )}
-      </td>
-      <td class="num">{secret || prev === null ? "" : <Money value={prev} unit={false} mono tone={false} />}</td>
-      <td class="num dk-delta">{secret || prev === null ? "" : <Money value={(l.spent ?? 0) - prev} unit={false} mono signed tone={false} />}</td>
-    </tr>
-  );
-}
-
-// ── Tích sản ───────────────────────────────────────────────────────
+// ── Tích luỹ ───────────────────────────────────────────────────────
+/**
+ * Ví & quỹ › Tích luỹ (pwa UC-707, ADR-122): card đầu đọc `pockets.savings` — cùng số thẻ Tích luỹ ở Hôm nay; tài sản đang giữ
+ * và nút Mua tài sản (UC-707 AC-37: không còn phần cách tính cũ, không gọi /v1/wealth-building).
+ */
 function WealthBuildingTab() {
   const app = useApp();
   const snap = viewSnapshot(app);
   const [buying, setBuying] = useState(false);
   const txs = useResource<TxRow[]>("/v1/transactions?limit=200");
-  const breakdown = useResource<WealthBuildingBreakdown>("/v1/wealth-building");
+  const wide = useWide();
   if (!snap) return <Skeleton rows={4} />;
-  const t = snap.tiers.wealth_building;
-  const fund = snap.safetyFund;
-  const full = fund.pct !== null && fund.pct >= 100;
-  const covered = safetyFundMonthsText(fund);
-  const total = t.cash + t.assets;
+  const savings = savingsCard(snap.pockets, snap.payCycle);
   const assets = (txs.data ?? []).filter((r) => r.meaning === "buy_asset" && r.status === "active");
   const assetLabel = (k: string | null) => ASSET_KINDS.find((a) => a.value === k)?.label ?? k ?? "";
-  const assetLabels: AssetLabels = Object.fromEntries(ASSET_KINDS.map((a) => [a.value, a.label]));
-  const wide = useWide();
-  const skipped = breakdown.data ? skippedRunLines(breakdown.data) : [];
 
-  const cards = (
+  const current = (
     <>
-      <Card title="Tích sản">
-        <p class="hint" style={{ margin: "0 0 10px" }}>
-          Tiền để dành lâu dài của nhà — gồm tiền (dùng được lúc khẩn cấp) và tài sản đã mua bằng tiền đó. Không chi trực tiếp từ đây.
-        </p>
-        <div class="flex justify-between items-baseline">
-          <span style={{ color: "var(--fg-2)" }}>Tổng Tích sản</span>
-          <Money value={total} class="font-semibold" />
-        </div>
-        {/* Thanh chỉ để thấy tỉ lệ; số đầy đủ nằm ở các dòng bên dưới (không rút gọn "55k" trên card này). */}
-        <div
-          style={{ display: "flex", gap: "2px", height: "10px", borderRadius: "5px", overflow: "hidden", margin: "6px 0 2px", background: "var(--surface-3)" }}
-          role="img"
-          aria-label={`Tiền ${formatVnd(t.cash)}, tài sản ${formatVnd(t.assets)}`}
-        >
-          {total > 0 && t.cash > 0 && <div style={{ flex: t.cash, background: "var(--lock-bg)" }} />}
-          {total > 0 && t.assets > 0 && <div style={{ flex: t.assets, background: "var(--lock)" }} />}
-        </div>
-        <Loadable res={breakdown}>
-          {(b) => {
-            const places = wealthBuildingPlaces(b);
-            return (
-              <>
-                <WealthBuildingList title="Loại" lines={wealthBuildingKinds(b, assetLabels)} />
-                <WealthBuildingList title="Tiền đang ở đâu" lines={places.lines} empty="Chưa có tiền Tích sản." />
-                {places.extra && (
-                  <p class="hint" style={{ margin: "4px 0 0" }}>
-                    {places.extra}
-                  </p>
-                )}
-              </>
-            );
-          }}
-        </Loadable>
-        <div class="flex justify-between" style={{ fontSize: "13px", padding: "3px 0", marginTop: "12px" }}>
-          <span style={{ color: "var(--fg-2)" }}>Quỹ an tâm {fund.estimated && <span class="chip">ước tính</span>}</span>
-          <span>{covered !== null ? `${covered} tháng chi Must` : "—"}</span>
-        </div>
-        <Bar pct={fund.pct ?? 0} tone="ok" />
-        <div class="sub-line" style={{ margin: "6px 0 12px" }}>
-          {safetyFundCashText(fund)}
-        </div>
-        <button type="button" class="btn btn-primary btn-wide" onClick={() => setBuying(true)}>
-          Mua tài sản
-        </button>
-        {!full && (
-          <p class="hint" style={{ margin: "8px 0 0" }}>
-            Quỹ an tâm chưa đủ. Quỹ an tâm chỉ tính tiền mặt — tài sản mua lúc nào cũng được.
-          </p>
-        )}
-      </Card>
-      <Card title="Tiền Tích sản đến từ đâu">
-        <Loadable res={breakdown}>
-          {(b) => {
-            const src = wealthBuildingSources(b, assetLabels);
-            return (
-              <>
-                <WealthBuildingList title="Vào" lines={src.ins} empty="Chưa có khoản nào vào Tích sản." />
-                {src.outs.length > 0 && <WealthBuildingList title="Ra khỏi tiền" lines={src.outs} />}
-                <ul class="hero-parts">
-                  <li>
-                    <span>Còn lại là tiền</span>
-                    <Money value={src.cash} />
+      {savings && (
+        <section class="card pocket">
+          <div class="pocket-h">
+            <h2>Tích luỹ</h2>
+          </div>
+          {savings.empty ? (
+            <div class="pocket-empty">
+              <button type="button" class="link" style={{ textAlign: "left" }} onClick={() => go("settings", { settingsFocus: "pockets" })}>
+                {NO_SAVINGS_ACCOUNT}
+              </button>
+            </div>
+          ) : (
+            <>
+              <div class="pocket-total">{savings.total}</div>
+              <ul class="hero-parts">
+                {savings.lines.map((l) => (
+                  <li key={l.label}>
+                    <span>{l.label}</span>
+                    <span>{l.value}</span>
                   </li>
-                </ul>
-                <button
-                  type="button"
-                  class="btn btn-wide"
-                  style={{ marginTop: "12px" }}
-                  onClick={() => go("ledger", { book: { ...defaultFilter(new Date()), month: null, walletId: b.walletId } })}
-                >
-                  Xem các khoản Tích sản
-                </button>
-                {src.fundNote && (
-                  <p class="hint" style={{ margin: "8px 0 0" }}>
-                    {src.fundNote}
-                  </p>
-                )}
-              </>
-            );
-          }}
-        </Loadable>
-      </Card>
-      {skipped.length > 0 && (
-        <Card title="Lần chia không trả cho mình" flush note="Các lần chia Tích sản 0 kèm lý do đã ghi (khoản thu còn hiệu lực, mới trước).">
-          <table class="data">
-            <thead>
-              <tr>
-                <th scope="col">Khoản thu · lý do</th>
-                <th scope="col">Ngày</th>
-              </tr>
-            </thead>
-            <tbody>
-              {skipped.map((r) => (
-                <tr key={r.id} class="tx-row" onClick={() => openTx(r.id)}>
-                  <td>
-                    <button type="button" class="tx-open">
-                      {r.income}
-                    </button>
-                    <div class="sub-line">{r.reason}</div>
-                  </td>
-                  <td>{r.date}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
+                ))}
+              </ul>
+              <div class="pocket-meta">
+                <p>{savings.change}</p>
+                <p>{savings.prev}</p>
+                <div class="near-foot" style={{ borderTop: 0, paddingTop: 0, marginTop: 2 }}>
+                  <span>{savings.pct}</span>
+                  <button type="button" class="link" onClick={() => go("settings", { settingsFocus: "parameters" })}>
+                    Đổi ›
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </section>
       )}
       <Card title="Tài sản đang giữ" flush>
         <Loadable res={txs}>
           {() =>
             assets.length === 0 ? (
-              <Empty title="Chưa mua tài sản nào.">Tiền Tích sản đang nằm ở dạng tiền mặt. Giá tốt thì mua vàng — Quỹ an tâm chỉ tính phần tiền mặt.</Empty>
+              <Empty title="Chưa mua tài sản nào.">Tiền Tích luỹ đang nằm ở dạng tiền mặt. Giá tốt thì mua vàng.</Empty>
             ) : (
               <table class="data">
                 <thead>
@@ -522,46 +423,34 @@ function WealthBuildingTab() {
             )
           }
         </Loadable>
+        <div class="pad">
+          <button type="button" class="btn btn-primary btn-wide" onClick={() => setBuying(true)}>
+            Mua tài sản
+          </button>
+        </div>
       </Card>
     </>
   );
 
   return (
     <>
-      {wide ? <div class="dk-cols">{cards}</div> : cards}
+      {wide ? <div class="dk-cols">{current}</div> : current}
       {buying && <OtherEntrySheet kind="buy_asset" amount={0} title="Mua tài sản" onClose={() => setBuying(false)} />}
     </>
   );
 }
 
-/** Một nhóm dòng của tab Tích sản: nhãn + câu phụ bên trái, số đầy đủ (₫) bên phải; dòng chi tiết thụt vào. */
-function WealthBuildingList({ title, lines, empty }: { title: string; lines: WealthBuildingLine[]; empty?: string }) {
-  return (
-    <section aria-label={title} style={{ marginTop: "12px" }}>
-      <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--fg-2)" }}>{title}</div>
-      <ul class="hero-parts" style={{ marginTop: "4px" }}>
-        {lines.length === 0 && empty && (
-          <li>
-            <span>{empty}</span>
-          </li>
-        )}
-        {lines.map((l) => (
-          <li key={l.key} style={l.level === "part" ? { paddingLeft: "12px", fontSize: "12.5px" } : undefined}>
-            <span>
-              {l.label}
-              {l.note && <div class="sub-line">{l.note}</div>}
-            </span>
-            <Money value={l.value} />
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
+// ── Tài khoản ──────────────────────────────────────────────────────
+/** Dòng phụ của hàng "Tiền thật đang có" (pwa UC-707 AC-31). */
+function accountsTotalNote(hasCredit: boolean, hasExcluded: boolean): string | null {
+  const parts = [hasCredit ? "đã trừ dư nợ thẻ" : null, hasExcluded ? "gồm cả tiền Tích luỹ, Dự phòng và tài khoản ngoài ngăn — tiền vận hành xem ở Hôm nay" : null];
+  const text = parts.filter(Boolean).join(" · ");
+  return text || null;
 }
 
-// ── Tài khoản ──────────────────────────────────────────────────────
 function AccountsTab() {
-  const { boot } = useApp();
+  const { boot, snap } = useApp();
+  const hasExcluded = (snap?.nearSpend?.excluded.length ?? 0) > 0;
   const res = useResource<AccountRow[]>("/v1/accounts");
   const [counting, setCounting] = useState<string | null>(null);
   const wide = useWide();
@@ -573,10 +462,26 @@ function AccountsTab() {
         note="Muốn chắc số trong sổ đúng: đếm tiền hoặc xem app ngân hàng rồi bấm Nhập số dư — chênh bao nhiêu app ghi một khoản điều chỉnh. Lệch = sổ khác các giao dịch ngân hàng đã gán; khoản chưa gán không tính là lệch."
       >
         <Loadable res={res}>
-          {(rows) => wide ? <AccountsWide rows={rows} onCount={setCounting} /> : (
+          {(rows) => {
+            const sum = accountsTotal(rows);
+            const note = accountsTotalNote(sum.hasCredit, hasExcluded);
+            return wide ? <AccountsWide rows={rows} onCount={setCounting} total={rows.length > 0 ? { value: sum.total, note } : null} /> : (
             // Điện thoại: mỗi tài khoản một hàng, số sổ to bên phải; dòng "lệch" chỉ có nghĩa với tài khoản SePay
             // nên chỉ hiện ở đó — không còn bảng bốn cột đầy "—" (audit 261001 F21).
             <div class="blist">
+              {rows.length > 0 && (
+                <div class="tier accounts-total">
+                  <div class="nm">Tiền thật đang có</div>
+                  <div class="amt">
+                    <Money value={sum.total} />
+                  </div>
+                  {note && (
+                    <div class="tsub">
+                      <span>{note}</span>
+                    </div>
+                  )}
+                </div>
+              )}
               {rows.map((r) => {
                 const feed = boot?.accounts.find((a) => a.id === r.accountId)?.sepayEnabled ?? false;
                 const drift = driftOf(r);
@@ -619,7 +524,8 @@ function AccountsTab() {
                 );
               })}
             </div>
-          )}
+          );
+          }}
         </Loadable>
       </Card>
       {counting && <CountSheet accountId={counting} onClose={() => setCounting(null)} />}
@@ -630,7 +536,7 @@ function AccountsTab() {
 const ACCOUNT_KIND: Record<string, string> = { bank: "Ngân hàng", cash: "Tiền mặt", ewallet: "Ví điện tử", credit: "Thẻ tín dụng" };
 
 /** Máy tính: mọi cột của /v1/accounts cùng lúc — sổ, feed, lệch, chưa gán, lần cuối. */
-function AccountsWide({ rows, onCount }: { rows: AccountRow[]; onCount: (id: string) => void }) {
+function AccountsWide({ rows, onCount, total }: { rows: AccountRow[]; onCount: (id: string) => void; total: { value: number; note: string | null } | null }) {
   const { boot } = useApp();
   const money = (v: number | null) => (v === null ? "—" : <Money value={v} unit={false} mono />);
   return (
@@ -702,354 +608,22 @@ function AccountsWide({ rows, onCount }: { rows: AccountRow[]; onCount: (id: str
               </tr>
             );
           })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ── Phân tích ──────────────────────────────────────────────────────
-function AnalysisTab() {
-  const month = monthKey(new Date());
-  const res = useResource<SpendByCategory>(`/v1/spend-by-category?period=${month}`);
-  const m = (k: string) => `T${Number(k.slice(5))}`;
-  const wide = useWide();
-  return (
-    <Card
-      title="Chi theo danh mục"
-      right={
-        res.data &&
-        (wide ? (
-          <span class="dk-key">
-            <span>
-              <i class="now" aria-hidden="true" />
-              {monthLabel(res.data.month)}
-            </span>
-            <span>
-              <i class="prev" aria-hidden="true" />
-              {monthLabel(res.data.previous)}
-            </span>
-          </span>
-        ) : (
-          <span class="hint">{`${monthLabel(res.data.month)} so với ${monthLabel(res.data.previous)}`}</span>
-        ))
-      }
-      flush
-    >
-      <Loadable res={res}>
-        {(d) =>
-          d.categories.length === 0 ? (
-            <Empty title="Chưa có khoản chi nào trong hai tháng này." />
-          ) : wide ? (
-            <AnalysisWide d={d} label={m} />
-          ) : (
-            <table class="data">
-              <thead>
-                <tr>
-                  <th scope="col">Danh mục</th>
-                  <th scope="col">{m(d.month)}</th>
-                  <th scope="col">{m(d.previous)} ₫</th>
-                </tr>
-              </thead>
-              <tbody>
-                {d.categories.map((c) => {
-                  const delta = c.spent - c.previousSpent;
-                  return (
-                    <tr key={c.categoryId}>
-                      <td>
-                        {c.name}
-                        {delta !== 0 && (
-                          <div class="sub-line">
-                            {delta > 0 ? "nhiều hơn" : "ít hơn"} {formatVnd(Math.abs(delta))}
-                          </div>
-                        )}
-                      </td>
-                      <td class="num">
-                        <Money value={c.spent} unit={false} mono />
-                      </td>
-                      <td class="num">
-                        <Money value={c.previousSpent} unit={false} mono />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )
-        }
-      </Loadable>
-    </Card>
-  );
-}
-
-/**
- * Máy tính: mỗi danh mục một cặp thanh cùng thước — đặc là tháng này, rỗng là tháng trước — cạnh cột số.
- * Không tô màu "tốt/xấu" cho chi ít hay nhiều: màu chỉ mang trạng thái (DESIGN.md §3).
- */
-function AnalysisWide({ d, label }: { d: SpendByCategory; label: (k: string) => string }) {
-  const max = Math.max(1, ...d.categories.flatMap((c) => [c.spent, c.previousSpent]));
-  const w = (v: number) => `${(100 * v) / max}%`;
-  const total = d.categories.reduce((a, c) => ({ now: a.now + c.spent, prev: a.prev + c.previousSpent }), { now: 0, prev: 0 });
-  return (
-    <div class="table-wrap">
-      <table class="data dk-table">
-        <thead>
-          <tr>
-            <th scope="col">Danh mục</th>
-            <th scope="col" class="l" style={{ width: "38%" }}>
-              So sánh
-            </th>
-            <th scope="col">{label(d.month)} ₫</th>
-            <th scope="col">{label(d.previous)} ₫</th>
-            <th scope="col">Chênh lệch</th>
-          </tr>
-        </thead>
-        <tbody>
-          {d.categories.map((c) => (
-            <tr key={c.categoryId}>
-              <td>{c.name}</td>
-              <td class="l" style={{ verticalAlign: "middle" }}>
-                <svg class="dk-cmp" role="img" aria-label={`${label(d.month)} ${formatVnd(c.spent)}, ${label(d.previous)} ${formatVnd(c.previousSpent)}`}>
-                  <title>{`${monthLabel(d.month)}: ${formatVnd(c.spent)} · ${monthLabel(d.previous)}: ${formatVnd(c.previousSpent)}`}</title>
-                  {c.spent > 0 && <rect class="now" x="0" y="2" width={w(c.spent)} height="8" rx="2" />}
-                  {c.previousSpent > 0 && <rect class="prev" x="0.75" y="13.75" width={w(c.previousSpent)} height="6.5" rx="2" />}
-                </svg>
+          {total && (
+            <tr class="dk-total">
+              <td>
+                Tiền thật đang có
+                {total.note && <div class="sub-line">{total.note}</div>}
               </td>
               <td class="num">
-                <Money value={c.spent} unit={false} mono />
+                <Money value={total.value} unit={false} mono />
               </td>
-              <td class="num">
-                <Money value={c.previousSpent} unit={false} mono />
-              </td>
-              <td class="num dk-delta">
-                <Money value={c.spent - c.previousSpent} unit={false} mono signed tone={false} />
-              </td>
+              <td colSpan={5} />
             </tr>
-          ))}
-          <tr class="dk-total">
-            <td>Tổng</td>
-            <td />
-            <td class="num">
-              <Money value={total.now} unit={false} mono />
-            </td>
-            <td class="num">
-              <Money value={total.prev} unit={false} mono />
-            </td>
-            <td class="num dk-delta">
-              <Money value={total.now - total.prev} unit={false} mono signed tone={false} />
-            </td>
-          </tr>
+          )}
         </tbody>
       </table>
     </div>
   );
 }
 
-// ── Chuyển tiền cần làm ────────────────────────────────────────────
-/** Ảnh PNG của mã QR (nền trắng, mức sửa lỗi M, viền 4 ô) — PNG để nhấn giữ lưu được vào thư viện ảnh cho app ngân hàng quét. */
-function qrPng(payload: string): string {
-  const { data, size } = encode(payload, { ecc: "M", border: 4 });
-  const scale = 8;
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = size * scale;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return "";
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = "#000";
-  data.forEach((row, y) => row.forEach((on, x) => on && ctx.fillRect(x * scale, y * scale, scale, scale)));
-  return canvas.toDataURL("image/png");
-}
-
-/** Mã QR VietQR của một lệnh (ADR-116): vẽ trên máy, nền trắng cố định để quét được cả khi app ở nền tối. */
-function TransferQrBlock({ payload, label, memo }: { payload: string; label: string; memo: string }) {
-  const src = useMemo(() => qrPng(payload), [payload]);
-  return (
-    <div class="qr-block">
-      <img src={src} alt={`Mã QR chuyển tiền: ${label}`} width={200} height={200} />
-      <div>
-        <div style={{ fontWeight: 500 }}>{label}</div>
-        <div class="sub-line" style={{ marginTop: "4px" }}>
-          Mở app ngân hàng › Quét QR. Đang dùng điện thoại: nhấn giữ để lưu ảnh (hoặc chụp màn hình) rồi chọn ảnh trong mục quét QR.
-          Xem đúng tên người nhận và nội dung có <strong>{memo}</strong> trước khi chuyển.
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TransfersTab() {
-  const { online } = useApp();
-  const res = useResource<TransferOrder[]>("/v1/transfer-orders?status=pending");
-  const [busy, setBusy] = useState<number | null>(null);
-  const [confirmSkip, setConfirmSkip] = useState<number | null>(null);
-  const [qrOpen, setQrOpen] = useState<number | null>(null);
-  const wide = useWide();
-
-  async function mark(o: TransferOrder, status: "done" | "skip") {
-    setBusy(o.id);
-    try {
-      await api.post(`/v1/transfer-orders/${o.id}/${status}`);
-      toast(status === "done" ? `Đã đánh dấu đã chuyển ${formatVnd(o.amount)}.` : "Đã bỏ qua lệnh này.");
-      res.reload();
-      void refresh();
-    } catch (err) {
-      toast(errorText(err));
-    } finally {
-      setBusy(null);
-      setConfirmSkip(null);
-    }
-  }
-
-  return (
-    <Card title="Chuyển tiền cần làm" flush note="Phân bổ trong app chỉ là ảo cho tới khi tiền đi thật giữa các tài khoản. Chép số tiền và nội dung sang app ngân hàng.">
-      <Loadable res={res}>
-        {(list) =>
-          list.length === 0 ? (
-            <Empty title="Không có lệnh chuyển tiền nào đang chờ." />
-          ) : wide ? (
-            <div class="table-wrap">
-              <table class="data dk-table transfer-table">
-                <thead>
-                  <tr>
-                    <th scope="col">Chuyển</th>
-                    <th scope="col" class="l">
-                      Nội dung CK
-                    </th>
-                    <th scope="col">Số tiền ₫</th>
-                    <th scope="col">
-                      <span class="sr-only">Việc</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {list.map((o) => {
-                    const created = `${o.created_at.replace(" ", "T")}Z`;
-                    const overdue = Date.now() - Date.parse(created) > 3 * 86_400_000;
-                    const qr = transferQr(o);
-                    return (
-                      <Fragment key={o.id}>
-                      <tr>
-                        <td>
-                          {o.from_name} → {o.to_name}
-                          <div class="sub-line">
-                            {o.wallet_names && <>cho {o.wallet_names} · </>}tạo {shortDate(created)} {overdue && <span class="chip bad">quá 3 ngày</span>}
-                          </div>
-                        </td>
-                        <td class="l num">{o.memo}</td>
-                        <td class="num">
-                          <strong>
-                            <Money value={o.amount} unit={false} mono />
-                          </strong>
-                        </td>
-                        <td>
-                          <div class="dk-act">
-                            <button type="button" class="btn" onClick={() => void copyText(String(o.amount), "số tiền")}>
-                              <Icon name="copy" size={14} /> Chép số tiền
-                            </button>
-                            <button type="button" class="btn" onClick={() => void copyText(o.memo, "nội dung")}>
-                              <Icon name="copy" size={14} /> Chép nội dung
-                            </button>
-                            {"payload" in qr && (
-                              <button type="button" class="btn" aria-expanded={qrOpen === o.id} onClick={() => setQrOpen(qrOpen === o.id ? null : o.id)}>
-                                <Icon name="qr" size={14} /> {qrOpen === o.id ? "Ẩn QR" : "Mã QR"}
-                              </button>
-                            )}
-                            <button type="button" class="btn" disabled={!online || busy === o.id} onClick={() => void mark(o, "done")}>
-                              <Icon name="check" size={14} /> Đã chuyển
-                            </button>
-                            <button
-                              type="button"
-                              class={confirmSkip === o.id ? "btn btn-bad" : "btn btn-ghost"}
-                              disabled={!online || busy === o.id}
-                              onClick={() => (confirmSkip === o.id ? void mark(o, "skip") : setConfirmSkip(o.id))}
-                            >
-                              {confirmSkip === o.id ? "Bỏ qua hẳn" : "Bỏ qua"}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                      {(qrOpen === o.id || ("reason" in qr && qr.reason)) && (
-                        <tr class="qr-row">
-                          <td colSpan={4}>{"payload" in qr ? <TransferQrBlock payload={qr.payload} label={qr.label} memo={o.memo} /> : <div class="sub-line">{qr.reason}</div>}</td>
-                        </tr>
-                      )}
-                      </Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-              {!online && (
-                <div class="pad">
-                  <NeedsNetwork what="Đánh dấu đã chuyển" />
-                </div>
-              )}
-            </div>
-          ) : (
-            <div>
-              {list.map((o) => {
-                const overdue = Date.now() - Date.parse(`${o.created_at.replace(" ", "T")}Z`) > 3 * 86_400_000;
-                const qr = transferQr(o);
-                return (
-                  <div key={o.id} style={{ padding: "12px 14px", borderTop: "1px solid var(--border)" }}>
-                    <div class="flex justify-between items-baseline gap-2">
-                      <span style={{ fontWeight: 500 }}>
-                        {o.from_name} → {o.to_name}
-                      </span>
-                      <Money value={o.amount} class="font-semibold" />
-                    </div>
-                    {o.wallet_names && (
-                      <div class="srow-s" style={{ marginTop: "2px" }}>
-                        cho {o.wallet_names}
-                      </div>
-                    )}
-                    <div class="sub-line flex gap-2 items-center" style={{ margin: "3px 0 10px" }}>
-                      <span class="num">{o.memo}</span>· tạo {shortDate(`${o.created_at.replace(" ", "T")}Z`)}
-                      {overdue && <span class="chip bad">quá 3 ngày</span>}
-                    </div>
-                    <div class="grid grid-cols-2 gap-2">
-                      <button type="button" class="btn" onClick={() => void copyText(String(o.amount), "số tiền")}>
-                        <Icon name="copy" size={15} /> Chép số tiền
-                      </button>
-                      <button type="button" class="btn" onClick={() => void copyText(o.memo, "nội dung")}>
-                        <Icon name="copy" size={15} /> Chép nội dung
-                      </button>
-                      <button type="button" class="btn" disabled={!online || busy === o.id} onClick={() => void mark(o, "done")}>
-                        <Icon name="check" size={15} /> Đã chuyển
-                      </button>
-                      <button
-                        type="button"
-                        class={confirmSkip === o.id ? "btn btn-bad" : "btn btn-ghost"}
-                        disabled={!online || busy === o.id}
-                        onClick={() => (confirmSkip === o.id ? void mark(o, "skip") : setConfirmSkip(o.id))}
-                      >
-                        {confirmSkip === o.id ? "Bỏ qua hẳn" : "Bỏ qua"}
-                      </button>
-                      {"payload" in qr && (
-                        <button type="button" class="btn col-span-2" aria-expanded={qrOpen === o.id} onClick={() => setQrOpen(qrOpen === o.id ? null : o.id)}>
-                          <Icon name="qr" size={15} /> {qrOpen === o.id ? "Ẩn mã QR" : "Mã QR"}
-                        </button>
-                      )}
-                    </div>
-                    {"payload" in qr && qrOpen === o.id && <TransferQrBlock payload={qr.payload} label={qr.label} memo={o.memo} />}
-                    {"reason" in qr && qr.reason && (
-                      <div class="sub-line" style={{ marginTop: "8px" }}>
-                        {qr.reason}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              {!online && (
-                <div class="pad">
-                  <NeedsNetwork what="Đánh dấu đã chuyển" />
-                </div>
-              )}
-            </div>
-          )
-        }
-      </Loadable>
-    </Card>
-  );
-}
 

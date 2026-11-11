@@ -12,14 +12,11 @@ export interface RuleRow {
   pattern: string;
   meaning: RuleMeaning;
   isSalary: boolean;
-  walletId: string | null;
   categoryId: string | null;
   byMemberId: string | null;
 }
 
 const CODE_RE = /\b[QE][A-Z]{2}\b/;
-/** Nội dung lệnh chuyển tiền do chính app sinh ra: 'PF' + 6 ký tự ngẫu nhiên; dò dung sai khoảng trắng/hoa thường. */
-const PF_MEMO_RE = /\bPF\s*([0-9A-Z]{6})\b/;
 
 /** Bỏ dấu tiếng Việt + viết hoa, đúng như MzaSepaySheetLib đang làm trước khi so khớp từ khoá. */
 export function normalizeContent(content: string | null | undefined): string {
@@ -37,12 +34,6 @@ export function normalizeContent(content: string | null | undefined): string {
 export function extractCode(content: string | null | undefined): string | null {
   const m = normalizeContent(content).match(CODE_RE);
   return m ? m[0] : null;
-}
-
-/** Bắt mã lệnh chuyển tiền 'PF XXXXXX' trong nội dung, trả về đúng chuỗi memo đã lưu ở transfer_orders.memo. */
-export function extractTransferMemo(content: string | null | undefined): string | null {
-  const m = normalizeContent(content).match(PF_MEMO_RE);
-  return m ? `PF ${m[1]!}` : null;
 }
 
 /**

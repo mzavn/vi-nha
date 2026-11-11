@@ -29,27 +29,26 @@ describe("lãi vay: sheet Trả nợ tách lãi / gốc", () => {
     expect(splitOf(prefillSplit({ ...loan, interestPaidThisMonth: 300_000 }))).toEqual({ amount: 2_300_000, interest: 0, principal: 2_300_000 });
   });
 
-  it("UC-902 AC-10: Lưu → hai khoản chi — lãi 300.000 (`loan-interest`, ví Lãi vay, `interest_debt_id`), gốc 2.000.000 (`debt_id`, `debt-payment`); toast nói lãi, gốc, còn nợ", () => {
+  it("UC-902 AC-10: Lưu → hai khoản chi — lãi 300.000 (`loan-interest`, `interest_debt_id`), gốc 2.000.000 (`debt_id`, `debt-payment`), không ví, không `earmark_id`; toast nói lãi, gốc, còn nợ", () => {
     let n = 0;
     const entries = debtPaymentEntries({
       split: splitOf(prefillSplit(loan)),
       debtId: "vay-tieu-dung",
       at: "2026-11-05T03:00:00.000Z",
       accountId: "vcb",
-      principalWalletId: "rental-income",
-      interestWalletId: "loan-interest",
       newId: () => `c${++n}`,
     });
     expect(entries).toEqual([
-      { meaning: "spend", amount: 300_000, at: "2026-11-05T03:00:00.000Z", client_id: "c1", category_id: "loan-interest", wallet_id: "loan-interest", account_id: "vcb", interest_debt_id: "vay-tieu-dung" },
-      { meaning: "spend", amount: 2_000_000, at: "2026-11-05T03:00:00.000Z", client_id: "c2", category_id: "debt-payment", wallet_id: "rental-income", account_id: "vcb", debt_id: "vay-tieu-dung" },
+      { meaning: "spend", amount: 300_000, at: "2026-11-05T03:00:00.000Z", client_id: "c1", category_id: "loan-interest", account_id: "vcb", interest_debt_id: "vay-tieu-dung" },
+      { meaning: "spend", amount: 2_000_000, at: "2026-11-05T03:00:00.000Z", client_id: "c2", category_id: "debt-payment", account_id: "vcb", debt_id: "vay-tieu-dung" },
     ]);
     expect(entries[0]).not.toHaveProperty("debt_id");
+    expect(entries.some((e) => "earmark_id" in e)).toBe(false);
     expect(splitPaymentToast(splitOf(prefillSplit(loan)), loan)).toBe(vnd("Đã trả 2.300.000 ₫ cho Vay tiêu dùng: lãi 300.000 ₫, gốc 2.000.000 ₫. Còn nợ 18.000.000 ₫."));
   });
 
   it("UC-902 AC-11: phần bằng 0 không ghi — khoản 0% chỉ một khoản gốc như cũ; trả đúng bằng lãi chỉ một khoản lãi", () => {
-    const base = { debtId: "vay-nguoi-nha", at: "2026-11-05T03:00:00.000Z", accountId: "vcb", principalWalletId: "rental-income", interestWalletId: "loan-interest", newId: () => "x" };
+    const base = { debtId: "vay-nguoi-nha", at: "2026-11-05T03:00:00.000Z", accountId: "vcb", newId: () => "x" };
     const zero = debtPaymentEntries({ ...base, split: splitOf({ ...prefillSplit(family), amount: 5_000_000 }) });
     expect(zero).toHaveLength(1);
     expect(zero[0]).toMatchObject({ amount: 5_000_000, debt_id: "vay-nguoi-nha", category_id: "debt-payment" });
@@ -70,22 +69,22 @@ describe("lãi vay: sheet Trả nợ tách lãi / gốc", () => {
   });
 
   it("UC-903 AC-4: Gán log tiền ra 2.300.000 cho khoản có lãi → tách sẵn hai dòng: lãi 300.000 (`loan-interest`, `interest_debt_id`), gốc 2.000.000 (`debt_id`); khoản 0% một dòng như cũ", () => {
-    const ids = { debtCategoryId: "debt-payment", principalWalletId: "rental-income", interestWalletId: "loan-interest" };
+    const ids = { debtCategoryId: "debt-payment" };
     expect(assignDebtRows(2_300_000, { id: "vay-tieu-dung", ...loan }, ids)).toEqual([
-      { meaning: "spend", amount: 300_000, category_id: "loan-interest", wallet_id: "loan-interest", interest_debt_id: "vay-tieu-dung", debt_id: null },
-      { meaning: "spend", amount: 2_000_000, category_id: "debt-payment", wallet_id: "rental-income", debt_id: "vay-tieu-dung", interest_debt_id: null },
+      { meaning: "spend", amount: 300_000, category_id: "loan-interest", interest_debt_id: "vay-tieu-dung", debt_id: null },
+      { meaning: "spend", amount: 2_000_000, category_id: "debt-payment", debt_id: "vay-tieu-dung", interest_debt_id: null },
     ]);
     expect(assignDebtRows(200_000, { id: "vay-tieu-dung", ...loan }, ids)).toEqual([
-      { meaning: "spend", amount: 200_000, category_id: "loan-interest", wallet_id: "loan-interest", interest_debt_id: "vay-tieu-dung", debt_id: null },
+      { meaning: "spend", amount: 200_000, category_id: "loan-interest", interest_debt_id: "vay-tieu-dung", debt_id: null },
     ]);
     expect(assignDebtRows(5_000_000, { id: "vay-nguoi-nha", ...family }, ids)).toEqual([
-      { meaning: "spend", amount: 5_000_000, category_id: "debt-payment", wallet_id: "rental-income", debt_id: "vay-nguoi-nha", interest_debt_id: null },
+      { meaning: "spend", amount: 5_000_000, category_id: "debt-payment", debt_id: "vay-nguoi-nha", interest_debt_id: null },
     ]);
   });
 });
 
 describe("lãi vay: câu chữ", () => {
-  it("UC-707 AC-25: dòng phụ dưới ví Lãi vay — trước khi trả \"đã trả 0 ₫\", sau khi trả \"đã trả 300.000 ₫\"", () => {
+  it("UC-707 AC-34: dòng phụ từng khoản ở hàng Lãi vay của Nhìn lại — trước khi trả \"đã trả 0 ₫\", sau khi trả \"đã trả 300.000 ₫\"", () => {
     expect(interestLineText({ name: "Vay tiêu dùng", expected: 300_000, paid: 0, dueDay: 5 })).toBe(vnd("Vay tiêu dùng · trả ngày 5 · dự kiến 300.000 ₫ · đã trả 0 ₫"));
     expect(interestLineText({ name: "Vay tiêu dùng", expected: 300_000, paid: 300_000, dueDay: 5 })).toBe(vnd("Vay tiêu dùng · trả ngày 5 · dự kiến 300.000 ₫ · đã trả 300.000 ₫"));
     expect(interestLineText({ name: "Vay A", expected: 1_000, paid: 0, dueDay: null })).toBe(vnd("Vay A · dự kiến 1.000 ₫ · đã trả 0 ₫"));

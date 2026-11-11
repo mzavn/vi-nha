@@ -1,23 +1,25 @@
-// Hôm nay trên máy tính (≥1024px): cùng câu trả lời "còn bao nhiêu để chi", thêm mọi thứ cần để quyết định
-// mà không phải bấm sang màn khác — từng phong bì chi tiêu, việc cần làm dạng danh sách, giao dịch gần đây.
-// Chỉ dùng số /v1 đã trả: snapshot, logs chưa gán, lệnh chuyển tiền, giao dịch.
+// Hôm nay trên máy tính (≥1024px): cùng ba thẻ ngăn (Vận hành, Tích luỹ, Dự phòng — ADR-122), thêm mọi thứ cần để quyết định
+// mà không phải bấm sang màn khác — việc cần làm dạng danh sách, giao dịch gần đây.
+// Không có card phong bì: chi theo nhóm xem ở Ví & quỹ › Nhìn lại (pwa UC-702 alt 6a, UC-707). Chỉ dùng số /v1 đã trả: snapshot (kỳ lương,
+// việc ngày lương), logs chưa gán, giao dịch.
 
 import { useEffect, useState } from "preact/hooks";
+import { conversionBanner } from "../lib/convert";
 import { DRIFT_LABEL, driftOf } from "../lib/drift";
 import { formatVnd, maskAmounts, moneyDigits } from "../lib/money";
-import { dayHeading, dayKey, heroLabel, shortDate, timeHM, weekLabel, weekMetaText } from "../lib/period";
+import { dayHeading, dayKey, shortDate, timeHM, weekLabel } from "../lib/period";
 import { txLabel, txSign } from "../lib/transactions";
 import { loadPageSize, PAGE_SIZES, savePageSize, splitPage, txPagePath } from "../lib/tx-paging";
-import type { BankLog, Bootstrap, Snapshot, TransferOrder, TxRow } from "../lib/types";
+import type { BankLog, Bootstrap, Snapshot, TxRow } from "../lib/types";
 import { useResource } from "../state/resource";
 import { go, openTx, refresh, useApp, viewSnapshot } from "../state/store";
 import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
 import { Card, Empty, FirstLoadFailed, PageHeader, Skeleton } from "../ui/parts";
 import { LogRow } from "./assign";
-import { MonthCloseCard } from "./month-close";
+import { PayCycleCard } from "./pay-cycle-card";
 import { OtherEntrySheet } from "./other-entry-sheet";
-import { GoalsCard, SpendableCashCard, WaterfallCard } from "./today";
+import { NearSpendCard, ReserveCard, SavingsCard } from "./today";
 
 export function TodayDesk() {
   const app = useApp();
@@ -26,9 +28,8 @@ export function TodayDesk() {
   const sub = snap ? `${dayHeading(snap.day)} · ${weekLabel(snap.week.key, snap.week.start, snap.week.end)}` : "";
   const rejected = app.queue.filter((q) => q.memberId === app.member?.id && q.status === "rejected").length;
   const a = snap?.attention;
-  // Snapshot cũ trong cache máy (trước khi server có `unallocatedIncome`) thì không có — coi như 0.
-  const unallocated = a?.unallocatedIncome?.count ?? 0;
-  const hasTodo = !!a && (rejected > 0 || a.drift.some((d) => driftOf(d) !== null) || a.pendingLogs > 0 || unallocated > 0 || a.transferOrdersPending > 0);
+  const convert = snap ? conversionBanner(snap.conversion) : null;
+  const hasTodo = !!a && (!!convert || rejected > 0 || a.drift.some((d) => driftOf(d) !== null) || a.pendingLogs > 0);
 
   return (
     <>
@@ -47,130 +48,55 @@ export function TodayDesk() {
         </Card>
       ) : (
         <>
-          {/* Chốt tháng (UC-207): việc một lần mỗi tháng — đứng trên cả hai chồng, ngoài lưới vùng của .dash. */}
-          <MonthCloseCard />
-          {/* Hai chồng: chính (số hero, phong bì, giao dịch) và phụ (việc cần làm, dòng thác, quỹ).
+          {/* Hai chồng: chính (thẻ Vận hành, giao dịch) và phụ (việc cần làm, thẻ Tích luỹ, thẻ Dự phòng).
               ≥1280px hai chồng đứng cạnh nhau; 1024–1279px các card xếp thành lưới hai cột (xem .dash trong CSS). */}
           <div class={hasTodo ? "dash" : "dash no-todo"}>
             <div class="dash-main">
-              <Hero snap={snap} />
-              <SpendWallets snap={snap} />
+              <NearSpendCard snap={snap} />
               <RecentTransactions title="Giao dịch gần đây" class="dash-recent" />
             </div>
             <div class="dash-side">
-              {hasTodo && <Todo snap={snap} rejected={rejected} />}
-              <div class="dash-cash">
-                <SpendableCashCard snap={snap} />
-              </div>
-              <div class="dash-tiers">
-                <WaterfallCard snap={snap} />
-              </div>
-              <div class="dash-goals">
-                <GoalsCard snap={snap} />
-              </div>
+              {/* Màn chuyển đổi còn dở: Việc cần làm lên đầu cột, dòng chuyển đổi đứng đầu (UC-702 AC-27); không thì Việc
+                  ngày lương đứng đầu cột (UC-702 AC-21). */}
+              {convert && <Todo snap={snap} rejected={rejected} convert={convert} />}
+              <PayCycleCard snap={snap} />
+              {hasTodo && !convert && <Todo snap={snap} rejected={rejected} convert={null} />}
+              <SavingsCard snap={snap} />
+              <ReserveCard snap={snap} />
             </div>
           </div>
         </>
       )}
-      {income && <OtherEntrySheet kind="income" amount={0} title="Ghi thu nhập và chia" onClose={() => setIncome(false)} />}
+      {income && <OtherEntrySheet kind="income" amount={0} title="Ghi thu nhập" onClose={() => setIncome(false)} />}
     </>
   );
 }
 
-/** Số hero như điện thoại, cộng phần "vì sao ra số này": từng phong bì góp bao nhiêu vào tổng. */
-function Hero({ snap }: { snap: Snapshot }) {
-  const t = snap.tiers;
-  const hero = heroLabel(snap.spendableThisWeek);
-  const line = (id: string) => snap.wallets.find((w) => w.id === id);
-  return (
-    <section class="hero dk-hero" aria-labelledby="hero-lab">
-      <div class="dk-hero-in">
-        <div class="dk-hero-main">
-          <div class="lab" id="hero-lab">
-            {hero.label}
-          </div>
-          <div class="big">
-            <Money value={hero.amount} class={hero.over ? "neg" : ""} />
-          </div>
-          <div class="meta">{weekMetaText(snap.day, snap.week.end, snap.week.weeksLeftInMonth)}</div>
-          <div class="split">
-            <div>
-              <div class="k">Đã khóa</div>
-              <div class="v">
-                <Money value={t.wealth_building.balance + t.tax.balance} />
-              </div>
-            </div>
-            <div>
-              <div class="k">Tài sản</div>
-              <div class="v">
-                <Money value={t.wealth_building.assets} />
-              </div>
-            </div>
-            <div>
-              <div class="k">Chờ đầu tư</div>
-              <div class="v">
-                <Money value={t.wealth_building.cash} />
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="dk-hero-side">
-          <div class="k">Cộng từ các phong bì</div>
-          {snap.spendableByWallet.length === 0 ? (
-            <p class="sub-line">Chưa có phong bì chi tiêu.</p>
-          ) : (
-            <ul class="dk-parts">
-              {snap.spendableByWallet.map((p) => {
-                const w = line(p.walletId);
-                return (
-                  <li key={p.walletId}>
-                    <span class="min-w-0">
-                      {p.name}
-                      <span class="sub-line">
-                        {w?.weekTarget != null ? (
-                          <>
-                            tuần đã chi {moneyDigits(w.spentWeek ?? 0)} / {formatVnd(w.weekTarget)}
-                          </>
-                        ) : w?.balance != null ? (
-                          w.balance > 0 ? (
-                            <>
-                              trong ví {formatVnd(w.balance)}, chia đều cho {snap.week.weeksLeftInMonth} tuần còn lại
-                            </>
-                          ) : (
-                            <>ví đang âm, chưa bù thì không còn để chi</>
-                          )
-                        ) : null}
-                      </span>
-                    </span>
-                    <Money value={p.amount} mono />
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
-      </div>
-    </section>
-  );
-}
-
 /** Việc cần làm: mỗi việc là một hàng bấm được dẫn thẳng tới chỗ làm, không chỉ một banner đếm số. */
-function Todo({ snap, rejected }: { snap: Snapshot; rejected: number }) {
+function Todo({ snap, rejected, convert }: { snap: Snapshot; rejected: number; convert: string | null }) {
   const { boot } = useApp();
   const a = snap.attention;
-  const unalloc = a.unallocatedIncome;
   const logs = useResource<BankLog[]>(a.pendingLogs > 0 ? "/v1/logs?status=pending" : null);
-  const orders = useResource<TransferOrder[]>(a.transferOrdersPending > 0 ? "/v1/transfer-orders?status=pending" : null);
   const drift = a.drift.flatMap((d) => {
     const amount = driftOf(d);
     return amount === null ? [] : [{ accountId: d.accountId, name: d.name, amount }];
   });
-  const total = rejected + drift.length + a.pendingLogs + (unalloc?.count ?? 0) + a.transferOrdersPending;
+  const total = (convert ? 1 : 0) + rejected + drift.length + a.pendingLogs;
   const SHOW = 5;
 
   return (
     <Card class="dash-todo-card" title="Việc cần làm" right={<span class="hint">{total} việc</span>} flush>
       <div class="dash-todo">
+        {convert && (
+          <button type="button" class="srow" onClick={() => (location.hash = "#convert")}>
+            <span class="srow-main">
+              <span class="srow-t">{convert}</span>
+            </span>
+            <span class="srow-r">
+              <Icon name="chevron-right" size={16} />
+            </span>
+          </button>
+        )}
         {rejected > 0 && (
           <>
             <div class="set-sub">Khoản nhập bị từ chối</div>
@@ -237,129 +163,7 @@ function Todo({ snap, rejected }: { snap: Snapshot; rejected: number }) {
             )}
           </>
         )}
-
-        {unalloc && unalloc.count > 0 && unalloc.oldestTxId !== null && (
-          <>
-            <div class="set-sub">Thu chưa chia</div>
-            <button type="button" class="srow" onClick={() => openTx(unalloc.oldestTxId!)}>
-              <span class="srow-main">
-                <span class="srow-t">
-                  {unalloc.count} khoản thu chưa chia (<Money value={unalloc.amount} tone={false} />)
-                </span>
-                <span class="srow-s">Tiền đang nằm ở ví Thu nhập.</span>
-              </span>
-              <span class="srow-r">
-                Chia
-                <Icon name="chevron-right" size={16} />
-              </span>
-            </button>
-          </>
-        )}
-
-        {a.transferOrdersPending > 0 && (
-          <>
-            <div class="set-sub">
-              Chuyển tiền cần làm ({a.transferOrdersPending}
-              {a.transferOrdersOverdue > 0 ? `, ${a.transferOrdersOverdue} quá 3 ngày` : ""})
-            </div>
-            {(orders.data ?? []).slice(0, SHOW).map((o) => (
-              <button type="button" key={o.id} class="srow" onClick={() => go("wallets", { walletsTab: "transfers" })}>
-                <span class="srow-main">
-                  <span class="srow-t">
-                    {o.from_name} → {o.to_name}
-                  </span>
-                  {o.wallet_names && <span class="srow-s">cho {o.wallet_names}</span>}
-                  <span class="srow-s2 num">{o.memo}</span>
-                </span>
-                <span class="srow-r">
-                  <Money value={o.amount} class="srow-amt" />
-                  <Icon name="chevron-right" size={16} />
-                </span>
-              </button>
-            ))}
-            {(!orders.data || orders.data.length > SHOW) && (
-              <button type="button" class="srow" onClick={() => go("wallets", { walletsTab: "transfers" })}>
-                <span class="srow-t">{orders.data ? `Xem cả ${orders.data.length} lệnh` : `${a.transferOrdersPending} lệnh chuyển tiền`}</span>
-                <Icon name="chevron-right" size={16} />
-              </button>
-            )}
-          </>
-        )}
       </div>
-    </Card>
-  );
-}
-
-/** Mọi phong bì chi tiêu: tuần và tháng — dự kiến, đã chi, còn — cạnh nhau, và số thật còn trong ví. */
-function SpendWallets({ snap }: { snap: Snapshot }) {
-  const lines = snap.wallets.filter((w) => (w.tier === "must" || w.tier === "nice") && w.kind === "envelope");
-  const cell = (v: number | null, tone = true) => (v === null ? "" : <Money value={v} unit={false} mono tone={tone} />);
-  return (
-    <Card
-      class="dash-wallets"
-      title="Phong bì chi tiêu"
-      right={<span class="hint">{weekLabel(snap.week.key, snap.week.start, snap.week.end)} · ₫</span>}
-      flush
-      note="Còn tuần = dự kiến tuần trừ đã chi tuần. Trong ví là số thật, gồm cả phần dồn từ tuần trước và phần vượt chưa bù."
-    >
-      {lines.length === 0 ? (
-        <Empty title="Chưa có phong bì chi tiêu." />
-      ) : (
-        <div class="table-wrap">
-          <table class="data dk-table dk-env">
-            <thead>
-              <tr>
-                <th scope="col" rowSpan={2}>
-                  Ví
-                </th>
-                <th scope="colgroup" colSpan={3} class="dk-group">
-                  Tuần này
-                </th>
-                <th scope="col" rowSpan={2}>
-                  Đã chi tháng
-                </th>
-                <th scope="col" rowSpan={2}>
-                  Trong ví
-                </th>
-              </tr>
-              <tr>
-                <th scope="col">Dự kiến</th>
-                <th scope="col">Đã chi</th>
-                <th scope="col">Còn</th>
-              </tr>
-            </thead>
-            <tbody>
-              {lines.map((w) => {
-                const weekLeft = w.weekTarget !== null ? w.weekTarget - (w.spentWeek ?? 0) : null;
-                const monthUsed = w.monthTarget && w.spentMonth !== null ? Math.round((100 * w.spentMonth) / w.monthTarget) : null;
-                return (
-                  <tr key={w.id}>
-                    <td>
-                      {w.name}
-                      <div class="sub-line">{w.tier === "nice" ? "Hưởng thụ" : w.mustGroup === "have" ? "Có thì tốt" : "Must"}</div>
-                    </td>
-                    <td class="num">{cell(w.weekTarget)}</td>
-                    <td class="num">{cell(w.spentWeek, false)}</td>
-                    <td class="num">{cell(weekLeft)}</td>
-                    {/* Dự kiến tháng đã có ở Ví & quỹ › Ngân sách; ở đây bỏ cột đó để tên ví không bị ép xuống 4–5 dòng (audit 261001 F16). */}
-                    <td class="num">
-                      {cell(w.spentMonth, false)}
-                      {monthUsed !== null && monthUsed > 100 && (
-                        <div>
-                          <span class="chip bad">{monthUsed}%</span>
-                        </div>
-                      )}
-                    </td>
-                    <td class="num">
-                      <strong>{cell(w.balance)}</strong>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
     </Card>
   );
 }
@@ -493,7 +297,7 @@ function TxLine({ r, boot }: { r: TxRow; boot: Bootstrap | null }) {
   const who = boot && boot.members.length > 1 ? boot.members.find((m) => m.id === r.by_member_id)?.name : undefined;
   const acct = boot?.accounts.find((x) => x.id === r.account_id)?.name;
   const today = dayKey(r.at) === dayKey(new Date());
-  const context = [r.wallet_name, acct, who].filter(Boolean).join(" · ");
+  const context = [acct, who].filter(Boolean).join(" · ");
   // Cả hàng bấm được; nút trong ô "Khoản" cho bàn phím và trình đọc màn hình (bấm nó nổi lên hàng).
   return (
     <tr class="tx-row" onClick={() => openTx(r.id, r)}>

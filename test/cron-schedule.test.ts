@@ -3,9 +3,11 @@ import { CRONS, runScheduled } from "../src/cron";
 import { loadNotifyState, runScheduledDigests } from "../src/cron/schedule";
 import { inQuietHours, parseNotifySchedule } from "../src/domain/notify-schedule";
 import type { Env } from "../src/env";
-import { allocateIncome, createEntry } from "../src/services/ledger";
+import { notifyPendingLogs } from "../src/cron/pending-notifier";
+import { createEntry } from "../src/services/ledger";
 import { sqliteDateTime } from "../src/services/ingest";
 import { asD1, openDb } from "./helpers/d1-sqlite";
+import { householdP, P_NOW } from "./helpers/household-p";
 
 let env: Env;
 let raw: ReturnType<typeof openDb>;
@@ -13,7 +15,6 @@ let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   raw = openDb();
-  raw.prepare("UPDATE allocations SET target_date = '2026-12-31' WHERE wallet_id = 'travel'").run();
   raw.prepare("UPDATE accounts SET sepay_enabled = 0").run(); // nhập tay được vào mọi tài khoản
   raw.prepare("UPDATE members SET tg_chat_id = ? WHERE id = ?").run("111", "husband");
   raw.prepare("UPDATE members SET tg_chat_id = ? WHERE id = ?").run("222", "wife");
@@ -80,17 +81,14 @@ describe("giờ nhắc: tin sáng theo giờ ở Cài đặt", () => {
     expect(sent("daily")).toBe(2);
   });
 
-  it("UC-207 AC-2: tắt tin sáng → ngày 1 không chạy gì, không ghi mốc daily_run, không có giao dịch S…", async () => {
-    const { tx } = await createEntry(env.DB, { meaning: "income", amount: 40_000_000, account_id: "vcb-husband", at: "2026-09-10T09:00:00+07:00" }, null, vn("2026-09-10T09:00:00"));
-    await allocateIncome(env.DB, Number(tx!.id));
+  it("tắt tin sáng → kể cả ngày 1 không chạy gì, không ghi mốc daily_run, không gửi", async () => {
+    await createEntry(env.DB, { meaning: "income", amount: 40_000_000, account_id: "vcb-husband", at: "2026-09-10T09:00:00+07:00" }, null, vn("2026-09-10T09:00:00"));
     setConfig("notify_daily_enabled", "0");
 
     await tick("2026-09-30T07:00:00"); // ngày thường
     await tick("2026-10-01T07:00:00"); // ngày 1
     await tick("2026-10-01T07:15:00");
     expect(raw.prepare("SELECT COUNT(*) n FROM notifications WHERE kind = 'daily_run'").get()).toEqual({ n: 0 });
-    expect(raw.prepare("SELECT COUNT(*) n FROM transactions WHERE batch_id LIKE 'S%'").get()).toEqual({ n: 0 });
-    expect(raw.prepare("SELECT COUNT(*) n FROM month_closes").get()).toEqual({ n: 0 });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -142,11 +140,10 @@ describe("giờ nhắc: tổng kết tuần", () => {
 });
 
 describe("giờ nhắc: lượt chưa tới giờ không tốn thêm truy vấn", () => {
-  it("chưa tới giờ (kể cả ngày 1) hay đã gửi rồi: chỉ một câu đọc lịch + mốc, không chốt tháng, không gửi", async () => {
+  it("chưa tới giờ (kể cả ngày 1) hay đã gửi rồi: chỉ một câu đọc lịch + mốc, không gửi", async () => {
     const prepare = vi.spyOn(env.DB, "prepare");
     await runScheduledDigests(env, vn("2026-10-01T06:45:00"), await loadNotifyState(env.DB));
     expect(prepare).toHaveBeenCalledTimes(1);
-    expect(raw.prepare("SELECT COUNT(*) n FROM transactions WHERE batch_id = 'S202609'").get()).toEqual({ n: 0 });
 
     await runScheduledDigests(env, vn("2026-10-01T07:00:00"), await loadNotifyState(env.DB));
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -266,5 +263,33 @@ describe("giờ yên lặng & bật/tắt báo giao dịch chưa gán", () => {
       weeklyDay: 1,
       pendingEnabled: true,
     });
+  });
+});
+
+describe("báo giao dịch chưa gán: log của tài khoản riêng tư (notify UC-407)", () => {
+  it("UC-407 AC-14: L4, L1, L5 chờ ≥ 60 giây → tin gộp hai log của VCB (vợ) thành một dòng không số; cả ba log đánh dấu đã báo; vợ đã tắt → log mới của VCB (vợ) hiện từng khoản", async () => {
+    const db = householdP();
+    db.exec("UPDATE members SET tg_chat_id = '111' WHERE id = 'husband'; UPDATE members SET tg_chat_id = '222' WHERE id = 'wife';");
+    const at = (min: number) => sqliteDateTime(new Date(P_NOW.getTime() - min * 60_000));
+    for (const [id, min] of [["L4", 10], ["L1", 9], ["L5", 8]] as const) db.prepare("UPDATE bank_logs SET received_at = ? WHERE id = ?").run(at(min), id);
+    // L2 đã báo ở lượt trước.
+    db.prepare("UPDATE bank_logs SET received_at = ? WHERE id = 'L2'").run(at(30));
+    db.exec("INSERT INTO notifications (kind, day_key, chat_id, payload, ok) VALUES ('pending_log', 'L2', 'system', '{}', 1)");
+    const penv = { DB: asD1(db), TG_BOT_TOKEN: "test-token" } as Env;
+    const texts = () => fetchMock.mock.calls.map(([, opts]) => (JSON.parse((opts as RequestInit).body as string) as { text: string }).text);
+
+    await notifyPendingLogs(penv, P_NOW);
+    expect(texts()).toEqual(Array(2).fill("⚠️ 3 giao dịch chưa gán:\n+50.000 ₫ — VCB (chính)\n2 khoản của tài khoản riêng tư"));
+    expect(db.prepare("SELECT day_key FROM notifications WHERE kind = 'pending_log' AND ok = 1 AND day_key IN ('L1', 'L4', 'L5') ORDER BY day_key").all()).toEqual([
+      { day_key: "L1" },
+      { day_key: "L4" },
+      { day_key: "L5" },
+    ]);
+
+    fetchMock.mockClear();
+    db.exec("UPDATE members SET active = 0 WHERE id = 'wife'");
+    db.prepare("INSERT INTO bank_logs (id, at, amount, direction, account_id, content, status, received_at) VALUES ('L6', ?, 70000, 'in', 'vcb-wife', 'CK', 'pending', ?)").run(P_NOW.toISOString(), at(5));
+    await notifyPendingLogs(penv, new Date(P_NOW.getTime() + 15 * 60_000));
+    expect(texts()).toEqual(["⚠️ 1 giao dịch chưa gán:\n+70.000 ₫ — VCB (vợ)"]);
   });
 });

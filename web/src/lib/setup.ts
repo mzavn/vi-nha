@@ -1,24 +1,31 @@
 // Logic thuần của màn Thiết lập nhà lần đầu (UC-510, UC-701 AC-8): form bốn bước, kiểm từng bước như server,
-// dựng thân POST /v1/setup, đưa lỗi server (`field` dạng dấu chấm) về đúng ô và đúng bước.
+// dựng thân POST /v1/setup, dòng "Sẽ tạo: …" của bước Ba ngăn, đưa lỗi server (`field` dạng dấu chấm) về đúng ô và đúng bước.
 
 import { ApiError, errorText, request } from "./api";
 import { clashWith, MAX_MEMBERS, nameError, passwordError } from "./members";
-import { done, type Errors, type Result } from "./settings";
-import type { SettingsAccount } from "./types";
+import { parseAmount } from "./money";
+import { POCKET_ORDER, pocketLabel } from "./pockets";
+import { done, type Errors, parseInteger, type Result } from "./settings";
+import type { Pocket, SettingsAccount } from "./types";
 
-export const SETUP_STEPS = ["Mật khẩu chung", "Thành viên", "Tài khoản", "Ví theo mẫu"] as const;
+export const SETUP_STEPS = ["Mật khẩu chung", "Thành viên", "Tài khoản", "Ba ngăn"] as const;
 export type SetupStep = 0 | 1 | 2 | 3;
 
-export type MustChoice = "food" | "housing" | "transport" | "utilities";
-/** Ví Must chọn được trong mẫu "Profit First cơ bản", theo thứ tự gửi lên server. */
-export const MUST_OPTIONS: { value: MustChoice; label: string }[] = [
+export type GroupChoice = "food" | "housing" | "transport" | "utilities";
+/** Nhóm danh mục Thiết yếu mẫu, theo thứ tự gửi lên server; Y tế và Mua sắm server luôn tạo. */
+export const GROUP_OPTIONS: { value: GroupChoice; label: string }[] = [
   { value: "food", label: "Ăn uống" },
   { value: "housing", label: "Nhà ở" },
   { value: "transport", label: "Đi lại" },
   { value: "utilities", label: "Điện nước" },
 ];
+const ALWAYS_GROUPS = ["Y tế", "Mua sắm"];
 
 export const MAX_ACCOUNT_NAME = 60;
+export const MAX_GOALS = 10;
+export const MAX_GOAL_NAME = 60;
+/** Mục tiêu server tự tạo khi nhà tự nộp thuế (UC-510 bước 4): tên mục tiêu khác không được trùng mã. */
+const TAX_GOAL = { name: "Thuế", id: "thue" };
 
 export interface SetupMember {
   name: string;
@@ -32,30 +39,63 @@ export interface SetupAccount {
   bank: string;
   /** Chỉ số người giữ trong `members`; null = tài khoản chung. */
   owner: number | null;
+  /** Ngăn của tài khoản; mặc định Vận hành, null = ngoài ngăn. */
+  pocket: Pocket | null;
+}
+/** Mục tiêu Dự phòng tuỳ chọn: chữ người gõ. */
+export interface SetupGoal {
+  name: string;
+  /** Số mỗi tháng. */
+  monthly: string;
+  /** Mấy tháng một lần (1–12). */
+  repeat: string;
+  /** Tài khoản của mục tiêu: chỉ số trong `accounts` (phải ở ngăn Dự phòng, UC-510 AC-14); null = Chưa có. */
+  account: number | null;
 }
 export interface SetupForm {
   password: string;
   members: SetupMember[];
   accounts: SetupAccount[];
-  /** Có thu nhập phải tự nộp thuế không; null = chưa trả lời. */
+  /** Ngày lương 1–31 (chữ trong ô). */
+  paydayDay: string;
+  /** % Tích luỹ mỗi kỳ lương 1–100 (chữ trong ô). */
+  savingsPct: string;
+  /** Nhà có tự nộp thuế không; null = chưa trả lời. */
   taxable: boolean | null;
-  must: MustChoice[];
+  groups: GroupChoice[];
+  goals: SetupGoal[];
 }
 
 export interface SetupBody {
   password: string;
   members: { name: string; password?: string }[];
-  accounts: { name: string; kind: SettingsAccount["kind"]; bank?: string; owner: number | null }[];
-  template: { taxable: boolean; must: MustChoice[] };
+  accounts: { name: string; kind: SettingsAccount["kind"]; bank?: string; owner: number | null; pocket: Pocket | null }[];
+  payday_day: number;
+  savings_pct: number;
+  taxable: boolean;
+  groups: GroupChoice[];
+  goals: { name: string; monthly_amount: number; repeat_months: number; account?: number }[];
 }
+
+export const newAccount = (): SetupAccount => ({ name: "", kind: "bank", bank: "", owner: null, pocket: "operating" });
+export const newGoal = (): SetupGoal => ({ name: "", monthly: "", repeat: "1", account: null });
 
 export const emptySetup = (): SetupForm => ({
   password: "",
   members: [{ name: "", password: "" }],
-  accounts: [{ name: "", kind: "bank", bank: "", owner: null }],
+  accounts: [newAccount()],
+  paydayDay: "10",
+  savingsPct: "10",
   taxable: null,
-  must: MUST_OPTIONS.map((o) => o.value),
+  groups: GROUP_OPTIONS.map((o) => o.value),
+  goals: [],
 });
+
+/** Ô chọn ngăn: Vận hành đứng đầu (mặc định), rồi Tích luỹ, Dự phòng, Ngoài ngăn. */
+export const SETUP_POCKET_OPTIONS: { value: Pocket | null; label: string }[] = [
+  "operating" as const,
+  ...POCKET_ORDER.filter((p) => p !== "operating"),
+].map((p) => ({ value: p, label: pocketLabel(p) }));
 
 /**
  * Mở app: có cần hiện màn Thiết lập thay màn đăng nhập không (UC-701 AC-8). Không hỏi được server — mất mạng, lỗi,
@@ -98,12 +138,43 @@ function accountErrors(accounts: SetupAccount[], memberCount: number): Errors {
   return errors;
 }
 
+/** Tài khoản chọn được cho mục tiêu thứ `index`: tài khoản ngăn Dự phòng đã nhập, chưa thuộc mục tiêu khác (UC-510 AC-14). */
+export function goalAccountChoices(f: SetupForm, index: number): { index: number; name: string }[] {
+  const taken = new Set(f.goals.flatMap((g, i) => (i !== index && g.account !== null ? [g.account] : [])));
+  return f.accounts.flatMap((a, i) => (a.pocket === "reserve" && !taken.has(i) ? [{ index: i, name: a.name.trim() || `Tài khoản ${i + 1}` }] : []));
+}
+
+const MONEY_MAX = 1e12;
+
+function pocketErrors(f: SetupForm): Errors {
+  const errors: Errors = {};
+  if (parseInteger(f.paydayDay, 1, 31) === null) errors.payday_day = "Ngày lương từ 1 đến 31.";
+  if (parseInteger(f.savingsPct, 1, 100) === null) errors.savings_pct = "% Tích luỹ từ 1 đến 100.";
+  if (f.taxable === null) errors.taxable = "Chọn Có hoặc Không.";
+  if (f.goals.length > MAX_GOALS) errors.goals = `Tối đa ${MAX_GOALS} mục tiêu.`;
+  const reserved = f.taxable ? [TAX_GOAL] : [];
+  f.goals.forEach((g, i) => {
+    const bad = nameError(g.name, MAX_GOAL_NAME);
+    const clash = bad ? null : clashWith(g.name, [...reserved, ...f.goals.slice(0, i)]);
+    if (bad) errors[`goals.${i}.name`] = bad;
+    else if (clash) errors[`goals.${i}.name`] = `Trùng tên với “${clash}”.`;
+    const monthly = parseAmount(g.monthly);
+    if (monthly <= 0 || monthly > MONEY_MAX) errors[`goals.${i}.monthly_amount`] = "Nhập số mỗi tháng.";
+    if (parseInteger(g.repeat, 1, 12) === null) errors[`goals.${i}.repeat_months`] = "Từ 1 đến 12 tháng.";
+    if (g.account !== null) {
+      if (f.accounts[g.account]?.pocket !== "reserve") errors[`goals.${i}.account`] = "Tài khoản của mục tiêu phải ở ngăn Dự phòng.";
+      else if (f.goals.slice(0, i).some((x) => x.account === g.account)) errors[`goals.${i}.account`] = "Mỗi tài khoản chỉ cho một mục tiêu.";
+    }
+  });
+  return errors;
+}
+
 /** Lỗi của một bước, khoá theo `field` của server ("members.0.name"…); rỗng = được bấm Tiếp. */
 export function stepErrors(f: SetupForm, step: SetupStep): Errors {
   if (step === 0) return f.password ? {} : { password: "Nhập mật khẩu chung đã đặt lúc deploy." };
   if (step === 1) return memberErrors(f.members);
   if (step === 2) return accountErrors(f.accounts, f.members.length);
-  return f.taxable === null ? { "template.taxable": "Chọn Có hoặc Không." } : {};
+  return pocketErrors(f);
 }
 
 export function setupPayload(f: SetupForm): Result<SetupBody> {
@@ -111,9 +182,42 @@ export function setupPayload(f: SetupForm): Result<SetupBody> {
   return done(errors, () => ({
     password: f.password,
     members: f.members.map((m) => ({ name: m.name.trim(), ...(m.password ? { password: m.password } : {}) })),
-    accounts: f.accounts.map((a) => ({ name: a.name.trim(), kind: a.kind, ...(a.kind !== "cash" && a.bank.trim() ? { bank: a.bank.trim() } : {}), owner: a.owner })),
-    template: { taxable: f.taxable!, must: MUST_OPTIONS.map((o) => o.value).filter((v) => f.must.includes(v)) },
+    accounts: f.accounts.map((a) => ({
+      name: a.name.trim(),
+      kind: a.kind,
+      ...(a.kind !== "cash" && a.bank.trim() ? { bank: a.bank.trim() } : {}),
+      owner: a.owner,
+      pocket: a.pocket,
+    })),
+    payday_day: parseInteger(f.paydayDay, 1, 31)!,
+    savings_pct: parseInteger(f.savingsPct, 1, 100)!,
+    taxable: f.taxable!,
+    groups: GROUP_OPTIONS.map((o) => o.value).filter((v) => f.groups.includes(v)),
+    goals: f.goals.map((g) => ({
+      name: g.name.trim(),
+      monthly_amount: parseAmount(g.monthly),
+      repeat_months: parseInteger(g.repeat, 1, 12)!,
+      ...(g.account === null ? {} : { account: g.account }),
+    })),
   }));
+}
+
+/** Dòng "Sẽ tạo: …" của bước Ba ngăn: ngăn và tài khoản, nguồn "Lương", nhóm danh mục, mục tiêu Dự phòng. */
+export function setupSummary(f: SetupForm): string {
+  const named = f.accounts.map((a, i) => ({ pocket: a.pocket, name: a.name.trim() || `Tài khoản ${i + 1}` }));
+  const pockets = SETUP_POCKET_OPTIONS.flatMap(({ value, label }) => {
+    const names = named.filter((a) => a.pocket === value).map((a) => a.name);
+    return names.length ? [`${label}: ${names.join(", ")}`] : [];
+  });
+  const groups = [...GROUP_OPTIONS.filter((o) => f.groups.includes(o.value)).map((o) => o.label), ...ALWAYS_GROUPS];
+  const goals = [...f.goals.map((g) => g.name.trim()).filter(Boolean), ...(f.taxable ? [`${TAX_GOAL.name} 10%`] : [])];
+  const parts = [
+    ...pockets,
+    "nguồn “Lương” mở kỳ lương",
+    `nhóm ${groups.join(", ")}`,
+    ...(goals.length ? [`mục tiêu Dự phòng ${goals.join(", ")}`] : []),
+  ];
+  return `Sẽ tạo: ${parts.join(" · ")}.`;
 }
 
 /** Bớt người thứ `index`: tài khoản của người đó thành chung, chỉ số của người sau lùi một. */
@@ -125,13 +229,22 @@ export function removeMember(f: SetupForm, index: number): SetupForm {
   };
 }
 
-/** Bước chứa ô `field` của server; field lạ → null. */
+/** Bớt tài khoản thứ `index`: mục tiêu gắn tài khoản đó về Chưa có, chỉ số của tài khoản sau lùi một. */
+export function removeAccount(f: SetupForm, index: number): SetupForm {
+  return {
+    ...f,
+    accounts: f.accounts.filter((_, i) => i !== index),
+    goals: f.goals.map((g) => ({ ...g, account: g.account === null || g.account === index ? null : g.account > index ? g.account - 1 : g.account })),
+  };
+}
+
+/** Bước chứa ô `field` của server; field lạ → null. Ô ngăn của tài khoản nằm ở bước Ba ngăn. */
 export function stepOfField(field: string): SetupStep | null {
-  const head = field.split(/[.[]/)[0];
+  const [head, , sub] = field.split(/[.[\]]+/);
   if (head === "password") return 0;
   if (head === "members") return 1;
-  if (head === "accounts") return 2;
-  if (head === "template") return 3;
+  if (head === "accounts") return sub === "pocket" ? 3 : 2;
+  if (head === "payday_day" || head === "savings_pct" || head === "taxable" || head === "groups" || head === "goals") return 3;
   return null;
 }
 

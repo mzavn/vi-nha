@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { billionText } from "./freedom";
 import { memberPlanText } from "./income-plan";
-import { checkSplit } from "./manual-split";
 import {
   addAmount,
   amountText,
@@ -189,12 +188,9 @@ describe("che số tiền trên máy này (pwa UC-718)", () => {
     expect(memberPlanText({ actual: 43_500_000, planned: 50_000_000, pct: 87 } as IncomePlanMember)).toBe(`•••• / ••••${NBSP}₫ · 87,0%`);
   });
 
-  it("UC-718 AC-1: chỗ tự ghép số tiền cũng bị che — \"≈ 7,01 tỷ ₫\", đã chia / còn", () => {
+  it("UC-718 AC-1: chỗ tự ghép số tiền cũng bị che — \"≈ 7,01 tỷ ₫\"", () => {
     setAmountsHidden(true);
     expect(billionText(7_012_345_678)).toBe(`≈ ••••${NBSP}₫`);
-    const c = checkSplit({ amounts: { a: 300_000 }, invalid: [] }, 1_000_000);
-    expect(c.done).toBe("Đã chia •••• / ••••");
-    expect(c.rest).toBe("còn ••••");
     setAmountsHidden(false);
     expect(billionText(7_012_345_678)).toBe(`≈ 7,01 tỷ${NBSP}₫`);
   });
@@ -211,8 +207,8 @@ describe("che số tiền trên máy này (pwa UC-718)", () => {
     setAmountsHidden(true);
     expect(amountText(nextAmount(0, "50000"))).toBe("50.000");
     expect(`Lưu ${formatTypedVnd(50_000)}`).toBe(`Lưu 50.000${NBSP}₫`);
-    const text = entryToast(50_000, { walletId: "w", name: "Đi chợ", balance: 900_000, weekRemaining: 450_000, monthRemaining: null }, false);
-    expect(text).toBe(`Đã ghi ••••${NBSP}₫. Đi chợ còn ••••${NBSP}₫ tuần này.`);
+    const text = entryToast({ amount: 900_000, perDay: 30_000 }, false);
+    expect(text).toBe(`Đã ghi · Vận hành còn ••••${NBSP}₫ ≈ ••••/ngày`);
     expect(text).not.toMatch(/\d/);
   });
 

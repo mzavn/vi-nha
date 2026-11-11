@@ -38,7 +38,8 @@ export type PushPayload = PushText & { url: string; tag: string };
 
 const URLS: Record<string, string> = {
   daily: "/#today",
-  weekly: "/#wallets",
+  weekly: "/#wallets/analysis", // Ví & quỹ › Nhìn lại (notify UC-406)
+  pay_cycle: "/#today", // thẻ Việc ngày lương (notify UC-412)
   pending_batch: "/#assign",
   test: "/#settings",
   security: "/#settings",

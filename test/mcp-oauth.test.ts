@@ -261,22 +261,21 @@ describe("UC-601 AC-9: trang uỷ quyền", () => {
 });
 
 describe("UC-601 AC-6, AC-11: quyền xem / ghi", () => {
-  it("token chỉ Xem: initialize, tools/list (19 tool) và tool đọc chạy", async () => {
+  it("UC-601 AC-6: token chỉ Xem: initialize, tools/list (15 tool) và tool đọc chạy", async () => {
     const { access, scope } = await connectClaude(env, { memberId: "husband", password: SHARED, write: false });
     expect(scope).toBe("mcp:read");
     const init = await mcpPost(env, access, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } } });
     expect(init.status).toBe(200);
     const list = await json(await listTools(access));
-    expect(list.result.tools).toHaveLength(19);
+    expect(list.result.tools).toHaveLength(15);
     expect((await mcpPost(env, access, toolCall("get_snapshot"))).status).toBe(200);
   });
 
-  it("token chỉ Xem gọi tool ghi → HTTP 403 insufficient_scope, challenge ghi đủ mcp:read mcp:write; không ghi gì", async () => {
+  it("UC-601 AC-11: token chỉ Xem gọi add_transaction, assign_log, add_tenant_shared_expense hoặc record_asset_value (cả bốn tool trong WRITE_TOOLS) → HTTP 403 insufficient_scope, challenge ghi đủ mcp:read mcp:write; không ghi gì", async () => {
     const { access } = await connectClaude(env, { memberId: "husband", password: SHARED, write: false });
     for (const [name, args] of [
       ["add_transaction", { meaning: "spend", amount: 200_000, category_id: "fuel-parking" }],
       ["assign_log", { log_id: "L1", splits: [{ meaning: "spend", amount: 1 }] }],
-      ["allocate_income", { income_tx_id: 1 }],
       ["add_tenant_shared_expense", { tenant_id: "t", amount: 1, category_id: "groceries" }],
       ["record_asset_value", { item_id: "vang", unit_price: 5_250_000 }],
     ] as const) {
@@ -287,6 +286,19 @@ describe("UC-601 AC-6, AC-11: quyền xem / ghi", () => {
       expect(challenge).toContain('scope="mcp:read mcp:write"');
       expect(challenge).toContain('resource_metadata="http://localhost/.well-known/oauth-protected-resource/mcp"');
     }
+    expect(txCount()).toBe(0);
+  });
+
+  it("UC-602 AC-16: kết nối chỉ Xem — tools/list không có get_budget / allocate_income / preview_allocation / list_transfer_orders, đúng 15 tool; gọi get_budget → lỗi không có tool, không ghi gì", async () => {
+    const { access } = await connectClaude(env, { memberId: "husband", password: SHARED, write: false });
+    const names = ((await json(await listTools(access))).result.tools as { name: string }[]).map((t) => t.name);
+    expect(names).toHaveLength(15);
+    for (const gone of ["get_budget", "allocate_income", "preview_allocation", "list_transfer_orders"]) expect(names).not.toContain(gone);
+    const res = await mcpPost(env, access, toolCall("get_budget", { period: "2026-11" }));
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.error ?? body.result.isError).toBeTruthy();
+    expect(body.error?.message ?? body.result.content[0].text).toMatch(/not found/i);
     expect(txCount()).toBe(0);
   });
 
@@ -307,21 +319,6 @@ describe("UC-601 AC-6, AC-11: quyền xem / ghi", () => {
 });
 
 describe("UC-602, UC-603: tool nhìn và ghi như người đã uỷ quyền", () => {
-  it("get_snapshot như trên app của người đó: ví private của người khác bị ẩn", async () => {
-    raw.prepare("UPDATE wallets SET private = 1 WHERE id = 'fun-wife'").run();
-    raw.prepare(
-      "INSERT INTO transactions (at, amount, meaning, wallet_id, counter_wallet_id, week_key, month_key, source) VALUES (date('now'), 700000, 'fund', 'fun-wife', 'income', '2026-W40', strftime('%Y-%m', 'now'), 'system')",
-    ).run();
-    const balance = async (memberId: string) => {
-      const { access } = await connectClaude(env, { memberId, password: SHARED, write: false });
-      const res = await json(await mcpPost(env, access, toolCall("get_snapshot")));
-      const blocks = res.result.content as { text: string }[];
-      return (JSON.parse(blocks[blocks.length - 1]!.text) as { wallets: { id: string; balance: number | null }[] }).wallets.find((w) => w.id === "fun-wife")?.balance;
-    };
-    expect(await balance("husband")).toBeNull();
-    expect(await balance("wife")).toBe(700_000);
-  });
-
   it("add_transaction không gửi by_member_id → người ghi là người uỷ quyền; nhật ký via=mcp kèm người đó", async () => {
     const { access } = await connectClaude(env, { memberId: "wife", password: SHARED });
     const res = await json(await mcpPost(env, access, toolCall("add_transaction", { meaning: "spend", amount: 200_000, category_id: "fuel-parking" })));
@@ -376,13 +373,14 @@ describe("UC-602, UC-603: tool nhìn và ghi như người đã uỷ quyền", (
     expect(liabilities.flatMap((g) => g.rows).find((r) => r.key === "debt:vay-tieu-dung")!.interestThisMonth).toBe(300_000);
   });
 
-  it("UC-603 AC-11: add_transaction nhận interest_debt_id — ghi khoản trả lãi (danh mục Lãi vay), còn nợ không đổi; cùng luật ledger UC-101 AC-25", async () => {
+  it("UC-603 AC-11: add_transaction nhận interest_debt_id → khoản chi lãi không ví (danh mục loan-interest), còn nợ không đổi; kèm cả debt_id → tool error debt_and_interest", async () => {
     await rest("POST", "/v1/debts", { name: "Vay tiêu dùng", amount: 20_000_000, interest_rate: 18 });
     const { access } = await connectClaude(env, { memberId: "husband", password: SHARED });
     const ok = await toolJson(access, "add_transaction", { meaning: "spend", amount: 300_000, interest_debt_id: "vay-tieu-dung" });
-    expect(ok.data.tx).toMatchObject({ category_id: "loan-interest", counter_wallet_id: "loan-interest", interest_debt_id: "vay-tieu-dung" });
+    expect(ok.data.tx).toMatchObject({ category_id: "loan-interest", legacy_class: null, interest_debt_id: "vay-tieu-dung" });
     const both = await json(await mcpPost(env, access, toolCall("add_transaction", { meaning: "spend", amount: 1_000, interest_debt_id: "vay-tieu-dung", debt_id: "vay-tieu-dung" })));
     expect(both.result.isError).toBe(true);
+    expect(both.result.content[0].text).toBe("Một khoản chi không vừa trả gốc vừa trả lãi — ghi hai khoản: lãi (interest_debt_id) và gốc (debt_id).");
     const debts = (await rest("GET", "/v1/debts")).data.debts as { id: string; balance: number; interestPaidThisMonth: number }[];
     expect(debts.find((d) => d.id === "vay-tieu-dung")).toMatchObject({ balance: 20_000_000 });
   });

@@ -2,7 +2,6 @@
 // Thuần để test. DESIGN.md §4: số ra quyết định (tiền thật đang có) đứng đầu và to nhất; tài sản ròng nhỏ hơn, đứng cuối.
 
 import { formatVnd } from "./money";
-import { wealthBuildingAccountLabel } from "./wealth-building-accounts";
 import type { NetWorth } from "./types";
 
 export interface NetWorthLine {
@@ -21,18 +20,11 @@ export interface NetWorthLine {
 export function netWorthLines(nw: NetWorth): NetWorthLine[] {
   const owedToUs = nw.receivables + nw.tenants;
   const weOwe = nw.debts + nw.tenantsPrepaid;
-  // Phần đã khóa nằm trong tiền thật: Tích sản (tổng ví); heo, phao, sổ tiết kiệm là chỗ tiền Tích sản đang nằm (ADR-82, ADR-88) —
-  // nói là một phần của Tích sản, không cộng thêm lần nữa. Nhiều hơn Tích sản (tiền có trước khi dùng app) thì kể riêng.
-  const places = nw.wealthBuildingAccounts;
-  const by = places.accounts.map((a) => `${wealthBuildingAccountLabel(a)} ${formatVnd(a.balance)}`).join(" · ");
-  const wealthBuilding = nw.wealthBuildingCash > 0 && `Tích sản ${formatVnd(nw.wealthBuildingCash)} đã khóa`;
-  const lockedParts =
-    places.total > 0 && places.total <= nw.wealthBuildingCash
-      ? [`${wealthBuilding} (gồm ${formatVnd(places.total)} ở tài khoản Tích sản: ${by})`]
-      : [wealthBuilding, places.total > 0 && `Tài khoản Tích sản ${formatVnd(places.total)} (${by})`].filter(Boolean);
-  const cashNote = [lockedParts.length > 0 ? `trong đó ${lockedParts.join(", ")}` : null, `còn để chi tuần này ${formatVnd(nw.spendableThisWeek)}`]
-    .filter(Boolean)
-    .join(" · ");
+  // Tích luỹ nằm trong tiền thật (receivable UC-1005 bước 2.1): kể tổng ngăn rồi các tài khoản ngăn Tích luỹ. Tích luỹ 0 →
+  // không dòng phụ.
+  const savingsTotal = nw.pockets.savings;
+  const places = nw.savings.accounts.filter((a) => a.balance !== 0).map((a) => `${a.name.charAt(0).toUpperCase()}${a.name.slice(1)} ${formatVnd(a.balance)}`);
+  const cashNote = savingsTotal !== 0 ? `trong đó Tích luỹ ${formatVnd(savingsTotal)}${places.length ? ` (${places.join(" · ")})` : ""}` : null;
   const lines: (NetWorthLine | false)[] = [
     { key: "cash", level: "hero", label: "Tiền thật đang có", hint: "tiền mặt và tiền trong tài khoản", note: cashNote, value: nw.cash },
     // Mua qua app chưa gắn mục (giá mua) và tài sản ngoài app (định giá ở màn Tài sản & tự do — receivable UC-1005).

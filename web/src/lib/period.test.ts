@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { atForDay, dayHeading, daysLeftInWeek, heroLabel, weekMetaText, monthLabel, previousDay, previousMonth, shortDate, timeHM, weekLabel, weekRange } from "./period";
+import { atForDay, dayHeading, monthLabel, previousDay, previousMonth, shortDate, timeHM, weekLabel, weekRange } from "./period";
 
 describe("nhãn kỳ", () => {
   it("tuần trong một tháng: T39 (21–27/9)", () => {
@@ -35,8 +35,6 @@ describe("nhãn kỳ", () => {
     expect(shortDate("2026-09-05")).toBe("5/9");
     expect(shortDate("2026-09-21T18:00:00Z")).toBe("22/9");
     expect(timeHM("2026-09-22T07:05:00Z")).toBe("14:05");
-    expect(daysLeftInWeek("2026-09-22", "2026-09-27")).toBe(6);
-    expect(daysLeftInWeek("2026-09-27", "2026-09-27")).toBe(1);
     expect(previousDay("2026-10-01")).toBe("2026-09-30");
   });
 
@@ -44,17 +42,5 @@ describe("nhãn kỳ", () => {
     const now = new Date("2026-09-22T03:00:00Z");
     expect(atForDay("2026-09-22", now)).toBe(now.toISOString());
     expect(atForDay("2026-09-21", now)).toBe("2026-09-21T05:00:00.000Z");
-  });
-});
-
-describe("số hero 'còn để chi tuần này' viết đủ chữ", () => {
-  it("âm thì đổi nhãn thành 'đã chi vượt' và hiện số dương, không còn '−X' dưới chữ 'còn'", () => {
-    expect(heroLabel(-415_300)).toEqual({ label: "Tuần này đã chi vượt", amount: 415_300, over: true });
-    expect(heroLabel(0)).toEqual({ label: "Còn để chi tuần này", amount: 0, over: false });
-  });
-
-  it("dòng phụ: ngày cuối tuần và số tuần còn lại SAU tuần này (Chủ nhật 4/10/2026: còn 4 tuần, không phải 5)", () => {
-    expect(weekMetaText("2026-10-04", "2026-10-04", 5)).toBe("Hôm nay là ngày cuối tuần (CN 4/10) · tháng 10 còn 4 tuần nữa");
-    expect(weekMetaText("2026-10-26", "2026-11-01", 1)).toBe("Tuần này còn 7 ngày (hết CN 1/11) · đây là tuần cuối của tháng 10");
   });
 });

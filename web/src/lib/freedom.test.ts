@@ -7,6 +7,7 @@ import {
   freedomTargetText,
   incomeMilestoneText,
   incomeSourceText,
+  MILESTONE_LABEL,
   paramsSummary,
   safetyText,
 } from "./freedom";
@@ -34,9 +35,9 @@ const params: FreedomParams = {
 };
 
 describe("Mốc tự do: câu chữ", () => {
-  it("UC-1103 AC-1: card Thông số một dòng — \"Chi 20.000.000 ₫/tháng (tự nhập) · Must 15.000.000 · SWR 3,5% · lạm phát 3,5%\"; chi phí theo sổ ghi rõ", () => {
-    expect(paramsSummary(params)).toBe(vnd("Chi 20.000.000 ₫/tháng (tự nhập) · Must 15.000.000 · SWR 3,5% · lạm phát 3,5%"));
-    expect(paramsSummary({ ...params, expenseSource: "ledger", expenseMustSource: "ledger" })).toBe(vnd("Chi 20.000.000 ₫/tháng (theo sổ, 3 tháng gần nhất) · Must 15.000.000 · SWR 3,5% · lạm phát 3,5%"));
+  it("UC-1103 AC-1: card Thông số một dòng — \"Chi 20.000.000 ₫/tháng (tự nhập) · Thiết yếu 15.000.000 · SWR 3,5% · lạm phát 3,5%\"; chi phí theo sổ ghi rõ", () => {
+    expect(paramsSummary(params)).toBe(vnd("Chi 20.000.000 ₫/tháng (tự nhập) · Thiết yếu 15.000.000 · SWR 3,5% · lạm phát 3,5%"));
+    expect(paramsSummary({ ...params, expenseSource: "ledger", expenseMustSource: "ledger" })).toBe(vnd("Chi 20.000.000 ₫/tháng (theo sổ, 3 tháng gần nhất) · Thiết yếu 15.000.000 · SWR 3,5% · lạm phát 3,5%"));
   });
 
   it("UC-1103 AC-5: chưa có chi phí tháng → \"Cần chi phí tháng — nhập ở Tham số hoặc chờ đủ 3 tháng\"", () => {
@@ -70,5 +71,11 @@ describe("Mốc tự do: câu chữ", () => {
     expect(freedomTargetText({ age: 50, year: 2040, yearsLeft: 14, needAtTargetYear: 12_209_581_541 })).toBe(vnd("50 tuổi · năm 2040 · còn 14 năm · ≈ 12,21 tỷ ₫ theo giá 2040"));
     expect(billionText(950_000_000)).toBe(vnd("≈ 0,95 tỷ ₫"));
     expect(freedomTargetText({ age: 45, year: 2026, yearsLeft: 0, needAtTargetYear: 5_142_857_143 })).toBe("45 tuổi · năm 2026 · năm nay");
+  });
+
+  it("UC-717 AC-6: M2′ \"Đủ chi sau phần trích trước (Tích luỹ, Thuế)\", F1 \"chi thiết yếu\"; không chữ Must, Có thì tốt, Hưởng thụ, phần khóa, Tích sản", () => {
+    expect(MILESTONE_LABEL.M2p).toEqual({ name: "M2′ · Đủ chi sau phần trích trước", hint: "Thu nhập trừ phần trích trước (Tích luỹ, Thuế) vẫn đủ chi phí tháng" });
+    expect(MILESTONE_LABEL.F1.hint).toBe("Tài sản đầu tư trừ nợ đủ chi thiết yếu theo tỷ lệ rút an toàn");
+    expect(`${JSON.stringify(MILESTONE_LABEL)} ${paramsSummary(params)}`).not.toMatch(/Must|Có thì tốt|Hưởng thụ|phần khóa|Tích sản/);
   });
 });

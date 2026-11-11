@@ -1,8 +1,10 @@
 import { Hono, type Context } from "hono";
+import { rejectOldFields } from "../domain/entry";
 import { suggestRulePattern } from "../domain/rules";
 import { DomainError } from "../domain/types";
 import type { AppEnv } from "../env";
-import { recordChange } from "../services/audit";
+import { notifyPayCycle } from "../notify/pay-cycle";
+import { afterResponse, recordChange } from "../services/audit";
 import * as ingest from "../services/ingest";
 import type { Split, SplitMeaning } from "../services/ingest";
 
@@ -25,6 +27,8 @@ const SPLIT_MEANINGS: readonly SplitMeaning[] = ["spend", "transfer", "income", 
 function parseSplit(raw: unknown, index: number): Split {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return bad(`splits[${index}] phải là object.`);
   const s = raw as Record<string, unknown>;
+  // Trường cũ (wallet_id, from_wallet_id, wealth_move, allocate, earmark_id…) → 400 model_changed, không ghi gì (ADR-123, ADR-131).
+  rejectOldFields(s);
   if (typeof s.meaning !== "string" || !SPLIT_MEANINGS.includes(s.meaning as SplitMeaning)) {
     bad(`splits[${index}].meaning phải là một trong: ${SPLIT_MEANINGS.join(", ")}.`);
   }
@@ -34,13 +38,12 @@ function parseSplit(raw: unknown, index: number): Split {
   if (s.link_id !== undefined && s.link_id !== null && (typeof s.link_id !== "number" || !Number.isInteger(s.link_id) || s.link_id <= 0)) {
     bad(`splits[${index}].link_id phải là số nguyên dương.`);
   }
+  if (s.opens_cycle !== undefined && s.opens_cycle !== null && typeof s.opens_cycle !== "boolean") bad(`splits[${index}].opens_cycle là true hoặc false.`);
   return {
     meaning: s.meaning as SplitMeaning,
     amount: s.amount as number,
-    wallet_id: typeof s.wallet_id === "string" ? s.wallet_id : null,
     category_id: typeof s.category_id === "string" ? s.category_id : null,
     other_account_id: typeof s.other_account_id === "string" ? s.other_account_id : null,
-    from_wallet_id: typeof s.from_wallet_id === "string" ? s.from_wallet_id : null,
     income_stream_id: typeof s.income_stream_id === "string" ? s.income_stream_id : null,
     tenant_id: typeof s.tenant_id === "string" ? s.tenant_id : null,
     debt_id: typeof s.debt_id === "string" ? s.debt_id : null,
@@ -50,6 +53,7 @@ function parseSplit(raw: unknown, index: number): Split {
     taxable: s.taxable === true,
     asset_kind: typeof s.asset_kind === "string" ? s.asset_kind : null,
     interest: s.interest === true,
+    ...(typeof s.opens_cycle === "boolean" ? { opens_cycle: s.opens_cycle } : {}),
     note: typeof s.note === "string" ? s.note : null,
   };
 }
@@ -60,11 +64,13 @@ logs.get("/logs", async (c) => {
   if (status !== "pending") bad("Chỉ hỗ trợ status=pending.", "invalid_status");
   const limit = Number(c.req.query("limit") ?? 50);
   if (!Number.isInteger(limit)) bad("limit phải là số nguyên.");
-  return ok(c, await ingest.listPendingLogs(c.env.DB, limit));
+  return ok(c, await ingest.listPendingLogs(c.env.DB, limit, c.get("memberId")));
 });
 
 logs.post("/logs/:id/assign", async (c) => {
   const b = await body(c);
+  // "Có phải lệnh chuyển này?" đã bỏ cùng lệnh chuyển (ADR-124).
+  rejectOldFields(b, ["transfer_order_id"]);
   if (!Array.isArray(b.splits) || b.splits.length === 0) bad("Cần mảng splits với ít nhất một dòng.");
   const splits = (b.splits as unknown[]).map((s, i) => parseSplit(s, i));
 
@@ -88,6 +94,8 @@ logs.post("/logs/:id/assign", async (c) => {
   if (explicit && ruleBlocker) bad(ruleBlocker, "rule_not_allowed");
 
   const result = await ingest.assignLog(c.env.DB, c.req.param("id"), splits, c.get("memberId"), new Date());
+  // Gán khoản lương mở kỳ: báo kỳ lương mới sau khi trả lời (notify UC-412).
+  if (result.effects.cycle?.opened) await afterResponse(c, notifyPayCycle(c.env, result.effects.cycle.payday));
 
   let rule: Record<string, unknown> | null = null;
   let ruleSkipped: string | null = wantRule ? ruleBlocker : null;
@@ -105,13 +113,19 @@ logs.post("/logs/:id/assign", async (c) => {
   return ok(c, { ...result, rule, ruleSkipped }, 201);
 });
 
-logs.post("/logs/:id/ignore", async (c) => ok(c, await ingest.ignoreLog(c.env.DB, c.req.param("id"))));
+logs.post("/logs/:id/ignore", async (c) => {
+  const id = c.req.param("id");
+  const result = await ingest.ignoreLog(c.env.DB, id, c.get("memberId"));
+  // Không ghi số tiền: ai trong nhà cũng đọc được nhật ký (ingest UC-305, access UC-505).
+  await recordChange(c, "log.ignore", `log:${id}`, null);
+  return ok(c, result);
+});
 
 // "Đã nhập tay?" ở màn Gán: nối log vào khoản nhập tay đã ghi đúng khoản đó (không ghi thêm giao dịch).
 logs.post("/logs/:id/link", async (c) => {
   const txId = (await body(c)).transaction_id;
   if (typeof txId !== "number" || !Number.isInteger(txId) || txId <= 0) bad("transaction_id phải là số nguyên dương.");
-  const result = await ingest.linkLog(c.env.DB, c.req.param("id"), txId as number);
+  const result = await ingest.linkLog(c.env.DB, c.req.param("id"), txId as number, c.get("memberId"));
   await recordChange(c, "log.link", `tx:${txId}`, { log: c.req.param("id") });
   return ok(c, result);
 });
@@ -121,14 +135,14 @@ logs.post("/logs/pair", async (c) => {
   const logA = b.log_a;
   const logB = b.log_b;
   if (typeof logA !== "string" || !logA || typeof logB !== "string" || !logB) bad("Cần log_a và log_b.");
-  return ok(c, await ingest.pairLogs(c.env.DB, logA as string, logB as string), 201);
+  return ok(c, await ingest.pairLogs(c.env.DB, logA as string, logB as string, c.get("memberId")), 201);
 });
 
 // Gỡ cặp/gỡ gán sai: huỷ giao dịch sinh từ log ngân hàng, trả (các) log về 'pending'.
 logs.post("/logs/transactions/:txId/void", async (c) => {
   const txId = Number(c.req.param("txId"));
   if (!Number.isInteger(txId) || txId <= 0) bad("txId không hợp lệ.");
-  const result = await ingest.unassignTransaction(c.env.DB, txId);
+  const result = await ingest.unassignTransaction(c.env.DB, txId, c.get("memberId"));
   await recordChange(c, "tx.unassign", `tx:${txId}`, { voided: result.voided, logs: result.logs });
   return ok(c, result);
 });
@@ -138,6 +152,8 @@ logs.get("/rules", async (c) => ok(c, await ingest.listRules(c.env.DB)));
 /** Chỉ nhận đúng các trường của rule, đúng kiểu — không đẩy nguyên body xuống tầng dịch vụ. */
 logs.post("/rules", async (c) => {
   const b = await body(c);
+  // Rule không còn ví (ingest UC-307): cột ví đã bỏ ở 0040, gửi lên → 400 model_changed.
+  rejectOldFields(b, ["wallet_id", "from_wallet_id"]);
   const text = (v: unknown, name: string, required = false): string | null => {
     if (v === undefined || v === null || v === "") return required ? bad(`Thiếu ${name}.`) : null;
     return typeof v === "string" ? v : bad(`${name} phải là chuỗi.`);
@@ -149,11 +165,12 @@ logs.post("/rules", async (c) => {
     pattern: text(b.pattern, "pattern", true)!,
     meaning: text(b.meaning, "meaning", true)!,
     is_salary: b.is_salary === true,
-    wallet_id: text(b.wallet_id, "wallet_id"),
     category_id: text(b.category_id, "category_id"),
     by_member_id: text(b.by_member_id, "by_member_id") ?? c.get("memberId"),
     tenant_id: text(b.tenant_id, "tenant_id"),
     income_stream_id: text(b.income_stream_id, "income_stream_id"),
+    account_id: text(b.account_id, "account_id"),
+    counter_account_id: text(b.counter_account_id, "counter_account_id"),
   };
-  return ok(c, await ingest.createRule(c.env.DB, input), 201);
+  return ok(c, await ingest.createRule(c.env.DB, input, c.get("memberId")), 201);
 });

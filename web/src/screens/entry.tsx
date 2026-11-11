@@ -4,14 +4,13 @@
 
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { errorText } from "../lib/api";
-import { defaultAccountFor, defaultWalletFor, manualAccounts, spendableWallets, topCategories } from "../lib/categories";
-import { addAmount, formatTypedVnd, formatVnd, timesThousand } from "../lib/money";
-import { localWalletStatus } from "../lib/pending";
+import { defaultAccountFor, manualAccounts, topCategories } from "../lib/categories";
+import { addAmount, formatTypedVnd, formatVnd, moneyDigits, timesThousand } from "../lib/money";
 import { atForDay, dayKey, shortDate, timeHM } from "../lib/period";
-import { draftFromTx, editedAt, withChosen } from "../lib/transactions";
+import { draftFromTx, editedAt } from "../lib/transactions";
 import type { Bootstrap, CategoryRef, EntryBody } from "../lib/types";
 import { confirmDuplicateEntry, discardEntry, getState, go, refresh, replaceEntry, retryEntry, saveEntry, setState, syncNow, toast, useApp, viewSnapshot, type AppState } from "../state/store";
-import { AccountSelect, amountExprHint, newClientId, useAmountField, WalletSelect } from "../ui/fields";
+import { AccountSelect, amountExprHint, newClientId, useAmountField } from "../ui/fields";
 import { CategoryIcon, Icon } from "../ui/icons";
 import { Money } from "../ui/money";
 import { Card, FirstLoadFailed, NeedsNetwork, PageHeader, Sheet, Skeleton } from "../ui/parts";
@@ -50,7 +49,6 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
   const [d] = useState(() => (edit ? draftFromTx(edit.tx) : null));
   const [amount, setAmount] = useState(d?.amount ?? 0);
   const [category, setCategory] = useState<CategoryRef | null>(() => boot.categories.find((c) => c.id === d?.category_id) ?? null);
-  const [walletId, setWalletId] = useState<string | null>(d?.wallet_id ?? null);
   const [accountId, setAccountId] = useState<string | null>(() => d?.account_id ?? defaultAccountFor(boot, memberId, "out"));
   const [note, setNote] = useState(d?.note ?? "");
   const [day, setDay] = useState(() => d?.day ?? preset?.day ?? dayKey(new Date()));
@@ -74,12 +72,8 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
   const [topIds] = useState(() => topCategories(boot.categories, boot.categoryUsage).map((c) => c.id));
   const top = useMemo(() => topIds.flatMap((id) => boot.categories.filter((c) => c.id === id)), [topIds, boot]);
   const tiles = category && !top.some((c) => c.id === category.id) ? [category, ...top.slice(0, 5)] : top;
-  const wallets = useMemo(
-    () => withChosen(spendableWallets(boot.wallets, memberId), d?.wallet_id, () => boot.wallets.find((w) => w.id === d?.wallet_id)),
-    [boot, memberId, d],
-  );
   const view = viewSnapshot(app);
-  const status = view && walletId ? localWalletStatus(view, walletId, new Date()) : null;
+  const ns = view?.nearSpend ?? null;
   const today = dayKey(new Date());
 
   // Danh mục / tài khoản bị xoá khỏi cấu hình sau khi tải lại: bỏ chọn thay vì gửi một mã không còn.
@@ -89,11 +83,10 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
 
   function pick(c: CategoryRef) {
     setCategory(c);
-    setWalletId(defaultWalletFor(boot, c, memberId)?.id ?? null);
     setAllCats(false);
   }
 
-  const missing = !amount ? (field.expr !== null ? "Phép tính chưa đúng" : "Nhập số tiền") : !category ? "Chọn danh mục" : !walletId ? "Chọn ví" : !accountId ? "Chọn tài khoản" : null;
+  const missing = !amount ? (field.expr !== null ? "Phép tính chưa đúng" : "Nhập số tiền") : !category ? "Chọn danh mục" : !accountId ? "Chọn tài khoản" : null;
 
   /** Nút "+": thêm dấu cộng vào cuối ô (thay dấu phép tính đang treo), con trỏ về cuối để gõ số tiếp. */
   function plus() {
@@ -106,7 +99,7 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
   }
 
   async function save() {
-    if (missing || saving || !category || !walletId || !accountId) return;
+    if (missing || saving || !category || !accountId) return;
     if (edit && !app.online) return;
     setSaving(true);
     const body: EntryBody = {
@@ -115,7 +108,6 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
       at: edit ? editedAt(day, edit.tx.at, new Date()) : atForDay(day, new Date()),
       client_id: newClientId(),
       category_id: category.id,
-      wallet_id: walletId,
       account_id: accountId,
       ...(d?.debt_id ? { debt_id: d.debt_id } : {}),
       ...(note.trim() ? { note: note.trim() } : {}),
@@ -135,7 +127,6 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
       }
       setAmount(0);
       setCategory(null);
-      setWalletId(null);
       setNote("");
       setDay(dayKey(new Date()));
       setMore(false);
@@ -259,34 +250,15 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
         </div>
       </Card>
 
-      <section class="card" aria-label="Ví và tài khoản">
-        <div class="field" style={{ borderTop: 0 }}>
-          <label for="f-wallet">Ví</label>
-          {category ? (
-            <WalletSelect id="f-wallet" wallets={wallets} value={walletId} onChange={setWalletId} />
-          ) : (
-            <span style={{ color: "var(--fg-3)" }}>tự điền theo danh mục</span>
-          )}
-        </div>
-        {status && status.balance !== null && (
-          <div style={{ padding: "0 14px 10px", marginTop: "-4px", fontSize: "12.5px", color: "var(--fg-2)", textAlign: "right" }}>
-            {status.weekRemaining !== null ? (
-              <>
-                còn <Money value={status.weekRemaining} /> tuần này
-              </>
-            ) : status.monthRemaining !== null ? (
-              <>
-                còn <Money value={status.monthRemaining} /> tháng này
-              </>
-            ) : (
-              <>
-                còn <Money value={status.balance} />
-              </>
-            )}
+      <section class="card" aria-label="Tài khoản">
+        {ns && ns.accounts.length > 0 && (
+          <div style={{ padding: "10px 14px 0", fontSize: "12.5px", color: "var(--fg-2)", textAlign: "right" }}>
+            Vận hành còn <Money value={ns.amount} />
+            {ns.perDay !== null && <> · chi khoảng {moneyDigits(ns.perDay)}/ngày</>}
             {app.stale && " (số cũ)"}
           </div>
         )}
-        <div class="field">
+        <div class="field" style={{ borderTop: 0 }}>
           <label for="f-acct">Trả bằng</label>
           <AccountSelect id="f-acct" accounts={manualAccounts(boot.accounts, "out", day)} value={accountId} onChange={setAccountId} />
         </div>
@@ -320,11 +292,10 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
 
       <div class="savebar">
         {category && (
-          // Ví và tài khoản đã tự điền, nhắc lại ngay trên nút Lưu; chạm để cuộn tới chỗ đổi.
-          <button type="button" class="pick-summary" onClick={() => document.getElementById("f-wallet")?.scrollIntoView({ block: "center" })}>
+          // Danh mục và tài khoản đã tự điền, nhắc lại ngay trên nút Lưu; chạm để cuộn tới chỗ đổi.
+          <button type="button" class="pick-summary" onClick={() => document.getElementById("f-acct")?.scrollIntoView({ block: "center" })}>
             <span>
-              <strong>{boot.wallets.find((w) => w.id === walletId)?.name ?? "Chưa chọn ví"}</strong>
-              {status?.weekRemaining != null && <> · còn <Money value={status.weekRemaining} /> tuần này</>}
+              <strong>{category.name}</strong>
             </span>
             <span>{boot.accounts.find((a) => a.id === accountId)?.name}</span>
           </button>
@@ -463,7 +434,7 @@ function QueueList({ boot }: { boot: Bootstrap }) {
         <div key={q.clientId} class="log" style={{ cursor: "default" }}>
           <span class="t">
             {shortDate(q.body.at)} {timeHM(q.body.at)} · {name(boot.categories, q.body.category_id) ?? q.body.meaning} ·{" "}
-            {name(boot.wallets, q.body.wallet_id) ?? name(boot.accounts, q.body.account_id) ?? ""}
+            {name(boot.accounts, q.body.account_id) ?? ""}
           </span>
           <Money value={q.body.amount} class="a" />
           <span class="c">

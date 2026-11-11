@@ -1,26 +1,25 @@
 // Xem, sửa, xoá một giao dịch (UC-715). Mở từ bất kỳ dòng giao dịch nào trong app (`openTx`), vẽ một lần ở khung app.
 // Ghi tay: Sửa (mở đúng form đã dùng để nhập, điền sẵn) và Xoá (hai bước). Ngân hàng: chỉ Gán lại. Hệ thống: chỉ xem.
-// Khoản thu còn hiệu lực chưa chia: thêm Chia (bảng chia thử rồi chia đúng khoản đó).
+// Giao dịch cũ: loại chi / lần chia nằm dưới "Theo cách tính cũ", chỉ đọc, không tên ví (UC-715); chuyển chỉ giữa hai ví chỉ xoá.
+// Khoản chạm tài khoản riêng tư của người khác: chỉ xem, kèm dòng "chỉ chủ tài khoản sửa được" (UC-715 AC-16).
 // Liên kết hai chiều: khoản hoàn tiền / nhận lại có khoản gốc → dòng "Trả cho" (chạm mở khoản gốc); khoản chi / cho vay đã
 // được trả về → mục "Đã nhận lại" (tổng, chênh, từng khoản chạm mở). Dữ liệu đi kèm GET /v1/transactions/:id.
-// Sửa / xoá / chia ghi thẳng lên server nên cần mạng; khoản chưa lên sổ thì sửa ở hàng đợi màn Nhập (Gửi lại / Bỏ hẳn).
+// Sửa / xoá ghi thẳng lên server nên cần mạng; khoản chưa lên sổ thì sửa ở hàng đợi màn Nhập (Gửi lại / Bỏ hẳn).
 
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
-import { ApiError, api, errorText } from "../lib/api";
+import { api, errorText } from "../lib/api";
 import { formatVnd, maskAmounts } from "../lib/money";
-import { ordersLeft } from "../lib/pending";
 import { shortDate, timeHM } from "../lib/period";
 import { linkOriginText, returnedText } from "../lib/refunds";
-import { draftFromTx, editForm, MEANING_LABEL, ORIGIN_LABEL, txActions, txLabel, txOrigin, voidConfirm } from "../lib/transactions";
-import type { AllocateResult, Bootstrap, TxRow } from "../lib/types";
+import { editForm, isWalletOnlyTransfer, legacyRows, MEANING_LABEL, ORIGIN_LABEL, txActions, txLabel, txOrigin, voidConfirm } from "../lib/transactions";
+import type { Bootstrap, TxRow } from "../lib/types";
 import { useResource } from "../state/resource";
-import { getState, go, openTx, refresh, setState, toast, useApp, voidEntry } from "../state/store";
+import { go, openTx, refresh, setState, toast, useApp, voidEntry } from "../state/store";
 import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
 import { NeedsNetwork, Sheet } from "../ui/parts";
-import { MoveBudgetSheet } from "./budget-sheets";
-import { AllocationPreview, ASSET_KINDS, OtherEntrySheet, useAllocationPreview } from "./other-entry-sheet";
+import { ASSET_KINDS, OtherEntrySheet } from "./other-entry-sheet";
 
 export function TxSheet() {
   const { txOpen, boot } = useApp();
@@ -39,15 +38,6 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** Bảng chia thử của khoản thu chưa chia: mở khi bấm Chia, rồi Chia và ghi sổ. Chia thử đúng như server sẽ chia khoản
-   *  này (allocateIncome): số tiền, thuế, ngày, tài khoản nhận, nguồn thu của nó. */
-  const [previewing, setPreviewing] = useState(false);
-  const trial = useAllocationPreview(
-    previewing && tx
-      ? { amount: tx.amount, taxable: !!tx.taxable, at: tx.at, account_id: tx.counter_account_id, ...(tx.income_stream_id ? { income_stream_id: tx.income_stream_id } : {}) }
-      : null,
-    app.online,
-  );
 
   if (!tx) {
     return (
@@ -59,37 +49,29 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
 
   if (editing) {
     const form = editForm(tx);
-    if (form === "move") {
-      const d = draftFromTx(tx);
-      return <MoveBudgetSheet edit={tx} title="Sửa chuyển ngân sách" initial={{ amount: d.amount, fromWalletId: d.from_wallet_id, toWalletId: d.wallet_id }} onClose={close} />;
-    }
     if (form !== "spend") return <OtherEntrySheet kind={form} amount={tx.amount} edit={tx} onClose={close} />;
   }
 
-  const can = txActions(tx);
-  const canAllocate = tx.status === "active" && tx.meaning === "income" && !tx.allocated;
+  const can = txActions(tx, boot);
   const name = (list: { id: string; name: string }[], wid: string | null | undefined) => (wid ? (list.find((x) => x.id === wid)?.name ?? wid) : null);
   const who = name(boot.members, tx.by_member_id);
   const asset = ASSET_KINDS.find((a) => a.value === tx.asset_kind)?.label ?? tx.asset_kind;
   const rows: [string, ComponentChildren][] = [
-    ["Loại", tx.meaning === "transfer" && !tx.account_id && !tx.counter_account_id ? "Chuyển ngân sách" : (MEANING_LABEL[tx.meaning] ?? tx.meaning)],
+    ["Loại", isWalletOnlyTransfer(tx) ? "Chuyển ngân sách" : (MEANING_LABEL[tx.meaning] ?? tx.meaning)],
     ["Số tiền", <Money value={tx.amount} tone={false} />],
     ["Lúc", `${shortDate(tx.at)} · ${timeHM(tx.at)}`],
     ...(tx.category_name ? [["Danh mục", tx.category_name] as [string, string]] : []),
-    ...(tx.counter_wallet_id ? [["Trừ ví", name(boot.wallets, tx.counter_wallet_id)] as [string, string | null]] : []),
-    ...(tx.wallet_id ? [["Cộng vào ví", name(boot.wallets, tx.wallet_id)] as [string, string | null]] : []),
     ...(tx.account_id ? [["Tiền ra từ", name(boot.accounts, tx.account_id)] as [string, string | null]] : []),
     ...(tx.counter_account_id ? [["Tiền vào", name(boot.accounts, tx.counter_account_id)] as [string, string | null]] : []),
     ...(asset ? [["Loại tài sản", asset] as [string, string]] : []),
     ...(tx.debt_id ? [["Trả nợ cho", tx.debt_name ?? tx.debt_id] as [string, string]] : []),
     ...(tx.receivable_id ? [[tx.meaning === "lend" ? "Cho ai vay" : "Ai trả", tx.receivable_name ?? tx.receivable_id] as [string, string]] : []),
     ...(tx.tenant_id ? [["Người thuê trả", tx.tenant_name ?? tx.tenant_id] as [string, string]] : []),
-    ...(tx.meaning === "income" ? [["Lần chia", tx.allocated ? "đã chia vào các ví" : "chưa chia"] as [string, string]] : []),
-    ...(tx.meaning === "income" && tx.allocated && tx.wealth_note ? [["Tích sản", `Không trả cho mình lần này: ${tx.wealth_note}`] as [string, string]] : []),
     ...(who ? [["Người ghi", who] as [string, string]] : []),
     ...(tx.note ? [["Ghi chú", maskAmounts(tx.note)] as [string, string]] : []),
     ["Nguồn", ORIGIN_LABEL[txOrigin(tx)]],
   ];
+  const legacy = legacyRows(tx);
 
   async function run(work: () => Promise<void>) {
     setBusy(true);
@@ -118,31 +100,12 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
       go("assign", { txOpen: null, assignFocus: tx.log_id ?? null });
     });
 
-  const allocate = () =>
-    run(async () => {
-      let orders = 0;
-      let wealthNote = "";
-      try {
-        const done = await api.post<AllocateResult>("/v1/allocate", { income_tx_id: tx.id, ...trial.allocateBody() });
-        orders = done.transferOrders.length;
-        if (done.wealth) wealthNote = done.wealth.amount > 0 ? ` (Tích sản ${formatVnd(done.wealth.amount)})` : " (không Tích sản lần này)";
-      } catch (err) {
-        if (!(err instanceof ApiError && err.code === "already_allocated")) throw err;
-      }
-      // Như Loại khác: tải lại số rồi nói tổng lệnh chuyển tiền đang chờ.
-      await refresh();
-      const after = getState();
-      const tail = ordersLeft(orders, after.stale || !after.snap ? null : after.snap.attention.transferOrdersPending);
-      toast(`Đã chia ${formatVnd(tx.amount)}${wealthNote}.${tail ? ` ${tail}` : ""}`);
-      close();
-    });
-
   function edit() {
     if (editForm(tx!) === "spend") go("entry", { txOpen: null, editTx: { tx: tx!, back: app.tab } });
     else setEditing(true);
   }
 
-  const offline = !app.online && (can.edit || can.remove || can.reassign || canAllocate);
+  const offline = !app.online && (can.edit || can.remove || can.reassign);
   const linkedFrom = tx.meaning === "spend" || tx.meaning === "lend" ? (tx.linked_from ?? []) : [];
   return (
     <Sheet open title={txLabel(tx)} onClose={close}>
@@ -157,6 +120,19 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
           <span class="srow-v">{v}</span>
         </div>
       ))}
+      {legacy.length > 0 && (
+        <>
+          <p class="note" style={{ borderTop: "1px solid var(--border)", fontWeight: 550 }}>
+            Theo cách tính cũ
+          </p>
+          {legacy.map(([k, v]) => (
+            <div class="srow" key={`legacy-${k}`}>
+              <span class="srow-s">{k}</span>
+              <span class="srow-v">{v}</span>
+            </div>
+          ))}
+        </>
+      )}
       {tx.link && (
         <button type="button" class="srow" onClick={() => openTx(tx.link!.id)}>
           <span class="srow-s" style={{ flex: "none" }}>
@@ -189,34 +165,13 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
         </>
       )}
       {can.note && <p class="note" style={{ borderTop: "1px solid var(--border)" }}>{can.note}</p>}
-      {previewing && <AllocationPreview preview={trial} boot={boot} fromAccountId={tx.counter_account_id} />}
-      {previewing && !trial.plan && !trial.error && <p class="note">Đang chia thử…</p>}
       <div class="pad">
-        {(error ?? (previewing ? trial.error : null)) && (
+        {error && (
           <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
-            {error ?? trial.error}
+            {error}
           </p>
         )}
-        {previewing ? (
-          <div class="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              class="btn"
-              disabled={busy}
-              onClick={() => setPreviewing(false)}
-            >
-              Thôi
-            </button>
-            <button
-              type="button"
-              class="btn btn-primary"
-              disabled={busy || !app.online || !trial.ready}
-              onClick={() => void allocate()}
-            >
-              {busy ? "Đang chia…" : "Chia và ghi sổ"}
-            </button>
-          </div>
-        ) : confirm ? (
+        {confirm ? (
           <>
             <p style={{ margin: "0 0 8px", fontWeight: 550 }}>{voidConfirm(tx)}</p>
             <div class="grid grid-cols-2 gap-2">
@@ -230,11 +185,6 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
           </>
         ) : (
           <div class="grid grid-cols-2 gap-2">
-            {canAllocate && (
-              <button type="button" class="btn btn-primary" style={{ gridColumn: "1 / -1" }} disabled={busy || !app.online} onClick={() => setPreviewing(true)}>
-                Chia
-              </button>
-            )}
             {can.edit && (
               <button type="button" class="btn btn-primary" disabled={busy || !app.online} onClick={edit}>
                 Sửa
@@ -252,7 +202,7 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
             )}
           </div>
         )}
-        {offline && <NeedsNetwork what={canAllocate ? "Chia, sửa, xoá giao dịch" : "Sửa, xoá giao dịch"} />}
+        {offline && <NeedsNetwork what="Sửa, xoá giao dịch" />}
       </div>
     </Sheet>
   );

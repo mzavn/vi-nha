@@ -1,63 +1,29 @@
 // Màn "Hôm nay", tin Telegram sáng và tool MCP `get_snapshot` đều lấy số từ đúng một hàm này.
 
-import type { WalletRule } from "./allocation";
-import { dayKey, mondaysInMonth, monthKey, weekKey, weeksLeftInMonth } from "./period";
-import { isReserve, type AccountRole, type WalletRef } from "./types";
+import type { PayCycleView } from "./pay-cycle";
+import { dayKey, monthKey, weekKey, weeksLeftInMonth } from "./period";
+import type { Pocket, PocketsView } from "./pockets";
 
 export interface SnapshotData {
   now: Date;
-  viewerId: string | null;
-  wallets: WalletRef[];
-  rules: WalletRule[];
-  balances: Record<string, number>;
-  spentWeek: Record<string, number>;
-  spentMonth: Record<string, number>;
-  wealthBuilding: { cash: number; assets: number } | null;
-  safetyFund: { cash: number; target: number | null; monthsOfData: number } | null;
-  safetyFundMonths: number;
-  goals: { walletId: string; name: string; target: number; balance: number; targetDate: string }[];
   pending: { count: number; net: number };
   drift: { accountId: string; name: string; bookDrift: number | null }[];
-  transferOrders: { pending: number; overdue: number };
-  /** Khoản thu còn hiệu lực chưa chia — tiền đang nằm ở ví Thu nhập. `oldestTxId`: khoản cũ nhất, null khi không còn. */
-  unallocatedIncome: { count: number; amount: number; oldestTxId: number | null };
-  /** Tài khoản đang dùng kèm số dư sổ (`v_account_book`) — cho "Tiền chi được" (ADR-85, ADR-88). */
-  accounts: { id: string; name: string; role: AccountRole | null; locked: boolean; spendable: boolean; balance: number }[];
-}
-
-export interface WalletLine {
-  id: string;
-  name: string;
-  tier: WalletRef["tier"];
-  mustGroup: WalletRef["mustGroup"];
-  kind: WalletRef["kind"];
-  /** null = ví riêng tư của người khác: hiện tên, ẩn số. */
-  balance: number | null;
-  monthTarget: number | null;
-  spentMonth: number | null;
-  weekTarget: number | null;
-  spentWeek: number | null;
-}
-
-/** Nhu cầu tháng theo luật nạp, phong bì tuần nhân số thứ Hai thật của tháng. */
-export function monthTarget(rule: WalletRule | undefined, month: string): number | null {
-  if (!rule) return null;
-  if (rule.mode === "flat") return (rule.amount ?? 0) * (rule.period === "week" ? mondaysInMonth(month) : 1);
-  if (rule.mode === "lump") return rule.amount ?? rule.targetAmount ?? null;
-  return null;
-}
-
-/**
- * Dự kiến tuần: phong bì tuần, hoặc phong bì tháng có `splitWeekly` chia đều theo số thứ Hai của tháng
- * (`month` = tháng chứa ngày thứ Hai đầu tuần). Ví khác: null.
- */
-export function weekTarget(rule: WalletRule | undefined, month: string): number | null {
-  if (!rule) return null;
-  if (rule.mode === "flat" && rule.period === "week") return rule.amount;
-  if (rule.splitWeekly && rule.kind === "envelope" && (rule.mode === "flat" || rule.mode === "lump")) {
-    return Math.floor((monthTarget(rule, month) ?? 0) / mondaysInMonth(month));
-  }
-  return null;
+  /** Log chờ của tài khoản riêng tư bị giấu với người xem (access UC-504): Gán chỉ hiện một dòng đếm. */
+  hiddenPendingLogs: number;
+  /** Tài khoản đang dùng kèm ngăn — cho `nearSpend.excluded`. */
+  accounts: { id: string; name: string; pocket: Pocket | null }[];
+  /** Ba ngăn (pocket UC-1203), tính trước: tiền vận hành = tổng ngăn Vận hành. */
+  pockets: PocketsView;
+  /** Ngày lương (`config.payday_day`, 1–31). */
+  paydayDay: number;
+  /** Kỳ lương hiện tại và danh sách việc (pocket UC-1205, UC-1206); null = chưa có kỳ. */
+  payCycle: PayCycleView | null;
+  /** Phần chưa làm theo việc ngày lương (ledger UC-103) — trừ trước khi chia theo ngày. */
+  pendingTasks: number;
+  /** Có nguồn đang dùng bật "Mở kỳ lương" (UC-1205 bước 9). */
+  hasCycleStream: boolean;
+  /** Màn chuyển đổi còn dở (pocket UC-1208); null = không có / đã xong. */
+  conversion: ConversionProgress | null;
 }
 
 /** Monday..Sunday của tuần chứa `now`, theo giờ VN. */
@@ -70,144 +36,129 @@ function weekRange(now: Date): { start: string; end: string } {
   return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
 }
 
-/** Tiền chi được (ADR-85, ADR-88), trả ở `snapshot.spendableCash`. */
-export interface SpendableCash {
-  /** Σ số dư sổ tài khoản đang tính − `wealthBuildingHeld` − `taxHeld`; âm được phép. */
-  amount: number;
-  /** Tài khoản đang tính (không khóa, bật `spendable`), theo thứ tự server. */
-  accounts: { accountId: string; name: string; balance: number }[];
-  /** Tích sản tiền mặt còn nằm trong các tài khoản đang tính — phần phải trừ. */
-  wealthBuildingHeld: number;
-  /** Phần Tích sản đã nằm ở tài khoản Tích sản không tính (heo, phao, sổ tiết kiệm — ADR-88) — không trừ lại. */
-  wealthBuildingOutside: number;
-  taxHeld: number;
-  /** Tài khoản đang dùng không tính (tắt công tắc, khóa, thẻ tín dụng), kèm vai trò Tích sản nếu có. */
-  excluded: { accountId: string; name: string; role: AccountRole | null }[];
+/** Ngày lương mặc định khi chưa đặt `config.payday_day`. */
+export const DEFAULT_PAYDAY_DAY = 10;
+
+const DAY_MS = 86_400_000;
+
+/** Ngày lương của tháng `month0` (có thể âm / quá 11): tháng ít ngày hơn `paydayDay` lấy ngày cuối tháng. */
+export function paydayIn(year: number, month0: number, paydayDay: number): Date {
+  const day = Math.min(paydayDay, new Date(Date.UTC(year, month0 + 1, 0)).getUTCDate());
+  return new Date(Date.UTC(year, month0, day));
 }
 
 /**
- * Tiền chi được (ADR-85) = Σ số dư sổ của tài khoản đang tính (không khóa, bật `spendable`) − Tích sản đang giữ − Thuế đang giữ.
- * Tài khoản Tích sản không tính (heo đất, phao, sổ tiết kiệm — ADR-88) giữ tiền Tích sản: phần đó (`wealthBuildingOutside`, tối đa
- * bằng Tích sản) không trừ lần nữa. Tài khoản thường tắt công tắc thì sổ không biết tiền trong đó là gì: không coi là Tích sản
- * (sai về phía thấp an toàn hơn). Tích sản / Thuế âm không cộng ngược vào. Kết quả âm được phép.
+ * Ngày lương kế tiếp (`YYYY-MM-DD`) sau `today` (ngày VN, `dayKey`): ngày lương của tháng này nếu hôm nay còn trước nó,
+ * ngược lại của tháng sau. Ngày lương là ngày đầu kỳ mới; tháng ít ngày hơn `paydayDay` lấy ngày cuối tháng.
  */
-export function spendableCash(accounts: SnapshotData["accounts"], wealthBuildingCash: number, taxBalance: number): SpendableCash {
-  const counted = accounts.filter((a) => a.spendable && !a.locked);
-  const outside = Math.max(0, accounts.filter((a) => a.role && !counted.includes(a)).reduce((s, a) => s + a.balance, 0));
-  const wealthBuilding = Math.max(0, wealthBuildingCash);
-  const wealthBuildingOutside = Math.min(outside, wealthBuilding);
-  const wealthBuildingHeld = wealthBuilding - wealthBuildingOutside;
-  const taxHeld = Math.max(0, taxBalance);
+export function nextPayday(today: string, paydayDay: number): string {
+  const [y, m, d] = today.split("-").map(Number) as [number, number, number];
+  const thisMonth = paydayIn(y, m - 1, paydayDay);
+  return (d < thisMonth.getUTCDate() ? thisMonth : paydayIn(y, m, paydayDay)).toISOString().slice(0, 10);
+}
+
+/** Các số theo ngày của tiền vận hành — hàm thuần, PWA dùng lại để trừ tạm hàng đợi và tính lại khi mở bản lưu cũ. */
+export interface NearSpendView {
+  payday: string;
+  /** Từ hôm nay (tính cả hôm nay) tới hết ngày trước ngày lương kế tiếp; luôn ≥ 1. */
+  daysLeft: number;
+  /** Tròn xuống 1.000; null khi hết tiền hoặc dưới 1.000. Tính trên `amount − pendingTasks`. */
+  perDay: number | null;
+  /** 2 bữa: mỗi ngày (đã tròn) ÷ 2, tròn xuống 5.000; null khi dưới 5.000. */
+  perMeal: number | null;
+  /** 1 lần/ngày: mỗi ngày (đã tròn), tròn xuống 10.000; null khi dưới 10.000. */
+  perMarket: number | null;
+  /** Phần chưa làm theo danh sách việc ngày lương (ledger UC-103): trừ trước khi chia theo ngày; 0 khi không có kỳ. */
+  pendingTasks: number;
+}
+
+/** Kỳ lương hiện tại cho luật số ngày và phần chưa làm (ledger UC-103, pocket UC-1205 bước 7). */
+export interface NearSpendCycle {
+  /** Ngày lương danh nghĩa của kỳ hiện tại (`payCycle.payday`); null = chưa có kỳ. */
+  cyclePayday: string | null;
+  pendingTasks: number;
+}
+
+/**
+ * Một hàm cho server và PWA (mọi chỗ tính lại số mỗi ngày): hôm nay trước ngày lương của kỳ hiện tại (lương về sớm) →
+ * đếm tới ngày lương sau kỳ đó, còn lại tới ngày lương kế tiếp theo hôm nay; số mỗi ngày chia `amount − pendingTasks`.
+ */
+export function nearSpendView(amount: number, today: string, paydayDay: number, cycle: NearSpendCycle = { cyclePayday: null, pendingTasks: 0 }): NearSpendView {
+  const payday = cycle.cyclePayday !== null && today < cycle.cyclePayday ? nextPayday(cycle.cyclePayday, paydayDay) : nextPayday(today, paydayDay);
+  const daysLeft = Math.round((Date.parse(`${payday}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / DAY_MS);
+  const floorTo = (n: number, step: number) => {
+    const r = Math.floor(n / step) * step;
+    return r > 0 ? r : null;
+  };
+  const free = amount - cycle.pendingTasks;
+  const perDay = free > 0 ? floorTo(free / daysLeft, 1_000) : null;
   return {
-    amount: counted.reduce((s, a) => s + a.balance, 0) - wealthBuildingHeld - taxHeld,
-    accounts: counted.map((a) => ({ accountId: a.id, name: a.name, balance: a.balance })),
-    wealthBuildingHeld,
-    wealthBuildingOutside,
-    taxHeld,
-    excluded: accounts.filter((a) => !counted.includes(a)).map((a) => ({ accountId: a.id, name: a.name, role: a.role })),
+    payday,
+    daysLeft,
+    perDay,
+    perMeal: perDay === null ? null : floorTo(perDay / 2, 5_000),
+    perMarket: perDay === null ? null : floorTo(perDay, 10_000),
+    pendingTasks: cycle.pendingTasks,
   };
 }
 
+/** Tiền vận hành (ledger UC-103, ADR-122), trả ở `snapshot.nearSpend`. */
+export interface NearSpend extends NearSpendView {
+  /** = `pockets.operating.total`: sổ các tài khoản ngăn Vận hành; âm được phép. */
+  amount: number;
+  /** Tài khoản ngăn Vận hành (số trong sổ), theo thứ tự server. */
+  accounts: { accountId: string; name: string; balance: number }[];
+  /** Tài khoản đang dùng không thuộc ngăn Vận hành. */
+  excluded: { accountId: string; name: string; pocket: Pocket | null }[];
+  paydayDay: number;
+  /** Ngày lương danh nghĩa của kỳ hiện tại (null = chưa có kỳ) — PWA tính lại số ngày bằng đúng luật này. */
+  cyclePayday: string | null;
+}
+
 /**
- * Số dư có sẵn của một tài khoản vừa thành tài khoản Tích sản không tính (ADR-91): phần ghi có ví Tích sản, không lấy từ
- * ví nào. `outsideBefore` = Σ số dư sổ các tài khoản Tích sản không tính trước khi ghi (như `spendableCash`), `balance` =
- * số dư sổ của tài khoản đó. Phần Tích sản đang nằm ở tài khoản thường coi như đã chuyển vào đây, nên chỉ ghi phần làm
- * tài khoản Tích sản nhiều hơn Tích sản tiền mặt — luôn nằm gọn trong `wealthBuildingOutside`, Tiền chi được không đổi.
+ * Tiền vận hành = tổng ngăn Vận hành, đếm ngược tới ngày lương; số mỗi ngày trừ trước phần chưa làm theo việc ngày lương.
+ * Không trừ nợ.
  */
-export function openingWealthBuildingCredit(balance: number, outsideBefore: number, wealthBuildingCash: number): number {
-  if (balance <= 0) return 0;
-  return Math.min(balance, Math.max(0, Math.max(0, outsideBefore + balance) - Math.max(0, wealthBuildingCash)));
+export function nearSpend(operating: PocketsView["operating"], accounts: SnapshotData["accounts"], today: string, paydayDay: number, cycle: NearSpendCycle): NearSpend {
+  const ids = new Set(operating.accounts.map((a) => a.id));
+  return {
+    amount: operating.total,
+    accounts: operating.accounts.map((a) => ({ accountId: a.id, name: a.name, balance: a.balance })),
+    excluded: accounts.filter((a) => !ids.has(a.id)).map((a) => ({ accountId: a.id, name: a.name, pocket: a.pocket })),
+    paydayDay,
+    cyclePayday: cycle.cyclePayday,
+    ...nearSpendView(operating.total, today, paydayDay, cycle),
+  };
+}
+
+/** Màn chuyển đổi một lần còn dở (pocket UC-1208): số bước đã xong, bước kế tiếp; null = không có / đã xong. */
+export interface ConversionProgress {
+  done: number;
+  total: 5;
+  next: string;
 }
 
 export function buildSnapshot(data: SnapshotData) {
-  const { now, wallets, rules, balances, spentWeek, spentMonth } = data;
-  const month = monthKey(now);
-  const ruleOf = (id: string) => rules.find((r) => r.walletId === id);
-  const hidden = (w: WalletRef) => w.private && w.memberId !== data.viewerId;
-  const weeksLeft = weeksLeftInMonth(now);
-
-  const weekMonth = weekRange(now).start.slice(0, 7);
-
-  const lines: WalletLine[] = wallets.map((w) => {
-    const rule = ruleOf(w.id);
-    const target = weekTarget(rule, weekMonth);
-    const secret = hidden(w);
-    return {
-      id: w.id,
-      name: w.name,
-      tier: w.tier,
-      mustGroup: w.mustGroup,
-      kind: w.kind,
-      balance: secret ? null : balances[w.id] ?? 0,
-      monthTarget: secret ? null : monthTarget(rule, month),
-      spentMonth: secret ? null : spentMonth[w.id] ?? 0,
-      weekTarget: secret ? null : target,
-      spentWeek: secret || target === null ? null : spentWeek[w.id] ?? 0,
-    };
-  });
-
-  // Còn để chi tuần này — chỉ các phong bì chi tiêu của phe Vận hành (Must + Có-thì-tốt).
-  const spendable = lines.filter((l) => l.tier === "must" && l.kind === "envelope" && l.balance !== null);
-  const perWallet = spendable.map((l) => {
-    const balance = l.balance!;
-    const amount =
-      l.weekTarget !== null
-        ? Math.min(l.weekTarget - (l.spentWeek ?? 0), balance)
-        : balance <= 0
-          ? balance
-          : Math.floor(balance / weeksLeft);
-    return { walletId: l.id, name: l.name, amount };
-  });
-
-  const sum = (xs: (number | null)[]) => xs.reduce<number>((s, x) => s + (x ?? 0), 0);
-  const group = (pred: (l: WalletLine) => boolean) => {
-    const ls = lines.filter(pred);
-    return { balance: sum(ls.map((l) => l.balance)), monthTarget: sum(ls.map((l) => l.monthTarget)) };
-  };
-
-  // Quỹ an tâm: có đủ 3 tháng chi Must trọn thì dùng số thật; chưa đủ thì ước bằng tổng dự kiến tháng của nhóm Must.
-  const mustNeed = sum(lines.filter((l) => l.tier === "must" && l.mustGroup === "must").map((l) => l.monthTarget));
-  const safetyFundTarget = data.safetyFund?.target ?? mustNeed * data.safetyFundMonths;
-  const safetyFundCash = data.safetyFund?.cash ?? data.wealthBuilding?.cash ?? 0;
-  const monthlyBase = safetyFundTarget / Math.max(1, data.safetyFundMonths);
-
+  const { now } = data;
   return {
     at: now.toISOString(),
     day: dayKey(now),
-    week: { key: weekKey(now), ...weekRange(now), weeksLeftInMonth: weeksLeft },
-    month,
-    spendableThisWeek: sum(perWallet.map((p) => p.amount)),
-    spendableByWallet: perWallet,
-    tiers: {
-      wealth_building: { balance: group((l) => l.tier === "wealth_building").balance, cash: data.wealthBuilding?.cash ?? 0, assets: data.wealthBuilding?.assets ?? 0 },
-      tax: { balance: group((l) => l.tier === "tax").balance },
-      nice: group((l) => l.tier === "nice"),
-      must: group((l) => l.tier === "must" && l.mustGroup === "must"),
-      have: group((l) => l.tier === "must" && l.mustGroup === "have"),
-    },
-    wallets: lines,
-    /** Ví quỹ giữ riêng (vd "Thu cho thuê"): không vào "còn để chi", dùng theo quyết định từng lần. */
-    reserves: wallets.filter(isReserve).map((w) => ({ walletId: w.id, name: w.name, balance: hidden(w) ? null : balances[w.id] ?? 0 })),
-    safetyFund: {
-      cash: safetyFundCash,
-      target: safetyFundTarget,
-      months: data.safetyFundMonths,
-      monthsCovered: monthlyBase > 0 ? Math.round((safetyFundCash / monthlyBase) * 10) / 10 : null,
-      pct: safetyFundTarget > 0 ? Math.min(100, Math.round((1000 * safetyFundCash) / safetyFundTarget) / 10) : null,
-      /** true = chưa đủ 3 tháng dữ liệu, mục tiêu đang ước từ ngân sách. */
-      estimated: !data.safetyFund?.target,
-    },
-    goals: data.goals.map((g) => ({ ...g, pct: g.target > 0 ? Math.min(100, Math.round((1000 * g.balance) / g.target) / 10) : null })),
+    week: { key: weekKey(now), ...weekRange(now), weeksLeftInMonth: weeksLeftInMonth(now) },
+    month: monthKey(now),
     attention: {
       pendingLogs: data.pending.count,
       pendingNet: data.pending.net,
       drift: data.drift.filter((d) => (d.bookDrift ?? 0) !== 0),
-      transferOrdersPending: data.transferOrders.pending,
-      transferOrdersOverdue: data.transferOrders.overdue,
-      unallocatedIncome: data.unallocatedIncome,
+      hiddenPendingLogs: data.hiddenPendingLogs,
     },
-    /** Tiền chi được (ADR-85): tiền thật ở tài khoản đang tính, trừ Tích sản và Thuế còn giữ. */
-    spendableCash: spendableCash(data.accounts, data.wealthBuilding?.cash ?? 0, group((l) => l.tier === "tax").balance),
+    /** Tiền vận hành (ADR-122): tổng ngăn Vận hành, đếm ngược tới ngày lương, trừ trước việc ngày lương chưa làm. */
+    nearSpend: nearSpend(data.pockets.operating, data.accounts, dayKey(now), data.paydayDay, { cyclePayday: data.payCycle?.payday ?? null, pendingTasks: data.pendingTasks }),
+    payCycle: data.payCycle,
+    paySetup: { hasCycleStream: data.hasCycleStream },
+    /** Ba ngăn chỉ đọc (pocket UC-1203). */
+    pockets: data.pockets,
+    /** Màn chuyển đổi một lần (pocket UC-1208); null = không có / đã xong. */
+    conversion: data.conversion,
   };
 }
 

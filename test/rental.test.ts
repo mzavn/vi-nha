@@ -26,12 +26,12 @@ async function call(method: string, path: string, body?: unknown) {
   return { status: res.status, json: (await res.json()) as Json };
 }
 
-/** Tiền người thuê trả = income mang tenant_id (không phải dòng sổ). */
+/** Tiền người thuê trả = income mang tenant_id, nguồn cho thuê, không ví (không phải dòng sổ). */
 function payment(amount: number, at = "2026-10-10T03:00:00.000Z"): number {
   const r = raw
     .prepare(
-      `INSERT INTO transactions (at, amount, meaning, wallet_id, counter_account_id, week_key, month_key, source, tenant_id)
-       VALUES (?, ?, 'income', 'income', 'vcb-husband', '2026-W41', ?, 'manual', 'tenant-binh')`,
+      `INSERT INTO transactions (at, amount, meaning, counter_account_id, week_key, month_key, source, tenant_id, income_stream_id)
+       VALUES (?, ?, 'income', 'vcb-husband', '2026-W41', ?, 'manual', 'tenant-binh', 'rental')`,
     )
     .run(at, amount, at.slice(0, 7));
   return Number(r.lastInsertRowid);
@@ -145,5 +145,34 @@ describe("/v1/rental", () => {
     expect(month.month).toBe("2026-10");
     expect(month.openingBalance).toBe(7_075_000);
     expect(month.balance).toBe(7_075_000);
+  });
+
+  describe("tiền người thuê trả qua Gán (rental UC-805)", () => {
+    const book = (id: string) => (raw.prepare("SELECT book_balance FROM v_account_book WHERE account_id = ?").get(id) as { book_balance: number }).book_balance;
+    const pendingLog = (id: string, accountId: string, amount: number) =>
+      raw.prepare("INSERT INTO bank_logs (id, at, amount, direction, account_id, status) VALUES (?, '2026-10-20T03:00:00.000Z', ?, 'in', ?, 'pending')").run(id, amount, accountId);
+    const assignTenant = (id: string, amount: number) => call("POST", `/v1/logs/${id}/assign`, { splits: [{ meaning: "income", amount, tenant_id: "tenant-binh" }] });
+
+    it("UC-805 AC-1: gán tiền vào cho người thuê → khoản thu gắn nguồn cho thuê, không ví, không chia; số dư người thuê giảm, tài khoản nhận tăng", async () => {
+      expect((await call("POST", "/v1/rental/tenants", { id: "tenant-binh", name: "Anh Bình", opening_balance: 5_000_000 })).status).toBe(201);
+      pendingLog("thue-1", "vcb-husband", 5_000_000);
+      const res = await assignTenant("thue-1", 5_000_000);
+      expect(res.status).toBe(201);
+      expect(res.json.data.transactions[0]).toMatchObject({ meaning: "income", tenant_id: "tenant-binh", income_stream_id: "rental", counter_account_id: "vcb-husband" });
+      expect(res.json.data.effects).toEqual({ cycle: null, tasksDone: [] });
+      expect(await balance()).toBe(0);
+      expect(book("vcb-husband")).toBe(5_000_000);
+      expect(raw.prepare("SELECT COUNT(*) n FROM transactions WHERE meaning = 'fund'").get()).toEqual({ n: 0 });
+    });
+
+    it("UC-805 AC-9: người thuê nợ 4.000.000, tiền về tài khoản ngăn Tích luỹ → số dư người thuê 0, Tích luỹ +4.000.000, không lệnh chuyển, không kỳ, không việc", async () => {
+      raw.prepare("UPDATE accounts SET pocket = 'savings' WHERE id = 'tcb-husband'").run();
+      expect((await call("POST", "/v1/rental/tenants", { id: "tenant-binh", name: "Anh Bình", opening_balance: 4_000_000 })).status).toBe(201);
+      pendingLog("thue-2", "tcb-husband", 4_000_000);
+      expect((await assignTenant("thue-2", 4_000_000)).status).toBe(201);
+      expect(await balance()).toBe(0);
+      expect(book("tcb-husband")).toBe(4_000_000);
+      expect(raw.prepare("SELECT (SELECT COUNT(*) FROM pay_cycles) + (SELECT COUNT(*) FROM pay_cycle_tasks) AS n").get()).toEqual({ n: 0 });
+    });
   });
 });

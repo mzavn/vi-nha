@@ -48,7 +48,7 @@ export function Login() {
     <main class="app" style={{ paddingBottom: "32px" }}>
       <div style={{ padding: "calc(40px + var(--safe-top)) 4px 20px" }}>
         <h1 style={{ fontSize: "24px", fontWeight: 650, letterSpacing: "-0.02em" }}>Ví nhà</h1>
-        <p style={{ color: "var(--fg-2)", margin: "4px 0 0" }}>Sổ tiền của nhà. Còn bao nhiêu để chi tuần này.</p>
+        <p style={{ color: "var(--fg-2)", margin: "4px 0 0" }}>Sổ tiền của nhà. Biết ngay mỗi ngày chi khoảng bao nhiêu tới kỳ lương.</p>
       </div>
       <form class="card" onSubmit={submit}>
         <fieldset style={{ border: 0, margin: 0, padding: "14px 14px 6px" }}>

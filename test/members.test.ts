@@ -1,4 +1,4 @@
-// UC-507: thêm / tắt / bật lại thành viên, mật khẩu riêng; UC-505 has_password; UC-504 ví private của người đã tắt.
+// UC-507: thêm / tắt / bật lại thành viên, mật khẩu riêng; UC-505 has_password.
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
@@ -106,12 +106,12 @@ describe("UC-507 AC-11: thêm người", () => {
 });
 
 describe("UC-507 AC-12: tắt / bật lại người", () => {
-  it("tắt → biến khỏi màn đăng nhập, mọi phiên hết hiệu lực ngay, session_gen tăng, ví / tài khoản / giao dịch giữ nguyên; nhật ký, báo cả nhà", async () => {
+  it("tắt → biến khỏi màn đăng nhập, mọi phiên hết hiệu lực ngay, session_gen tăng, tài khoản / giao dịch giữ nguyên; nhật ký, báo cả nhà", async () => {
     const wife = await cookieOf("wife");
     expect(await status(wife)).toBe(200);
     const kept = () => [
-      raw.prepare("SELECT COUNT(*) n FROM wallets WHERE member_id = 'wife' AND active = 1").get(),
       raw.prepare("SELECT COUNT(*) n FROM accounts WHERE owner_member_id = 'wife' AND active = 1").get(),
+      raw.prepare("SELECT COUNT(*) n FROM transactions WHERE by_member_id = 'wife'").get(),
     ];
     const before = kept();
     const res = await call("PATCH", "/v1/settings/members/wife", { active: false });
@@ -255,30 +255,5 @@ describe("UC-507 AC-14: GET /v1/settings trả has_password", () => {
       ["husband", false],
       ["wife", true],
     ]);
-  });
-});
-
-describe("UC-504: ví private của người đã tắt không còn bị ẩn", () => {
-  it("tắt X → người khác thấy số ví private của X ở /v1/snapshot, /v1/budget, /v1/bootstrap; bật lại → ẩn như cũ", async () => {
-    raw.prepare("UPDATE wallets SET private = 1 WHERE id = 'fun-wife'").run();
-    raw.prepare(
-      "INSERT INTO transactions (at, amount, meaning, wallet_id, counter_wallet_id, week_key, month_key, source) VALUES (date('now'), 700000, 'fund', 'fun-wife', 'income', '2026-W40', strftime('%Y-%m', 'now'), 'system')",
-    ).run();
-    const husband = await cookieOf("husband");
-    const seen = async () => {
-      const snapshot = (await call("GET", "/v1/snapshot", undefined, husband)).json.data as { wallets: { id: string; balance: number | null }[] };
-      const budget = (await call("GET", "/v1/budget", undefined, husband)).json.data as { lines: { walletId: string; balance: number | null }[] };
-      const bootstrap = (await call("GET", "/v1/bootstrap", undefined, husband)).json.data as { wallets: { id: string; hidden: boolean }[] };
-      return {
-        snapshot: snapshot.wallets.find((w) => w.id === "fun-wife")?.balance,
-        budget: budget.lines.find((l) => l.walletId === "fun-wife")?.balance,
-        hidden: bootstrap.wallets.find((w) => w.id === "fun-wife")?.hidden,
-      };
-    };
-    expect(await seen()).toEqual({ snapshot: null, budget: null, hidden: true });
-    await call("PATCH", "/v1/settings/members/wife", { active: false });
-    expect(await seen()).toEqual({ snapshot: 700_000, budget: 700_000, hidden: false });
-    await call("PATCH", "/v1/settings/members/wife", { active: true });
-    expect(await seen()).toEqual({ snapshot: null, budget: null, hidden: true });
   });
 });

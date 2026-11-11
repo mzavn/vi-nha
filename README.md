@@ -1,19 +1,22 @@
 # Ví nhà — sổ tiền cả nhà theo Profit First
 
 > **English summary.** Ví nhà ("family wallet") is a self-hosted household money app built on the *Profit First* method:
-> every income is split immediately into wallets (wealth building, tax, fun, must-pay, nice-to-have), locked money is never
-> touched, and the app answers one question each day — *how much is left to spend this week?* It runs entirely on **your
-> own Cloudflare account** (Workers + D1, Free plan is enough) as an installable PWA, can ingest bank transactions
+> money is grouped into three pockets (savings / reserve / operating) of real accounts; each reserve goal is a real
+> account; payday creates a checklist. The app answers one question each day — *how much is left in Operating and per day
+> until payday?* It runs entirely on **your own Cloudflare account** (Workers + D1, Free plan is enough) as an installable
+> PWA, can ingest bank transactions
 > automatically through [SePay](https://sepay.vn?gcid=arqcwdek) (Vietnamese banks), sends reminders via web push / Telegram / Zalo, and exposes an MCP server
 > so Claude can read and record transactions. The interface and documentation are in **Vietnamese**.
 > Install with the **Deploy to Cloudflare** button, `npm run setup`, or by asking an AI coding agent to follow
 > [`docs/cai-bang-ai.md`](docs/cai-bang-ai.md). License: AGPL-3.0, Copyright (C) 2026 MZA. Security reports: [`SECURITY.md`](SECURITY.md).
 
-Ví nhà trả lời một câu mỗi ngày: **"Tuần này còn bao nhiêu để chi?"**. Lương về là app chia ngay vào các ví — Tích sản,
-Thuế, Hưởng thụ, Must, Có thì tốt; phần đã khoá thì không đụng tới, phần còn lại mới là tiền được tiêu. App chạy trên
+Ví nhà trả lời một câu mỗi ngày: **"Vận hành còn bao nhiêu, mỗi ngày chi khoảng bao nhiêu tới kỳ lương?"**. Mỗi tài khoản
+thật của nhà thuộc một trong ba ngăn — **Tích luỹ** (trích trước, không đụng), **Dự phòng** (các khoản đã biết sẽ phải trả,
+mỗi mục tiêu là một tài khoản thật; phần còn lại là phần an tâm), **Vận hành** (tiền sống tới kỳ lương). Mọi số là tiền thật
+trong tài khoản, không có ví trên giấy. Lương về, app đưa danh sách việc: trích Tích luỹ, nạp mục tiêu. App chạy trên
 **tài khoản Cloudflare của chính nhà bạn** (gói Free là đủ): số liệu nằm ở database của bạn, không lưu ở máy chủ nào khác.
-(Font chữ tải từ Google Fonts và màn Hướng dẫn nhúng GitBook, nên Google / GitBook thấy địa chỉ IP và loại trình duyệt khi
-bạn mở app — không thấy số liệu.)
+(Font chữ tải từ Google Fonts, nên Google thấy địa chỉ IP và loại trình duyệt khi bạn mở app; GitBook chỉ thấy khi bạn
+bấm mở Hướng dẫn — không ai thấy số liệu.)
 
 <p>
   <img src="https://2736867949-files.gitbook.io/~/files/v0/b/gitbook-x-prod.appspot.com/o/spaces%2FAkew07JyqLl5qmM1Jo26%2Fuploads%2Fgit-blob-bec8d942a542b3e9a038fd40f26db73269458726%2Fhom-nay-01-tong-quan-m.jpg?alt=media" alt="Màn Hôm nay" width="260">
@@ -26,14 +29,16 @@ bạn mở app — không thấy số liệu.)
 
 | | |
 |---|---|
-| **Ghi khoản chi trong vài giây** | Gõ số tiền, chạm danh mục, bấm Lưu — app nói ngay ví đó còn bao nhiêu. Mất mạng vẫn ghi được, có mạng thì tự gửi |
-| **Chia lương theo Profit First** | Thu nhập về → Tích sản → Thuế → Hưởng thụ → Must → Có thì tốt; app tính sẵn mỗi ví nhận bao nhiêu và nhắc các lệnh chuyển tiền cần làm |
+| **Ghi khoản chi trong vài giây** | Gõ số tiền, chạm danh mục, bấm Lưu — app nói ngay Vận hành còn bao nhiêu. Mất mạng vẫn ghi được, có mạng thì tự gửi |
+| **Ba ngăn** | Tích luỹ · Dự phòng · Vận hành, mỗi ngăn là một nhóm tài khoản thật; mỗi mục tiêu Dự phòng (học phí, thuế…) là một tài khoản thật, số "đã có" là số dư của nó |
+| **Trả cho mình trước** | Lương về có danh sách việc (trích Tích luỹ, nạp mục tiêu), kèm mã QR, tự đánh dấu khi tiền tới đúng tài khoản |
+| **Nhìn lại theo kỳ lương** | Chi theo nhóm danh mục so hạn mức mềm, so kỳ trước |
 | **Tự ghi sổ ngân hàng** | Tài khoản nối [SePay](https://my.sepay.vn/register?gcid=arqcwdek) tự báo tiền vào / ra; bạn chỉ chọn "khoản này là gì", khoản lặp lại thì đặt luật tự gán |
 | **Đối soát** | Sổ so với giao dịch ngân hàng và số dư thật; lệch là báo |
 | **Nợ và phải thu** | Mình nợ ai, ai nợ mình, người thuê nhà còn phải trả bao nhiêu |
 | **Nhắc việc** | Tin sáng, tổng kết tuần, giao dịch chưa gán — qua thông báo trên máy, Telegram hoặc Zalo |
-| **Nói chuyện với Claude** | Nối Claude (OAuth, MCP): hỏi "tuần này còn bao nhiêu", ghi khoản chi bằng lời |
-| **Cả nhà cùng dùng** | 1–6 người, mật khẩu chung hoặc mật khẩu riêng từng người; ví riêng ẩn số với người khác |
+| **Nói chuyện với Claude** | Nối Claude (OAuth, MCP): hỏi "Vận hành còn bao nhiêu", ghi khoản chi bằng lời |
+| **Cả nhà cùng dùng** | 1–6 người, mật khẩu chung hoặc mật khẩu riêng từng người; tài khoản riêng tư: người khác chỉ thấy tổng |
 
 Hướng dẫn sử dụng đầy đủ (có hình từng màn): **https://mzavn.gitbook.io/vi-nha**
 
@@ -73,7 +78,8 @@ file `~/.vi-nha/vi-nha.txt` trên máy bạn, agent chỉ đưa đường dẫn 
 
 ### Sau khi cài
 
-Mở địa chỉ vừa có → màn **Thiết lập**: nhập mật khẩu chung, thêm người trong nhà, tài khoản tiền, chọn bộ ví mẫu.
+Mở địa chỉ vừa có → màn **Thiết lập**: nhập mật khẩu chung, thêm người trong nhà, tài khoản tiền, xếp tài khoản vào ngăn,
+ngày lương, % Tích luỹ, mục tiêu Dự phòng (mỗi mục tiêu một tài khoản).
 Trên điện thoại: mở bằng trình duyệt → "Thêm vào màn hình chính" để dùng như app.
 
 ## Lưu ý trước khi cài
@@ -82,7 +88,7 @@ Trên điện thoại: mở bằng trình duyệt → "Thêm vào màn hình ch�
   Tài khoản đã dùng hết cron cho việc khác thì deploy sẽ báo lỗi.
 - **Tự ghi sổ ngân hàng cần [SePay](https://sepay.vn?gcid=arqcwdek)** (dịch vụ bên thứ ba, nối tài khoản ngân hàng Việt Nam; giá xem ở [sepay.vn](https://sepay.vn?gcid=arqcwdek)).
   Chưa có tài khoản: [đăng ký SePay qua link giới thiệu của Ví nhà](https://my.sepay.vn/register?gcid=arqcwdek) (cũng có trong app: Cài đặt › Kết nối › SePay).
-  Không có SePay thì vẫn dùng được: ghi tay, chia tiền, nhắc việc đều chạy.
+  Không có SePay thì vẫn dùng được: ghi tay, danh sách việc ngày lương, nhắc việc đều chạy.
 - **Nối Claude (hoặc ứng dụng AI khác) thì số liệu bạn hỏi sẽ đi qua nhà cung cấp AI đó.** Không nối thì số liệu chỉ nằm
   trong Cloudflare của bạn.
 - **`API_TOKEN` (tuỳ chọn) — để trống trừ khi bạn viết script gọi API.** Ai có token này gọi được toàn bộ `/v1/*` với
@@ -120,6 +126,22 @@ Hướng dẫn từng bước kèm ảnh: [Cập nhật Ví nhà](https://mzavn.
 
 `npm run deploy` = build → nâng cấp database (`wrangler d1 migrations apply DB --remote`) → deploy. Chỉ dùng để cập nhật;
 lần đầu cài dùng nút Deploy hoặc `npm run setup`. Cập nhật xong, mở lại app (hay bấm **Tải bản mới** khi app báo) để chạy bản mới.
+
+### Lên 2.0 từ 1.x — bản nâng database lớn
+
+Bản 2.0 bỏ ví, chuyển sang ba ngăn tài khoản thật (chi tiết ở [`CHANGELOG.md`](CHANGELOG.md)). Database tự nâng khi cập
+nhật và **không lùi lại được bằng nút Cập nhật**, nên:
+
+1. **Sao lưu trước.** Chọn lúc cả nhà không ghi chép (~15 phút). Cài bằng `npm run setup` / AI: chạy lệnh export ở trên
+   (đặt `CLOUDFLARE_ACCOUNT_ID` trước nếu máy đăng nhập nhiều tài khoản Cloudflare), mở được file thì mới cập nhật. Cài bằng
+   nút Deploy: D1 tự giữ lịch sử 7 ngày (Time Travel) — **ghi lại giờ bạn bấm cập nhật**.
+2. **Bước nâng database lỗi**: bấm **Retry** ở build Cloudflare hoặc chạy lại `npm run deploy` (bước nâng tiếp từ chỗ
+   dừng). **Không** đưa code về 1.8 khi database chưa được khôi phục.
+3. **Sau khi cập nhật**: làm màn **Chuyển sang ba ngăn** (5 bước, app tự mở lần đầu; bấm Để sau thì Hôm nay có banner).
+4. **Lùi về 1.8** (chỉ khi thật cần): `npx wrangler d1 time-travel restore` về trước giờ cập nhật (hoặc nạp lại file sao
+   lưu), rồi deploy lại bản 1.8.0. Mọi thứ ghi sau giờ đó mất.
+
+Hướng dẫn kèm ảnh: [Cập nhật Ví nhà](https://mzavn.gitbook.io/vi-nha/bat-dau/cap-nhat-vi-nha).
 
 ## Phát triển
 

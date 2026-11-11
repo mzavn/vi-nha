@@ -122,13 +122,13 @@ export const classOptions = (meaning: string): ReportClass[] =>
 /** Tên một giao dịch trong danh sách của dòng: danh mục, không có thì loại ("Thu nhập", "Mua tài sản"…). */
 export const reportTxTitle = (t: ReportTx): string => t.categoryName ?? MEANING_LABEL[t.meaning] ?? t.meaning;
 
-/** Dòng phụ: "15/10 · VCB · ví Ăn uống · ghi chú". */
-export const reportTxSub = (t: ReportTx): string => [shortDate(t.at), t.accountName, t.walletName ? `ví ${t.walletName}` : null, t.note].filter(Boolean).join(" · ");
+/** Dòng phụ: "15/10 · VCB · nhóm Ăn uống · ghi chú". */
+export const reportTxSub = (t: ReportTx): string => [shortDate(t.at), t.accountName, t.groupName ? `nhóm ${t.groupName}` : null, t.note].filter(Boolean).join(" · ");
 
-/** Toast sau khi xếp lại: "Đã xếp khoản 50.000.000 ₫ vào Tài chính — chỉ đổi báo cáo, ví và số dư giữ nguyên." */
+/** Toast sau khi xếp lại: "Đã xếp khoản 50.000.000 ₫ vào Tài chính — chỉ đổi báo cáo, số dư và ngăn giữ nguyên." */
 export const reclassToast = (amount: number, cls: ReportClass | null): string =>
   cls
-    ? `Đã xếp khoản ${formatVnd(Math.abs(amount))} vào ${CLASS_LABEL[cls]} — chỉ đổi báo cáo, ví và số dư giữ nguyên.`
+    ? `Đã xếp khoản ${formatVnd(Math.abs(amount))} vào ${CLASS_LABEL[cls]} — chỉ đổi báo cáo, số dư và ngăn giữ nguyên.`
     : `Đã đưa khoản ${formatVnd(Math.abs(amount))} về nhóm mặc định.`;
 
 // ── Kết quả thu chi ────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, SW_CACHED_AT } from "./api";
-import { emptySetup, removeMember, setupNeeded, setupPayload, setupServerError, stepErrors, stepOfField, type SetupForm } from "./setup";
+import { emptySetup, goalAccountChoices, newGoal, removeAccount, removeMember, SETUP_STEPS, setupNeeded, setupPayload, setupServerError, setupSummary, stepErrors, stepOfField, type SetupForm } from "./setup";
 
 const valid = (patch: Partial<SetupForm> = {}): SetupForm => ({
   ...emptySetup(),
@@ -10,11 +10,11 @@ const valid = (patch: Partial<SetupForm> = {}): SetupForm => ({
     { name: "Vợ", password: "rieng-cua-vo" },
   ],
   accounts: [
-    { name: "MB (vợ)", kind: "bank", bank: "MBBank", owner: 1 },
-    { name: "Tiền mặt", kind: "cash", bank: "", owner: null },
+    { name: "MB (vợ)", kind: "bank", bank: "MBBank", owner: 1, pocket: "operating" },
+    { name: "Tiền mặt", kind: "cash", bank: "", owner: null, pocket: "operating" },
   ],
   taxable: false,
-  must: ["food", "utilities"],
+  groups: ["food", "utilities"],
   ...patch,
 });
 
@@ -43,12 +43,18 @@ describe("UC-701 AC-8: mở app hỏi GET /v1/setup", () => {
 });
 
 describe("UC-701 AC-8: form Thiết lập — bắt đầu", () => {
-  it("một người, một tài khoản ngân hàng trống, đủ bốn ví Must, chưa trả lời câu thuế", () => {
+  it("một người, một tài khoản ngân hàng trống ở Vận hành, ngày lương 10, % Tích luỹ 10, đủ bốn nhóm mẫu, chưa có mục tiêu, chưa trả lời câu thuế", () => {
     const f = emptySetup();
     expect(f.members).toEqual([{ name: "", password: "" }]);
-    expect(f.accounts).toEqual([{ name: "", kind: "bank", bank: "", owner: null }]);
-    expect(f.must).toEqual(["food", "housing", "transport", "utilities"]);
+    expect(f.accounts).toEqual([{ name: "", kind: "bank", bank: "", owner: null, pocket: "operating" }]);
+    expect([f.paydayDay, f.savingsPct]).toEqual(["10", "10"]);
+    expect(f.groups).toEqual(["food", "housing", "transport", "utilities"]);
+    expect(f.goals).toEqual([]);
     expect(f.taxable).toBeNull();
+  });
+
+  it("UC-510 AC-12: bước 4 tên “Ba ngăn”", () => {
+    expect(SETUP_STEPS[3]).toBe("Ba ngăn");
   });
 });
 
@@ -78,7 +84,7 @@ describe("UC-510 AC-4 (phía app): kiểm từng bước trước khi bấm Ti�
 
   it("bước 3: ít nhất một tài khoản; tên bắt buộc, không trùng (kể cả cùng mã); người giữ phải là một người ở bước 2", () => {
     expect(stepErrors(valid({ accounts: [] }), 2)).toEqual({ accounts: expect.any(String) });
-    const acct = (name: string, owner: number | null = null) => ({ name, kind: "cash" as const, bank: "", owner });
+    const acct = (name: string, owner: number | null = null) => ({ name, kind: "cash" as const, bank: "", owner, pocket: "operating" as const });
     expect(stepErrors(valid({ accounts: [acct("")] }), 2)).toEqual({ "accounts.0.name": expect.any(String) });
     expect(stepErrors(valid({ accounts: [acct("Tiền mặt"), acct("tiền mặt ")] }), 2)).toEqual({ "accounts.1.name": expect.any(String) });
     expect(stepErrors(valid({ accounts: [acct("Tiền Mặt"), acct("Tien mat")] }), 2)).toEqual({ "accounts.1.name": expect.any(String) });
@@ -86,14 +92,51 @@ describe("UC-510 AC-4 (phía app): kiểm từng bước trước khi bấm Ti�
     expect(stepErrors(valid(), 2)).toEqual({});
   });
 
-  it("bước 4: phải trả lời câu thu nhập tự nộp thuế", () => {
-    expect(stepErrors(valid({ taxable: null }), 3)).toEqual({ "template.taxable": expect.any(String) });
-    expect(stepErrors(valid({ must: [] }), 3)).toEqual({});
+  it("bước 4: phải trả lời câu thuế; ngày lương 1–31, % Tích luỹ 1–100; bỏ hết nhóm mẫu vẫn được", () => {
+    expect(stepErrors(valid({ taxable: null }), 3)).toEqual({ taxable: expect.any(String) });
+    expect(stepErrors(valid({ groups: [] }), 3)).toEqual({});
+    expect(stepErrors(valid({ paydayDay: "32", savingsPct: "0" }), 3)).toEqual({ payday_day: expect.any(String), savings_pct: expect.any(String) });
+    expect(stepErrors(valid({ paydayDay: "", savingsPct: "101" }), 3)).toEqual({ payday_day: expect.any(String), savings_pct: expect.any(String) });
+  });
+
+  it("UC-510 AC-11 (phía app): mục tiêu cần tên (không trùng nhau, không trùng Thuế khi tự nộp thuế), số mỗi tháng > 0, 1–12 tháng; tối đa 10 mục; không còn tên dành riêng “Giữ cho Tích luỹ”", () => {
+    const goal = (name: string, monthly = "2.000.000", repeat = "1") => ({ name, monthly, repeat, account: null });
+    expect(stepErrors(valid({ goals: [goal("Học phí", "2.000.000", "3")] }), 3)).toEqual({});
+    expect(stepErrors(valid({ goals: [newGoal()] }), 3)).toEqual({ "goals.0.name": expect.any(String), "goals.0.monthly_amount": expect.any(String) });
+    expect(stepErrors(valid({ goals: [goal("Học phí"), goal("hoc phi")] }), 3)).toEqual({ "goals.1.name": expect.any(String) });
+    expect(stepErrors(valid({ goals: [goal("Học phí", "2.000.000", "13")] }), 3)).toEqual({ "goals.0.repeat_months": expect.any(String) });
+    expect(stepErrors(valid({ taxable: true, goals: [goal("Thuế")] }), 3)).toEqual({ "goals.0.name": expect.any(String) });
+    expect(stepErrors(valid({ taxable: false, goals: [goal("Thuế")] }), 3)).toEqual({});
+    expect(stepErrors(valid({ goals: [goal("Giữ cho Tích luỹ")] }), 3)).toEqual({});
+    expect(stepErrors(valid({ goals: Array.from({ length: 11 }, (_, i) => goal(`Mục ${i + 1}`)) }), 3)).toEqual({ goals: expect.any(String) });
+  });
+
+  it("UC-510 AC-14 (phía app): tài khoản của mục tiêu chọn trong các tài khoản ngăn Dự phòng đã nhập hoặc “Chưa có”; mỗi tài khoản tối đa một mục tiêu; tài khoản đổi khỏi Dự phòng → lỗi ở ô goals.N.account", () => {
+    const accounts = [
+      { name: "MB (vợ)", kind: "bank" as const, bank: "MBBank", owner: 1, pocket: "operating" as const },
+      { name: "Sổ BIDV", kind: "bank" as const, bank: "BIDV", owner: null, pocket: "reserve" as const },
+      { name: "", kind: "bank" as const, bank: "TCB", owner: null, pocket: "reserve" as const },
+    ];
+    const goal = (name: string, account: number | null) => ({ name, monthly: "2.000.000", repeat: "1", account });
+    const f = valid({ accounts, goals: [goal("Học phí", 1), goal("Bảo dưỡng xe", null)] });
+    expect(goalAccountChoices(f, 0)).toEqual([
+      { index: 1, name: "Sổ BIDV" },
+      { index: 2, name: "Tài khoản 3" },
+    ]);
+    expect(goalAccountChoices(f, 1)).toEqual([{ index: 2, name: "Tài khoản 3" }]);
+    expect(stepErrors(f, 3)).toEqual({});
+    expect(stepErrors(valid({ accounts, goals: [goal("Học phí", 1), goal("Xe", 1)] }), 3)).toEqual({ "goals.1.account": "Mỗi tài khoản chỉ cho một mục tiêu." });
+    expect(stepErrors(valid({ accounts, goals: [goal("Học phí", 0)] }), 3)).toEqual({ "goals.0.account": "Tài khoản của mục tiêu phải ở ngăn Dự phòng." });
+    expect(stepOfField("goals.0.account")).toBe(3);
+    // Bớt tài khoản: mục tiêu gắn nó về Chưa có, chỉ số tài khoản sau lùi một.
+    const g3 = valid({ accounts, goals: [goal("A", 1), goal("B", 2)] });
+    expect(removeAccount(g3, 1).goals.map((g) => g.account)).toEqual([null, 1]);
+    expect(removeAccount(g3, 0).goals.map((g) => g.account)).toEqual([0, 1]);
   });
 });
 
 describe("UC-510: thân POST /v1/setup", () => {
-  it("đúng hình dạng: tên đã cắt khoảng trắng, chỉ gửi mật khẩu riêng khi có, ngân hàng chỉ khi không phải tiền mặt, ví Must theo thứ tự cố định", () => {
+  it("UC-510 AC-12: đúng hình dạng — tên đã cắt khoảng trắng, mật khẩu riêng chỉ khi có, ngân hàng chỉ khi không phải tiền mặt, ngăn từng tài khoản, ngày lương, % Tích luỹ, nhóm theo thứ tự cố định, mục tiêu; không có `template`", () => {
     const r = setupPayload(
       valid({
         members: [
@@ -101,12 +144,19 @@ describe("UC-510: thân POST /v1/setup", () => {
           { name: "Vợ", password: "rieng-cua-vo" },
         ],
         accounts: [
-          { name: "MB (vợ)", kind: "bank", bank: "MBBank", owner: 1 },
-          { name: "Tiền mặt", kind: "cash", bank: "MBBank", owner: null },
-          { name: "MoMo", kind: "ewallet", bank: "", owner: 0 },
+          { name: "MB (vợ)", kind: "bank", bank: "MBBank", owner: 1, pocket: "operating" },
+          { name: "Tiền mặt", kind: "cash", bank: "MBBank", owner: null, pocket: null },
+          { name: "MoMo", kind: "ewallet", bank: "", owner: 0, pocket: "savings" },
+          { name: "Sổ BIDV", kind: "bank", bank: "BIDV", owner: null, pocket: "reserve" },
         ],
+        paydayDay: "5",
+        savingsPct: "15",
         taxable: true,
-        must: ["utilities", "food"],
+        groups: ["utilities", "food"],
+        goals: [
+          { name: " Học phí ", monthly: "2.000.000", repeat: "3", account: 3 },
+          { name: "Xe", monthly: "400.000", repeat: "12", account: null },
+        ],
       }),
     );
     expect(r).toEqual({
@@ -115,18 +165,55 @@ describe("UC-510: thân POST /v1/setup", () => {
         password: "chung-cua-nha",
         members: [{ name: "Chồng" }, { name: "Vợ", password: "rieng-cua-vo" }],
         accounts: [
-          { name: "MB (vợ)", kind: "bank", bank: "MBBank", owner: 1 },
-          { name: "Tiền mặt", kind: "cash", owner: null },
-          { name: "MoMo", kind: "ewallet", owner: 0 },
+          { name: "MB (vợ)", kind: "bank", bank: "MBBank", owner: 1, pocket: "operating" },
+          { name: "Tiền mặt", kind: "cash", owner: null, pocket: null },
+          { name: "MoMo", kind: "ewallet", owner: 0, pocket: "savings" },
+          { name: "Sổ BIDV", kind: "bank", bank: "BIDV", owner: null, pocket: "reserve" },
         ],
-        template: { taxable: true, must: ["food", "utilities"] },
+        payday_day: 5,
+        savings_pct: 15,
+        taxable: true,
+        groups: ["food", "utilities"],
+        goals: [
+          { name: "Học phí", monthly_amount: 2_000_000, repeat_months: 3, account: 3 },
+          { name: "Xe", monthly_amount: 400_000, repeat_months: 12 },
+        ],
       },
     });
+    expect(r.ok && "template" in r.value).toBe(false);
   });
 
   it("còn lỗi ở bất kỳ bước nào thì không dựng thân", () => {
     expect(setupPayload(valid({ password: "" })).ok).toBe(false);
     expect(setupPayload(valid({ taxable: null })).ok).toBe(false);
+    expect(setupPayload(valid({ goals: [newGoal()] })).ok).toBe(false);
+  });
+});
+
+describe("UC-510 AC-12: dòng “Sẽ tạo:” ở bước Ba ngăn", () => {
+  it("UC-510 AC-12: liệt kê ngăn và tài khoản, nguồn Lương, nhóm (kèm Y tế, Mua sắm), mục tiêu (kèm Thuế 10%); không chữ ví / Profit First / chia / giữ riêng", () => {
+    const text = setupSummary(
+      valid({
+        accounts: [
+          { name: "MB (vợ)", kind: "bank", bank: "MBBank", owner: 1, pocket: "operating" },
+          { name: "Sổ BIDV", kind: "bank", bank: "BIDV", owner: null, pocket: "reserve" },
+          { name: "", kind: "cash", bank: "", owner: null, pocket: null },
+        ],
+        taxable: true,
+        groups: ["utilities", "food"],
+        goals: [{ name: "Học phí", monthly: "2.000.000", repeat: "3", account: 1 }],
+      }),
+    );
+    expect(text).toBe(
+      "Sẽ tạo: Vận hành: MB (vợ) · Dự phòng: Sổ BIDV · Ngoài ngăn: Tài khoản 3 · nguồn “Lương” mở kỳ lương · nhóm Ăn uống, Điện nước, Y tế, Mua sắm · mục tiêu Dự phòng Học phí, Thuế 10%.",
+    );
+    expect(text).not.toMatch(/(^|\P{L})ví(\P{L}|$)|profit first|chia|giữ riêng/iu);
+  });
+
+  it("UC-510 AC-14: nhà không có tài khoản Tích luỹ cũng không tạo “Giữ cho Tích luỹ”; không mục tiêu thì không có phần mục tiêu", () => {
+    expect(setupSummary(valid({ groups: [] }))).toBe("Sẽ tạo: Vận hành: MB (vợ), Tiền mặt · nguồn “Lương” mở kỳ lương · nhóm Y tế, Mua sắm.");
+    const text = setupSummary(valid({ accounts: [{ name: "Heo", kind: "cash", bank: "", owner: null, pocket: "savings" }], groups: [] }));
+    expect(text).toBe("Sẽ tạo: Tích luỹ: Heo · nguồn “Lương” mở kỳ lương · nhóm Y tế, Mua sắm.");
   });
 });
 
@@ -139,10 +226,10 @@ describe("UC-701 AC-8: bớt người ở bước 2 giữ đúng người giữ 
         { name: "C", password: "" },
       ],
       accounts: [
-        { name: "Của A", kind: "cash", bank: "", owner: 0 },
-        { name: "Của B", kind: "cash", bank: "", owner: 1 },
-        { name: "Của C", kind: "cash", bank: "", owner: 2 },
-        { name: "Chung", kind: "cash", bank: "", owner: null },
+        { name: "Của A", kind: "cash", bank: "", owner: 0, pocket: "operating" },
+        { name: "Của B", kind: "cash", bank: "", owner: 1, pocket: "operating" },
+        { name: "Của C", kind: "cash", bank: "", owner: 2, pocket: "operating" },
+        { name: "Chung", kind: "cash", bank: "", owner: null, pocket: "operating" },
       ],
     });
     const g = removeMember(f, 1);
@@ -157,7 +244,9 @@ describe("UC-701 AC-8: lỗi server hiện đúng ô", () => {
     expect(stepOfField("members")).toBe(1);
     expect(stepOfField("members.3.password")).toBe(1);
     expect(stepOfField("accounts.1.owner")).toBe(2);
-    expect(stepOfField("template.must")).toBe(3);
+    expect(stepOfField("accounts.1.pocket")).toBe(3);
+    for (const f of ["payday_day", "savings_pct", "taxable", "groups", "goals", "goals.0.name", "goals[2].monthly_amount"]) expect(stepOfField(f)).toBe(3);
+    expect(stepOfField("template")).toBeNull();
     expect(stepOfField("khác")).toBeNull();
   });
 

@@ -104,11 +104,11 @@ describe("chống trùng qua HTTP", () => {
 });
 
 describe("nối trọn: webhook → rule mã → transaction", () => {
-  it("mã EAN qua webhook thật tạo spend đúng ví/danh mục", async () => {
+  it("UC-303 AC-1: mã EAN qua webhook thật tạo khoản chi đúng danh mục, không ví", async () => {
     const res = await post(payload({ id: 3003 }));
     expect(await res.json()).toEqual({ success: true });
-    const tx = raw.prepare("SELECT meaning, counter_wallet_id, category_id, account_id FROM transactions WHERE log_id = '3003'").get();
-    expect(tx).toEqual({ meaning: "spend", counter_wallet_id: "food", category_id: "groceries", account_id: "vcb-husband" });
+    const tx = raw.prepare("SELECT meaning, category_id, account_id FROM transactions WHERE log_id = '3003'").get();
+    expect(tx).toEqual({ meaning: "spend", category_id: "groceries", account_id: "vcb-husband" });
   });
 
   it("payload thiếu trường bắt buộc vẫn trả success (SePay không nên bị coi là lỗi để retry vô ích)", async () => {

@@ -68,7 +68,7 @@ function Milestones({ f, onOpen }: { f: Freedom; onOpen: (o: Open) => void }) {
       <Card
         title="Mốc an tâm"
         flush
-        note="Mất thu nhập thì cả nhà sống bình thường được bao lâu — gồm vàng và tài sản có cờ Tiền lỏng, không phải tiền chi tiêu. Khác Quỹ an tâm ở tab Tích sản."
+        note="Mất thu nhập thì cả nhà sống bình thường được bao lâu — gồm vàng và tài sản có cờ Tiền lỏng, không phải tiền chi tiêu. Khác phần an tâm ở thẻ Dự phòng (Hôm nay)."
       >
         <div class="blist">
           {f.safety.map((s) => (
@@ -453,7 +453,7 @@ function Projection({ start, year }: { start: ProjectionStart; year: number }) {
             <Field id="pj-e" label="Chi phí tháng (E)">
               <AmountInput id="pj-e" value={f.expense} onChange={(n) => set({ expense: n })} />
             </Field>
-            <Field id="pj-em" label="Chi Must tháng">
+            <Field id="pj-em" label="Chi thiết yếu tháng">
               <AmountInput id="pj-em" value={f.expenseMust} onChange={(n) => set({ expenseMust: n })} />
             </Field>
             {pctField("pj-r", "returnPct", "Lợi suất %/năm")}

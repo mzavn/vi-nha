@@ -34,6 +34,11 @@ Chưa đăng nhập: tự chạy \`npx wrangler login\` trong terminal (mở tr�
 /** Mã thoát — agent AI đọc để biết phải hỏi người dùng gì. */
 export const EXIT = { error: 1, usage: 2, notLoggedIn: 3, chooseAccount: 4, noSubdomain: 5, needInput: 6 };
 
+/** Câu cuối sau khi cài xong: việc tiếp theo ở màn Thiết lập trong app. */
+export const NEXT_STEPS = `Bước tiếp: mở địa chỉ trên → màn Thiết lập: nhập mật khẩu chung, thêm người trong nhà, tài khoản, ba ngăn.
+Địa chỉ workers.dev mới đăng ký có thể cần vài phút mới mở được.
+Cập nhật bản mới sau này: git pull && npm run deploy`;
+
 /** Đọc cờ dòng lệnh (`--cờ giá-trị` hoặc `--cờ=giá-trị`); `env` cho CLOUDFLARE_ACCOUNT_ID. Sai cờ → ném lỗi. */
 export function parseArgs(argv, env = {}) {
   const opts = {
@@ -294,9 +299,7 @@ async function main() {
 
   console.log(`\n✅ Xong. Ví nhà: ${url ?? `https://${name}.<subdomain>.workers.dev (xem dòng "Deployed" phía trên)`}`);
   if (generated) console.log(generatedPasswordMessage({ password, interactive, savedPath }));
-  console.log(`Bước tiếp: mở địa chỉ trên → màn Thiết lập: nhập mật khẩu chung, thêm người trong nhà, tài khoản, bộ ví.
-Địa chỉ workers.dev mới đăng ký có thể cần vài phút mới mở được.
-Cập nhật bản mới sau này: git pull && npm run deploy`);
+  console.log(NEXT_STEPS);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) await main();
