@@ -108,10 +108,11 @@ export interface DailyMessageInput {
   /** Số giao dịch (bank_logs) còn `pending`, chưa gán. */
   unassignedCount: number;
   /**
-   * Mục tiêu Dự phòng theo thứ tự `reserve.goals` của server; `held` = số dư tài khoản của mục tiêu. Mục tiêu theo %
-   * (`target` null) và mục tiêu chưa gắn tài khoản (`held` null) không vào dòng 🎯.
+   * Mục tiêu Dự phòng theo thứ tự `reserve.goals` của server (thứ tự ưu tiên); `held` = đã có sau khi chia số dư tài khoản,
+   * `spent` = đã chi cho mục tiêu trong kỳ. Mục tiêu theo % (`target` null) và mục tiêu chưa gắn tài khoản (`held` null)
+   * không vào dòng 🎯.
    */
-  reserveGoals: Pick<PocketGoal, "name" | "held" | "target">[];
+  reserveGoals: Pick<PocketGoal, "name" | "held" | "target" | "spent">[];
   /** Phần an tâm (`reserve.peace`), âm = thiếu. */
   peace: number;
   peaceMonths: Pick<PeaceMonths, "covered" | "target">;
@@ -191,8 +192,9 @@ export function dailyMessage(input: DailyMessageInput): NotifyMessage {
   if (tenants.length > 0) todo.push(`chốt tháng ${tenants.map((t) => t.name).join(", ")}`);
 
   // ── Thông tin ──
+  // % = phần của mục tiêu (đã có + đã chi trong kỳ) ÷ B, kẹp 0…100 — cùng luật "đủ" của thẻ Dự phòng (pocket UC-1209 bước 9).
   const goalChips = input.reserveGoals.flatMap((g) =>
-    g.held === null || g.target === null || g.target <= 0 ? [] : [`${escapeHtml(g.name)} ${Math.min(100, Math.floor((g.held * 100) / g.target))}%`],
+    g.held === null || g.target === null || g.target <= 0 ? [] : [`${escapeHtml(g.name)} ${Math.max(0, Math.min(100, Math.floor(((g.held + g.spent) * 100) / g.target)))}%`],
   );
   if (input.peace < 0) goalChips.push(`Phần an tâm thiếu ${formatMoney(-input.peace)}`);
   else if (input.peace > 0 && input.peaceMonths.covered !== null) goalChips.push(`Phần an tâm đủ ${formatDecimal1(input.peaceMonths.covered)}/${input.peaceMonths.target} tháng`);

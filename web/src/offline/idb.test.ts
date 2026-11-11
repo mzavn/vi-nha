@@ -58,7 +58,7 @@ describe("bản lưu của phiên bản dữ liệu trước (pwa UC-710 AC-11)"
     vi.stubGlobal("localStorage", ls);
     const { cacheGet, cacheSet, queueStore } = await import("./idb");
     expect(await cacheGet("husband:snapshot")).toBeNull();
-    expect(ls.getItem("vi-nha:cache-version")).toBe("3");
+    expect(ls.getItem("vi-nha:cache-version")).toBe("4");
     expect((await queueStore.list()).map((i) => i.clientId)).toEqual(["c-00000001"]);
     // Bản lưu mới ghi sau đó thì đọc lại được, không bị bỏ thêm lần nữa.
     await cacheSet("husband:snapshot", { ok: 1 }, "2026-10-07T01:00:00.000Z");
@@ -66,13 +66,13 @@ describe("bản lưu của phiên bản dữ liệu trước (pwa UC-710 AC-11)"
   });
 
   it("đã đúng phiên bản: bản lưu giữ nguyên", async () => {
-    vi.stubGlobal("localStorage", fakeLocalStorage({ seed: { "vi-nha:cache-version": "3", "vi-nha:cache:husband:snapshot": JSON.stringify(old) } }));
+    vi.stubGlobal("localStorage", fakeLocalStorage({ seed: { "vi-nha:cache-version": "4", "vi-nha:cache:husband:snapshot": JSON.stringify(old) } }));
     const { cacheGet } = await import("./idb");
     expect((await cacheGet("husband:snapshot"))?.at).toBe(old.at);
   });
 });
 
-describe("lên v2: DATA_VERSION 3 (pwa UC-710 AC-13)", () => {
+describe("đổi dạng dữ liệu lưu trên máy (pwa UC-710 AC-13)", () => {
   it("UC-710 AC-13: máy đã mở 1.8 (bản lưu phiên bản 2 có tiers, wallets) → bản lưu cũ bị bỏ, hàng đợi còn; mất mạng lúc đó → đọc ra null như lần đầu, không lỗi", async () => {
     const v18 = { key: "husband:snapshot", data: { tiers: { wealth_building: { balance: 1 } }, wallets: [] }, at: "2026-11-10T01:00:00.000Z" };
     const boot18 = { key: "husband:bootstrap", data: { wallets: [{ id: "food" }] }, at: "2026-11-10T01:00:00.000Z" };
@@ -88,7 +88,23 @@ describe("lên v2: DATA_VERSION 3 (pwa UC-710 AC-13)", () => {
     const { cacheGet, queueStore } = await import("./idb");
     expect(await cacheGet("husband:snapshot")).toBeNull();
     expect(await cacheGet("husband:bootstrap")).toBeNull();
-    expect(ls.getItem("vi-nha:cache-version")).toBe("3");
+    expect(ls.getItem("vi-nha:cache-version")).toBe("4");
+    expect((await queueStore.list()).map((i) => i.clientId)).toEqual(["c-00000001"]);
+  });
+
+  it("UC-704 AC-29: máy đã mở 2.0 (bản lưu phiên bản 3: accounts[].goalId, chưa có reserve.groups / goal_groups) → bản lưu cũ bị bỏ, hàng đợi còn (khoản cũ không goal_id vẫn gửi được)", async () => {
+    const v20 = { key: "husband:snapshot", data: { pockets: { reserve: { accounts: [{ id: "tk", goalId: "hoc-phi" }], goals: [] } } }, at: "2026-11-10T01:00:00.000Z" };
+    const ls = fakeLocalStorage({
+      seed: {
+        "vi-nha:cache-version": "3",
+        "vi-nha:cache:husband:snapshot": JSON.stringify(v20),
+        "vi-nha:queue": JSON.stringify({ [item.clientId]: item }),
+      },
+    });
+    vi.stubGlobal("localStorage", ls);
+    const { cacheGet, queueStore } = await import("./idb");
+    expect(await cacheGet("husband:snapshot")).toBeNull();
+    expect(ls.getItem("vi-nha:cache-version")).toBe("4");
     expect((await queueStore.list()).map((i) => i.clientId)).toEqual(["c-00000001"]);
   });
 });

@@ -10,7 +10,7 @@ import { goalAccountRequest, goalCreateRequest, type GoalAccountResult } from ".
 import { groupAccountsByPocket, groupPayload, groupToForm, OUTSIDE_LABEL, POCKET_LABEL, POCKET_ORDER, type PocketChoice, pocketsPayload } from "../lib/pockets";
 import {
   ACCOUNT_KIND_LABEL,
-  accountGoal,
+  accountGoals,
   type AccountForm,
   accountPayload,
   accountSubmitError,
@@ -30,9 +30,14 @@ import {
   type Errors,
   GOAL_MODE_LABEL,
   GOAL_POCKET_LOCK,
+  goalAccountNote,
   goalAccountOptions,
   type GoalForm,
+  goalOrderError,
+  goalOrderPayload,
+  goalOrderPreview,
   goalPayload,
+  goalSubmitError,
   goalToForm,
   followsCodeConvention,
   isoFromVnInput,
@@ -244,7 +249,8 @@ export function AccountSheet({
   // Tài khoản riêng tư của người khác: ô Chủ tài khoản chỉ đọc (UC-709 AC-47).
   const ownerLocked = !canSetOwner(item, me);
   // Tài khoản của mục tiêu đang dùng: ngăn khoá ở Dự phòng (UC-1209 bước 3, server 409 `account_has_goal`).
-  const goal = item ? accountGoal(item.id, d.goals) : undefined;
+  const goalNames = item ? accountGoals(item.id, d.goals).map((g) => g.name).join(", ") : "";
+  const goal = goalNames ? { name: goalNames } : undefined;
 
   function submit() {
     const name = f.name.trim();
@@ -1193,7 +1199,7 @@ export function FiConfigSheet({ config, onClose, onSaved }: { config: SettingsCo
       <Field id="fi-exp" label="Chi phí tháng">
         <AmountInput id="fi-exp" value={f.expense} onChange={(n) => set({ expense: n })} />
       </Field>
-      <Field id="fi-must" label="Chi Must tháng">
+      <Field id="fi-must" label="Chi thiết yếu tháng">
         <AmountInput id="fi-must" value={f.expenseMust} onChange={(n) => set({ expenseMust: n })} />
       </Field>
       <Hint>Để trống là lấy từ sổ (trung bình 3 tháng đã kết thúc).</Hint>
@@ -1440,7 +1446,7 @@ function PocketSelect(props: { id: string; value: Pocket | null; label?: string;
 }
 
 /** Câu của sheet xếp ngăn — cũng là bước 1 của màn chuyển đổi (pocket UC-1208). */
-export const POCKETS_SHEET_NOTE = "Tiền về tài khoản nào là tiền của ngăn đó. Thẻ tín dụng để ở Vận hành. Mỗi mục tiêu Dự phòng cần một tài khoản riêng ở ngăn Dự phòng.";
+export const POCKETS_SHEET_NOTE = "Tiền về tài khoản nào là tiền của ngăn đó. Thẻ tín dụng để ở Vận hành. Mỗi mục tiêu Dự phòng gắn một tài khoản ở ngăn Dự phòng; nhiều mục tiêu dùng chung được một tài khoản.";
 
 /**
  * Xếp tài khoản vào ngăn (UC-709 AC-35): đổi ngăn từng dòng, Xác nhận gửi một lô PUT /v1/settings/pockets. Tài khoản của mục
@@ -1459,7 +1465,8 @@ export function PocketsSheet({ d, onClose, onSaved }: { d: SettingsData; onClose
           <div class="set-sub">{g.label}</div>
           {g.accounts.length === 0 && <Hint>Chưa có tài khoản nào.</Hint>}
           {g.accounts.map((a) => {
-            const goal = accountGoal(a.id, d.goals);
+            const names = accountGoals(a.id, d.goals).map((g) => g.name).join(", ");
+            const goal = names ? { name: names } : undefined;
             return (
               <div key={a.id}>
                 <Field id={`p-${a.id}`} label={a.pocket_confirmed === false ? `${a.name} (chưa xác nhận)` : a.name}>
@@ -1495,8 +1502,9 @@ export const NEW_ACCOUNT = "+new";
 const PENDING_ACCOUNT = "+pending";
 
 /**
- * Thêm / sửa mục tiêu Dự phòng (UC-709 AC-36, AC-39, pocket UC-1209): tên, Tài khoản (tài khoản Dự phòng chưa gắn mục tiêu,
- * không phải Ví Thưởng / "Tạo tài khoản mới" / "Chưa có"), cách đặt số, hạn, gắn nợ. "Tạo tài khoản mới" mở sheet tài khoản
+ * Thêm / sửa mục tiêu Dự phòng (UC-709 AC-36, AC-39, AC-49, pocket UC-1209): tên, Tài khoản (tài khoản Dự phòng đang dùng,
+ * không phải Ví Thưởng, kèm "dùng chung với …", luật Thuế tắt kèm lý do; câu mềm khi tài khoản đang thiếu / "Tạo tài khoản
+ * mới" / "Chưa có"), cách đặt số, hạn, gắn nợ. "Tạo tài khoản mới" mở sheet tài khoản
  * điền sẵn tên mục tiêu, ngăn Dự phòng (pocket UC-1208, sheet mục tiêu): sửa mục tiêu đã có → lưu sheet tài khoản là tạo và
  * gắn ngay (`POST /v1/settings/goals/:id/account`); thêm mục tiêu mới → giữ thân tài khoản, Lưu tạo mục tiêu (không
  * `account_id`) rồi tạo + gắn. Bước hai lỗi → sheet thành sửa mục tiêu vừa tạo, giữ lựa chọn và thân; Lưu lại chỉ gửi bước
@@ -1505,7 +1513,7 @@ const PENDING_ACCOUNT = "+pending";
 export function GoalSheet({ d, item, prefill, onClose, onSaved }: { d: SettingsData; item: ReserveGoal | null; prefill?: GoalForm; onClose: () => void; onSaved: Saved }) {
   const [f, setF] = useState<GoalForm>(() => prefill ?? goalToForm(item));
   const set = (patch: Partial<GoalForm>) => setF((x) => ({ ...x, ...patch }));
-  const { busy, error, errors, run } = useSubmit(onSaved, onClose);
+  const { busy, error, errors, run } = useSubmit(onSaved, onClose, (err) => goalSubmitError(err, accounts, f.account_id));
   const [creating, setCreating] = useState(false);
   // Tài khoản vừa tạo ở sheet con: cài đặt tải lại sau, nên giữ ở đây để ô chọn có ngay.
   const [created, setCreated] = useState<SettingsAccount | null>(null);
@@ -1517,7 +1525,9 @@ export function GoalSheet({ d, item, prefill, onClose, onSaved }: { d: SettingsD
   const isNew = !goal;
   const e = (k: string) => ({ id: `g-${k}`, error: errors[k] });
   const accounts = created && !d.accounts.some((a) => a.id === created.id) ? [...d.accounts, created] : d.accounts;
-  const options = goalAccountOptions(accounts, d.goals, d.config.surplus_reward_account, goal?.id ?? null);
+  const options = goalAccountOptions(accounts, d.goals, d.config.surplus_reward_account, goal?.id ?? null, f.mode === "pct");
+  const chosenShared = options.find((a) => a.id === f.account_id)?.shared ?? null;
+  const note = f.account_id ? goalAccountNote(d, f.account_id, { id: goal?.id ?? null, due_date: f.due_date }) : null;
   // Tài khoản đã gắn mà nay không chọn được vẫn hiện để biết.
   const stale = f.account_id && !options.some((a) => a.id === f.account_id) ? (accounts.find((a) => a.id === f.account_id) ?? { id: f.account_id, name: f.account_id }) : null;
   const debtOptions = (debts.data?.debts ?? []).filter((x) => x.active || x.id === f.debt_id);
@@ -1583,15 +1593,18 @@ export function GoalSheet({ d, item, prefill, onClose, onSaved }: { d: SettingsD
           <option value="">Chưa có</option>
           {stale && <option value={stale.id}>{stale.name} (không còn chọn được)</option>}
           {options.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name}
+            <option key={a.id} value={a.id} disabled={a.blocked !== null && a.id !== f.account_id}>
+              {`${a.name}${a.shared ? ` — ${a.shared}` : ""}${a.blocked ? ` (${a.blocked})` : ""}`}
             </option>
           ))}
           {pendingAccount && <option value={PENDING_ACCOUNT}>Tài khoản mới: {String(pendingAccount.name ?? "")}</option>}
           <option value={NEW_ACCOUNT}>Tạo tài khoản mới</option>
         </select>
+        {/* Ô chọn cắt chữ ở 390px: "dùng chung với …" của tài khoản đang chọn hiện đủ ở dòng dưới (như UC-1208 AC-12). */}
+        {chosenShared && <span class="sub-line">{chosenShared}</span>}
       </Field>
-      <Hint>Mỗi mục tiêu là một tài khoản thật ở ngăn Dự phòng; số đã có là số dư của tài khoản đó. Chưa có tài khoản thì mục tiêu chưa có việc nạp ở ngày lương.</Hint>
+      {note && <Hint>{note}</Hint>}
+      <Hint>Mục tiêu gắn một tài khoản thật ở ngăn Dự phòng; nhiều mục tiêu dùng chung được một tài khoản — số dư chia theo thứ tự ưu tiên (đổi ở danh sách mục tiêu). Chưa có tài khoản thì mục tiêu chưa có việc nạp ở ngày lương.</Hint>
       <Field id="g-mode" label="Cách đặt số" wrap>
         <Seg label="Cách đặt số" value={f.mode} onChange={(mode) => set({ mode })} options={(["repeat", "once", "pct"] as const).map((m) => ({ value: m, label: GOAL_MODE_LABEL[m] }))} />
       </Field>
@@ -1676,6 +1689,104 @@ export function GoalSheet({ d, item, prefill, onClose, onSaved }: { d: SettingsD
           onSaved={goal ? onSaved : async () => {}}
         />
       )}
+    </Sheet>
+  );
+}
+
+/**
+ * Đổi thứ tự ưu tiên các mục tiêu của một tài khoản chung (UC-709 bước 4u, AC-48): kéo tay cầm (≥ 44px) hoặc ↑ ↓ từng hàng,
+ * xem trước số mới bằng `fillGoals`; Lưu gửi đúng một `PUT /v1/settings/goals/order` với mọi mục tiêu đang dùng (mục tiêu
+ * ngoài tài khoản giữ chỗ). 400 `invalid_order` (máy khác vừa đổi) → câu tải lại và nút Tải lại.
+ */
+export function GoalOrderSheet({ d, accountId, onClose, onSaved, onReload }: { d: SettingsData; accountId: string; onClose: () => void; onSaved: Saved; onReload: () => void }) {
+  const { online } = useApp();
+  const [ids, setIds] = useState(() => accountGoals(accountId, d.goals).map((g) => g.id));
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<{ message: string; reload: boolean } | null>(null);
+  const rows = goalOrderPreview(d, accountId, ids);
+  const name = d.accounts.find((a) => a.id === accountId)?.name ?? accountId;
+  const moveTo = (id: string, to: number) =>
+    setIds((list) => {
+      const next = list.filter((x) => x !== id);
+      next.splice(Math.max(0, Math.min(to, next.length)), 0, id);
+      return next;
+    });
+
+  async function save() {
+    setBusy(true);
+    setProblem(null);
+    try {
+      await api.put("/v1/settings/goals/order", goalOrderPayload(d.goals, accountId, ids));
+      await onSaved(`Đã đổi thứ tự mục tiêu trong ${name}.`);
+      onClose();
+    } catch (err) {
+      setProblem(goalOrderError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Sheet open title={`Đổi thứ tự · ${name}`} onClose={onClose}>
+      <Hint>Số dư lấp mục tiêu đứng trên trước. Kéo tay cầm hoặc bấm ↑ ↓; số dưới mỗi mục tiêu là số sau khi đổi.</Hint>
+      <ul class="goal-order">
+        {rows.map((r, i) => (
+          <li
+            key={r.id}
+            data-goal-id={r.id}
+            class={dragging === r.id ? "goal-order-row dragging" : "goal-order-row"}
+          >
+            <button
+              type="button"
+              class="goal-order-handle"
+              aria-label={`Kéo ${r.name}`}
+              onPointerDown={(ev) => {
+                ev.currentTarget.setPointerCapture(ev.pointerId);
+                setDragging(r.id);
+              }}
+              onPointerMove={(ev) => {
+                if (dragging !== r.id) return;
+                const over = document.elementFromPoint(ev.clientX, ev.clientY)?.closest<HTMLElement>("[data-goal-id]")?.dataset.goalId;
+                if (over && over !== r.id) moveTo(r.id, ids.indexOf(over));
+              }}
+              onPointerUp={() => setDragging(null)}
+              onPointerCancel={() => setDragging(null)}
+            >
+              ⋮⋮
+            </button>
+            <div class="goal-order-main">
+              <div>
+                {i + 1}. {r.name}
+              </div>
+              <div class="sub-line">{r.text}</div>
+            </div>
+            <button type="button" class="btn btn-ghost" aria-label={`Đưa ${r.name} lên`} disabled={i === 0} onClick={() => moveTo(r.id, i - 1)}>
+              ↑
+            </button>
+            <button type="button" class="btn btn-ghost" aria-label={`Đưa ${r.name} xuống`} disabled={i === rows.length - 1} onClick={() => moveTo(r.id, i + 1)}>
+              ↓
+            </button>
+          </li>
+        ))}
+      </ul>
+      <div class="pad">
+        {problem && (
+          <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
+            {problem.message}
+          </p>
+        )}
+        {problem?.reload ? (
+          <button type="button" class="btn btn-primary btn-wide" onClick={onReload}>
+            Tải lại
+          </button>
+        ) : (
+          <button type="button" class="btn btn-primary btn-wide" disabled={!online || busy} onClick={() => void save()}>
+            {busy ? "Đang lưu…" : "Lưu thứ tự"}
+          </button>
+        )}
+        {!online && <NeedsNetwork what="Lưu cài đặt" />}
+      </div>
     </Sheet>
   );
 }

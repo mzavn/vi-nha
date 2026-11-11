@@ -79,8 +79,11 @@ export interface SyncerDeps {
 export interface Syncer {
   enqueue(body: EntryBody, memberId: string): Promise<QueuedEntry>;
   flush(): Promise<FlushReport>;
-  /** Gửi lại một khoản. `confirmDuplicate`: người nhập xác nhận khoản SePay đã báo là khoản thật thứ hai (409 `bank_log_exists`). */
-  retry(clientId: string, opts?: { confirmDuplicate?: boolean }): Promise<FlushReport>;
+  /**
+   * Gửi lại một khoản. `confirmDuplicate`: người nhập xác nhận khoản SePay đã báo là khoản thật thứ hai (409 `bank_log_exists`).
+   * `dropGoal`: bỏ "Cho mục tiêu" rồi gửi (400 `invalid_goal` — mục tiêu vừa đổi tài khoản ở máy khác, pwa UC-704 AC-28).
+   */
+  retry(clientId: string, opts?: { confirmDuplicate?: boolean; dropGoal?: boolean }): Promise<FlushReport>;
   discard(clientId: string): Promise<void>;
   list(): Promise<QueuedEntry[]>;
 }
@@ -174,7 +177,9 @@ export function createSyncer(deps: SyncerDeps): Syncer {
       const item = (await deps.store.list()).find((i) => i.clientId === clientId);
       if (item) {
         const { error: _drop, ...rest } = item;
-        const body = opts.confirmDuplicate ? { ...item.body, confirm_duplicate: true } : item.body;
+        const { goal_id: _goal, ...noGoal } = item.body;
+        const base = opts.dropGoal ? noGoal : item.body;
+        const body = opts.confirmDuplicate ? { ...base, confirm_duplicate: true } : base;
         await deps.store.put({ ...rest, body, status: "pending" });
       }
       return flush();

@@ -91,6 +91,20 @@ describe("thân yêu cầu Gán (UC-706)", () => {
     expect(interestToast(37)).toBe(`Đã ghi lãi ${formatVnd(37)}`);
   });
 
+  it("UC-706 AC-39: gán log out của MB tiết kiệm thành chi, chọn chip Học tập → split mang goal_id 'hoc-tap'; dòng chuyển ra mang theo chip; dòng loại khác / không chọn / chip không thuộc tài khoản → không gửi", () => {
+    const choices = [
+      { id: "nha-o", name: "Nhà ở" },
+      { id: "hoc-tap", name: "Học tập" },
+    ];
+    const body = assignBody([row({ meaning: "spend", amount: 6_000_000, category_id: "tuition", goal_id: "hoc-tap" })], false, choices);
+    expect(body.splits).toEqual([{ meaning: "spend", amount: 6_000_000, category_id: "tuition", goal_id: "hoc-tap" }]);
+    expect(assignBody([row({ meaning: "transfer", amount: 1_000, other_account_id: "main", goal_id: "nha-o" })], false, choices).splits[0]).toMatchObject({ goal_id: "nha-o" });
+    expect(assignBody([row({ meaning: "buy_asset", amount: 1_000, asset_kind: "gold", goal_id: "nha-o" })], false, choices).splits[0]).not.toHaveProperty("goal_id");
+    expect(assignBody([row({ meaning: "spend", amount: 1_000, category_id: "food", goal_id: null })], false, choices).splits[0]).not.toHaveProperty("goal_id");
+    expect(assignBody([row({ meaning: "spend", amount: 1_000, category_id: "food", goal_id: "thue" })], false, choices).splits[0]).not.toHaveProperty("goal_id");
+    expect(assignBody([row({ meaning: "spend", amount: 1_000, category_id: "food", goal_id: "hoc-tap" })], false).splits[0]).not.toHaveProperty("goal_id");
+  });
+
   it("UC-706 AC-36: log chờ của tài khoản riêng tư bị giấu → '1 khoản của tài khoản riêng tư'; 0 / thiếu → không dòng", () => {
     expect(hiddenLogsLine(1)).toBe("1 khoản của tài khoản riêng tư");
     expect(hiddenLogsLine(0)).toBeNull();

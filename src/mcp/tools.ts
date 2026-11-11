@@ -29,6 +29,11 @@ const OLD_SPLIT_FIELDS = ["wallet_id", "counter_wallet_id", "from_wallet_id", "w
 type Row = Record<string, unknown>;
 const rows = <T = Row>(r: D1Result) => (r.results ?? []) as T[];
 const vnd = (n: number) => `${Math.round(n).toLocaleString("vi-VN")} ₫`;
+/** Mô tả tham số `goal_id` của add_transaction / assign_log (mcp UC-603, UC-604; pocket UC-1209 bước 11). */
+const GOAL_ID_HINT =
+  "the reserve goal this spend / outgoing transfer uses money for (goal ids per account: get_snapshot pockets accounts[].goalIds) — " +
+  "only when the paying account has two or more goals, which share one account; leave it out = for no goal (an account with one goal is " +
+  "filled in automatically). A goal that does not belong to the paying account is an error (invalid_goal).";
 
 /** Kết quả tool thành công: JSON gọn kèm một dòng tóm tắt tiếng Việt (khi có ích cho việc trả lời). */
 function ok(data: unknown, summary?: string): CallToolResult {
@@ -69,8 +74,10 @@ export async function registerTools(
     {
       description:
         "Numbers behind the 'Today' screen, three cards. pockets: real money per pocket (each pocket is a group of real accounts: " +
-        "savings / reserve / operating / outside), savings change this / previous pay cycle (savings.change), reserve goals (each goal is a " +
-        "real account; held = its balance, null = no account yet; target or % of taxable income; sorted by due date), peace-of-mind amount " +
+        "savings / reserve / operating / outside), savings change this / previous pay cycle (savings.change), reserve goals (each goal sits in " +
+        "a real reserve account and several goals can share one account; held = what the goal has after splitting the account balance by " +
+        "priority order, counting spent = what was spent for the goal this pay cycle; null = no account yet; target or % of taxable income; " +
+        "sorted by priority), reserve.groups = per account with goals: balance, need, spent, short / extra; accounts[].goalIds = goals of each account; peace-of-mind amount " +
         "(reserve accounts without a goal) and months of operating spend it covers (reserve.peace, reserve.peaceMonths), reward account " +
         "(reserve.reward), short-term debts (shortDebt, reminder only — not subtracted). nearSpend: the operating pocket counted until the " +
         "next payday, per day / per meal / per market trip, minus payday tasks not done yet (pendingTasks). " +
@@ -93,8 +100,9 @@ export async function registerTools(
     "get_goals",
     {
       description:
-        "Savings pocket total and change per pay cycle, savings % and done this cycle, reserve goals (each goal is a real account; " +
-        "held = its balance, null = no account yet) vs target, peace-of-mind amount (reserve accounts without a goal) and months, " +
+        "Savings pocket total and change per pay cycle, savings % and done this cycle, reserve goals vs target (several goals can share one " +
+        "account; held = what the goal has after splitting the account balance by priority, counting spent this pay cycle; null = no account yet), " +
+        "groups per account (balance, need, spent, short / extra), peace-of-mind amount (reserve accounts without a goal) and months, " +
         "short-term debts. Same numbers as get_snapshot pockets. No parameters.",
     },
     async () => {
@@ -133,6 +141,7 @@ export async function registerTools(
         "Bank deposit interest (suggestion.interest from list_pending_logs) is ONE split { meaning: income, interest: true }: " +
         "it records the income in the receiving account, reported as passive income. " +
         "income: opens_cycle overrides whether this income opens a new pay cycle (default: the income stream's setting, e.g. salary). " +
+        `spend / outgoing transfer: goal_id = ${GOAL_ID_HINT} ` +
         "There are no wallets: sending wallet_id, from_wallet_id, wealth_move, earmark_id or transfer_order_id is an error (model_changed).",
       inputSchema: z.looseObject({
         log_id: z.string().min(1),
@@ -154,6 +163,7 @@ export async function registerTools(
               interest: z.boolean().optional(),
               note: z.string().optional(),
               opens_cycle: z.boolean().optional(),
+              goal_id: z.string().optional(),
             }),
           )
           .min(1),
@@ -179,6 +189,7 @@ export async function registerTools(
           interest: s.interest === true,
           note: s.note ?? null,
           opens_cycle: s.opens_cycle,
+          goal_id: s.goal_id ?? null,
         }));
         const result = await ingest.assignLog(db, args.log_id, splits, memberId, now());
         await audit(db, actor, "log.assign", `log:${args.log_id}`, { splits: splits.length });
@@ -210,7 +221,8 @@ export async function registerTools(
         "income: income_stream_id = income stream, tenant_id = rent paid by a tenant (id from list_tenants; " +
         "without a stream the rental stream is used); opens_cycle overrides whether this income opens a new pay cycle " +
         "(default: the stream's setting, e.g. salary) — the result's effects.cycle tells whether a cycle opened and how many payday tasks it has. " +
-        "spend: money paid from a reserve goal's own account lowers that goal's held amount automatically; " +
+        "spend: money paid from a reserve goal's account lowers what the goals of that account hold; " +
+        `goal_id (spend / outgoing transfer) = ${GOAL_ID_HINT} ` +
         "debt_id = a debt repayment of PRINCIPAL (id from get_debts; without category_id the debt-repayment category is used); " +
         "interest_debt_id = INTEREST paid on that debt (spend only, never together with debt_id; without category_id the 'loan-interest' category). " +
         "When paying a debt with interestRate > 0, record TWO transactions: interest = min(amount, interestThisMonth − interestPaidThisMonth from get_debts) " +
@@ -238,6 +250,7 @@ export async function registerTools(
         receivable_id: z.string().optional(),
         confirm_duplicate: z.boolean().optional(),
         opens_cycle: z.boolean().optional(),
+        goal_id: z.string().optional(),
       }),
     },
     async (args) => {
@@ -265,13 +278,15 @@ export async function registerTools(
           receivable_id: args.receivable_id ?? null,
           confirm_duplicate: args.confirm_duplicate === true,
           opens_cycle: args.opens_cycle,
+          goal_id: args.goal_id ?? null,
         };
         // Người ghi có thể là `by_member_id`; luật tài khoản riêng tư nhìn theo người đã uỷ quyền (access UC-504 AC-14).
         const result = await ledger.createEntry(db, input, by, now(), memberId);
         // Không trùng thì tx là dòng vừa ghi.
         if (!result.duplicate) {
           const id = result.tx!.id;
-          await audit(db, actor, "tx.create", `tx:${id}`, { meaning: args.meaning, by_member_id: by });
+          const goalId = result.tx!.goal_id ?? null;
+          await audit(db, actor, "tx.create", `tx:${id}`, { meaning: args.meaning, by_member_id: by, ...(goalId ? { goal_id: goalId } : {}) });
           if (result.effects.cycle?.opened) {
             await audit(db, actor, "pay_cycle.open", `tx:${id}`, { income_tx_id: Number(id), payday: result.effects.cycle.payday });
             onCycleOpened(result.effects.cycle.payday);

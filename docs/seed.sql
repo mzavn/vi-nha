@@ -79,11 +79,12 @@ UPDATE accounts SET pocket = 'operating', pocket_confirmed = 1;
 UPDATE accounts SET pocket = 'reserve' WHERE id IN ('mb-tuition', 'mb-reward');
 UPDATE config SET v = '30' WHERE k = 'savings_pct';
 
--- MỤC TIÊU DỰ PHÒNG: mỗi mục tiêu là một tài khoản thật (A = số dư tài khoản đó). Học phí gắn tài khoản MB học phí;
--- Thuế thu nhập và Bảo dưỡng xe chưa gắn tài khoản (chưa sinh việc nạp, Hôm nay nhắc mở tài khoản thật).
+-- MỤC TIÊU DỰ PHÒNG: mỗi mục tiêu gắn một tài khoản thật (nhiều mục tiêu dùng chung được; A chia từ số dư theo thứ tự
+-- ưu tiên `sort`, hạn gần trước). Học phí gắn tài khoản MB học phí; Bảo dưỡng xe và Thuế thu nhập chưa gắn tài khoản
+-- (chưa sinh việc nạp, Hôm nay nhắc mở tài khoản thật).
 INSERT INTO reserve_goals (id,name,account_id,target_amount,target_pct,monthly_amount,repeat_months,due_date,sort) VALUES
  ('tuition','Học phí','mb-tuition',6000000,NULL,2000000,3,'2027-01-15',10),
- ('income-tax','Thuế thu nhập',NULL,NULL,10,NULL,NULL,NULL,20),
- ('car-service','Bảo dưỡng xe',NULL,4800000,NULL,NULL,NULL,'2027-03-31',30);
+ ('income-tax','Thuế thu nhập',NULL,NULL,10,NULL,NULL,NULL,30),
+ ('car-service','Bảo dưỡng xe',NULL,4800000,NULL,NULL,NULL,'2027-03-31',20);
 -- Dư cuối kỳ: 50% vào Tích luỹ (mặc định của schema), phần còn lại vào tài khoản Ví Thưởng (UC-1207).
 INSERT INTO config (k,v) VALUES ('surplus_reward_account','mb-reward');

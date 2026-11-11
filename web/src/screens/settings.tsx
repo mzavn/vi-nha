@@ -27,6 +27,7 @@ import {
   fiConfigSummary,
   type GoalForm,
   goalLineText,
+  goalListGroups,
   MATCH_LABEL,
   MEANING_LABEL,
   scheduleRows,
@@ -75,6 +76,7 @@ import { PinRow } from "./pin-sheet";
 import {
   AccountSheet,
   ConfigSheet,
+  GoalOrderSheet,
   GoalSheet,
   FiConfigSheet,
   FeeSheet,
@@ -93,7 +95,7 @@ import {
 } from "./settings-sheets";
 
 const SECTIONS = [
-  // Ba ngăn (v2, UC-709 AC-35…39, AC-46): xếp tài khoản vào ngăn, mục tiêu Dự phòng (mỗi mục tiêu một tài khoản thật), nhóm danh mục.
+  // Ba ngăn (v2, UC-709 AC-35…39, AC-46, AC-48): xếp tài khoản vào ngăn, mục tiêu Dự phòng (nhóm theo tài khoản, đổi thứ tự), nhóm danh mục.
   { id: "pockets", label: "Ba ngăn", advanced: false },
   { id: "accounts", label: "Tài khoản", advanced: false },
   { id: "rental", label: "Cho thuê", advanced: false },
@@ -135,6 +137,7 @@ export type Edit =
   | { kind: "rental-config"; rental: Rental }
   | { kind: "pockets" }
   | { kind: "goal"; item: ReserveGoal | null; prefill?: GoalForm }
+  | { kind: "goal-order"; accountId: string }
   | { kind: "group"; item: CategoryGroup | null };
 
 interface SectionProps {
@@ -335,6 +338,18 @@ export function Settings() {
       {edit?.kind === "rental-config" && <RentalConfigSheet d={s.data} rental={edit.rental} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "pockets" && <PocketsSheet d={s.data} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "goal" && <GoalSheet d={s.data} item={edit.item} prefill={edit.prefill} onClose={() => setEdit(null)} onSaved={saved} />}
+      {edit?.kind === "goal-order" && (
+        <GoalOrderSheet
+          d={s.data}
+          accountId={edit.accountId}
+          onClose={() => setEdit(null)}
+          onSaved={saved}
+          onReload={() => {
+            setEdit(null);
+            void s.reload();
+          }}
+        />
+      )}
       {edit?.kind === "group" && <GroupSheet d={s.data} item={edit.item} onClose={() => setEdit(null)} onSaved={saved} />}
     </>
   );
@@ -1180,9 +1195,9 @@ function Accounts({ d, ro, wide, open }: SectionProps) {
 // ── Ba ngăn ──────────────────────────────────────────────────────
 
 /**
- * Ba ngăn (UC-709 AC-35…39, AC-46): hàng "Chuyển sang ba ngăn · còn N bước ›" khi đang chuyển đổi, xếp tài khoản vào ngăn
- * (chip "N chưa xác nhận"), mục tiêu Dự phòng (mỗi mục tiêu một tài khoản thật) kèm gợi ý "Tạo mục tiêu Trả nợ" từ sổ nợ,
- * nhóm danh mục & hạn mức mềm. Số tiền đều qua bộ định dạng có che số (UC-718).
+ * Ba ngăn (UC-709 AC-35…39, AC-46, AC-48): hàng "Chuyển sang ba ngăn · còn N bước ›" khi đang chuyển đổi, xếp tài khoản vào ngăn
+ * (chip "N chưa xác nhận"), mục tiêu Dự phòng nhóm theo tài khoản (nhóm chung có nút Đổi thứ tự) kèm gợi ý "Tạo mục tiêu Trả
+ * nợ" từ sổ nợ, nhóm danh mục & hạn mức mềm. Số tiền đều qua bộ định dạng có che số (UC-718).
  */
 function Pockets({ d, ro, open }: SectionProps) {
   const conversion = conversionSettingsRow(useApp().snap?.conversion);
@@ -1190,7 +1205,7 @@ function Pockets({ d, ro, open }: SectionProps) {
   const counts = groupAccountsByPocket(d.accounts, Object.fromEntries(d.accounts.map((a) => [a.id, a.pocket ?? null])))
     .map((g) => `${g.label} ${g.accounts.length}`)
     .join(" · ");
-  const goals = [...d.goals].sort((a, b) => Number(b.active) - Number(a.active) || a.sort - b.sort || a.name.localeCompare(b.name, "vi"));
+  const goalGroups = goalListGroups(d);
   const groups = [...(d.categoryGroups ?? [])].sort((a, b) => Number(b.active) - Number(a.active) || a.sort - b.sort);
   const debts = useResource<DebtsData>(ro ? null : "/v1/debts");
   const suggestions = debts.data ? debtGoalSuggestions(debts.data.debts, d.goals, dayKey(new Date())) : [];
@@ -1213,20 +1228,34 @@ function Pockets({ d, ro, open }: SectionProps) {
         title="Mục tiêu Dự phòng"
         right={<AddButton ro={ro} label="Thêm" onClick={() => open({ kind: "goal", item: null })} />}
         flush
-        note="Mỗi mục tiêu là một tài khoản thật ở ngăn Dự phòng; số đã có là số dư của tài khoản đó"
+        note="Mỗi mục tiêu gắn một tài khoản thật ở ngăn Dự phòng; nhiều mục tiêu dùng chung được một tài khoản — số dư lấp lần lượt theo thứ tự ưu tiên"
       >
-        {goals.length === 0 && suggestions.length === 0 && <p class="empty">Chưa có mục tiêu nào.</p>}
-        {goals.map((g) => (
-          <Row
-            key={g.id}
-            title={
-              <>
-                {goalLineText(g, d.accounts)} {!g.active && <span class="chip">ngừng dùng</span>}
-              </>
-            }
-            sub={g.active && !g.account_id ? <span class="chip warn">Mở tài khoản thật</span> : undefined}
-            onClick={ro ? undefined : () => open({ kind: "goal", item: g })}
-          />
+        {goalGroups.length === 0 && suggestions.length === 0 && <p class="empty">Chưa có mục tiêu nào.</p>}
+        {goalGroups.map((grp) => (
+          <div key={grp.key}>
+            {grp.title && (
+              <div class="set-sub goal-list-h">
+                <span>{grp.title}</span>
+                {grp.reorder && !ro && (
+                  <button type="button" class="btn btn-ghost" onClick={() => open({ kind: "goal-order", accountId: grp.accountId! })}>
+                    Đổi thứ tự
+                  </button>
+                )}
+              </div>
+            )}
+            {grp.goals.map((g) => (
+              <Row
+                key={g.id}
+                title={
+                  <>
+                    {goalLineText(g, d.accounts, grp.shared)} {!g.active && <span class="chip">ngừng dùng</span>}
+                  </>
+                }
+                sub={g.active && !g.account_id ? <span class="chip warn">Mở tài khoản thật</span> : undefined}
+                onClick={ro ? undefined : () => open({ kind: "goal", item: g })}
+              />
+            ))}
+          </div>
         ))}
         {suggestions.map((s) => (
           <Row key={s.debt.id} title={s.text} sub="Gợi ý từ sổ nợ: nợ ngắn hạn chưa có mục tiêu" onClick={ro ? undefined : () => open({ kind: "goal", item: null, prefill: s.prefill })} />

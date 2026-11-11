@@ -7,6 +7,7 @@ import { app } from "../src/index";
 import { getTax, settleTax } from "../src/services/ledger";
 import { asD1, migratedDb, openDb } from "./helpers/d1-sqlite";
 import { householdE } from "./helpers/household-e";
+import { householdShared, sharedTx } from "./helpers/household-shared";
 import { openLegacyDb } from "./helpers/legacy";
 
 /** Khoản mới (sau 0040) ghi thẳng vào sổ: chuyển khoản / khoản chi. */
@@ -99,5 +100,23 @@ describe("quyết toán thuế năm (UC-110)", () => {
     const env = { DB: asD1(openDb()), API_TOKEN: "tok" } as Env;
     const res = await app.request("/v1/tax/abc", { headers: { Authorization: "Bearer tok" } }, env);
     expect(res.status).toBe(400);
+  });
+});
+
+describe("Thuế giữ tài khoản riêng (UC-110 AC-9)", () => {
+  it("UC-110 AC-9: TK thuế nhận 500.000, chi nộp thuế 200.000; tài khoản chung chi học phí 6.000.000; gắn Hiếu hỉ vào TK thuế → 409 tax_account_shared; GET /v1/tax/2026 provisioned 500.000, paid 200.000, held 300.000 — khoản học phí không ở đã nộp", async () => {
+    const raw = householdShared();
+    raw.exec("UPDATE accounts SET opening_balance = 0 WHERE id = 'tk-thue'");
+    raw.exec("UPDATE reserve_goals SET account_id = NULL WHERE id = 'hieu-hi'");
+    sharedTx(raw, { at: "2026-06-01 10:00", meaning: "transfer", amount: 500_000, from: "vcb-husband", to: "tk-thue" });
+    sharedTx(raw, { at: "2026-07-01 10:00", meaning: "spend", amount: 200_000, from: "tk-thue", goal: "thue" });
+    sharedTx(raw, { at: "2026-11-12 09:00", meaning: "spend", amount: 6_000_000, from: "tk-tiet-kiem", goal: "hoc-tap" });
+    const env = { DB: asD1(raw), API_TOKEN: "tok" } as Env;
+    const req = (method: string, path: string, body?: unknown) =>
+      app.request(path, { method, headers: { Authorization: "Bearer tok", "X-Member-Id": "husband", "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) }, env);
+    const linked = await req("PATCH", "/v1/settings/goals/hieu-hi", { account_id: "tk-thue" });
+    expect([linked.status, ((await linked.json()) as { error: { code: string } }).error.code]).toEqual([409, "tax_account_shared"]);
+    const tax = ((await (await req("GET", "/v1/tax/2026")).json()) as { data: { provisioned: number; paid: number; held: number } }).data;
+    expect([tax.provisioned, tax.paid, tax.held]).toEqual([500_000, 200_000, 300_000]);
   });
 });

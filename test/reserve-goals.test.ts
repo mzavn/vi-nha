@@ -2,11 +2,12 @@
 // của tài khoản gắn, không sổ để riêng. Hộ mẫu `docs/seed.sql`: Học phí ↔ MB (học phí) `mb-tuition`; Bảo dưỡng xe, Thuế thu
 // nhập chưa gắn; Ví Thưởng = MB (Ví Thưởng) `mb-reward`. Mỗi bài thêm phao `phao` (Dự phòng, không gắn mục tiêu) 5.000.000.
 import type { DatabaseSync } from "node:sqlite";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import { app } from "../src/index";
 import { asD1, openDb } from "./helpers/d1-sqlite";
 import { householdE } from "./helpers/household-e";
+import { householdShared, SHARED_NOW } from "./helpers/household-shared";
 
 let env: Env;
 let raw: DatabaseSync;
@@ -89,20 +90,24 @@ describe("mục tiêu Dự phòng là một tài khoản thật (UC-1209)", () =
     expect(raw.prepare("SELECT name FROM sqlite_master WHERE name IN ('earmarks', 'earmark_lines')").all()).toEqual([]);
   });
 
-  it("UC-1209 AC-2: luật gắn — tài khoản Vận hành → 409 account_not_reserve; tài khoản đã gắn mục tiêu / tài khoản Ví Thưởng → 409 account_has_goal; phao → lưu, nhật ký goal.update có changes.account_id; B lẫn % → 400; khoản nợ đã có mục tiêu → 409 debt_has_goal; đường /earmarks* cũ → 404", async () => {
+  it("UC-1209 AC-2: luật gắn — tài khoản Vận hành → 409 account_not_reserve; tài khoản tiết kiệm đang gắn Học phí → 200 (chung tài khoản), nhật ký goal.update có changes.account_id; tài khoản Ví Thưởng → 409 account_is_reward; phao → lưu; B lẫn % → 400; khoản nợ đã có mục tiêu → 409 debt_has_goal; đường /earmarks* cũ → 404", async () => {
     const patch = (body: Record<string, unknown>) => call<{ goal: Goal }>("PATCH", "/v1/settings/goals/car-service", body);
     expect(err(await patch({ account_id: "vcb-husband" }))).toEqual([409, "account_not_reserve"]);
     expect(err(await patch({ account_id: "khong-co" }))).toEqual([409, "account_not_reserve"]);
-    expect(err(await patch({ account_id: "mb-tuition" }))).toEqual([409, "account_has_goal"]);
-    expect(err(await patch({ account_id: "mb-reward" }))).toEqual([409, "account_has_goal"]);
+    expect(err(await patch({ account_id: "mb-reward" }))).toEqual([409, "account_is_reward"]);
     expect(await goalOf("car-service")).toMatchObject({ account_id: null, held: null });
+    const shared = await patch({ account_id: "mb-tuition" });
+    expect(shared.status).toBe(200);
+    expect(raw.prepare("SELECT id FROM reserve_goals WHERE account_id = 'mb-tuition' AND active = 1 ORDER BY id").all()).toEqual([{ id: "car-service" }, { id: "tuition" }]);
+    expect(auditOf("goal.update")).toEqual([
+      { target: "goal:car-service", detail: { fields: ["account_id"], changes: { account_id: { from: null, to: "mb-tuition" } } } },
+    ]);
+    raw.exec("UPDATE reserve_goals SET account_id = NULL WHERE id = 'car-service'");
 
     const linked = await patch({ account_id: "phao" });
     expect(linked.status).toBe(200);
     expect(linked.json.data.goal).toMatchObject({ id: "car-service", account_id: "phao", held: 5_000_000, target_amount: 4_800_000, active: true });
-    expect(auditOf("goal.update")).toEqual([
-      { target: "goal:car-service", detail: { fields: ["account_id"], changes: { account_id: { from: null, to: "phao" } } } },
-    ]);
+    expect(auditOf("goal.update").at(-1)).toEqual({ target: "goal:car-service", detail: { fields: ["account_id"], changes: { account_id: { from: null, to: "phao" } } } });
 
     const both = await call("POST", "/v1/settings/goals", { name: "Thuế 2027", target_amount: 1_000_000, target_pct: 10 });
     expect([both.status, both.json.error?.code, both.json.error?.field]).toEqual([400, "invalid_input", "target_pct"]);
@@ -112,8 +117,8 @@ describe("mục tiêu Dự phòng là một tài khoản thật (UC-1209)", () =
     const created = await call<{ goal: Goal }>("POST", "/v1/settings/goals", { name: "Hoá đơn", monthly_amount: 1_300_000, repeat_months: 1 });
     expect(created.status).toBe(201);
     expect(created.json.data.goal).toEqual({
-      id: "hoa-don", name: "Hoá đơn", account_id: null, suggested_account_id: null, held: null, target_amount: 1_300_000, target_pct: null,
-      monthly_amount: 1_300_000, repeat_months: 1, due_date: null, debt_id: null, sort: 100, active: true,
+      id: "hoa-don", name: "Hoá đơn", account_id: null, suggested_account_id: null, held: null, need: null, spent: 0, short: null, target_amount: 1_300_000, target_pct: null,
+      monthly_amount: 1_300_000, repeat_months: 1, due_date: null, debt_id: null, sort: 40, active: true,
     });
     expect(err(await call("POST", "/v1/settings/goals", { name: "Hoá đơn", target_amount: 1_000 }))).toEqual([409, "duplicate"]);
     expect(auditOf("goal.create")).toEqual([{ target: "goal:hoa-don", detail: { fields: ["monthly_amount", "name", "repeat_months"] } }]);
@@ -159,7 +164,7 @@ describe("mục tiêu Dự phòng là một tài khoản thật (UC-1209)", () =
     expect(raw.prepare("SELECT COUNT(*) AS n FROM config WHERE k = 'surplus_reward_account'").get()).toEqual({ n: 0 });
   });
 
-  it("UC-1209 AC-6: Ví Thưởng và tài khoản mục tiêu không trùng kể cả khi hai máy ghi cùng lúc — trigger huỷ câu ghi sau (account_is_reward / reward_has_goal); API trả 409 account_has_goal / 400 invalid_account, dữ liệu giữ lần ghi trước", async () => {
+  it("UC-1209 AC-6: Ví Thưởng và tài khoản mục tiêu không trùng kể cả khi hai máy ghi cùng lúc — trigger huỷ câu ghi sau (account_is_reward / reward_has_goal); API trả 409 account_is_reward / 400 invalid_account, dữ liệu giữ lần ghi trước", async () => {
     const reward = () => (raw.prepare("SELECT v FROM config WHERE k = 'surplus_reward_account'").get() as { v: string } | undefined)?.v ?? null;
     const goalAccount = () => (raw.prepare("SELECT account_id FROM reserve_goals WHERE id = 'car-service'").get() as { account_id: string | null }).account_id;
     const setReward = (v: string) => raw.prepare("INSERT INTO config (k, v) VALUES ('surplus_reward_account', ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v").run(v);
@@ -200,14 +205,14 @@ describe("mục tiêu Dự phòng là một tài khoản thật (UC-1209)", () =
     };
     racing(/^UPDATE reserve_goals SET name/, () => setReward("phao"));
     const patched = await call("PATCH", "/v1/settings/goals/car-service", { account_id: "phao" });
-    expect([...err(patched), patched.json.error?.field]).toEqual([409, "account_has_goal", "account_id"]);
+    expect([...err(patched), patched.json.error?.field]).toEqual([409, "account_is_reward", "account_id"]);
     expect(patched.json.error?.message).toContain("là tài khoản Ví Thưởng");
     expect([reward(), goalAccount()]).toEqual(["phao", null]);
 
     setReward("mb-reward");
     racing(/^\s*INSERT INTO reserve_goals/, () => setReward("phao"));
     const created = await call("POST", "/v1/settings/goals", { name: "Hoá đơn", target_amount: 1_300_000, account_id: "phao" });
-    expect(err(created)).toEqual([409, "account_has_goal"]);
+    expect(err(created)).toEqual([409, "account_is_reward"]);
     expect(raw.prepare("SELECT COUNT(*) AS n FROM reserve_goals WHERE id = 'hoa-don'").get()).toEqual({ n: 0 });
 
     setReward("mb-reward");
@@ -216,6 +221,125 @@ describe("mục tiêu Dự phòng là một tài khoản thật (UC-1209)", () =
     expect([...err(put), put.json.error?.field]).toEqual([400, "invalid_account", "surplus_reward_account"]);
     expect([reward(), goalAccount()]).toEqual(["mb-reward", "phao"]);
     expect(auditOf("config.update")).toEqual([]);
+  });
+});
+
+describe("nhiều mục tiêu dùng chung một tài khoản (UC-1209 bước 9, 10)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(SHARED_NOW);
+    raw = householdShared({ linked: false });
+    env = { DB: asD1(raw), API_TOKEN: "tok" } as Env;
+  });
+  afterEach(() => vi.useRealTimers());
+
+  type Group = { accountId: string; balance: number; need: number | null; spent: number; short: number | null; extra: number | null; goalIds: string[] };
+  type FullGoal = SnapGoal & { need: number | null; spent: number; short: number | null };
+  const reserve = async () => (await call<{ pockets: { reserve: { total: number; goals: FullGoal[]; groups: Group[] } } }>("GET", "/v1/snapshot")).json.data.pockets.reserve;
+  const heldOf = (goals: FullGoal[]) => Object.fromEntries(goals.map((g) => [g.id, g.held]));
+  const sorts = () => Object.fromEntries((raw.prepare("SELECT id, sort FROM reserve_goals WHERE active = 1").all() as { id: string; sort: number }[]).map((r) => [r.id, r.sort]));
+
+  it("UC-1209 AC-8: gắn Học tập vào tài khoản đang có Nhà ở → 200; Nhà ở 7.500.000, Học tập 4.500.000; nhóm thiếu 1.500.000; sau chuyển 3.000.000 → Học tập 7.500.000 (mục tiêu cuối nhận phần còn lại), extra 1.500.000", async () => {
+    const linked = await call<{ goal: Goal }>("PATCH", "/v1/settings/goals/hoc-tap", { account_id: "tk-tiet-kiem" });
+    expect(linked.status).toBe(200);
+    expect(auditOf("goal.update")).toEqual([{ target: "goal:hoc-tap", detail: { fields: ["account_id"], changes: { account_id: { from: null, to: "tk-tiet-kiem" } } } }]);
+    let r = await reserve();
+    expect([heldOf(r.goals)["nha-o"], heldOf(r.goals)["hoc-tap"]]).toEqual([7_500_000, 4_500_000]);
+    expect(r.goals.find((g) => g.id === "hoc-tap")!.spent).toBe(0);
+    expect(r.groups.find((g) => g.accountId === "tk-tiet-kiem")).toEqual({
+      accountId: "tk-tiet-kiem", name: "MB tiết kiệm", balance: 12_000_000, need: 13_500_000, spent: 0, short: 1_500_000, extra: 0, goalIds: ["nha-o", "hoc-tap"],
+    });
+    const txBefore = Number((raw.prepare("SELECT COUNT(*) AS n FROM transactions").get() as { n: number }).n);
+    expect((await call("POST", "/v1/transactions", { meaning: "transfer", amount: 3_000_000, account_id: "vcb-husband", to_account_id: "tk-tiet-kiem" })).status).toBe(201);
+    r = await reserve();
+    expect([heldOf(r.goals)["nha-o"], heldOf(r.goals)["hoc-tap"]]).toEqual([7_500_000, 7_500_000]);
+    expect(r.groups.find((g) => g.accountId === "tk-tiet-kiem")).toMatchObject({ short: 0, extra: 1_500_000 });
+    const book = raw.prepare("SELECT SUM(b.book_balance) AS s FROM v_account_book b JOIN accounts a ON a.id = b.account_id WHERE a.pocket = 'reserve'").get() as { s: number };
+    expect(r.total).toBe(book.s);
+    expect(raw.prepare("SELECT COUNT(*) AS n FROM transactions").get()).toEqual({ n: txBefore + 1 });
+  });
+
+  it("UC-1209 AC-9: mục tiêu mới chen theo hạn, đánh số lại 10…70 cùng batch; PUT /goals/order đổi thứ tự và ghi nhật ký goal.order; ids sai → 400 invalid_order; đổi hạn không đổi thứ tự", async () => {
+    raw.exec("UPDATE reserve_goals SET account_id = 'tk-tiet-kiem' WHERE id = 'hoc-tap'");
+    raw.exec("UPDATE reserve_goals SET account_id = NULL WHERE id = 'hieu-hi'");
+    const created = await call<{ goal: Goal }>("POST", "/v1/settings/goals", { name: "Sửa nhà", target_amount: 10_000_000, due_date: "2027-01-01" });
+    expect(created.status).toBe(201);
+    expect(sorts()).toEqual({ "hoa-don": 10, "nha-o": 20, "sua-nha": 30, "hoc-tap": 40, "bao-duong-xe": 50, "hieu-hi": 60, thue: 70 });
+    const ids = ["hoa-don", "hoc-tap", "nha-o", "sua-nha", "bao-duong-xe", "hieu-hi", "thue"];
+    const ordered = await call<{ goals: Goal[] }>("PUT", "/v1/settings/goals/order", { ids });
+    expect(ordered.status).toBe(200);
+    expect(sorts()).toEqual({ "hoa-don": 10, "hoc-tap": 20, "nha-o": 30, "sua-nha": 40, "bao-duong-xe": 50, "hieu-hi": 60, thue: 70 });
+    const r = await reserve();
+    expect([heldOf(r.goals)["hoc-tap"], heldOf(r.goals)["nha-o"]]).toEqual([6_000_000, 6_000_000]);
+    expect(r.groups.find((g) => g.accountId === "tk-tiet-kiem")).toMatchObject({ short: 1_500_000, goalIds: ["hoc-tap", "nha-o"] });
+    expect(auditOf("goal.order")).toEqual([
+      { target: "goal:*", detail: { changes: { from: ["hoa-don", "nha-o", "sua-nha", "hoc-tap", "bao-duong-xe", "hieu-hi", "thue"], to: ids } } },
+    ]);
+    const before = sorts();
+    for (const bad of [ids.filter((id) => id !== "thue"), [...ids.slice(0, 5), "hieu-hi", "hieu-hi"], [...ids.slice(0, 6), "khong-co"], "x", [...ids, "thue"]]) {
+      expect(err(await call("PUT", "/v1/settings/goals/order", { ids: bad })), JSON.stringify(bad)).toEqual([400, "invalid_order"]);
+    }
+    expect(sorts()).toEqual(before);
+    expect((await call("PATCH", "/v1/settings/goals/hoc-tap", { due_date: "2026-11-30" })).status).toBe(200);
+    expect(sorts()).toEqual(before);
+  });
+
+  it("UC-1209 AC-10: Thuế giữ tài khoản riêng — gắn Thuế vào tài khoản chung, gắn mục tiêu khác vào TK thuế, đổi Học tập (đang chung) sang % → 409 tax_account_shared, không đổi gì; hai máy: trigger 0042 huỷ câu ghi sau", async () => {
+    raw.exec("UPDATE reserve_goals SET account_id = 'tk-tiet-kiem' WHERE id = 'hoc-tap'");
+    raw.exec("UPDATE reserve_goals SET account_id = NULL WHERE id = 'hieu-hi'");
+    const snapshotRows = () => raw.prepare("SELECT id, account_id, target_amount, target_pct, active FROM reserve_goals ORDER BY id").all();
+    const before = snapshotRows();
+    const tax = await call("GET", "/v1/tax/2026");
+    expect(err(await call("PATCH", "/v1/settings/goals/thue", { account_id: "tk-tiet-kiem" }))).toEqual([409, "tax_account_shared"]);
+    expect(err(await call("PATCH", "/v1/settings/goals/hieu-hi", { account_id: "tk-thue" }))).toEqual([409, "tax_account_shared"]);
+    const pct = await call("PATCH", "/v1/settings/goals/hoc-tap", { target_pct: 5, target_amount: null });
+    expect(err(pct)).toEqual([409, "tax_account_shared"]);
+    expect(pct.json.error?.message).toBe("Thuế cần tài khoản riêng: thuế đã nộp đếm mọi khoản chi từ tài khoản này.");
+    expect(snapshotRows()).toEqual(before);
+
+    // Hai máy: cả hai đã qua bước kiểm ở code; câu ghi của máy kia chen vào ngay trước câu ghi.
+    const base = asD1(raw);
+    const plain = env;
+    const racing = (pattern: RegExp, competitor: () => void) => {
+      let fired = false;
+      const prepare = (sql: string) => {
+        if (!fired && pattern.test(sql)) {
+          fired = true;
+          competitor();
+        }
+        return base.prepare(sql);
+      };
+      env = { ...plain, DB: { ...base, prepare, batch: base.batch.bind(base) } as D1Database };
+    };
+    racing(/^UPDATE reserve_goals SET name/, () => raw.exec("UPDATE reserve_goals SET account_id = 'tk-moi' WHERE id = 'hieu-hi'"));
+    expect(err(await call("PATCH", "/v1/settings/goals/thue", { account_id: "tk-moi" }))).toEqual([409, "tax_account_shared"]);
+    expect(raw.prepare("SELECT id, account_id FROM reserve_goals WHERE id IN ('hieu-hi', 'thue') ORDER BY id").all()).toEqual([
+      { id: "hieu-hi", account_id: "tk-moi" },
+      { id: "thue", account_id: "tk-thue" },
+    ]);
+    raw.exec("UPDATE reserve_goals SET account_id = NULL WHERE id = 'hieu-hi'");
+    racing(/^UPDATE reserve_goals SET name/, () => raw.exec("UPDATE reserve_goals SET account_id = 'tk-moi' WHERE id = 'thue'"));
+    expect(err(await call("PATCH", "/v1/settings/goals/hieu-hi", { account_id: "tk-moi" }))).toEqual([409, "tax_account_shared"]);
+    expect(raw.prepare("SELECT id, account_id FROM reserve_goals WHERE id IN ('hieu-hi', 'thue') ORDER BY id").all()).toEqual([
+      { id: "hieu-hi", account_id: null },
+      { id: "thue", account_id: "tk-moi" },
+    ]);
+    env = plain;
+    raw.exec("UPDATE reserve_goals SET account_id = 'tk-thue' WHERE id = 'thue'");
+    expect(await call("GET", "/v1/tax/2026")).toEqual(tax);
+  });
+
+  it("UC-1209 AC-12: giữ tài khoản dùng chung — tắt Nhà ở → Học tập nhận cả 12.000.000; Ví Thưởng → 400 invalid_account; đổi ngăn khi còn Học tập → 409 account_has_goal; tắt Học tập rồi đổi ngăn được", async () => {
+    raw.exec("UPDATE reserve_goals SET account_id = 'tk-tiet-kiem' WHERE id = 'hoc-tap'");
+    expect((await call("PATCH", "/v1/settings/goals/nha-o", { active: false })).status).toBe(200);
+    const r = await reserve();
+    expect(r.goals.find((g) => g.id === "hoc-tap")).toMatchObject({ held: 12_000_000, short: 0 });
+    expect(r.groups.find((g) => g.accountId === "tk-tiet-kiem")).toMatchObject({ goalIds: ["hoc-tap"], extra: 6_000_000 });
+    expect(err(await call("PUT", "/v1/settings/config", { surplus_reward_account: "tk-tiet-kiem" }))).toEqual([400, "invalid_account"]);
+    expect(err(await call("PATCH", "/v1/settings/accounts/tk-tiet-kiem", { pocket: "operating" }))).toEqual([409, "account_has_goal"]);
+    expect(accountRow("tk-tiet-kiem")).toMatchObject({ pocket: "reserve", active: 1 });
+    expect((await call("PATCH", "/v1/settings/goals/hoc-tap", { active: false })).status).toBe(200);
+    expect((await call("PATCH", "/v1/settings/accounts/tk-tiet-kiem", { pocket: "operating" })).status).toBe(200);
   });
 });
 

@@ -3,6 +3,7 @@
 // sai); huỷ giao dịch kéo theo kỳ / việc gắn nó. Mục tiêu Dự phòng là tài khoản thật: A = số dư tài khoản, không sổ riêng.
 // Nhập tay, Gán, ingest, MCP đều đi qua đây.
 
+import type { AuditAction } from "../domain/audit-actions";
 import type { TxRow } from "../domain/entry";
 import {
   DEFAULT_SURPLUS_SAVINGS_PCT,
@@ -27,9 +28,10 @@ import {
   type TaskStatus,
 } from "../domain/pay-cycle";
 import { dayKey } from "../domain/period";
-import { DEFAULT_SAVINGS_PCT, type Pocket } from "../domain/pockets";
+import { DEFAULT_SAVINGS_PCT, goalOrder, type Pocket } from "../domain/pockets";
 import { DEFAULT_PAYDAY_DAY, nextPayday } from "../domain/snapshot";
 import { DomainError, type Refs } from "../domain/types";
+import { goalFill } from "./pockets";
 import { hiddenAccountIds, txVisibility } from "./privacy";
 
 type Row = Record<string, unknown>;
@@ -88,21 +90,19 @@ export async function cycleConfig(db: D1Database): Promise<CycleConfig> {
 }
 
 /**
- * Mục tiêu Dự phòng đang dùng ĐÃ GẮN tài khoản (đang dùng), A = số dư sổ của tài khoản đó, theo thứ tự `reserve.goals`
- * (hạn gần trước, chưa có hạn cuối, rồi tên). Mục tiêu chưa gắn không sinh việc (UC-1206 bước 3).
+ * Mục tiêu Dự phòng đang dùng ĐÃ GẮN tài khoản (đang dùng), theo thứ tự ưu tiên (`goalOrder`), A = phần của mục tiêu khi
+ * chia số dư tài khoản (`fillGoals`) = đã có + đã chi từ `since` (đầu kỳ) — khoản đã chi cho mục tiêu trong kỳ đã dùng phần
+ * của nó, không cần nạp lại (UC-1206 bước 3, AC-14). Mục tiêu chưa gắn không sinh việc.
  */
-async function activeGoals(db: D1Database): Promise<GoalInput[]> {
-  const list = rows<GoalInput & { name: string }>(
-    await db
-      .prepare(
-        `SELECT g.id, g.name, b.book_balance AS held, g.target_amount AS target, g.target_pct AS targetPct, g.monthly_amount AS monthly, g.due_date AS dueDate
-         FROM reserve_goals g JOIN v_account_book b ON b.account_id = g.account_id WHERE g.active = 1`,
-      )
-      .all(),
-  ).map((g) => ({ ...g, held: Number(g.held) }));
-  return list.sort(
-    (a, b) => (a.dueDate === b.dueDate ? 0 : a.dueDate === null ? 1 : b.dueDate === null ? -1 : a.dueDate < b.dueDate ? -1 : 1) || a.name.localeCompare(b.name, "vi"),
-  );
+async function activeGoals(db: D1Database, since: string): Promise<GoalInput[]> {
+  const { inputs, active, filled } = await goalFill(db, since);
+  return inputs
+    .filter((g) => active.has(g.id) && filled.has(g.id))
+    .sort(goalOrder)
+    .map((g) => {
+      const f = filled.get(g.id)!;
+      return { id: g.id, held: f.held + f.spent, target: g.target, targetPct: g.targetPct, monthly: g.monthly, dueDate: g.dueDate };
+    });
 }
 
 /**
@@ -177,7 +177,6 @@ export async function incomeStatements(
     streamPocket: (stream?.pocket ?? null) as Pocket | null,
   };
   const guard = opts.guardTxId ? ` AND EXISTS (SELECT 1 FROM transactions WHERE id = ${Number(opts.guardTxId)} AND status = 'active')` : "";
-  const goals = await activeGoals(db);
   const insertTask = (t: TaskDraft, where: string, binds: unknown[]) =>
     db
       .prepare(
@@ -188,7 +187,7 @@ export async function incomeStatements(
 
   if (!opts.opensCycle) {
     if (!cur || row.at < cur.started_at) return none;
-    const drafts = incomeTasks(income, cfg.savingsPct, goals);
+    const drafts = incomeTasks(income, cfg.savingsPct, await activeGoals(db, cur.started_at));
     return {
       statements: drafts.map((t) => insertTask(t, "c.id = ?", [cur.id])),
       plan: { decision: "attach", payday: cur.payday, startedAt: cur.started_at, tasks: drafts.length },
@@ -198,13 +197,15 @@ export async function incomeStatements(
   const decision = cycleDecision(cur?.payday ?? null, payday);
   if (decision === "skip") return { statements: [], plan: { decision, payday, startedAt: null, tasks: 0 } };
   if (decision === "join") {
-    const drafts = incomeTasks(income, cfg.savingsPct, goals);
+    const drafts = incomeTasks(income, cfg.savingsPct, await activeGoals(db, cur!.started_at));
     return {
       statements: drafts.map((t) => insertTask(t, "c.payday = ?", [payday])),
       plan: { decision, payday, startedAt: cur!.started_at, tasks: drafts.length },
     };
   }
   const prev = await prevOperatingAt(db, row.at, opts.excludeTxId ?? null);
+  // A lúc mở kỳ: đã chi cho mục tiêu tính từ lúc khoản lương này mở kỳ (`started_at = row.at`, UC-1206 bước 3).
+  const goals = await activeGoals(db, row.at);
   const drafts = openingTasks(income, { savingsPct: cfg.savingsPct, goals, cyclePayday: payday, paydayDay: cfg.paydayDay, prevOperating: prev, surplusPct: cfg.surplusPct, rewardAccountId: cfg.rewardAccountId });
   return {
     statements: [
@@ -274,17 +275,17 @@ interface GoalRow {
   held: number | null;
 }
 
-/** Mọi mục tiêu (cả đã tắt — việc cũ vẫn trỏ tới), kèm tài khoản đích và A hiện tại. */
-async function goalRows(db: D1Database): Promise<Map<string, GoalRow>> {
-  const list = rows<GoalRow>(
-    await db
-      .prepare(
-        `SELECT g.id, g.name, g.target_amount AS target, CASE WHEN g.active = 1 THEN b.account_id END AS accountId, CASE WHEN g.active = 1 THEN b.book_balance END AS held
-         FROM reserve_goals g LEFT JOIN v_account_book b ON b.account_id = g.account_id`,
-      )
-      .all(),
+/** Mọi mục tiêu (cả đã tắt — việc cũ vẫn trỏ tới), kèm tài khoản đích và A hiện tại (đã chia, đã chi từ `since`). */
+async function goalRows(db: D1Database, since: string): Promise<Map<string, GoalRow>> {
+  const { inputs, active, filled, rows: raw } = await goalFill(db, since);
+  const balanceOf = new Map(raw.map((r) => [String(r.id), r.balance]));
+  return new Map(
+    inputs.map((g) => {
+      const f = filled.get(g.id);
+      const linked = active.has(g.id) && g.accountId !== null && balanceOf.get(g.id) !== null;
+      return [g.id, { id: g.id, name: g.name, target: g.target, accountId: linked ? g.accountId : null, held: f ? f.held : null }];
+    }),
   );
-  return new Map(list.map((g) => [g.id, { ...g, target: g.target === null ? null : Number(g.target), held: g.held === null ? null : Number(g.held) }]));
 }
 
 /** Tài khoản đích của một việc: ② → tài khoản của mục tiêu (đọc lúc này), ④ → Ví Thưởng → `to_account_id`; còn lại null. */
@@ -321,7 +322,7 @@ export async function afterWrite(db: D1Database): Promise<{ tasksDone: { id: num
   const cur = await currentCycle(db);
   if (!cur) return { tasksDone: [] };
   const tasks = await cycleTasks(db, cur.id);
-  const goals = tasks.some((t) => t.kind === "goal") ? await goalRows(db) : new Map<string, GoalRow>();
+  const goals = tasks.some((t) => t.kind === "goal") ? await goalRows(db, cur.started_at) : new Map<string, GoalRow>();
   const open: MatchTask[] = tasks
     .map((t) => ({ t, s: taskState(t, t.linked) }))
     .filter(({ s }) => s.state === "open")
@@ -376,7 +377,7 @@ export async function payCycleView(
   const cfg = await cycleConfig(db);
   const [tasks, goals, accounts, sources, prev, hidden] = await Promise.all([
     cycleTasks(db, cur.id),
-    goalRows(db),
+    goalRows(db, cur.started_at),
     db
       .prepare("SELECT id, name, bank, account_no AS accountNo, sub_account AS subAccount, pocket, active FROM accounts ORDER BY kind, name")
       .all<{ id: string; name: string; bank: string | null; accountNo: string | null; subAccount: string | null; pocket: Pocket | null; active: number }>(),
@@ -478,7 +479,7 @@ const amountOf = (v: unknown): number => {
 
 export interface TaskActionResult {
   view: PayCycleView | null;
-  audit: { action: string; detail: Record<string, unknown> };
+  audit: { action: AuditAction; detail: Record<string, unknown> };
 }
 
 /** View sau khi tick / bỏ qua / sửa, nhìn như người làm (`memberId`). */
@@ -497,7 +498,8 @@ export async function markTaskDone(db: D1Database, id: number, b: Record<string,
   if (taskState(t, t.linked).state !== "open") fail("task_done", "Việc này đã xong hoặc đã bỏ qua.", 409);
   const amount = b.amount === undefined || b.amount === null ? t.amount - t.linked : amountOf(b.amount);
   if (t.kind === "goal") {
-    const goal = t.goal_id ? (await goalRows(db)).get(t.goal_id) : undefined;
+    // Chỉ cần tài khoản đích của mục tiêu (đã chi không đổi tài khoản): mốc đã chi lấy lúc này.
+    const goal = t.goal_id ? (await goalRows(db, now.toISOString())).get(t.goal_id) : undefined;
     if (!goal?.accountId) fail("goal_no_account", "Mục tiêu này chưa gắn tài khoản: gắn một tài khoản Dự phòng ở Cài đặt trước.", 409);
   } else if (t.kind === "surplus" && t.to_account_id) {
     const ok = await db.prepare("SELECT 1 FROM accounts WHERE id = ? AND active = 1").bind(t.to_account_id).first();

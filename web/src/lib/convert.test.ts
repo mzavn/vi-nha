@@ -9,6 +9,8 @@ import {
   convertTitle,
   cycleStreamsNote,
   cycleSwitchStreams,
+  GOAL_ORDER_NOTE,
+  goalGroupLines,
   goalRowAccounts,
   goalTerms,
   goalAccountRequest,
@@ -64,6 +66,9 @@ const goal = (id: string, name: string, over: Partial<ReserveGoal> = {}): Reserv
   account_id: null,
   suggested_account_id: null,
   held: null,
+  need: null,
+  spent: 0,
+  short: null,
   target_amount: 2_000_000,
   target_pct: null,
   monthly_amount: 2_000_000,
@@ -205,18 +210,62 @@ describe("bước 2: mỗi mục tiêu một tài khoản thật", () => {
     expect(initialGoalChoices(twice, accounts, null)).toEqual({ a: { kind: "account", accountId: "phao" }, b: null });
   });
 
-  it("UC-1208 AC-3: ô chọn của mỗi dòng chỉ có tài khoản Dự phòng đang dùng chưa thuộc dòng khác, không phải Ví Thưởng đang chọn", () => {
+  it("UC-1208 AC-3: ô chọn của mỗi dòng có tài khoản Dự phòng đang dùng (tài khoản dòng khác đã chọn kèm 'dùng chung với …'), không phải Ví Thưởng đang chọn; Ví Thưởng chỉ tài khoản không thuộc dòng nào", () => {
     const choices: Record<string, GoalChoice | null> = { "hoc-phi": { kind: "account", accountId: "tiet-kiem" }, "hoa-don": null, "thue": null };
-    expect(goalRowAccounts("hoa-don", goals, accounts, choices, "du-phong").map((a) => a.id)).toEqual(["phao"]);
-    expect(goalRowAccounts("hoc-phi", goals, accounts, choices, "du-phong").map((a) => a.id)).toEqual(["tiet-kiem", "phao"]);
+    expect(goalRowAccounts("hoa-don", goals, accounts, choices, "du-phong").map((a) => [a.id, a.shared])).toEqual([
+      ["tiet-kiem", "dùng chung với Học phí"],
+      ["phao", null],
+    ]);
+    expect(goalRowAccounts("hoc-phi", goals, accounts, choices, "du-phong").map((a) => [a.id, a.shared])).toEqual([
+      ["tiet-kiem", null],
+      ["phao", null],
+    ]);
     // Ví Thưởng chuyển sang "Chưa chọn" → tài khoản dự phòng chọn được cho mục tiêu.
-    expect(goalRowAccounts("hoa-don", goals, accounts, choices, null).map((a) => a.id)).toEqual(["phao", "du-phong"]);
-    // Ví Thưởng không chọn được tài khoản đã thuộc dòng mục tiêu.
+    expect(goalRowAccounts("hoa-don", goals, accounts, choices, null).map((a) => a.id)).toEqual(["tiet-kiem", "phao", "du-phong"]);
+    // Ví Thưởng không chọn được tài khoản đã thuộc dòng mục tiêu (UC-1208 AC-11: rewardRowAccounts giữ luật "không gắn mục tiêu").
     expect(rewardRowAccounts(accounts, goals, { ...choices, "hoa-don": { kind: "account", accountId: "phao" } }).map((a) => a.id)).toEqual(["du-phong"]);
     // Mục tiêu đang gắn mà dòng của nó chọn Để sau → tài khoản đó rảnh.
     const attached = [goal("a", "A", { account_id: "phao", held: 5_000_000 }), goal("b", "B")];
-    expect(goalRowAccounts("b", attached, accounts, { a: { kind: "later" }, b: null }, null).map((a) => a.id)).toEqual(["tiet-kiem", "phao", "du-phong"]);
-    expect(goalRowAccounts("b", attached, accounts, { a: { kind: "account", accountId: "phao" }, b: null }, null).map((a) => a.id)).toEqual(["tiet-kiem", "du-phong"]);
+    expect(goalRowAccounts("b", attached, accounts, { a: { kind: "later" }, b: null }, null).map((a) => [a.id, a.shared])).toEqual([
+      ["tiet-kiem", null],
+      ["phao", null],
+      ["du-phong", null],
+    ]);
+    expect(goalRowAccounts("b", attached, accounts, { a: { kind: "account", accountId: "phao" }, b: null }, null).find((a) => a.id === "phao")!.shared).toBe("dùng chung với A");
+  });
+
+  it("UC-1208 AC-11: Nhà ở và Học tập cùng chọn MB tiết kiệm → dòng nhóm 'MB tiết kiệm 12.000.000 ₫ cho Nhà ở, Học tập · thiếu 1.500.000 ₫' + câu thứ tự; Thuế thấy MB tiết kiệm tắt 'Thuế cần tài khoản riêng'; Tiếp gửi hai PATCH, mục tiêu % gắn sau cùng; che số", () => {
+    const house = [account("chinh", "Tài khoản chính", { pocket: "operating" }), account("tk-tiet-kiem", "MB tiết kiệm", { book_balance: 12_000_000 }), account("phao", "Phao", { book_balance: 5_000_000 })];
+    // Thứ tự server (goals theo thứ tự ưu tiên).
+    const list = [
+      goal("thue", "Thuế", { target_pct: 10, target_amount: null, monthly_amount: null, repeat_months: null, sort: 10 }),
+      goal("nha-o", "Nhà ở", { target_amount: 7_500_000, monthly_amount: 7_500_000, due_date: "2026-12-05", sort: 20 }),
+      goal("hoc-tap", "Học tập", { target_amount: 6_000_000, monthly_amount: null, repeat_months: null, due_date: "2027-01-15", sort: 30 }),
+    ];
+    const choices: Record<string, GoalChoice | null> = { "nha-o": { kind: "account", accountId: "tk-tiet-kiem" }, "hoc-tap": { kind: "account", accountId: "tk-tiet-kiem" }, thue: null };
+    expect(goalGroupLines(list, house, choices)).toEqual([{ accountId: "tk-tiet-kiem", text: `MB tiết kiệm 12.000.000${NBSP}₫ cho Nhà ở, Học tập · thiếu 1.500.000${NBSP}₫` }]);
+    expect(GOAL_ORDER_NOTE).toBe("Thứ tự ưu tiên đổi ở Cài đặt › Ba ngăn");
+    expect(goalGroupLines(list, house, { ...choices, "hoc-tap": { kind: "later" } })).toEqual([]);
+    expect(goalGroupLines(list, house.map((a) => (a.id === "tk-tiet-kiem" ? { ...a, book_balance: 15_000_000 } : a)), choices)[0]!.text).toMatch(/· dư 1\.500\.000/);
+    expect(goalGroupLines(list, house.map((a) => (a.id === "tk-tiet-kiem" ? { ...a, book_balance: 13_500_000 } : a)), choices)[0]!.text).toMatch(/· đủ$/);
+    const forTax = goalRowAccounts("thue", list, house, choices, null);
+    expect(forTax.map((a) => [a.id, a.shared, a.blocked])).toEqual([
+      ["tk-tiet-kiem", "dùng chung với Nhà ở, Học tập", "Thuế cần tài khoản riêng"],
+      ["phao", null, null],
+    ]);
+    // Dòng khác không chọn được tài khoản đã chọn cho mục tiêu %.
+    expect(goalRowAccounts("nha-o", list, house, { ...choices, thue: { kind: "account", accountId: "phao" } }, null).find((a) => a.id === "phao")!.blocked).toBe("Thuế cần tài khoản riêng");
+    expect(goalStepRequests(list, { ...choices, thue: { kind: "account", accountId: "phao" } }, { current: null, next: null })).toEqual([
+      { method: "PATCH", path: "/v1/settings/goals/nha-o", body: { account_id: "tk-tiet-kiem" } },
+      { method: "PATCH", path: "/v1/settings/goals/hoc-tap", body: { account_id: "tk-tiet-kiem" } },
+      { method: "PATCH", path: "/v1/settings/goals/thue", body: { account_id: "phao" } },
+    ]);
+    setAmountsHidden(true);
+    try {
+      expect(goalGroupLines(list, house, choices)[0]!.text).toBe(`MB tiết kiệm ••••${NBSP}₫ cho Nhà ở, Học tập · thiếu ••••${NBSP}₫`);
+    } finally {
+      setAmountsHidden(false);
+    }
   });
 
   it("UC-1208 AC-3: biến thể nhà một tài khoản — không tài khoản Dự phòng nào, chọn Để sau cho mọi mục tiêu thì Tiếp bật, không gửi gì", () => {

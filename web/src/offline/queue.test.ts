@@ -159,6 +159,22 @@ describe("hàng đợi nhập offline", () => {
     expect(server.rows.get(dup.client_id)).toMatchObject({ amount: 500_000, confirm_duplicate: true });
   });
 
+  it("UC-704 AC-28: khoản chi offline mang goal_id 'nha-o'; server 400 invalid_goal → nằm lại rejected kèm 'Mục tiêu này không thuộc tài khoản chi.'; gửi lại bỏ mục tiêu → ghi, không goal_id", async () => {
+    const { server, store, syncer } = setup();
+    const spend = { ...body(7_500_000), account_id: "tk-tiet-kiem", goal_id: "nha-o" };
+    await syncer.enqueue(spend, "wife");
+    expect((await store.list())[0]!.body.goal_id).toBe("nha-o");
+    server.failNextWith({ status: 400, payload: { ok: false, error: { code: "invalid_goal", message: "Mục tiêu này không thuộc tài khoản chi." } } });
+    await syncer.flush();
+    expect(await store.list()).toEqual([expect.objectContaining({ status: "rejected", error: { code: "invalid_goal", message: "Mục tiêu này không thuộc tài khoản chi." } })]);
+    await syncer.flush();
+    expect(server.calls).toEqual([spend.client_id]);
+    await syncer.retry(spend.client_id, { dropGoal: true });
+    expect(await store.list()).toEqual([]);
+    expect(server.rows.get(spend.client_id)).toMatchObject({ amount: 7_500_000, account_id: "tk-tiet-kiem" });
+    expect(server.rows.get(spend.client_id)).not.toHaveProperty("goal_id");
+  });
+
   it("UC-704 AC-27: khoản chi bản cũ kèm wallet_id → gửi không wallet_id, rời hàng đợi; chuyển ngân sách giữa hai ví → ở lại kèm câu, xoá được; server 400 model_changed → ở lại kèm câu", async () => {
     const { server, store, syncer } = setup();
     const oldSpend = { ...body(200_000), account_id: "main", wallet_id: "food", counter_wallet_id: null, wealth_move: "new", allocate: true } as unknown as EntryBody;

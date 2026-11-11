@@ -56,6 +56,11 @@ export interface EntryInput {
   confirm_duplicate?: boolean;
   /** Chỉ dùng cho `income`: ghi đè "Mở kỳ lương" của nguồn (pocket UC-1205 bước 2); không gửi = cờ của nguồn. */
   opens_cycle?: boolean;
+  /**
+   * Chỉ dùng cho `spend` / `transfer`: mục tiêu Dự phòng mà khoản này dùng tiền (pocket UC-1209 bước 11) — phải là mục tiêu
+   * đang dùng của tài khoản tiền ra. Không gửi: tài khoản đúng một mục tiêu thì tự gắn khi ghi (`insertTx`), còn lại NULL.
+   */
+  goal_id?: string | null;
 }
 
 export interface TxRow {
@@ -80,7 +85,10 @@ export interface TxRow {
   debt_id?: string | null;
   receivable_id?: string | null;
   interest_debt_id?: string | null;
+  goal_id?: string | null;
 }
+
+export const INVALID_GOAL = "Mục tiêu này không thuộc tài khoản chi.";
 
 const fail = (code: string, message: string): never => {
   throw new DomainError(code, message);
@@ -245,6 +253,11 @@ export function buildEntry(input: EntryInput, refs: Refs, memberId: string | nul
       row.link_id = input.link_id ?? null;
       break;
     }
+  }
+  if (input.goal_id) {
+    const from = row.account_id ? refs.accounts.find((a) => a.id === row.account_id) : undefined;
+    if ((row.meaning !== "spend" && row.meaning !== "transfer") || !from?.goalIds?.includes(input.goal_id)) fail("invalid_goal", INVALID_GOAL);
+    row.goal_id = input.goal_id;
   }
   for (const id of [row.account_id, row.counter_account_id]) {
     const touched = id ? refs.accounts.find((a) => a.id === id) : undefined;

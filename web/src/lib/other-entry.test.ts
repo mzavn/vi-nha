@@ -32,4 +32,12 @@ describe("Loại khác không ví (pwa UC-705)", () => {
     expect(queuedMissing({ ...t, toAccountId: "main" })).toBe("Hai tài khoản phải khác nhau");
     expect(queuedMissing({ ...base, categoryId: null })).toBe("Chọn danh mục");
   });
+
+  it("UC-705 AC-37: chuyển tiền từ MB tiết kiệm sang tài khoản chính chọn chip 'Nhà ở' → thân có goal_id 'nha-o'; chi tiêu cũng mang; loại khác (hoàn tiền) không mang; không chọn → không gửi", () => {
+    const t = { ...base, kind: "transfer" as const, accountId: "tk-tiet-kiem", toAccountId: "main", categoryId: null, goalId: "nha-o" };
+    expect(queuedBody(t)).toEqual({ meaning: "transfer", amount: 6_000_000, at: AT, client_id: "c3", account_id: "tk-tiet-kiem", to_account_id: "main", goal_id: "nha-o" });
+    expect(queuedBody({ ...base, accountId: "tk-tiet-kiem", goalId: "hoc-tap" })).toMatchObject({ meaning: "spend", goal_id: "hoc-tap" });
+    expect(queuedBody({ ...base, kind: "refund", goalId: "hoc-tap" })).not.toHaveProperty("goal_id");
+    expect(queuedBody({ ...t, goalId: null })).not.toHaveProperty("goal_id");
+  });
 });

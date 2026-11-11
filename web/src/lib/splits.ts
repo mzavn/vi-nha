@@ -1,6 +1,7 @@
 // Tách một log ngân hàng thành nhiều dòng: tổng các dòng phải bằng đúng số tiền log (phase 04, lớp 2).
 // Hình dạng `Split` khớp src/services/ingest.ts — không import trực tiếp vì file đó kéo theo kiểu D1. Không ví (Đợt C).
 
+import { goalField, type GoalChoice } from "./goal-choices";
 import { formatVnd } from "./money";
 import { effectsToast } from "./pay-cycle";
 import { entryToast } from "./pending";
@@ -33,6 +34,8 @@ export interface Split {
   link_id?: number | null;
   /** income: lãi tiền gửi (change 261018-lai-tien-gui) — một dòng trọn số tiền log. */
   interest?: boolean;
+  /** spend / transfer của log tiền ra: mục tiêu Dự phòng của tài khoản (chip "Cho mục tiêu", pocket UC-1209 bước 11). */
+  goal_id?: string | null;
 }
 
 /** Một dòng trên form Gán: `tenantMode` / `interestMode` là lựa chọn trên màn hình, gửi lên thành income kèm tenant_id / interest. */
@@ -113,12 +116,13 @@ export function validateSplits(total: number, splits: Split[]): SplitCheck {
 
 /**
  * Thân POST /v1/logs/:id/assign (UC-305, UC-706): mỗi dòng chỉ mang trường đúng loại — không trường ví, không
- * `transfer_order_id`, không `earmark_id`. Thu nhập mang `opens_cycle` (trừ tiền người thuê và lãi).
+ * `transfer_order_id`, không `earmark_id`. Thu nhập mang `opens_cycle` (trừ tiền người thuê và lãi). Chi / chuyển ra mang
+ * `goal_id` khi chip đã chọn thuộc `choices` (mục tiêu của tài khoản log tiền ra — UC-706 AC-39).
  */
-export function assignBody(rows: AssignRow[], createRule: boolean): { splits: Split[]; create_rule: boolean } {
+export function assignBody(rows: AssignRow[], createRule: boolean, choices: GoalChoice[] = []): { splits: Split[]; create_rule: boolean } {
   const interest = rows.find((r) => r.interestMode);
   if (interest) return { splits: [{ meaning: "income", amount: interest.amount, interest: true, ...(interest.note ? { note: interest.note } : {}) }], create_rule: createRule };
-  const splits = rows.map(({ key: _k, tenantMode, interestMode: _i, tenant_id, income_stream_id, opens_cycle, debt_id, interest_debt_id, receivable_id, link_id, other_account_id, category_id, taxable, asset_kind, ...s }): Split => ({
+  const splits = rows.map(({ key: _k, tenantMode, interestMode: _i, tenant_id, income_stream_id, opens_cycle, debt_id, interest_debt_id, receivable_id, link_id, other_account_id, category_id, taxable, asset_kind, goal_id, ...s }): Split => ({
     ...s,
     ...(s.meaning === "spend" || s.meaning === "refund" ? { category_id: category_id ?? null } : {}),
     ...(s.meaning === "transfer" ? { other_account_id } : {}),
@@ -131,6 +135,7 @@ export function assignBody(rows: AssignRow[], createRule: boolean): { splits: Sp
     ...(s.meaning === "spend" && interest_debt_id ? { interest_debt_id } : {}),
     ...((s.meaning === "lend" || s.meaning === "collect") && receivable_id ? { receivable_id } : {}),
     ...((s.meaning === "refund" || s.meaning === "collect") && link_id ? { link_id } : {}),
+    ...(s.meaning === "spend" || s.meaning === "transfer" ? goalField(goal_id, choices) : {}),
   }));
   return { splits, create_rule: createRule };
 }

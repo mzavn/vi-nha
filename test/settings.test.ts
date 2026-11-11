@@ -5,6 +5,7 @@ import { notifyMembers } from "../src/notify/telegram";
 import { testSepay, testTelegram, updateAccount } from "../src/services/settings";
 import { asD1, openDb } from "./helpers/d1-sqlite";
 import { client, householdP } from "./helpers/household-p";
+import { householdShared, SHARED_NOW, sharedTx } from "./helpers/household-shared";
 
 let env: Env;
 let raw: ReturnType<typeof openDb>;
@@ -35,9 +36,9 @@ describe("đọc cài đặt", () => {
     expect((await call("GET", "/v1/settings", undefined, false)).status).toBe(401);
   });
 
-  it("UC-505 AC-1: trả đúng mười phần, kèm URL webhook để dán vào SePay", async () => {
+  it("UC-505 AC-1: trả đúng mười một phần, kèm URL webhook để dán vào SePay", async () => {
     const { json } = await call("GET", "/v1/settings");
-    expect(Object.keys(json.data).sort()).toEqual(["accounts", "categories", "categoryGroups", "config", "goals", "incomeStreams", "integrations", "members", "notifySchedule", "rules"]);
+    expect(Object.keys(json.data).sort()).toEqual(["accounts", "categories", "categoryGroups", "config", "goal_groups", "goals", "incomeStreams", "integrations", "members", "notifySchedule", "rules"]);
     expect(json.data.integrations.webhook_url).toBe("https://app.example.com/webhooks/sepay");
     expect(json.data.config).toMatchObject({ salary_min_amount: 1_000_000, safety_fund_months: 6, fi_swr_bps: 350, fi_safety_months: "6,12,24", fi_birth_year: null });
     expect(json.data.notifySchedule).toEqual({
@@ -77,7 +78,7 @@ describe("đọc cài đặt", () => {
       for (const k of ["spendable", "locked", "role"]) expect(a, a.id).not.toHaveProperty(k);
       for (const k of ["pocket", "pocket_confirmed", "private"]) expect(a, a.id).toHaveProperty(k);
     }
-    expect(data.goals.map((g: any) => g.id)).toEqual(["tuition", "income-tax", "car-service"]);
+    expect(data.goals.map((g: any) => g.id)).toEqual(["tuition", "car-service", "income-tax"]);
     expect(data.config.surplus_reward_account).toBe("mb-reward");
   });
 });
@@ -639,7 +640,7 @@ describe("ba ngăn: cấu hình (261112-ba-ngan-nen-du-lieu)", () => {
       detail: JSON.parse(r.detail),
     }));
 
-  it("UC-505 AC-15: GET /v1/settings trên hộ mẫu có ngăn tài khoản, ngăn nguồn thu, goals[] (held = số dư sổ tài khoản gắn, chưa gắn → null), nhóm danh mục, % Tích luỹ", async () => {
+  it("UC-505 AC-15: GET /v1/settings trên hộ mẫu có ngăn tài khoản, ngăn nguồn thu, goals[] theo thứ tự ưu tiên (held = đã có — một mục tiêu một tài khoản thì = số dư sổ tài khoản gắn, chưa gắn → null), nhóm danh mục, % Tích luỹ", async () => {
     raw.exec("UPDATE accounts SET opening_balance = 2500000 WHERE id = 'mb-tuition'");
     const { data } = (await call("GET", "/v1/settings")).json;
     expect(data.accounts.find((a: any) => a.id === "vcb-husband")).toMatchObject({ pocket: "operating", pocket_confirmed: true });
@@ -648,19 +649,44 @@ describe("ba ngăn: cấu hình (261112-ba-ngan-nen-du-lieu)", () => {
     expect(data.config.savings_pct).toBe(30);
     for (const g of data.goals) {
       expect(Object.keys(g).sort()).toEqual(
-        ["account_id", "active", "debt_id", "due_date", "held", "id", "monthly_amount", "name", "repeat_months", "sort", "suggested_account_id", "target_amount", "target_pct"].sort(),
+        ["account_id", "active", "debt_id", "due_date", "held", "id", "monthly_amount", "name", "need", "repeat_months", "short", "sort", "spent", "suggested_account_id", "target_amount", "target_pct"].sort(),
       );
     }
     expect(data.goals).toEqual([
-      { id: "tuition", name: "Học phí", account_id: "mb-tuition", suggested_account_id: null, held: 2_500_000, target_amount: 6_000_000, target_pct: null, monthly_amount: 2_000_000, repeat_months: 3, due_date: "2027-01-15", debt_id: null, sort: 10, active: true },
-      { id: "income-tax", name: "Thuế thu nhập", account_id: null, suggested_account_id: null, held: null, target_amount: null, target_pct: 10, monthly_amount: null, repeat_months: null, due_date: null, debt_id: null, sort: 20, active: true },
-      { id: "car-service", name: "Bảo dưỡng xe", account_id: null, suggested_account_id: null, held: null, target_amount: 4_800_000, target_pct: null, monthly_amount: null, repeat_months: null, due_date: "2027-03-31", debt_id: null, sort: 30, active: true },
+      { id: "tuition", name: "Học phí", account_id: "mb-tuition", suggested_account_id: null, held: 2_500_000, need: 6_000_000, spent: 0, short: 3_500_000, target_amount: 6_000_000, target_pct: null, monthly_amount: 2_000_000, repeat_months: 3, due_date: "2027-01-15", debt_id: null, sort: 10, active: true },
+      { id: "car-service", name: "Bảo dưỡng xe", account_id: null, suggested_account_id: null, held: null, need: null, spent: 0, short: null, target_amount: 4_800_000, target_pct: null, monthly_amount: null, repeat_months: null, due_date: "2027-03-31", debt_id: null, sort: 20, active: true },
+      { id: "income-tax", name: "Thuế thu nhập", account_id: null, suggested_account_id: null, held: null, need: null, spent: 0, short: null, target_amount: null, target_pct: 10, monthly_amount: null, repeat_months: null, due_date: null, debt_id: null, sort: 30, active: true },
     ]);
+    expect(data.goal_groups).toEqual([{ account_id: "mb-tuition", balance: 2_500_000, need: 6_000_000, spent: 0, short: 3_500_000, extra: 0, goal_ids: ["tuition"] }]);
     // Mục tiêu đã tắt vẫn có trong danh sách.
     raw.exec("UPDATE reserve_goals SET active = 0 WHERE id = 'car-service'");
     expect((await call("GET", "/v1/settings")).json.data.goals.find((g: any) => g.id === "car-service")).toMatchObject({ active: false });
     expect(data.categoryGroups.find((g: any) => g.id === "food")).toEqual({ id: "food", name: "Ăn uống", essential: true, cycle_limit: 2_709_000, sort: 41, active: true });
     expect(data.categories.find((c: any) => c.id === "groceries").groupId).toBe("food");
+  });
+
+  it("UC-505 AC-18: nhóm tài khoản chung — goals[] theo sort, held như snapshot, spent 0; sau khoản chi 7.500.000 gắn Nhà ở → Nhà ở held 0, spent 7.500.000, short 0; goal_groups cùng số với snapshot.pockets.reserve.groups", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(SHARED_NOW);
+    try {
+      raw = householdShared();
+      env = { DB: asD1(raw), API_TOKEN: "tok" } as Env;
+      let data = (await call("GET", "/v1/settings")).json.data;
+      expect(data.goals.filter((g: any) => g.active).map((g: any) => g.id)).toEqual(["hoa-don", "nha-o", "hoc-tap", "bao-duong-xe", "hieu-hi", "thue"]);
+      const heldOf = (goals: any[]) => Object.fromEntries(goals.filter((g) => g.active !== false).map((g) => [g.id, g.held]));
+      expect(heldOf(data.goals)).toEqual({ "hoa-don": 2_000_000, "nha-o": 7_500_000, "hoc-tap": 4_500_000, "bao-duong-xe": 4_800_000, "hieu-hi": 2_200_000, thue: 1_500_000 });
+      expect(data.goals.every((g: any) => g.spent === 0)).toBe(true);
+      sharedTx(raw, { at: "2026-11-12 09:00", meaning: "spend", amount: 7_500_000, from: "tk-tiet-kiem", goal: "nha-o" });
+      data = (await call("GET", "/v1/settings")).json.data;
+      expect(data.goals.find((g: any) => g.id === "nha-o")).toMatchObject({ held: 0, spent: 7_500_000, short: 0 });
+      const snap = (await call("GET", "/v1/snapshot", undefined, true, as("husband"))).json.data.pockets.reserve;
+      expect(data.goal_groups).toEqual(
+        snap.groups.map((g: any) => ({ account_id: g.accountId, balance: g.balance, need: g.need, spent: g.spent, short: g.short, extra: g.extra, goal_ids: g.goalIds })),
+      );
+      expect(heldOf(data.goals)).toEqual(heldOf(snap.goals));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("UC-1204 AC-2: nhóm danh mục — tạo, trùng, bỏ hạn mức, hạn mức 0, tắt khi còn danh mục", async () => {

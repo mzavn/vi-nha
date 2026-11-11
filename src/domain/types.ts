@@ -28,6 +28,8 @@ export interface AccountRef {
   pocket: "savings" | "reserve" | "operating" | null;
   /** Tài khoản riêng tư (access UC-504): người khác chỉ thấy tổng. */
   private: boolean;
+  /** Mục tiêu Dự phòng đang dùng gắn tài khoản này, theo thứ tự ưu tiên (pocket UC-1209). `loadRefs` luôn điền. */
+  goalIds?: string[];
 }
 
 export interface MemberRef {

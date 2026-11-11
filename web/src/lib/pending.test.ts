@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { pocketsView } from "../../../src/domain/pockets";
 import type { QueuedEntry } from "../offline/queue";
-import { nearSpendB, pocketsB } from "./household-b.fixture";
+import { nearSpendB, pocketsB, pocketsShared } from "./household-b.fixture";
 import { applyQueue, entryToast, localNearSpend, queuedLineAfter } from "./pending";
 import type { EntryBody, Snapshot } from "./types";
 
@@ -40,6 +40,24 @@ describe("trừ tạm khoản chưa đồng bộ vào số đang hiển thị", 
     const goal = applyQueue(snapB, [item({ meaning: "spend", amount: 500_000, category_id: "school", account_id: "tuition-acc" })]).pockets.reserve;
     expect(goal).toMatchObject({ total: 37_500_000, peace: 31_500_000 });
     expect(goal.goals.find((g) => g.id === "tuition")!.held).toBe(3_500_000);
+  });
+
+  it("UC-704 AC-29: MB tiết kiệm 12.000.000 chung Nhà ở / Học tập; xếp hàng chi 7.500.000 gắn Nhà ở → Nhà ở đã có 0 + đã chi 7.500.000 (đủ), Học tập 4.500.000; thêm chi 1.000.000 không gắn → Học tập 3.500.000; Σ đã có = số dư đã trừ tạm", () => {
+    const snap = snapOf("2026-11-11", pocketsShared(), nearSpendB());
+    const goalOf = (s: Snapshot, id: string) => s.pockets.reserve.goals.find((g) => g.id === id)!;
+    const group = (s: Snapshot) => s.pockets.reserve.groups.find((g) => g.accountId === "tk-tiet-kiem")!;
+    const paid = item({ meaning: "spend", amount: 7_500_000, category_id: "rent", account_id: "tk-tiet-kiem", goal_id: "nha-o" });
+    const one = applyQueue(snap, [paid]);
+    expect(goalOf(one, "nha-o")).toMatchObject({ held: 0, spent: 7_500_000, short: 0 });
+    expect(goalOf(one, "hoc-tap")).toMatchObject({ held: 4_500_000, spent: 0, short: 1_500_000 });
+    expect(group(one)).toMatchObject({ balance: 4_500_000, spent: 7_500_000, short: 1_500_000 });
+    const two = applyQueue(snap, [paid, item({ meaning: "spend", amount: 1_000_000, category_id: "food", account_id: "tk-tiet-kiem" })]);
+    expect(goalOf(two, "nha-o")).toMatchObject({ held: 0, spent: 7_500_000 });
+    expect(goalOf(two, "hoc-tap")).toMatchObject({ held: 3_500_000, short: 2_500_000 });
+    expect(goalOf(two, "nha-o").held! + goalOf(two, "hoc-tap").held!).toBe(3_500_000);
+    expect(group(two)).toMatchObject({ balance: 3_500_000, short: 2_500_000 });
+    expect(two.pockets.reserve.peace).toBe(5_000_000);
+    expect(goalOf(two, "hoa-don")).toMatchObject({ held: 2_000_000, spent: 0 });
   });
 
   it("UC-702 AC-25: lương về sớm (kỳ 10/12), hôm nay 4/12, hàng đợi chi 370.000 → 'Chi khoảng 396.000/ngày' (nearSpendView, vẫn trừ việc chưa làm); chuyển sang tích luỹ trong hàng đợi không tự tick, phần chưa làm không trừ tạm", () => {

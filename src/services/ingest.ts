@@ -8,7 +8,7 @@ import { isInterestLog } from "../domain/interest-deposit";
 import { dayKey, minuteOfDay, monthKey, weekKey } from "../domain/period";
 import { canPair, extractCode, looksLikeCashWithdrawal, matchRule, type PairCandidate, type RuleRow } from "../domain/rules";
 import { DomainError, type Refs } from "../domain/types";
-import { getTransaction, insertTx, interestMaxAmount, loadRefs, resolveLink, salaryMinAmount, writeEffects, type WriteEffects } from "./ledger";
+import { getTransaction, insertTx, interestMaxAmount, loadRefs, resolveLink, rethrowInvalidGoal, salaryMinAmount, writeEffects, type WriteEffects } from "./ledger";
 import { closest, feedMark, linkColumn, linkLogToTx, manualMatches } from "./manual-links";
 import { afterWrite, incomeStatements, resolveOpensCycle, voidTxStatements, type IncomePlan } from "./pay-cycles";
 import { assertLogChangeable, assertRowWritable, assertTxChangeable, hiddenAccountIds } from "./privacy";
@@ -43,6 +43,8 @@ export interface Split {
   /** income: ghi đè "Mở kỳ lương" của nguồn (pocket UC-1205 bước 2); không gửi = cờ của nguồn. */
   opens_cycle?: boolean;
   note?: string | null;
+  /** spend / transfer ra: mục tiêu Dự phòng của tài khoản log dùng tiền (pocket UC-1209 bước 11); bỏ trống = tự gắn nếu tài khoản một mục tiêu. */
+  goal_id?: string | null;
 }
 
 // ── Chuẩn hoá payload SePay → dữ liệu thô lưu vào bank_logs ──────────
@@ -199,6 +201,7 @@ async function commit(db: D1Database, statements: D1PreparedStatement[]): Promis
     return true;
   } catch (err) {
     if (/log_not_pending/.test(String(err))) return false;
+    rethrowInvalidGoal(err);
     throw err;
   }
 }
@@ -721,6 +724,7 @@ function splitToEntryInput(log: Row, split: Split): EntryInput {
     receivable_id: split.receivable_id ?? undefined,
     link_id: split.link_id ?? undefined,
     opens_cycle: split.opens_cycle,
+    goal_id: split.goal_id ?? undefined,
   };
   const accountId = (log.account_id as string | null) ?? undefined;
   if (split.meaning === "transfer") {

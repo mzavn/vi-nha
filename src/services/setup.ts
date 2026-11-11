@@ -103,10 +103,10 @@ function intIn(b: Record<string, unknown>, field: string, min: number, max: numb
 }
 
 /**
- * Một mục tiêu của thân. `account` = chỉ số trong `accounts[]` của thân: tài khoản ngăn Dự phòng, chưa gắn mục tiêu khác
- * (`linked`); không gửi / null = chưa gắn.
+ * Một mục tiêu của thân. `account` = chỉ số trong `accounts[]` của thân: tài khoản ngăn Dự phòng (nhiều mục tiêu dùng chung
+ * được — pocket UC-1209); không gửi / null = chưa gắn.
  */
-function parseGoal(raw: unknown, i: number, taken: Map<string, string>, accounts: SetupInput["accounts"], linked: Set<string>): SetupGoal {
+function parseGoal(raw: unknown, i: number, taken: Map<string, string>, accounts: SetupInput["accounts"]): SetupGoal {
   const g = isObject(raw) ? raw : {};
   const field = (k: string) => `goals.${i}.${k}`;
   const name = typeof g.name === "string" ? g.name.trim() : "";
@@ -142,8 +142,6 @@ function parseGoal(raw: unknown, i: number, taken: Map<string, string>, accounts
     const account = typeof index === "number" && Number.isInteger(index) ? accounts[index] : undefined;
     if (!account) return invalid(field("account"), "Tài khoản của mục tiêu phải là một tài khoản trong danh sách, hoặc để chưa có.");
     if (account.pocket !== "reserve") invalid(field("account"), "Tài khoản của mục tiêu phải ở ngăn Dự phòng.");
-    if (linked.has(account.id)) invalid(field("account"), "Tài khoản này đã gắn mục tiêu khác: mỗi mục tiêu một tài khoản riêng.");
-    linked.add(account.id);
     accountId = account.id;
   }
   taken.set(id, `Trùng tên với mục tiêu “${name}”.`);
@@ -214,8 +212,7 @@ export function parseSetup(body: unknown): SetupInput {
   // Mã đã có trước khi đọc mục tiêu: mục tiêu thiết lập tự tạo (không để batch vấp khoá chính rồi bị hiểu là already_setup).
   const taken = new Map<string, string>();
   if (taxable) taken.set(TAX_GOAL.id, "Trùng tên với mục tiêu có sẵn.");
-  const linked = new Set<string>();
-  const goals = rawGoals.map((g, i) => parseGoal(g, i, taken, accounts, linked));
+  const goals = rawGoals.map((g, i) => parseGoal(g, i, taken, accounts));
 
   return {
     members,
@@ -227,6 +224,10 @@ export function parseSetup(body: unknown): SetupInput {
     goals,
   };
 }
+
+/** Mục tiêu của thân theo hạn (tăng dần, không hạn xuống cuối); cùng hạn giữ thứ tự gửi. */
+const defaultOrder = (goals: SetupGoal[]) =>
+  [...goals].sort((a, b) => (a.dueDate === b.dueDate ? 0 : a.dueDate === null ? 1 : b.dueDate === null ? -1 : a.dueDate < b.dueDate ? -1 : 1));
 
 /**
  * Tạo nhà trong một batch (UC-510 bước 4–5): thành viên theo thứ tự gửi (người đầu `owner`, sau `adult`), tài khoản theo ngăn
@@ -265,9 +266,10 @@ export async function createHousehold(db: D1Database, input: SetupInput): Promis
     ...SYSTEM_CATEGORIES.map((c) => category.bind(c.id, c.name, c.icon, c.sort, null)),
     // Nguồn "Lương" mở kỳ; ngăn theo tài khoản nhận (pocket UC-1205).
     db.prepare("INSERT INTO income_streams (id, name, sort, pocket, opens_cycle) VALUES (?, ?, 10, NULL, 1)").bind(SALARY_STREAM.id, SALARY_STREAM.name),
-    // Mục tiêu sau tài khoản trong cùng batch: trigger thấy tài khoản ngăn Dự phòng vừa tạo.
-    ...input.goals.map((g, i) => goal.bind(g.id, g.name, g.accountId, g.targetAmount, null, g.monthlyAmount, g.repeatMonths, g.dueDate, 10 + i)),
-    ...(input.taxable ? [goal.bind(TAX_GOAL.id, TAX_GOAL.name, null, null, TAX_GOAL.pct, null, null, null, 50)] : []),
+    // Mục tiêu sau tài khoản trong cùng batch: trigger thấy tài khoản ngăn Dự phòng vừa tạo. Thứ tự ưu tiên mặc định (pocket
+    // UC-1209 bước 10): hạn gần trước, không hạn xuống cuối (giữ thứ tự gửi); "Thuế" sau cùng.
+    ...defaultOrder(input.goals).map((g, i) => goal.bind(g.id, g.name, g.accountId, g.targetAmount, null, g.monthlyAmount, g.repeatMonths, g.dueDate, 10 * (i + 1))),
+    ...(input.taxable ? [goal.bind(TAX_GOAL.id, TAX_GOAL.name, null, null, TAX_GOAL.pct, null, null, null, 10 * (input.goals.length + 1))] : []),
     db
       .prepare("INSERT INTO audit_log (member_id, via, action, target, detail) VALUES (?, 'session', 'setup.done', NULL, ?)")
       .bind(

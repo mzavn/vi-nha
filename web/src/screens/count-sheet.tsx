@@ -1,4 +1,4 @@
-// Đếm ví / nhập số dư thật: nhập số tiền đang có → hiện chênh lệch với sổ → xác nhận thì server sinh `adjust`.
+// Đếm số dư / nhập số dư thật: nhập số tiền đang có → hiện chênh lệch với sổ → xác nhận thì server sinh `adjust`.
 // Không sửa đè lịch sử: chênh lệch thành một dòng mới trong sổ.
 
 import { useState } from "preact/hooks";
@@ -39,7 +39,7 @@ export function CountSheet({ accountId: initial, onClose }: { accountId?: string
   }
 
   return (
-    <Sheet open title="Đếm ví / nhập số dư thật" onClose={onClose}>
+    <Sheet open title="Đếm số dư" onClose={onClose}>
       {boot && (
         <div class="field" style={{ borderTop: 0 }}>
           <label for="c-acct">Tài khoản</label>
@@ -59,7 +59,7 @@ export function CountSheet({ accountId: initial, onClose }: { accountId?: string
         {diff === null ? <span style={{ color: "var(--fg-3)" }}>—</span> : <Money value={diff} signed class="font-semibold" />}
       </div>
       <div class="note">
-        Thật nhiều hơn sổ thì phần dư cộng vào ví nhận phần còn lại; ít hơn thì trừ ví đó. Sai thì ghi lại lần đếm mới, không sửa đè.
+        Thật khác sổ thì app ghi một khoản điều chỉnh vào tài khoản này. Sai thì ghi lại lần đếm mới, không sửa đè.
       </div>
       <div class="pad">
         {error && (
@@ -70,7 +70,7 @@ export function CountSheet({ accountId: initial, onClose }: { accountId?: string
         <button type="button" class="btn btn-primary btn-wide" disabled={!online || busy || counted === null || book === null} onClick={() => void submit()}>
           {busy ? "Đang ghi…" : diff === 0 ? "Ghi lần đếm — khớp sổ" : "Ghi chênh lệch"}
         </button>
-        {!online && <NeedsNetwork what="Đếm ví" />}
+        {!online && <NeedsNetwork what="Đếm số dư" />}
       </div>
     </Sheet>
   );

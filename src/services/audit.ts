@@ -4,6 +4,7 @@
 // Kênh báo tin mới hay khoá đổi → cảnh báo tới MỌI kênh hiện có của cả nhà, để người bị chiếm quyền biết mà gỡ.
 
 import type { Context } from "hono";
+import type { AuditAction } from "../domain/audit-actions";
 import type { AppEnv, Env } from "../env";
 import { escapeHtml, notifyMembers, sendTelegram } from "../notify/telegram";
 import { sendZalo, zaloText } from "../notify/zalo";
@@ -28,7 +29,7 @@ export const fieldNames = (b: Record<string, unknown>): string[] =>
     .slice(0, 20);
 
 /** Ghi một dòng nhật ký, trả id. */
-export async function audit(db: D1Database, actor: Actor, action: string, target: string | null, detail: AuditDetail | null = null): Promise<number> {
+export async function audit(db: D1Database, actor: Actor, action: AuditAction, target: string | null, detail: AuditDetail | null = null): Promise<number> {
   const row = await db
     .prepare("INSERT INTO audit_log (member_id, via, action, target, detail) VALUES (?, ?, ?, ?, ?) RETURNING id")
     .bind(actor.memberId, actor.via, action, target, detail ? JSON.stringify(detail) : null)
@@ -112,7 +113,7 @@ export async function afterResponse(c: Context<AppEnv>, work: Promise<void>): Pr
 }
 
 /** Ghi nhật ký cho request đang xử lý; có `alert` thì cảnh báo cả nhà sau khi trả lời (lỗi gửi chỉ ghi log). */
-export async function recordChange(c: Context<AppEnv>, action: string, target: string | null, detail: AuditDetail | null, alert?: Alert): Promise<void> {
+export async function recordChange(c: Context<AppEnv>, action: AuditAction, target: string | null, detail: AuditDetail | null, alert?: Alert): Promise<void> {
   const actor = actorOf(c);
   const id = await audit(c.env.DB, actor, action, target, detail);
   if (!alert) return;

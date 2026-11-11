@@ -31,7 +31,7 @@ async function call<T = unknown>(method: string, path: string, body?: unknown) {
 const NOW = new Date("2026-11-11T03:00:00Z");
 const near = async (now = NOW): Promise<NearSpend> => (await getSnapshot(env.DB, null, now)).nearSpend;
 
-const line = (id: string, balance: number) => ({ id, name: id, balance, goalId: null });
+const line = (id: string, balance: number) => ({ id, name: id, balance, goalIds: [] });
 
 describe("tiền vận hành — công thức (hàm thuần)", () => {
   it("UC-103 AC-20: tiền vận hành = tổng ngăn Vận hành 4.100.000 → kỳ lương 10/12, còn 29 ngày, 141.000/ngày, 70.000/bữa, 140.000/lần đi chợ; excluded chỉ có ngăn (heo đất ở pocket savings); không leaving, không misplaced", () => {

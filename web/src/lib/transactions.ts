@@ -135,6 +135,8 @@ export interface TxDraft {
   tenant_id: string | null;
   debt_id: string | null;
   receivable_id: string | null;
+  /** Mục tiêu của khoản chi / chuyển ra (chip "Cho mục tiêu" đang chọn); null = không. */
+  goal_id: string | null;
 }
 
 // Quy ước dấu (src/domain/entry.ts): account_id = tài khoản tiền RA · counter_account_id = tài khoản tiền VÀO. Sửa khoản cũ
@@ -156,6 +158,7 @@ export function draftFromTx(tx: TxRow): TxDraft {
     tenant_id: tx.tenant_id ?? null,
     debt_id: tx.debt_id ?? null,
     receivable_id: tx.receivable_id ?? null,
+    goal_id: tx.goal_id ?? null,
   };
 }
 

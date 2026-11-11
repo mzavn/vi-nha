@@ -234,3 +234,21 @@ describe("chuyển sang ba ngăn (UC-1208)", () => {
     expect([third.status, third.json.error?.code]).toEqual([409, "conversion_not_pending"]);
   });
 });
+
+describe("bước 2 cho chung tài khoản (UC-1208 AC-11)", () => {
+  it("UC-1208 AC-11: Nhà ở và Học tập cùng chọn MB tiết kiệm → hai PATCH 200, chia theo thứ tự hạn; Thuế vào tài khoản đó → 409 tax_account_shared; POST …/steps/goals 200", async () => {
+    await doPockets();
+    db.exec(`
+      UPDATE accounts SET name = 'MB tiết kiệm', opening_balance = 12000000 WHERE id = '${E_ACCOUNTS.deposit}';
+      UPDATE reserve_goals SET active = 0 WHERE id IN ('hoc-phi', 'hoa-don');
+      INSERT INTO reserve_goals (id, name, target_amount, monthly_amount, repeat_months, due_date, sort) VALUES
+        ('nha-o', 'Nhà ở', 7500000, 7500000, 1, '2026-12-05', 10), ('hoc-tap', 'Học tập', 6000000, NULL, NULL, '2027-01-15', 20);
+    `);
+    for (const id of ["nha-o", "hoc-tap"]) expect((await call("PATCH", `/v1/settings/goals/${id}`, { account_id: E_ACCOUNTS.deposit })).status).toBe(200);
+    const tax = await call("PATCH", "/v1/settings/goals/thue", { account_id: E_ACCOUNTS.deposit });
+    expect([tax.status, tax.json.error?.code]).toEqual([409, "tax_account_shared"]);
+    const group = (await call("GET", "/v1/snapshot")).json.data.pockets.reserve.groups.find((g: { accountId: string }) => g.accountId === E_ACCOUNTS.deposit);
+    expect(group).toMatchObject({ balance: 12_000_000, need: 13_500_000, short: 1_500_000, goalIds: ["nha-o", "hoc-tap"] });
+    expect((await step("goals")).status).toBe(200);
+  });
+});

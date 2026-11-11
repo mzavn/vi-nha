@@ -3,7 +3,7 @@
 
 import { ApiError, errorText, request } from "./api";
 import { clashWith, MAX_MEMBERS, nameError, passwordError } from "./members";
-import { parseAmount } from "./money";
+import { MAX_AMOUNT } from "./money";
 import { POCKET_ORDER, pocketLabel } from "./pockets";
 import { done, type Errors, parseInteger, type Result } from "./settings";
 import type { Pocket, SettingsAccount } from "./types";
@@ -45,11 +45,11 @@ export interface SetupAccount {
 /** Mục tiêu Dự phòng tuỳ chọn: chữ người gõ. */
 export interface SetupGoal {
   name: string;
-  /** Số mỗi tháng. */
-  monthly: string;
+  /** Số mỗi tháng (đồng) từ ô AmountInput; phép tính sai ra 0. */
+  monthly: number;
   /** Mấy tháng một lần (1–12). */
   repeat: string;
-  /** Tài khoản của mục tiêu: chỉ số trong `accounts` (phải ở ngăn Dự phòng, UC-510 AC-14); null = Chưa có. */
+  /** Tài khoản của mục tiêu: chỉ số trong `accounts` (phải ở ngăn Dự phòng, nhiều mục tiêu dùng chung được, UC-510 AC-14); null = Chưa có. */
   account: number | null;
 }
 export interface SetupForm {
@@ -78,7 +78,7 @@ export interface SetupBody {
 }
 
 export const newAccount = (): SetupAccount => ({ name: "", kind: "bank", bank: "", owner: null, pocket: "operating" });
-export const newGoal = (): SetupGoal => ({ name: "", monthly: "", repeat: "1", account: null });
+export const newGoal = (): SetupGoal => ({ name: "", monthly: 0, repeat: "1", account: null });
 
 export const emptySetup = (): SetupForm => ({
   password: "",
@@ -138,13 +138,11 @@ function accountErrors(accounts: SetupAccount[], memberCount: number): Errors {
   return errors;
 }
 
-/** Tài khoản chọn được cho mục tiêu thứ `index`: tài khoản ngăn Dự phòng đã nhập, chưa thuộc mục tiêu khác (UC-510 AC-14). */
-export function goalAccountChoices(f: SetupForm, index: number): { index: number; name: string }[] {
-  const taken = new Set(f.goals.flatMap((g, i) => (i !== index && g.account !== null ? [g.account] : [])));
-  return f.accounts.flatMap((a, i) => (a.pocket === "reserve" && !taken.has(i) ? [{ index: i, name: a.name.trim() || `Tài khoản ${i + 1}` }] : []));
+/** Tài khoản chọn được cho mục tiêu: mọi tài khoản ngăn Dự phòng đã nhập; nhiều mục tiêu dùng chung một tài khoản được,
+ *  server đặt thứ tự ưu tiên mặc định (UC-510 AC-14). */
+export function goalAccountChoices(f: SetupForm): { index: number; name: string }[] {
+  return f.accounts.flatMap((a, i) => (a.pocket === "reserve" ? [{ index: i, name: a.name.trim() || `Tài khoản ${i + 1}` }] : []));
 }
-
-const MONEY_MAX = 1e12;
 
 function pocketErrors(f: SetupForm): Errors {
   const errors: Errors = {};
@@ -158,13 +156,9 @@ function pocketErrors(f: SetupForm): Errors {
     const clash = bad ? null : clashWith(g.name, [...reserved, ...f.goals.slice(0, i)]);
     if (bad) errors[`goals.${i}.name`] = bad;
     else if (clash) errors[`goals.${i}.name`] = `Trùng tên với “${clash}”.`;
-    const monthly = parseAmount(g.monthly);
-    if (monthly <= 0 || monthly > MONEY_MAX) errors[`goals.${i}.monthly_amount`] = "Nhập số mỗi tháng.";
+    if (g.monthly <= 0 || g.monthly > MAX_AMOUNT) errors[`goals.${i}.monthly_amount`] = "Nhập số mỗi tháng.";
     if (parseInteger(g.repeat, 1, 12) === null) errors[`goals.${i}.repeat_months`] = "Từ 1 đến 12 tháng.";
-    if (g.account !== null) {
-      if (f.accounts[g.account]?.pocket !== "reserve") errors[`goals.${i}.account`] = "Tài khoản của mục tiêu phải ở ngăn Dự phòng.";
-      else if (f.goals.slice(0, i).some((x) => x.account === g.account)) errors[`goals.${i}.account`] = "Mỗi tài khoản chỉ cho một mục tiêu.";
-    }
+    if (g.account !== null && f.accounts[g.account]?.pocket !== "reserve") errors[`goals.${i}.account`] = "Tài khoản của mục tiêu phải ở ngăn Dự phòng.";
   });
   return errors;
 }
@@ -195,7 +189,7 @@ export function setupPayload(f: SetupForm): Result<SetupBody> {
     groups: GROUP_OPTIONS.map((o) => o.value).filter((v) => f.groups.includes(v)),
     goals: f.goals.map((g) => ({
       name: g.name.trim(),
-      monthly_amount: parseAmount(g.monthly),
+      monthly_amount: g.monthly,
       repeat_months: parseInteger(g.repeat, 1, 12)!,
       ...(g.account === null ? {} : { account: g.account }),
     })),

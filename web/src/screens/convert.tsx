@@ -14,6 +14,8 @@ import {
   type GoalAccountResult,
   type GoalChoice,
   goalAccountRequest,
+  GOAL_ORDER_NOTE,
+  goalGroupLines,
   goalRowAccounts,
   goalStepRequests,
   goalsReady,
@@ -221,7 +223,7 @@ function PocketsStep({ data, offline, postStep, reloadSettings }: StepProps) {
   );
 }
 
-// ── Bước 2: mỗi mục tiêu một tài khoản thật ─────────────────────────
+// ── Bước 2: mỗi mục tiêu một tài khoản thật (nhiều mục tiêu dùng chung được một tài khoản, UC-1208 AC-11) ──
 
 function GoalsStep({ data, offline, postStep, reloadSettings }: StepProps) {
   const app = useApp();
@@ -235,6 +237,7 @@ function GoalsStep({ data, offline, postStep, reloadSettings }: StepProps) {
   // Lựa chọn sẵn tính lại theo cài đặt mới nhất (mục tiêu mới, tài khoản vừa tạo), lựa chọn người đã chọn đè lên.
   const choices = { ...initialGoalChoices(goals, data.accounts, savedReward), ...picked };
   const hasReserve = data.accounts.some((a) => a.active && a.pocket === "reserve");
+  const groupLines = goalGroupLines(goals, data.accounts, choices);
   const peace = viewSnapshot(app)?.pockets?.reserve.peace;
   const creating = goals.find((g) => g.id === creatingFor);
   const saved = async () => {
@@ -259,16 +262,17 @@ function GoalsStep({ data, offline, postStep, reloadSettings }: StepProps) {
 
   return (
     <>
-      <Card title="Mỗi mục tiêu một tài khoản thật" flush note="Mỗi mục tiêu Dự phòng là một tài khoản thật ở ngăn Dự phòng; số đã có là số dư của tài khoản đó">
+      <Card title="Mỗi mục tiêu một tài khoản thật" flush note="Mỗi mục tiêu Dự phòng gắn một tài khoản thật ở ngăn Dự phòng; nhiều mục tiêu dùng chung được một tài khoản — số dư lấp lần lượt theo thứ tự ưu tiên">
         {!hasReserve && <p class="note">{NO_RESERVE_ACCOUNT}</p>}
         {goals.length === 0 && <p class="empty">Chưa có mục tiêu nào.</p>}
         {goals.map((g) => {
           const c = choices[g.id];
           const value = !c ? "" : c.kind === "account" ? c.accountId : c.kind === "off" ? OFF : LATER;
           const options = goalRowAccounts(g.id, data.goals, data.accounts, choices, reward);
+          const chosen = c?.kind === "account" ? options.find((a) => a.id === c.accountId) : undefined;
           const id = `cv-goal-${g.id}`;
           return (
-            <div key={g.id} class="field" style={{ flexWrap: "wrap" }}>
+            <div key={g.id} class="field cv-goal-row">
               <label class="k" for={id}>
                 <span class="srow-t">{g.name}</span>
                 {goalTerms(g) && <span class="srow-s"> · {goalTerms(g)}</span>}
@@ -289,17 +293,29 @@ function GoalsStep({ data, offline, postStep, reloadSettings }: StepProps) {
                   Chọn…
                 </option>
                 {options.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name} · đã có {formatVnd(a.book_balance ?? 0)}
+                  <option key={a.id} value={a.id} disabled={a.blocked !== null && a.id !== value}>
+                    {`${a.name} · đã có ${formatVnd(a.book_balance ?? 0)}${a.shared ? ` — ${a.shared}` : ""}${a.blocked ? ` (${a.blocked})` : ""}`}
                   </option>
                 ))}
                 <option value={NEW_ACCOUNT}>Tạo tài khoản mới</option>
                 <option value={OFF}>Không dùng mục tiêu này</option>
                 <option value={LATER}>Để sau</option>
               </select>
+              {/* Ô chọn bị cắt chữ ở 390px: tên tài khoản đã chọn và "dùng chung với …" hiện đủ ở dòng dưới (UC-1208 AC-12). */}
+              {chosen?.shared && (
+                <span class="sub-line cv-goal-shared">
+                  {chosen.name} — {chosen.shared}
+                </span>
+              )}
             </div>
           );
         })}
+        {groupLines.map((l) => (
+          <p key={l.accountId} class="note cv-goal-group">
+            {l.text}
+          </p>
+        ))}
+        {groupLines.length > 0 && <Hint>{GOAL_ORDER_NOTE}</Hint>}
         <div class="field">
           <label class="k" for="cv-reward">
             Ví Thưởng

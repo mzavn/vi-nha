@@ -38,7 +38,7 @@ describe("thẻ Vận hành ở Hôm nay (ADR-122)", () => {
         { id: "main", name: "tài khoản chính", pocket: "operating", confirmed: false, balance: 12_000_000 },
         { id: "other", name: "khác", pocket: null, confirmed: false, balance: 0 },
       ],
-      goals: [{ id: "tuition", name: "Học phí", accountId: null, target: 6_000_000, targetPct: null, monthly: null, repeatMonths: null, dueDate: null, debtId: null }],
+      goals: [{ id: "tuition", name: "Học phí", accountId: null, target: 6_000_000, targetPct: null, monthly: null, repeatMonths: null, dueDate: null, debtId: null, sort: 100, spent: 0 }],
       rewardAccountId: null,
       debts: [],
       savingsPct: 10,

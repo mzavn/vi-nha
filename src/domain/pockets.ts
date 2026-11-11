@@ -1,6 +1,7 @@
 // Ba ngăn Tích luỹ · Dự phòng · Vận hành (pocket UC-1201…1203, UC-1209, ADR-119, ADR-132) — hàm thuần, snapshot và PWA dùng
-// chung. Một nguồn số cho tiền: số trong sổ của tài khoản đang dùng. Mỗi mục tiêu Dự phòng là một tài khoản thật ngăn Dự
-// phòng (A = số dư tài khoản đó); phần an tâm và nợ ngắn hạn tính ra, không lưu.
+// chung. Một nguồn số cho tiền: số trong sổ của tài khoản đang dùng. Mỗi mục tiêu Dự phòng gắn một tài khoản thật ngăn Dự
+// phòng; nhiều mục tiêu dùng chung được một tài khoản — A (đã có) chia từ số dư theo thứ tự ưu tiên (`fillGoals`). Phần an
+// tâm và nợ ngắn hạn tính ra, không lưu.
 
 import { DomainError } from "./types";
 
@@ -80,6 +81,10 @@ export interface PocketGoalInput {
   repeatMonths: number | null;
   dueDate: string | null;
   debtId: string | null;
+  /** Thứ tự ưu tiên (`reserve_goals.sort`, nhỏ đứng trước — UC-1209 bước 10). */
+  sort: number;
+  /** Đã chi cho mục tiêu trong kỳ lương hiện tại (UC-1209 bước 11); 0 khi không có. */
+  spent: number;
 }
 
 /** Khoản nợ (`v_debt_balance` JOIN `debts`). */
@@ -97,15 +102,21 @@ export interface PocketAccountLine {
   id: string;
   name: string;
   balance: number;
-  /** Mục tiêu Dự phòng đang dùng gắn tài khoản này; null = không gắn. */
-  goalId: string | null;
+  /** Mục tiêu Dự phòng đang dùng gắn tài khoản này, theo thứ tự ưu tiên; rỗng = không gắn. */
+  goalIds: string[];
 }
 export interface PocketGoal {
   id: string;
   name: string;
   accountId: string | null;
-  /** A = số dư sổ của tài khoản gắn; null = chưa gắn tài khoản. */
+  /** A = đã có sau khi chia số dư tài khoản (UC-1209 bước 9; có thể âm); null = chưa gắn tài khoản. */
   held: number | null;
+  /** Số cần (= B); null với mục tiêu % hoặc chưa gắn tài khoản. */
+  need: number | null;
+  /** Đã chi cho mục tiêu trong kỳ lương hiện tại. */
+  spent: number;
+  /** Còn thiếu = max(0, need − held − spent); null khi need null. */
+  short: number | null;
   /** B; `null` khi đặt theo % thu chịu thuế. */
   target: number | null;
   targetPct: number | null;
@@ -123,6 +134,17 @@ export interface ShortDebtItem {
   dueDay: number | null;
   goalId: string | null;
   heldFor: number;
+}
+/** Nhóm mục tiêu của một tài khoản (UC-1203 bước 7) — tính ra, không lưu. `need` / `short` / `extra` null khi nhóm là mục tiêu %. */
+export interface GoalGroup {
+  accountId: string;
+  name: string;
+  balance: number;
+  need: number | null;
+  spent: number;
+  short: number | null;
+  extra: number | null;
+  goalIds: string[];
 }
 
 /** Tích luỹ thay đổi theo kỳ (UC-1203 bước 10): `amount` = bây giờ − đầu kỳ; `prevAmount` = đầu kỳ − đầu kỳ trước. */
@@ -148,6 +170,8 @@ export interface PocketsView {
     total: number;
     accounts: PocketAccountLine[];
     goals: PocketGoal[];
+    /** Mỗi tài khoản có ít nhất một mục tiêu đang dùng, theo thứ tự mục tiêu đầu tiên của nhóm. */
+    groups: GoalGroup[];
     /** Σ tài khoản Dự phòng không gắn mục tiêu đang dùng, không phải tài khoản Ví Thưởng (âm thì giữ âm). */
     peace: number;
     peaceMonths: PeaceMonths;
@@ -215,34 +239,119 @@ function operatingMonthly({ cycles, dataStart }: PocketsInput["operatingSpend"])
   return { monthly: used.length && days > 0 ? Math.floor((used.reduce((s, c) => s + c.amount, 0) * 30) / days) : null, cycles: used.length };
 }
 
-/** Mục tiêu theo hạn (tăng dần, chưa có hạn xuống cuối) rồi theo tên — thẻ Dự phòng, tin sáng, MCP dùng đúng thứ tự này. */
-const byDueThenName = (a: Pick<PocketGoal, "dueDate" | "name">, b: Pick<PocketGoal, "dueDate" | "name">) =>
-  (a.dueDate === b.dueDate ? 0 : a.dueDate === null ? 1 : b.dueDate === null ? -1 : a.dueDate < b.dueDate ? -1 : 1) || a.name.localeCompare(b.name, "vi");
+/** Thứ tự ưu tiên (UC-1209 bước 10): `sort` tăng dần, rồi hạn (chưa có hạn xuống cuối), rồi tên (`vi`), rồi mã. */
+export const goalOrder = (a: Pick<PocketGoalInput, "id" | "sort" | "dueDate" | "name">, b: Pick<PocketGoalInput, "id" | "sort" | "dueDate" | "name">) =>
+  a.sort - b.sort ||
+  (a.dueDate === b.dueDate ? 0 : a.dueDate === null ? 1 : b.dueDate === null ? -1 : a.dueDate < b.dueDate ? -1 : 1) ||
+  a.name.localeCompare(b.name, "vi") ||
+  (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+
+/** Số cần của mục tiêu = B (lặp: tích đã lưu ở `target_amount`); mục tiêu % (Thuế) không có số cần. */
+export const goalNeed = (g: Pick<PocketGoalInput, "target" | "targetPct">): number | null => (g.targetPct !== null ? null : g.target);
+
+export interface FillGoalInput {
+  id: string;
+  need: number | null;
+  spent: number;
+}
+export interface FillGoals {
+  goals: { id: string; held: number; spent: number; short: number | null }[];
+  need: number | null;
+  spent: number;
+  short: number | null;
+  extra: number | null;
+}
 
 /**
- * Bất biến: bốn tổng cộng lại = Σ sổ mọi tài khoản đang dùng. A của mục tiêu = số dư tài khoản gắn; phần an tâm = tài
- * khoản Dự phòng không gắn mục tiêu, không phải Ví Thưởng. Tích luỹ tại mỗi mốc theo trạng thái tại mốc (ADR-100), ngăn theo
- * giá trị đang lưu.
+ * Chia số dư một tài khoản cho các mục tiêu của nó, đã xếp theo thứ tự ưu tiên (pocket UC-1209 bước 9, QĐ2-A, QĐ3).
+ * quỹ = số dư + Σ đã chi (kẹp ≥ 0); mỗi mục tiêu trừ mục tiêu cuối lấy phần = min(max(số cần, đã chi), max(còn, 0)); mục tiêu
+ * cuối nhận phần còn lại; đã có (held) = phần − đã chi. Bất biến Σ held = số dư. Mục tiêu % chỉ đứng một mình (QĐ1-A).
+ */
+export function fillGoals(balance: number, goals: FillGoalInput[]): FillGoals {
+  if (goals.some((g) => g.need === null)) {
+    if (goals.length !== 1) throw new Error("fillGoals: mục tiêu % không dùng chung tài khoản");
+    const spent = Math.max(0, goals[0]!.spent);
+    return { goals: [{ id: goals[0]!.id, held: balance, spent, short: null }], need: null, spent, short: null, extra: null };
+  }
+  const spents = goals.map((g) => Math.max(0, g.spent));
+  let left = balance + spents.reduce((s, x) => s + x, 0);
+  const out = goals.map((g, i) => {
+    const need = g.need!;
+    const part = i === goals.length - 1 ? left : Math.min(Math.max(need, spents[i]!), Math.max(left, 0));
+    left -= part;
+    const held = part - spents[i]!;
+    return { id: g.id, held, spent: spents[i]!, short: Math.max(0, need - held - spents[i]!) };
+  });
+  const last = out.at(-1);
+  const lastNeed = goals.at(-1)?.need ?? 0;
+  return {
+    goals: out,
+    need: goals.reduce((s, g) => s + g.need!, 0),
+    spent: spents.reduce((s, x) => s + x, 0),
+    short: out.reduce((s, g) => s + g.short!, 0),
+    extra: last ? Math.max(0, Math.min(last.held, last.held + last.spent - lastNeed)) : 0,
+  };
+}
+
+/** Đã có / đã chi / còn thiếu của một mục tiêu đang dùng có tài khoản (kết quả `fillGoals`). */
+export type FilledGoal = FillGoals["goals"][number];
+
+/**
+ * Nhóm mục tiêu đang dùng theo tài khoản (đang dùng) và chia số dư từng tài khoản (UC-1209 bước 9) — một luật cho snapshot,
+ * `GET /v1/settings`, việc ②. `goals` đã xếp theo `goalOrder`; nhóm theo mục tiêu đầu tiên của nhóm.
+ */
+export function goalGroups(accounts: Pick<PocketAccount, "id" | "name" | "balance">[], goals: PocketGoalInput[]): { groups: GoalGroup[]; filled: Map<string, FilledGoal> } {
+  const byId = new Map(accounts.map((a) => [a.id, a]));
+  const goalsOf = new Map<string, PocketGoalInput[]>();
+  for (const g of goals) if (g.accountId !== null && byId.has(g.accountId)) goalsOf.set(g.accountId, [...(goalsOf.get(g.accountId) ?? []), g]);
+  const filled = new Map<string, FilledGoal>();
+  const groups: GoalGroup[] = [];
+  for (const [accountId, list] of goalsOf) {
+    const account = byId.get(accountId)!;
+    const fill = fillGoals(account.balance, list.map((g) => ({ id: g.id, need: goalNeed(g), spent: g.spent })));
+    for (const g of fill.goals) filled.set(g.id, g);
+    groups.push({ accountId, name: account.name, balance: account.balance, need: fill.need, spent: fill.spent, short: fill.short, extra: fill.extra, goalIds: list.map((g) => g.id) });
+  }
+  return { groups, filled };
+}
+
+/**
+ * Bất biến: bốn tổng cộng lại = Σ sổ mọi tài khoản đang dùng. A của mục tiêu = phần chia từ số dư tài khoản gắn
+ * (`fillGoals`); phần an tâm = tài khoản Dự phòng không gắn mục tiêu, không phải Ví Thưởng. Tích luỹ tại mỗi mốc theo trạng
+ * thái tại mốc (ADR-100), ngăn theo giá trị đang lưu.
  */
 export function pocketsView({ accounts, goals, rewardAccountId, debts, savingsPct, history, operatingSpend, peaceTarget }: PocketsInput): PocketsView {
   const byId = new Map(accounts.map((a) => [a.id, a]));
-  const goalOf = new Map<string, string>();
-  for (const g of goals) if (g.accountId !== null && byId.has(g.accountId)) goalOf.set(g.accountId, g.id);
+  const ordered = [...goals].sort(goalOrder);
+  const { groups, filled } = goalGroups(accounts, ordered);
+  const goalIdsOf = new Map(groups.map((g) => [g.accountId, g.goalIds]));
   const totals = pocketTotals(accounts);
   const lines: Record<Pocket | "outside", PocketAccountLine[]> = { savings: [], reserve: [], operating: [], outside: [] };
-  for (const a of accounts) lines[a.pocket ?? "outside"].push({ id: a.id, name: a.name, balance: a.balance, goalId: goalOf.get(a.id) ?? null });
+  for (const a of accounts) lines[a.pocket ?? "outside"].push({ id: a.id, name: a.name, balance: a.balance, goalIds: goalIdsOf.get(a.id) ?? [] });
   const savingsAt = (mark: "since" | "prevSince") =>
     pocketTotals(history.accounts.flatMap((a) => (a[mark] === null ? [] : [{ pocket: a.pocket, balance: a[mark] }]))).savings;
   const atSince = savingsAt("since");
-  const goalLines: PocketGoal[] = goals
-    .map(({ id, name, accountId, target, targetPct, monthly, repeatMonths, dueDate, debtId }) => {
-      const account = accountId === null ? undefined : byId.get(accountId);
-      return { id, name, accountId, held: account ? account.balance : null, target, targetPct, monthly, repeatMonths, dueDate, debtId };
-    })
-    .sort(byDueThenName);
+  const goalLines: PocketGoal[] = ordered.map(({ id, name, accountId, target, targetPct, monthly, repeatMonths, dueDate, debtId, spent }) => {
+    const f = filled.get(id);
+    return {
+      id,
+      name,
+      accountId,
+      held: f ? f.held : null,
+      need: f ? goalNeed({ target, targetPct }) : null,
+      spent: f ? f.spent : Math.max(0, spent),
+      short: f ? f.short : null,
+      target,
+      targetPct,
+      monthly,
+      repeatMonths,
+      dueDate,
+      debtId,
+    };
+  });
   const rewardAccount = rewardAccountId === null ? undefined : byId.get(rewardAccountId);
-  const reward = rewardAccount && rewardAccount.pocket === "reserve" && !goalOf.has(rewardAccount.id) ? { accountId: rewardAccount.id, balance: rewardAccount.balance } : null;
-  const peace = lines.reserve.filter((a) => a.goalId === null && a.id !== reward?.accountId).reduce((s, a) => s + a.balance, 0);
+  const reward = rewardAccount && rewardAccount.pocket === "reserve" && !goalIdsOf.has(rewardAccount.id) ? { accountId: rewardAccount.id, balance: rewardAccount.balance } : null;
+  const peace = lines.reserve.filter((a) => a.goalIds.length === 0 && a.id !== reward?.accountId).reduce((s, a) => s + a.balance, 0);
   const items = debts
     .filter((d) => d.active && d.term === "short" && d.balance > 0)
     .map((d) => {
@@ -261,6 +370,7 @@ export function pocketsView({ accounts, goals, rewardAccountId, debts, savingsPc
       total: totals.reserve,
       accounts: lines.reserve,
       goals: goalLines,
+      groups,
       peace,
       peaceMonths: { covered: peaceMonthsView(peace, spend.monthly, peaceTarget).covered, target: peaceTarget, monthly: spend.monthly, cycles: spend.cycles },
       reward,

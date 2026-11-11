@@ -100,6 +100,8 @@ export interface EntryBody {
   confirm_duplicate?: boolean;
   /** Thu nhập: "Lương — mở kỳ lương" (pocket UC-1205); thiếu = theo cờ của nguồn. */
   opens_cycle?: boolean;
+  /** Mục tiêu Dự phòng mà khoản chi / chuyển ra này dùng tiền (pocket UC-1209 bước 11); chỉ gửi khi người nhập chọn. */
+  goal_id?: string;
 }
 
 /** Hệ quả lên kỳ lương của một lần ghi (POST /v1/transactions, /replace, gán log). */
@@ -153,6 +155,8 @@ export interface TxRow {
   legacy_class?: LegacyClass | null;
   /** Khoản cũ (id ≤ `config.legacy_max_tx_id`): Sổ gắn nhãn "cách tính cũ". */
   legacy?: boolean;
+  /** Mục tiêu Dự phòng của khoản chi / chuyển ra (pocket UC-1209 bước 11); null = không cho mục tiêu nào. */
+  goal_id?: string | null;
 }
 
 /** Loại chi (cách tính cũ) của giao dịch trước v2 (transactions.legacy_class). */
@@ -316,7 +320,10 @@ export interface SettingsAccount {
 /** Ba ngăn (v2): Tích luỹ · Dự phòng · Vận hành. */
 export type Pocket = "savings" | "reserve" | "operating";
 
-/** Mục tiêu Dự phòng (GET /v1/settings › goals, UC-1209). `held` = số dư tài khoản gắn; null = chưa gắn tài khoản. */
+/**
+ * Mục tiêu Dự phòng (GET /v1/settings › goals, UC-1209), theo thứ tự ưu tiên. `held` = đã có sau khi chia số dư tài khoản theo
+ * thứ tự ưu tiên (có thể âm); null = chưa gắn tài khoản.
+ */
 export interface ReserveGoal {
   id: string;
   name: string;
@@ -324,6 +331,12 @@ export interface ReserveGoal {
   /** Tài khoản đề xuất của bản cập nhật (chỉ gợi ý cho màn chuyển đổi, không phải gắn); null = không có. */
   suggested_account_id: string | null;
   held: number | null;
+  /** Số cần (= B); null với mục tiêu % hoặc chưa gắn tài khoản. */
+  need: number | null;
+  /** Đã chi cho mục tiêu trong kỳ lương hiện tại. */
+  spent: number;
+  /** Còn thiếu = max(0, need − held − spent); null khi need null. */
+  short: number | null;
   target_amount: number | null;
   target_pct: number | null;
   monthly_amount: number | null;
@@ -333,6 +346,17 @@ export interface ReserveGoal {
   debt_id: string | null;
   sort: number;
   active: boolean;
+}
+
+/** Nhóm mục tiêu của một tài khoản (GET /v1/settings › goal_groups) — cùng số với `snapshot.pockets.reserve.groups`. */
+export interface SettingsGoalGroup {
+  account_id: string;
+  balance: number;
+  need: number | null;
+  spent: number;
+  short: number | null;
+  extra: number | null;
+  goal_ids: string[];
 }
 
 /** Nhóm danh mục và hạn mức mềm mỗi kỳ lương (UC-1204); `cycle_limit` null = không đặt. */
@@ -470,8 +494,10 @@ export interface SettingsData {
   incomeStreams?: IncomeStream[];
   /** Bản cài đặt lưu offline từ trước khi có giờ nhắc thì thiếu trường này. */
   notifySchedule?: NotifySchedule;
-  /** Mục tiêu Dự phòng (UC-1209), mỗi mục tiêu gắn tối đa một tài khoản thật ngăn Dự phòng. */
+  /** Mục tiêu Dự phòng (UC-1209) theo thứ tự ưu tiên; nhiều mục tiêu dùng chung được một tài khoản thật ngăn Dự phòng. */
   goals: ReserveGoal[];
+  /** Nhóm mục tiêu theo tài khoản (mỗi tài khoản có ≥ 1 mục tiêu đang dùng, theo mục tiêu đầu tiên). */
+  goal_groups: SettingsGoalGroup[];
   /** Ba ngăn (v2): bản cài đặt lưu offline cũ thiếu trường này. */
   categoryGroups?: CategoryGroup[];
 }

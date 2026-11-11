@@ -747,6 +747,124 @@
   .pocket .tier .nm.bad {
     color: var(--bad);
   }
+  .pocket .tier .tsub.bad {
+    color: var(--bad);
+  }
+  /* Nhóm tài khoản chung của thẻ Dự phòng (pwa UC-702 bước 7). */
+  .pocket .goal-group {
+    border-top: 1px solid var(--border);
+  }
+  .pocket .goal-group .tier {
+    padding-left: 24px;
+  }
+  .goal-group-h {
+    padding: 10px 14px 2px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 13px;
+    font-weight: 550;
+  }
+  .goal-group-note {
+    margin: 0;
+    padding: 2px 14px 10px 24px;
+    font-size: 12px;
+    color: var(--fg-3);
+  }
+  /* Sheet Đổi thứ tự mục tiêu (pwa UC-709 AC-48): tay cầm và nút ↑ ↓ ≥ 44px, tên dài xuống dòng. */
+  .goal-order {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .goal-order-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-top: 1px solid var(--border);
+  }
+  .goal-order-row.dragging {
+    background: var(--surface-3);
+  }
+  .goal-order-main {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .goal-order-handle {
+    min-width: 44px;
+    min-height: 44px;
+    border: 0;
+    background: none;
+    color: var(--fg-3);
+    cursor: grab;
+    touch-action: none;
+  }
+  .goal-order-row .btn {
+    min-width: 44px;
+    padding: 0;
+  }
+  .goal-list-h {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+    overflow-wrap: anywhere;
+  }
+  /* Hàng chip "Cho mục tiêu" (pwa UC-703 AC-17): chạm ≥ 44px, xuống dòng thay vì cuộn ngang. */
+  .field.goal-chips {
+    flex-wrap: wrap;
+  }
+  .goal-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    flex: 1 1 100%;
+  }
+  .goal-chip {
+    min-height: 44px;
+    padding: 0 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--fg);
+    font: inherit;
+    font-size: 13.5px;
+    overflow-wrap: anywhere;
+  }
+  .goal-chip[aria-pressed="true"] {
+    background: var(--fg);
+    color: var(--surface);
+    border-color: var(--fg);
+  }
+  /* Bước 2 màn chuyển đổi (pocket UC-1208 AC-12): ô chọn tài khoản chiếm hết bề ngang, xuống dòng dưới tên mục tiêu; chữ dài
+     xuống dòng, không cuộn ngang. */
+  .field.cv-goal-row {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .cv-goal-row > .k {
+    flex: 1 1 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .cv-goal-row > select.ctl {
+    flex: 1 1 100%;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    text-overflow: ellipsis;
+  }
+  .cv-goal-shared,
+  .cv-goal-group {
+    flex: 1 1 100%;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
   .pocket-empty {
     padding: 6px 14px 12px;
     font-size: 13px;

@@ -49,9 +49,47 @@ export interface PayCycleCardView {
   collapsed: string | null;
   /** Dư kỳ trước âm: "Kỳ trước tiêu quá 300.000 ₫ — không có gì để chia". */
   overspent: string | null;
+  /** Việc theo thứ tự server, trừ các việc ② đang mở cùng tài khoản đích được dời về liền nhau (UC-702 bước 6). */
   rows: PayTaskRow[];
+  /** Từ hai việc ② đang mở cùng tài khoản đích: dòng gộp đứng trước việc đầu (`taskIds[0]`), QR gộp khi tài khoản có số. */
+  goalGroups: GoalTaskGroup[];
   /** Mất mạng: nút Đã làm / Bỏ qua / Hoàn tác / sửa số khoá, câu "Cần mạng". */
   offline: string | null;
+}
+
+export interface GoalTaskGroup {
+  accountId: string;
+  /** "Chuyển {Σ thiếu} vào {tài khoản} · {n} mục tiêu". */
+  title: string;
+  taskIds: number[];
+  qr: boolean;
+}
+
+/** Việc ② đang mở có tài khoản đích — gộp hiển thị và QR theo tài khoản (pocket UC-1206 bước 10, QĐ4-A). */
+const openGoalTask = (t: PayCycleTask) => t.kind === "goal" && t.status === "open" && t.toAccountId !== null;
+
+/** Dời các việc ② đang mở cùng tài khoản đích về ngay sau việc đầu của nhóm; trả kèm các nhóm từ hai việc. */
+function groupGoalTasks(tasks: PayCycleTask[]): { ordered: PayCycleTask[]; groups: GoalTaskGroup[] } {
+  const byAccount = new Map<string, PayCycleTask[]>();
+  for (const t of tasks) if (openGoalTask(t)) byAccount.set(t.toAccountId!, [...(byAccount.get(t.toAccountId!) ?? []), t]);
+  const ordered: PayCycleTask[] = [];
+  const groups: GoalTaskGroup[] = [];
+  for (const t of tasks) {
+    const same = openGoalTask(t) ? byAccount.get(t.toAccountId!)! : [t];
+    if (same.length < 2) {
+      ordered.push(t);
+      continue;
+    }
+    if (same[0] !== t) continue;
+    ordered.push(...same);
+    groups.push({
+      accountId: t.toAccountId!,
+      title: `Chuyển ${formatVnd(same.reduce((s, x) => s + x.missing, 0))} vào ${t.targetName ?? ""} · ${same.length} mục tiêu`,
+      taskIds: same.map((x) => x.id),
+      qr: t.targets.length > 0,
+    });
+  }
+  return { ordered, groups };
 }
 
 /** Câu nhắc khi nhà chưa có tài khoản Tích luỹ (① và ④ → Tích luỹ, pocket UC-1206 AC-10). */
@@ -122,12 +160,14 @@ export function taskRow(c: Pick<PayCycleView, "prevOperating">, t: PayCycleTask)
 export function payCycleCard(c: PayCycleView | null | undefined, online: boolean): PayCycleCardView | null {
   if (!c || c.tasks.length === 0) return null;
   const done = c.openCount === 0;
+  const { ordered, groups } = groupGoalTasks(c.tasks);
   return {
     title: `Việc ngày lương · kỳ từ ${shortDate(c.startedAt)}`,
     chip: done ? null : `còn ${c.openCount}`,
     collapsed: done ? `Việc ngày lương: xong cả ${c.tasks.length} việc ✓` : null,
     overspent: c.prevOperating < 0 ? `Kỳ trước tiêu quá ${formatVnd(-c.prevOperating)} — không có gì để chia` : null,
-    rows: c.tasks.map((t) => taskRow(c, t)),
+    rows: ordered.map((t) => taskRow(c, t)),
+    goalGroups: groups,
     offline: online ? null : NEEDS_NETWORK,
   };
 }
@@ -137,13 +177,17 @@ export function noCycleStreamLine(s: { paySetup?: { hasCycleStream: boolean } })
   return s.paySetup && !s.paySetup.hasCycleStream ? NO_CYCLE_STREAM : null;
 }
 
-/** "Kỳ này đã trích" ở thẻ Tích luỹ (UC-702): chỉ khi kỳ có khoản lương sinh ①. */
+/**
+ * "Kỳ này đã trích" ở thẻ Tích luỹ (UC-702 AC-32): chỉ khi kỳ có khoản lương sinh ①. Số cần = Σ số các ① không bỏ qua; % là
+ * `savings_pct` đã cài (không phải đã ghép ÷ lương).
+ */
 export function savingsDoneLine(c: PayCycleView | null | undefined, savingsPct: number): string | null {
   if (!c || c.savingsDone.base <= 0) return null;
-  const { amount, pct } = c.savingsDone;
-  if (amount > 0) return `Kỳ này đã trích ✓ ${formatVnd(amount)} (${pct ?? 0}%)`;
-  const planned = c.tasks.filter((t) => t.kind === "savings" && t.status !== "skipped").reduce((s, t) => s + t.amount, 0);
-  return `Kỳ này chưa trích (${savingsPct}% = ${formatVnd(planned)})`;
+  const { amount } = c.savingsDone;
+  const need = c.tasks.filter((t) => t.kind === "savings" && t.status !== "skipped").reduce((s, t) => s + t.amount, 0);
+  if (amount <= 0) return `Kỳ này chưa trích (${savingsPct}% = ${formatVnd(need)})`;
+  if (amount >= need) return `Kỳ này đã trích ✓ ${formatVnd(amount)} (${savingsPct}%)`;
+  return `Kỳ này đã trích ${moneyDigits(amount)} / ${formatVnd(need)} (${savingsPct}%)`;
 }
 
 // ── Mã QR (UC-1206 bước 10, ADR-116) ───────────────────────────────
@@ -157,10 +201,12 @@ const plain = (s: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
+const memoTail = (c: Pick<PayCycleView, "payday">) => ` ky ${Number(c.payday.slice(8, 10))}-${Number(c.payday.slice(5, 7))}`;
+
 /** Nội dung chuyển khoản không dấu: "Tich luy ky 10-11", "Hoc phi ky 10-11" (≤ 25 ký tự; tên dài thì cắt tên). */
 export function taskMemo(c: Pick<PayCycleView, "payday">, t: PayCycleTask): string {
   const what = t.goal ? t.goal.name : t.kind === "surplus" && t.toAccountId !== null ? "Ví Thưởng" : t.kind === "move" && t.toPocket ? POCKET_LABEL[t.toPocket] : "Tích luỹ";
-  const tail = ` ky ${Number(c.payday.slice(8, 10))}-${Number(c.payday.slice(5, 7))}`;
+  const tail = memoTail(c);
   return `${plain(what).slice(0, 25 - tail.length).trim()}${tail}`;
 }
 
@@ -169,12 +215,9 @@ export type TaskQr =
   | { target: QrTarget; targets: QrTarget[]; amount: number; memo: string; reason: string | null }
   | { hint: string | null };
 
-/** Mã QR của một việc: tài khoản đích (mặc định cái đầu theo thứ tự tài khoản), số = phần còn thiếu lúc mở QR. */
-export function taskQr(c: Pick<PayCycleView, "payday">, t: PayCycleTask, accountId?: string): TaskQr {
-  const target = t.targets.find((x) => x.accountId === accountId) ?? t.targets[0];
-  if (!target) return { hint: t.targetName ? `Chuyển sang ${t.targetName}` : null };
-  const memo = taskMemo(c, t);
-  const amount = t.missing;
+function qrFor(targets: QrTarget[], targetName: string | null, amount: number, memo: string, accountId?: string): TaskQr {
+  const target = targets.find((x) => x.accountId === accountId) ?? targets[0];
+  if (!target) return { hint: targetName ? `Chuyển sang ${targetName}` : null };
   const qr = transferQr({
     amount,
     memo,
@@ -185,7 +228,20 @@ export function taskQr(c: Pick<PayCycleView, "payday">, t: PayCycleTask, account
     to_sub_account: target.subAccount,
     to_sepay_enabled: target.subAccount !== null,
   });
-  return { target, targets: t.targets, amount, memo, ...qr };
+  return { target, targets, amount, memo, ...qr };
+}
+
+/** Mã QR của một việc: tài khoản đích (mặc định cái đầu theo thứ tự tài khoản), số = phần còn thiếu lúc mở QR. */
+export function taskQr(c: Pick<PayCycleView, "payday">, t: PayCycleTask, accountId?: string): TaskQr {
+  return qrFor(t.targets, t.targetName, t.missing, taskMemo(c, t), accountId);
+}
+
+/** QR gộp các việc ② đang mở cùng tài khoản đích (pocket UC-1206 bước 10, AC-13): số = Σ phần còn thiếu, "Du phong ky {d-m}". */
+export function goalGroupQr(c: Pick<PayCycleView, "payday" | "tasks">, accountId: string): TaskQr {
+  const tasks = c.tasks.filter((t) => openGoalTask(t) && t.toAccountId === accountId);
+  const first = tasks[0];
+  if (!first) return { hint: null };
+  return qrFor(first.targets, first.targetName, tasks.reduce((s, t) => s + t.missing, 0), `Du phong${memoTail(c)}`, accountId);
 }
 
 // ── Kiểm và thân yêu cầu ───────────────────────────────────────────

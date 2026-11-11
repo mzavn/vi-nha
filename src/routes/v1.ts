@@ -194,6 +194,7 @@ function entryInput(b: Record<string, unknown>): EntryInput {
     confirm_duplicate: b.confirm_duplicate === true,
     // Kiểu kiểm ở resolveOpensCycle (invalid_input), giá trị không hợp lệ cũng báo ở đó.
     opens_cycle: b.opens_cycle as boolean | undefined,
+    goal_id: str(b.goal_id, "goal_id"),
   };
   if (input.client_id && !/^[A-Za-z0-9_-]{8,64}$/.test(input.client_id)) bad("client_id phải là chuỗi 8–64 ký tự chữ, số, gạch.");
   return input;

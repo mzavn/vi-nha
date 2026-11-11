@@ -3,6 +3,7 @@ import { setAmountsHidden } from "./money";
 import {
   amountProblem,
   effectsToast,
+  goalGroupQr,
   noCycleStreamLine,
   payCycleCard,
   savingsDoneLine,
@@ -66,6 +67,23 @@ function cycleC(over: Partial<PayCycleView> = {}, tasks?: PayCycleTask[]): PayCy
     savingsDone: { amount: 0, base: 20_000_000, pct: 0 },
     ...over,
   };
+}
+
+const SAVING_ACC: QrTarget = { accountId: "tk-tiet-kiem", name: "MB tiết kiệm", bank: "Vietcombank", accountNo: "09991234567", subAccount: null };
+const SHARED_ACC: QrTarget = { accountId: "tk-chung", name: "VCB chung", bank: "Vietcombank", accountNo: "09997654321", subAccount: null };
+
+/** pocket UC-1206 AC-12 trước chuyển khoản: ② Nhà ở 1.500.000 rồi Học tập 2.000.000 cùng MB tiết kiệm, Hoá đơn ở VCB chung xếp giữa. `linked` theo mã việc. */
+function sharedCycle(linked: Record<number, number> = {}): PayCycleView {
+  const goalTask = (id: number, amount: number, goal: { id: string; name: string; held: number; target: number }, acc: QrTarget) => {
+    const l = linked[id] ?? 0;
+    return task({ id, kind: "goal", amount, linked: l, missing: amount - l, status: l >= amount ? "done" : "open", auto: l >= amount, goal: { ...goal, accountId: acc.accountId }, toAccountId: acc.accountId, targets: [acc], targetName: acc.name });
+  };
+  return cycleC({}, [
+    task({ id: 40, kind: "savings", amount: 2_000_000, pct: 10, toPocket: "savings", source: salary, targets: [SAVINGS_ACC] }),
+    goalTask(41, 1_500_000, { id: "nha-o", name: "Nhà ở", held: 6_000_000, target: 7_500_000 }, SAVING_ACC),
+    goalTask(42, 500_000, { id: "hoa-don", name: "Hoá đơn", held: 1_500_000, target: 2_000_000 }, SHARED_ACC),
+    goalTask(43, 2_000_000, { id: "hoc-tap", name: "Học tập", held: 0, target: 6_000_000 }, SAVING_ACC),
+  ]);
 }
 
 describe("thẻ Việc ngày lương (pwa UC-702)", () => {
@@ -196,6 +214,36 @@ describe("thẻ Việc ngày lương (pwa UC-702)", () => {
     expect(savingsDoneLine(cycleC({ savingsDone: { amount: 0, base: 0, pct: null } }), 10)).toBeNull();
     expect(savingsDoneLine(null, 10)).toBeNull();
   });
+
+  it("UC-702 AC-32: savings_pct 15, hai khoản lương (① 3.000.000 và 1.500.000) → 'Kỳ này đã trích 3.000.000 / 4.500.000 ₫ (15%)', rồi '✓ 4.500.000 ₫ (15%)', chưa chuyển → 'chưa trích (15% = 4.500.000 ₫)'; ① bỏ qua không vào số cần", () => {
+    const tasks = [
+      task({ id: 31, kind: "savings", amount: 3_000_000, pct: 15, toPocket: "savings", source: salary, targets: [SAVINGS_ACC] }),
+      task({ id: 32, kind: "savings", amount: 1_500_000, pct: 15, toPocket: "savings", source: { ...salary, txId: 2, amount: 10_000_000 }, targets: [SAVINGS_ACC] }),
+    ];
+    const at = (amount: number) => cycleC({ savingsDone: { amount, base: 30_000_000, pct: Math.floor((amount * 100) / 30_000_000) } }, tasks);
+    expect(savingsDoneLine(at(3_000_000), 15)).toBe(`Kỳ này đã trích 3.000.000 / ${vnd("4.500.000")} (15%)`);
+    expect(savingsDoneLine(at(4_500_000), 15)).toBe(`Kỳ này đã trích ✓ ${vnd("4.500.000")} (15%)`);
+    expect(savingsDoneLine(at(0), 15)).toBe(`Kỳ này chưa trích (15% = ${vnd("4.500.000")})`);
+    const skipped = cycleC({ savingsDone: { amount: 3_000_000, base: 30_000_000, pct: 10 } }, [tasks[0]!, { ...tasks[1]!, status: "skipped" }]);
+    expect(savingsDoneLine(skipped, 15)).toBe(`Kỳ này đã trích ✓ ${vnd("3.000.000")} (15%)`);
+    setAmountsHidden(true);
+    expect(savingsDoneLine(at(3_000_000), 15)).toBe(`Kỳ này đã trích •••• / ${vnd("••••")} (15%)`);
+  });
+
+  it("UC-702 AC-30: hai việc ② cùng MB tiết kiệm → liền nhau dưới dòng 'Chuyển 3.500.000 ₫ vào MB tiết kiệm · 2 mục tiêu' có QR gộp; việc ② tài khoản khác chen giữa bị dời ra sau nhóm; một việc ② một tài khoản không có dòng gộp; che số", () => {
+    const v = payCycleCard(sharedCycle(), true)!;
+    expect(v.rows.map((r) => r.title)).toEqual([
+      `Trích Tích luỹ 10% · ${vnd("2.000.000")}`,
+      `Nạp Nhà ở · ${vnd("1.500.000")}`,
+      `Nạp Học tập · ${vnd("2.000.000")}`,
+      `Nạp Hoá đơn · ${vnd("500.000")}`,
+    ]);
+    expect(v.goalGroups).toEqual([{ accountId: "tk-tiet-kiem", title: `Chuyển ${vnd("3.500.000")} vào MB tiết kiệm · 2 mục tiêu`, taskIds: [41, 43], qr: true }]);
+    const paid = sharedCycle({ 41: 1_500_000, 43: 1_000_000 });
+    expect(payCycleCard(paid, true)!.goalGroups).toEqual([]);
+    setAmountsHidden(true);
+    expect(payCycleCard(sharedCycle(), true)!.goalGroups[0]!.title).toBe(`Chuyển ${vnd("••••")} vào MB tiết kiệm · 2 mục tiêu`);
+  });
 });
 
 describe("mã QR của việc ngày lương (pocket UC-1206 bước 10)", () => {
@@ -214,6 +262,15 @@ describe("mã QR của việc ngày lương (pocket UC-1206 bước 10)", () => 
     expect(v.rows[0]).toMatchObject({ qr: false, qrHint: "Chuyển sang heo đất" });
     const two = taskQr(c, { ...savings!, targets: [SAVINGS_ACC, { ...SAVINGS_ACC, accountId: "piggy2", name: "heo 2" }] }, "piggy2");
     expect("target" in two && two.target.accountId).toBe("piggy2");
+  });
+
+  it("UC-1206 AC-13: QR gộp của MB tiết kiệm → 3.500.000, 'Du phong ky 10-11'; sau chuyển 2.500.000 (Nhà ở xong, Học tập đã 1.000.000) → 1.000.000; việc ② tài khoản khác không vào; QR từng việc vẫn mở được", () => {
+    const c = sharedCycle();
+    const qr = goalGroupQr(c, "tk-tiet-kiem");
+    expect(qr).toMatchObject({ target: SAVING_ACC, amount: 3_500_000, memo: "Du phong ky 10-11" });
+    expect("payload" in qr && qr.payload).toContain("Du phong ky 10-11");
+    expect(goalGroupQr(sharedCycle({ 41: 1_500_000, 43: 1_000_000 }), "tk-tiet-kiem")).toMatchObject({ amount: 1_000_000 });
+    expect(taskQr(c, c.tasks[1]!)).toMatchObject({ target: SAVING_ACC, amount: 1_500_000, memo: "Nha o ky 10-11" });
   });
 });
 

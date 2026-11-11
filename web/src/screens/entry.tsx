@@ -5,12 +5,13 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { errorText } from "../lib/api";
 import { defaultAccountFor, manualAccounts, topCategories } from "../lib/categories";
+import { goalChoices, goalField } from "../lib/goal-choices";
 import { addAmount, formatTypedVnd, formatVnd, moneyDigits, timesThousand } from "../lib/money";
 import { atForDay, dayKey, shortDate, timeHM } from "../lib/period";
 import { draftFromTx, editedAt } from "../lib/transactions";
 import type { Bootstrap, CategoryRef, EntryBody } from "../lib/types";
 import { confirmDuplicateEntry, discardEntry, getState, go, refresh, replaceEntry, retryEntry, saveEntry, setState, syncNow, toast, useApp, viewSnapshot, type AppState } from "../state/store";
-import { AccountSelect, amountExprHint, newClientId, useAmountField } from "../ui/fields";
+import { AccountSelect, amountExprHint, GoalChips, newClientId, useAmountField } from "../ui/fields";
 import { CategoryIcon, Icon } from "../ui/icons";
 import { Money } from "../ui/money";
 import { Card, FirstLoadFailed, NeedsNetwork, PageHeader, Sheet, Skeleton } from "../ui/parts";
@@ -50,6 +51,12 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
   const [amount, setAmount] = useState(d?.amount ?? 0);
   const [category, setCategory] = useState<CategoryRef | null>(() => boot.categories.find((c) => c.id === d?.category_id) ?? null);
   const [accountId, setAccountId] = useState<string | null>(() => d?.account_id ?? defaultAccountFor(boot, memberId, "out"));
+  // "Cho mục tiêu": không chọn sẵn; đổi tài khoản là bỏ chọn (pwa UC-703 AC-17, sửa khoản UC-715 AC-17 giữ chip đang gắn).
+  const [goalId, setGoalId] = useState<string | null>(d?.goal_id ?? null);
+  const pickAccount = (id: string | null) => {
+    setAccountId(id);
+    setGoalId(null);
+  };
   const [note, setNote] = useState(d?.note ?? "");
   const [day, setDay] = useState(() => d?.day ?? preset?.day ?? dayKey(new Date()));
   const [more, setMore] = useState(Boolean(d));
@@ -74,11 +81,12 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
   const tiles = category && !top.some((c) => c.id === category.id) ? [category, ...top.slice(0, 5)] : top;
   const view = viewSnapshot(app);
   const ns = view?.nearSpend ?? null;
+  const goals = goalChoices(accountId, app.snap?.pockets);
   const today = dayKey(new Date());
 
   // Danh mục / tài khoản bị xoá khỏi cấu hình sau khi tải lại: bỏ chọn thay vì gửi một mã không còn.
   useEffect(() => {
-    if (accountId && !manualAccounts(boot.accounts, "out").some((a) => a.id === accountId)) setAccountId(defaultAccountFor(boot, memberId, "out"));
+    if (accountId && !manualAccounts(boot.accounts, "out").some((a) => a.id === accountId)) pickAccount(defaultAccountFor(boot, memberId, "out"));
   }, [boot]);
 
   function pick(c: CategoryRef) {
@@ -111,6 +119,7 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
       account_id: accountId,
       ...(d?.debt_id ? { debt_id: d.debt_id } : {}),
       ...(note.trim() ? { note: note.trim() } : {}),
+      ...goalField(goalId, goals),
     };
     try {
       if (edit) {
@@ -130,7 +139,7 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
       setNote("");
       setDay(dayKey(new Date()));
       setMore(false);
-      setAccountId(defaultAccountFor(boot, memberId, "out"));
+      pickAccount(defaultAccountFor(boot, memberId, "out"));
       // Sẵn sàng cho khoản tiếp theo: về đầu màn, con trỏ lại ở ô số tiền.
       scrollTo({ top: 0 });
       amountRef.current?.focus({ preventScroll: true });
@@ -260,8 +269,9 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
         )}
         <div class="field" style={{ borderTop: 0 }}>
           <label for="f-acct">Trả bằng</label>
-          <AccountSelect id="f-acct" accounts={manualAccounts(boot.accounts, "out", day)} value={accountId} onChange={setAccountId} />
+          <AccountSelect id="f-acct" accounts={manualAccounts(boot.accounts, "out", day)} value={accountId} onChange={pickAccount} />
         </div>
+        <GoalChips choices={goals} value={goalId} onChange={setGoalId} />
         {edit?.tx.debt_id && (
           // Khoản trả nợ giữ nguyên chỗ gắn ở sổ nợ khi sửa.
           <div class="field">
@@ -312,7 +322,7 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
     <>
       <QueueList boot={boot} />
 
-      <Card title="Đếm ví / nhập số dư thật" right={<span class="hint">chủ nhật</span>}>
+      <Card title="Đếm số dư" right={<span class="hint">chủ nhật</span>}>
         <p style={{ margin: "0 0 10px", color: "var(--fg-2)", fontSize: "13px" }}>
           Nhập số tiền thật đang có của một tài khoản. App hiện chênh lệch với sổ rồi mới ghi.
         </p>
@@ -468,6 +478,10 @@ function QueueList({ boot }: { boot: Bootstrap }) {
                     Vẫn ghi
                   </button>
                 )
+              ) : q.error?.code === "invalid_goal" ? (
+                <button type="button" class="btn" style={{ flex: 1 }} onClick={() => void retryEntry(q.clientId, { dropGoal: true })}>
+                  Gửi lại không chọn mục tiêu
+                </button>
               ) : (
                 <button type="button" class="btn" style={{ flex: 1 }} onClick={() => void retryEntry(q.clientId)}>
                   Gửi lại

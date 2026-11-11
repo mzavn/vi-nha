@@ -197,9 +197,12 @@ export async function syncNow(): Promise<void> {
   else toast(`Đã đồng bộ ${before - left} khoản. ${left} khoản vẫn chờ.`);
 }
 
-/** Nút "Gửi lại" của một khoản trong hàng đợi: gửi lại rồi nói kết quả — bị từ chối lần nữa thì thẻ trông y như cũ. */
-export async function retryEntry(clientId: string): Promise<void> {
-  const report = await syncer.retry(clientId);
+/**
+ * Nút "Gửi lại" của một khoản trong hàng đợi: gửi lại rồi nói kết quả — bị từ chối lần nữa thì thẻ trông y như cũ.
+ * `dropGoal`: "Gửi lại không chọn mục tiêu" của khoản bị 400 `invalid_goal` (pwa UC-704 AC-28).
+ */
+export async function retryEntry(clientId: string, opts: { dropGoal?: boolean } = {}): Promise<void> {
+  const report = await syncer.retry(clientId, opts);
   if (report.stopped === "auth") return toLogin();
   const r = report.results[clientId];
   if (r?.kind === "ok") toast("Đã đồng bộ khoản này.");

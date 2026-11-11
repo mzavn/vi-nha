@@ -8,8 +8,8 @@ describe("migrations", () => {
     const fromDocs = openDb();
     const migrated = migratedDb();
     expect(schemaShape(migrated)).toEqual(schemaShape(fromDocs));
-    expect(migrated.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.41" });
-    expect(fromDocs.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.41" });
+    expect(migrated.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.42" });
+    expect(fromDocs.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.42" });
   });
 
   it("dựng được DB và mọi view chạy sạch", () => {
@@ -17,7 +17,7 @@ describe("migrations", () => {
     const views = db.prepare("SELECT name FROM sqlite_master WHERE type='view'").all() as { name: string }[];
     expect(views.length).toBeGreaterThan(0);
     for (const v of views) db.prepare(`SELECT * FROM ${v.name} LIMIT 1`).all();
-    expect(db.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.41" });
+    expect(db.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.42" });
   });
 
   it("đã bỏ hai view ngân sách mù kỳ", () => {
@@ -65,8 +65,8 @@ describe("seed", () => {
   it("UC-1209: hộ mẫu v1.40 không ví — mục tiêu Học phí gắn tài khoản MB học phí ngăn Dự phòng, Thuế thu nhập 10% và Bảo dưỡng xe chưa gắn; thuế suất chỉ ở mục tiêu Thuế, không còn config tax_rate", () => {
     expect(db.prepare("SELECT id, name, account_id, target_amount, target_pct, monthly_amount, repeat_months, due_date, active FROM reserve_goals ORDER BY sort").all()).toEqual([
       { id: "tuition", name: "Học phí", account_id: "mb-tuition", target_amount: 6_000_000, target_pct: null, monthly_amount: 2_000_000, repeat_months: 3, due_date: "2027-01-15", active: 1 },
-      { id: "income-tax", name: "Thuế thu nhập", account_id: null, target_amount: null, target_pct: 10, monthly_amount: null, repeat_months: null, due_date: null, active: 1 },
       { id: "car-service", name: "Bảo dưỡng xe", account_id: null, target_amount: 4_800_000, target_pct: null, monthly_amount: null, repeat_months: null, due_date: "2027-03-31", active: 1 },
+      { id: "income-tax", name: "Thuế thu nhập", account_id: null, target_amount: null, target_pct: 10, monthly_amount: null, repeat_months: null, due_date: null, active: 1 },
     ]);
     expect(db.prepare("SELECT id, pocket, pocket_confirmed FROM accounts WHERE pocket IS NOT 'operating' ORDER BY id").all()).toEqual([
       { id: "mb-reward", pocket: "reserve", pocket_confirmed: 1 },

@@ -45,10 +45,10 @@ describe("snapshot.pockets", () => {
     const book = raw.prepare("SELECT SUM(book_balance) AS s FROM v_account_book").get() as { s: number };
     expect(p.savings.total + p.reserve.total + p.operating.total + p.outside.total).toBe(book.s);
     expect(book.s).toBe(18_900_000);
-    expect(p.reserve.accounts.find((a) => a.id === "mb-husband")).toEqual({ id: "mb-husband", name: "MB (Thuế)", balance: 10_000_000, goalId: null });
-    expect(p.reserve.accounts.find((a) => a.id === "mb-tuition")).toEqual({ id: "mb-tuition", name: "MB (học phí)", balance: 0, goalId: "tuition" });
+    expect(p.reserve.accounts.find((a) => a.id === "mb-husband")).toEqual({ id: "mb-husband", name: "MB (Thuế)", balance: 10_000_000, goalIds: [] });
+    expect(p.reserve.accounts.find((a) => a.id === "mb-tuition")).toEqual({ id: "mb-tuition", name: "MB (học phí)", balance: 0, goalIds: ["tuition"] });
     expect(p.reserve.reward).toEqual({ accountId: "mb-reward", balance: 0 });
-    expect(p.operating.accounts.find((a) => a.id === "card")).toEqual({ id: "card", name: "Thẻ tín dụng", balance: -800_000, goalId: null });
+    expect(p.operating.accounts.find((a) => a.id === "card")).toEqual({ id: "card", name: "Thẻ tín dụng", balance: -800_000, goalIds: [] });
     expect(p.outside.accounts.map((a) => a.id)).toEqual(["momo"]);
     expect(p.reserve.goals.map((g) => [g.id, g.accountId, g.held, g.target, g.targetPct])).toEqual([
       ["tuition", "mb-tuition", 0, 6_000_000, null],

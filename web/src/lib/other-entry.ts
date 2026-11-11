@@ -49,6 +49,8 @@ export interface QueuedDraft {
   receivableId: string | null;
   assetKind: string | null;
   note: string;
+  /** "Cho mục tiêu" (pocket UC-1209 bước 11): đã kiểm thuộc tài khoản tiền ra (`goalField`); chỉ chi / chuyển gửi. */
+  goalId?: string | null;
 }
 
 /** Lý do nút ghi còn tắt (chữ trên nút); null = ghi được. Chuyển nội bộ: bắt buộc hai tài khoản khác nhau (UC-705 AC-35). */
@@ -77,5 +79,6 @@ export function queuedBody(d: QueuedDraft): EntryBody {
     ...((kind === "lend" || kind === "collect") && d.receivableId ? { receivable_id: d.receivableId } : {}),
     ...(kind === "buy_asset" && d.assetKind ? { asset_kind: d.assetKind } : {}),
     ...(d.note.trim() ? { note: d.note.trim() } : {}),
+    ...((kind === "spend" || kind === "transfer") && d.goalId ? { goal_id: d.goalId } : {}),
   };
 }

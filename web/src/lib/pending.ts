@@ -2,7 +2,7 @@
 // Chỉ điều chỉnh theo đúng công thức của domain cho những tài khoản bị ảnh hưởng — không tính lại cả màn. Không ví (Đợt C):
 // khoản chuyển trong hàng đợi không tự tick việc ngày lương, phần chưa làm (`pendingTasks`) không trừ tạm (chỉ server tick).
 
-import { peaceMonthsView, type PocketAccountLine } from "../../../src/domain/pockets";
+import { fillGoals, peaceMonthsView, type PocketAccountLine, type PocketsView } from "../../../src/domain/pockets";
 import { nearSpendView } from "../../../src/domain/snapshot";
 import type { QueuedEntry } from "../offline/queue";
 import { formatVnd, moneyDigits } from "./money";
@@ -26,6 +26,37 @@ function accountEffects(items: QueuedEntry[]): Map<string, number> {
   return fx;
 }
 
+/**
+ * Đã chi cho mục tiêu của các khoản chi / chuyển ra trong hàng đợi: theo `goal_id`; không gửi `goal_id` từ tài khoản đúng một
+ * mục tiêu thì server tự gắn mục tiêu đó (pocket UC-1209 bước 11) — tính như đã gắn.
+ */
+function goalSpends(items: QueuedEntry[], accounts: PocketAccountLine[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const { body: b } of items) {
+    if ((b.meaning !== "spend" && b.meaning !== "transfer") || !b.account_id) continue;
+    const own = accounts.find((a) => a.id === b.account_id)?.goalIds ?? [];
+    const goalId = b.goal_id ?? (own.length === 1 ? own[0] : undefined);
+    if (goalId) out.set(goalId, (out.get(goalId) ?? 0) + b.amount);
+  }
+  return out;
+}
+
+/** Chia lại số dư đã trừ tạm cho mục tiêu từng nhóm bằng `fillGoals` (UC-704 AC-29): `spent` cộng khoản xếp hàng gắn mục tiêu. */
+function refillGoals(r: PocketsView["reserve"], fx: Map<string, number>, queued: Map<string, number>): Pick<PocketsView["reserve"], "goals" | "groups"> {
+  const filled = new Map<string, { held: number; spent: number; short: number | null }>();
+  const groups = r.groups.map((grp) => {
+    const members = grp.goalIds.flatMap((id) => r.goals.find((g) => g.id === id) ?? []);
+    const balance = grp.balance + (fx.get(grp.accountId) ?? 0);
+    const fill = fillGoals(
+      balance,
+      members.map((g) => ({ id: g.id, need: g.need, spent: g.spent + (queued.get(g.id) ?? 0) })),
+    );
+    for (const g of fill.goals) filled.set(g.id, g);
+    return { ...grp, balance, need: fill.need, spent: fill.spent, short: fill.short, extra: fill.extra };
+  });
+  return { groups, goals: r.goals.map((g) => (filled.has(g.id) ? { ...g, ...filled.get(g.id)! } : g)) };
+}
+
 /** Tiền vận hành sau khi trừ tạm: số mỗi ngày tính lại bằng `nearSpendView` dùng chung (vẫn trừ việc chưa làm). */
 function shiftNearSpend(s: Snapshot, fx: Map<string, number>, amount: number): Snapshot["nearSpend"] {
   const ns = s.nearSpend;
@@ -40,7 +71,8 @@ function shiftNearSpend(s: Snapshot, fx: Map<string, number>, amount: number): S
 /**
  * Ba ngăn trừ / cộng tạm khoản trong hàng đợi vào số của tài khoản liên quan và tổng ngăn chứa nó (UC-704, ADR-122):
  * tiền vận hành = tổng ngăn Vận hành, số mỗi ngày tính lại; phần an tâm đổi đúng bằng khoản trên tài khoản Dự phòng không
- * gắn mục tiêu, không phải Ví Thưởng; số dư (A) của mục tiêu theo tài khoản của nó; số tháng tính lại bằng `peaceMonthsView`. Số đo theo kỳ (`savings.change`, `monthly`, `cycles`) và việc ngày lương không trừ tạm.
+ * gắn mục tiêu, không phải Ví Thưởng; đã có (A) của mục tiêu chia lại bằng `fillGoals` trên số dư đã trừ tạm (UC-704 AC-29);
+ * số tháng tính lại bằng `peaceMonthsView`. Số đo theo kỳ (`savings.change`, `monthly`, `cycles`) và việc ngày lương không trừ tạm.
  */
 export function applyQueue(s: Snapshot, items: QueuedEntry[]): Snapshot {
   if (items.length === 0) return s;
@@ -60,7 +92,7 @@ export function applyQueue(s: Snapshot, items: QueuedEntry[]): Snapshot {
   if (savings === p.savings && reserve === p.reserve && operating === p.operating && outside === p.outside) return s;
   const r = p.reserve;
   const rewardId = r.reward?.accountId ?? null;
-  const peace = r.peace + r.accounts.filter((a) => a.goalId === null && a.id !== rewardId).reduce((sum, a) => sum + (fx.get(a.id) ?? 0), 0);
+  const peace = r.peace + r.accounts.filter((a) => a.goalIds.length === 0 && a.id !== rewardId).reduce((sum, a) => sum + (fx.get(a.id) ?? 0), 0);
   const { monthly, target } = r.peaceMonths;
   const pockets = {
     ...p,
@@ -69,7 +101,7 @@ export function applyQueue(s: Snapshot, items: QueuedEntry[]): Snapshot {
     outside,
     reserve: {
       ...reserve,
-      goals: r.goals.map((g) => (g.held !== null && g.accountId && fx.get(g.accountId) ? { ...g, held: g.held + fx.get(g.accountId)! } : g)),
+      ...refillGoals(r, fx, goalSpends(items, r.accounts)),
       peace,
       peaceMonths: { ...r.peaceMonths, covered: peaceMonthsView(peace, monthly, target).covered },
       reward: r.reward && fx.get(r.reward.accountId) ? { ...r.reward, balance: r.reward.balance + fx.get(r.reward.accountId)! } : r.reward,

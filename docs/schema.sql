@@ -87,6 +87,10 @@
 --                     conversion_state cho nhà lên từ 1.x (ADR-130, ADR-131)
 --  v1.41 (12/11/2026): Ví Thưởng ↔ tài khoản mục tiêu giữ bằng trigger hai chiều — trg_reserve_goals_not_reward(_insert)
 --                     (account_is_reward), trg_config_reward(_insert) (reward_has_goal) (ADR-134)
+--  v1.42 (12/11/2026): nhiều mục tiêu Dự phòng dùng chung một tài khoản — bỏ idx_reserve_goals_account; reserve_goals.sort
+--                     là thứ tự ưu tiên (0042 đánh số lại 10, 20, … theo hạn); mục tiêu % giữ tài khoản riêng
+--                     (trg_reserve_goals_tax_own(_insert) → tax_account_shared); transactions.goal_id (khoản chi / chuyển
+--                     ra cho mục tiêu nào; trg_tx_goal(_insert) → invalid_goal)
 -- ============================================================
 --  NGUYÊN TẮC ENCODE:
 --   1. Hai lớp: bank_logs (thô, BẤT BIẾN) vs transactions (đã diễn giải)
@@ -259,6 +263,7 @@ CREATE TABLE transactions (
   receivable_id TEXT REFERENCES receivables(id),      -- lend: cho vay thêm · collect: nhận lại (sổ phải thu)
   interest_debt_id TEXT REFERENCES debts(id),         -- spend: trả LÃI cho khoản nợ (chi phí, không giảm nợ)
   legacy_class TEXT CHECK (legacy_class IS NULL OR legacy_class IN ('essential','flex','tax','savings','holding')),  -- loại chi cũ (ADR-131): chỉ dòng trước v1.40
+  goal_id      TEXT REFERENCES reserve_goals(id),      -- spend / transfer: mục tiêu Dự phòng dùng tiền (v1.42); NULL = không cho mục tiêu nào
   CHECK (meaning <> 'spend'  OR category_id IS NOT NULL)
 );
 CREATE INDEX idx_tx_cat          ON transactions(category_id, month_key) WHERE status='active';
@@ -270,6 +275,7 @@ CREATE INDEX idx_tx_tenant       ON transactions(tenant_id) WHERE tenant_id IS N
 CREATE INDEX idx_tx_debt         ON transactions(debt_id) WHERE debt_id IS NOT NULL;
 CREATE INDEX idx_tx_receivable   ON transactions(receivable_id) WHERE receivable_id IS NOT NULL;
 CREATE INDEX idx_tx_interest_debt ON transactions(interest_debt_id, month_key) WHERE interest_debt_id IS NOT NULL AND status='active';
+CREATE INDEX idx_tx_goal         ON transactions(goal_id, at) WHERE goal_id IS NOT NULL;
 
 -- 7b. MỖI KHOẢN THU CHỈ ĐƯỢC CHIA MỘT LẦN — ghi cùng batch với các fund,
 --     trùng khoá chính thì cả batch huỷ (webhook gửi lại, cron vá, bấm hai lần...)
@@ -847,9 +853,10 @@ BEGIN
   SELECT RAISE(ABORT, 'income_plan_append_only');
 END;
 
--- BA NGĂN (v1.38, ADR-119, ADR-132) — ngăn là nhóm tài khoản thật (accounts.pocket). Mục tiêu Dự phòng là một tài khoản
---  thật ngăn Dự phòng: A = số dư sổ của tài khoản gắn (v_account_book), không lưu. Tổng ngăn, phần an tâm (tài khoản Dự
---  phòng không gắn mục tiêu, không phải Ví Thưởng), nợ ngắn hạn TÍNH RA ở src/domain/pockets.ts.
+-- BA NGĂN (v1.38, ADR-119, ADR-132) — ngăn là nhóm tài khoản thật (accounts.pocket). Mục tiêu Dự phòng gắn một tài khoản
+--  thật ngăn Dự phòng; nhiều mục tiêu dùng chung được một tài khoản (v1.42): A = phần chia từ số dư sổ của tài khoản
+--  (v_account_book) theo thứ tự ưu tiên `sort`, không lưu. Tổng ngăn, A, phần an tâm (tài khoản Dự phòng không gắn mục
+--  tiêu, không phải Ví Thưởng), nợ ngắn hạn TÍNH RA ở src/domain/pockets.ts.
 CREATE TABLE reserve_goals (
   id                   TEXT PRIMARY KEY,                    -- slug của tên; điền sẵn từ ví cũ = mã ví
   name                 TEXT NOT NULL,
@@ -861,7 +868,7 @@ CREATE TABLE reserve_goals (
   repeat_months        INTEGER CHECK (repeat_months IS NULL OR repeat_months BETWEEN 1 AND 12),
   due_date             TEXT,                                -- 'YYYY-MM-DD'; NULL = chưa đặt
   debt_id              TEXT REFERENCES debts(id),           -- mục tiêu Trả nợ
-  sort                 INTEGER NOT NULL DEFAULT 100,
+  sort                 INTEGER NOT NULL DEFAULT 100,        -- thứ tự ưu tiên của cả nhà (nhỏ đứng trước, v1.42)
   active               INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
   created_at           TEXT NOT NULL DEFAULT (datetime('now')),
   CHECK ((target_amount IS NULL) <> (target_pct IS NULL)),
@@ -869,7 +876,6 @@ CREATE TABLE reserve_goals (
   CHECK (monthly_amount IS NULL OR target_amount = monthly_amount * repeat_months),
   CHECK (target_pct IS NULL OR repeat_months IS NULL)
 );
-CREATE UNIQUE INDEX idx_reserve_goals_account ON reserve_goals(account_id) WHERE active = 1 AND account_id IS NOT NULL;
 CREATE UNIQUE INDEX idx_reserve_goals_debt ON reserve_goals(debt_id) WHERE active = 1 AND debt_id IS NOT NULL;
 
 -- Tài khoản gắn mục tiêu đang dùng phải đang dùng và ở ngăn Dự phòng; tài khoản đó không rời ngăn / không tắt được.
@@ -914,6 +920,38 @@ WHEN NEW.k = 'surplus_reward_account'
   AND EXISTS (SELECT 1 FROM reserve_goals g WHERE g.account_id = NEW.v AND g.active = 1)
 BEGIN
   SELECT RAISE(ABORT, 'reward_has_goal');
+END;
+-- Mục tiêu theo % (Thuế) giữ tài khoản riêng (v1.42, QĐ1-A): tài khoản của nó không có mục tiêu đang dùng nào khác.
+CREATE TRIGGER trg_reserve_goals_tax_own_insert BEFORE INSERT ON reserve_goals
+WHEN NEW.active = 1 AND NEW.account_id IS NOT NULL
+  AND EXISTS (SELECT 1 FROM reserve_goals g WHERE g.account_id = NEW.account_id AND g.active = 1 AND g.id <> NEW.id)
+  AND (NEW.target_pct IS NOT NULL
+    OR EXISTS (SELECT 1 FROM reserve_goals g WHERE g.account_id = NEW.account_id AND g.active = 1 AND g.id <> NEW.id AND g.target_pct IS NOT NULL))
+BEGIN
+  SELECT RAISE(ABORT, 'tax_account_shared');
+END;
+CREATE TRIGGER trg_reserve_goals_tax_own BEFORE UPDATE OF account_id, active, target_pct ON reserve_goals
+WHEN NEW.active = 1 AND NEW.account_id IS NOT NULL
+  AND EXISTS (SELECT 1 FROM reserve_goals g WHERE g.account_id = NEW.account_id AND g.active = 1 AND g.id <> NEW.id)
+  AND (NEW.target_pct IS NOT NULL
+    OR EXISTS (SELECT 1 FROM reserve_goals g WHERE g.account_id = NEW.account_id AND g.active = 1 AND g.id <> NEW.id AND g.target_pct IS NOT NULL))
+BEGIN
+  SELECT RAISE(ABORT, 'tax_account_shared');
+END;
+-- Khoản chi / chuyển ra cho mục tiêu (v1.42, QĐ3): mục tiêu đang dùng và gắn đúng tài khoản tiền ra lúc ghi.
+CREATE TRIGGER trg_tx_goal_insert BEFORE INSERT ON transactions
+WHEN NEW.goal_id IS NOT NULL
+  AND (NEW.meaning NOT IN ('spend', 'transfer')
+    OR NOT EXISTS (SELECT 1 FROM reserve_goals g WHERE g.id = NEW.goal_id AND g.active = 1 AND g.account_id = NEW.account_id))
+BEGIN
+  SELECT RAISE(ABORT, 'invalid_goal');
+END;
+CREATE TRIGGER trg_tx_goal BEFORE UPDATE OF goal_id, account_id, meaning ON transactions
+WHEN NEW.goal_id IS NOT NULL
+  AND (NEW.meaning NOT IN ('spend', 'transfer')
+    OR NOT EXISTS (SELECT 1 FROM reserve_goals g WHERE g.id = NEW.goal_id AND g.active = 1 AND g.account_id = NEW.account_id))
+BEGIN
+  SELECT RAISE(ABORT, 'invalid_goal');
 END;
 
 -- % Tích luỹ mỗi kỳ lương (UC-507), "1".."100"; D1 trống không có luật Tích sản nên mặc định.
@@ -1013,4 +1051,4 @@ BEGIN
 END;
 
 -- Phiên bản schema — /v1/health đọc từ đây
-INSERT INTO config (k,v) VALUES ('schema_version','1.41');
+INSERT INTO config (k,v) VALUES ('schema_version','1.42');

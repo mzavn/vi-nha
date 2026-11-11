@@ -55,6 +55,7 @@ function parseSplit(raw: unknown, index: number): Split {
     interest: s.interest === true,
     ...(typeof s.opens_cycle === "boolean" ? { opens_cycle: s.opens_cycle } : {}),
     note: typeof s.note === "string" ? s.note : null,
+    goal_id: typeof s.goal_id === "string" ? s.goal_id : null,
   };
 }
 

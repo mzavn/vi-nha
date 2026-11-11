@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, SW_CACHED_AT } from "./api";
+import { evalAmount, isAmountExpr, nextAmount } from "./money";
 import { emptySetup, goalAccountChoices, newGoal, removeAccount, removeMember, SETUP_STEPS, setupNeeded, setupPayload, setupServerError, setupSummary, stepErrors, stepOfField, type SetupForm } from "./setup";
 
 const valid = (patch: Partial<SetupForm> = {}): SetupForm => ({
@@ -100,32 +101,36 @@ describe("UC-510 AC-4 (phía app): kiểm từng bước trước khi bấm Ti�
   });
 
   it("UC-510 AC-11 (phía app): mục tiêu cần tên (không trùng nhau, không trùng Thuế khi tự nộp thuế), số mỗi tháng > 0, 1–12 tháng; tối đa 10 mục; không còn tên dành riêng “Giữ cho Tích luỹ”", () => {
-    const goal = (name: string, monthly = "2.000.000", repeat = "1") => ({ name, monthly, repeat, account: null });
-    expect(stepErrors(valid({ goals: [goal("Học phí", "2.000.000", "3")] }), 3)).toEqual({});
+    const goal = (name: string, monthly = 2_000_000, repeat = "1") => ({ name, monthly, repeat, account: null });
+    expect(stepErrors(valid({ goals: [goal("Học phí", 2_000_000, "3")] }), 3)).toEqual({});
     expect(stepErrors(valid({ goals: [newGoal()] }), 3)).toEqual({ "goals.0.name": expect.any(String), "goals.0.monthly_amount": expect.any(String) });
     expect(stepErrors(valid({ goals: [goal("Học phí"), goal("hoc phi")] }), 3)).toEqual({ "goals.1.name": expect.any(String) });
-    expect(stepErrors(valid({ goals: [goal("Học phí", "2.000.000", "13")] }), 3)).toEqual({ "goals.0.repeat_months": expect.any(String) });
+    expect(stepErrors(valid({ goals: [goal("Học phí", 2_000_000, "13")] }), 3)).toEqual({ "goals.0.repeat_months": expect.any(String) });
     expect(stepErrors(valid({ taxable: true, goals: [goal("Thuế")] }), 3)).toEqual({ "goals.0.name": expect.any(String) });
     expect(stepErrors(valid({ taxable: false, goals: [goal("Thuế")] }), 3)).toEqual({});
     expect(stepErrors(valid({ goals: [goal("Giữ cho Tích luỹ")] }), 3)).toEqual({});
     expect(stepErrors(valid({ goals: Array.from({ length: 11 }, (_, i) => goal(`Mục ${i + 1}`)) }), 3)).toEqual({ goals: expect.any(String) });
   });
 
-  it("UC-510 AC-14 (phía app): tài khoản của mục tiêu chọn trong các tài khoản ngăn Dự phòng đã nhập hoặc “Chưa có”; mỗi tài khoản tối đa một mục tiêu; tài khoản đổi khỏi Dự phòng → lỗi ở ô goals.N.account", () => {
+  it("UC-510 AC-14 (phía app): tài khoản của mục tiêu chọn trong các tài khoản ngăn Dự phòng đã nhập hoặc “Chưa có”; hai mục tiêu cùng một tài khoản được (server chia theo thứ tự hạn); tài khoản đổi khỏi Dự phòng → lỗi ở ô goals.N.account", () => {
     const accounts = [
       { name: "MB (vợ)", kind: "bank" as const, bank: "MBBank", owner: 1, pocket: "operating" as const },
       { name: "Sổ BIDV", kind: "bank" as const, bank: "BIDV", owner: null, pocket: "reserve" as const },
       { name: "", kind: "bank" as const, bank: "TCB", owner: null, pocket: "reserve" as const },
     ];
-    const goal = (name: string, account: number | null) => ({ name, monthly: "2.000.000", repeat: "1", account });
+    const goal = (name: string, account: number | null) => ({ name, monthly: 2_000_000, repeat: "1", account });
     const f = valid({ accounts, goals: [goal("Học phí", 1), goal("Bảo dưỡng xe", null)] });
-    expect(goalAccountChoices(f, 0)).toEqual([
+    const both = [
       { index: 1, name: "Sổ BIDV" },
       { index: 2, name: "Tài khoản 3" },
-    ]);
-    expect(goalAccountChoices(f, 1)).toEqual([{ index: 2, name: "Tài khoản 3" }]);
+    ];
+    expect(goalAccountChoices(f)).toEqual(both);
     expect(stepErrors(f, 3)).toEqual({});
-    expect(stepErrors(valid({ accounts, goals: [goal("Học phí", 1), goal("Xe", 1)] }), 3)).toEqual({ "goals.1.account": "Mỗi tài khoản chỉ cho một mục tiêu." });
+    const shared = valid({ accounts, goals: [goal("Học phí", 1), goal("Xe", 1)] });
+    expect(stepErrors(shared, 3)).toEqual({});
+    // Ô tên tài khoản thứ ba trống (lỗi bước 3) nên dựng thân với hai tài khoản đầu.
+    const body = setupPayload({ ...shared, accounts: accounts.slice(0, 2) });
+    expect(body.ok && body.value.goals.map((g) => g.account)).toEqual([1, 1]);
     expect(stepErrors(valid({ accounts, goals: [goal("Học phí", 0)] }), 3)).toEqual({ "goals.0.account": "Tài khoản của mục tiêu phải ở ngăn Dự phòng." });
     expect(stepOfField("goals.0.account")).toBe(3);
     // Bớt tài khoản: mục tiêu gắn nó về Chưa có, chỉ số tài khoản sau lùi một.
@@ -154,8 +159,8 @@ describe("UC-510: thân POST /v1/setup", () => {
         taxable: true,
         groups: ["utilities", "food"],
         goals: [
-          { name: " Học phí ", monthly: "2.000.000", repeat: "3", account: 3 },
-          { name: "Xe", monthly: "400.000", repeat: "12", account: null },
+          { name: " Học phí ", monthly: 2_000_000, repeat: "3", account: 3 },
+          { name: "Xe", monthly: 400_000, repeat: "12", account: null },
         ],
       }),
     );
@@ -188,6 +193,17 @@ describe("UC-510: thân POST /v1/setup", () => {
     expect(setupPayload(valid({ taxable: null })).ok).toBe(false);
     expect(setupPayload(valid({ goals: [newGoal()] })).ok).toBe(false);
   });
+
+  it("UC-510 AC-15: “Số mỗi tháng” là ô AmountInput chung — gõ 2000000, “2.000.000” hay phép tính “1.500.000+500.000” đều gửi monthly_amount: 2000000", () => {
+    // Ô AmountInput: số thường đọc bằng nextAmount (nhóm chấm khi gõ), phép tính bằng evalAmount.
+    const typed = (text: string) => (isAmountExpr(text) ? (evalAmount(text) ?? 0) : nextAmount(0, text));
+    for (const text of ["2000000", "2.000.000", "1.500.000+500.000"]) {
+      const r = setupPayload(valid({ goals: [{ name: "Học phí", monthly: typed(text), repeat: "1", account: null }] }));
+      expect(r.ok && r.value.goals).toEqual([{ name: "Học phí", monthly_amount: 2_000_000, repeat_months: 1 }]);
+    }
+    // Phép tính sai (kết quả ≤ 0) → ô báo, không dựng thân.
+    expect(stepErrors(valid({ goals: [{ name: "Học phí", monthly: typed("500.000-600.000"), repeat: "1", account: null }] }), 3)).toEqual({ "goals.0.monthly_amount": expect.any(String) });
+  });
 });
 
 describe("UC-510 AC-12: dòng “Sẽ tạo:” ở bước Ba ngăn", () => {
@@ -201,7 +217,7 @@ describe("UC-510 AC-12: dòng “Sẽ tạo:” ở bước Ba ngăn", () => {
         ],
         taxable: true,
         groups: ["utilities", "food"],
-        goals: [{ name: "Học phí", monthly: "2.000.000", repeat: "3", account: 1 }],
+        goals: [{ name: "Học phí", monthly: 2_000_000, repeat: "3", account: 1 }],
       }),
     );
     expect(text).toBe(

@@ -62,11 +62,11 @@ describe("dailyMessage", () => {
    */
   const sampleB: Pick<DailyMessageInput, "reserveGoals" | "peace" | "peaceMonths" | "shortDebt" | "debts"> = {
     reserveGoals: [
-      { name: "Trả nợ Vay người thân", held: 1_000_000, target: 1_000_000 },
-      { name: "Học phí", held: 4_000_000, target: 6_000_000 },
-      { name: "Bảo dưỡng xe", held: 1_000_000, target: 4_800_000 },
-      { name: "Thuế", held: 500_000, target: null },
-      { name: "Sửa nhà", held: null, target: 20_000_000 },
+      { name: "Trả nợ Vay người thân", held: 1_000_000, target: 1_000_000, spent: 0 },
+      { name: "Học phí", held: 4_000_000, target: 6_000_000, spent: 0 },
+      { name: "Bảo dưỡng xe", held: 1_000_000, target: 4_800_000, spent: 0 },
+      { name: "Thuế", held: 500_000, target: null, spent: 0 },
+      { name: "Sửa nhà", held: null, target: 20_000_000, spent: 0 },
     ],
     peace: 31_500_000,
     peaceMonths: { covered: 3.1, target: 6 },
@@ -93,10 +93,30 @@ describe("dailyMessage", () => {
     expect(line({})).toBe("🎯 Trả nợ Vay người thân 100% · Học phí 66% · Bảo dưỡng xe 20% · Phần an tâm đủ 3,1/6 tháng");
     expect(line({ peace: -1_000_000, peaceMonths: { covered: 0, target: 6 } })).toBe("🎯 Trả nợ Vay người thân 100% · Học phí 66% · Bảo dưỡng xe 20% · Phần an tâm thiếu 1.000.000 ₫");
     expect(line({ peaceMonths: { covered: null, target: 6 } })).toBe("🎯 Trả nợ Vay người thân 100% · Học phí 66% · Bảo dưỡng xe 20%");
-    expect(line({ reserveGoals: [{ name: "Quá <đích>", held: 9_000_000, target: 6_000_000 }], peace: 0 })).toBe("🎯 Quá &lt;đích&gt; 100%");
+    expect(line({ reserveGoals: [{ name: "Quá <đích>", held: 9_000_000, target: 6_000_000, spent: 0 }], peace: 0 })).toBe("🎯 Quá &lt;đích&gt; 100%");
     expect(line({ reserveGoals: [], peace: 0 })).toBeUndefined();
     expect(dailyMessage({ ...base, ...sampleB }).full).not.toContain("Quỹ an tâm");
     expect(dailyMessage({ ...base, ...sampleB }).full).not.toContain("Sửa nhà");
+  });
+
+  it("UC-402 AC-41: 🎯 theo thứ tự ưu tiên, p = ⌊(held + spent) × 100 ÷ B⌋ kẹp 0…100 — nhóm tài khoản chung; Thuế không vào; đã chi 7.500.000 gắn Nhà ở → 100%; Học tập held −6.000.000, spent 6.000.000 → 0%", () => {
+    const goals = [
+      { name: "Hoá đơn", held: 2_000_000, target: 2_000_000, spent: 0 },
+      { name: "Nhà ở", held: 7_500_000, target: 7_500_000, spent: 0 },
+      { name: "Học tập", held: 4_500_000, target: 6_000_000, spent: 0 },
+      { name: "Bảo dưỡng xe", held: 4_800_000, target: 4_800_000, spent: 0 },
+      { name: "Hiếu hỉ", held: 2_200_000, target: 3_000_000, spent: 0 },
+      { name: "Thuế", held: 1_500_000, target: null, spent: 0 },
+    ];
+    const line = (reserveGoals: typeof goals) =>
+      dailyMessage({ ...base, ...sampleB, reserveGoals, peace: 5_000_000, peaceMonths: { covered: null, target: 6 } }).full.split("\n").find((l) => l.startsWith("🎯"));
+    expect(line(goals)).toBe("🎯 Hoá đơn 100% · Nhà ở 100% · Học tập 75% · Bảo dưỡng xe 100% · Hiếu hỉ 73%");
+    const paid = goals.map((g) => (g.name === "Nhà ở" ? { ...g, held: 0, spent: 7_500_000 } : g));
+    expect(line(paid)).toContain("Nhà ở 100%");
+    const over = goals.map((g) => (g.name === "Học tập" ? { ...g, held: -6_000_000, spent: 6_000_000 } : g));
+    expect(line(over)).toContain("Học tập 0%");
+    const single = [{ name: "Hoá đơn", held: 1_000_000, target: 2_000_000, spent: 500_000 }];
+    expect(line(single)).toBe("🎯 Hoá đơn 75%");
   });
 
   it("UC-402 AC-35: 💳 nợ ngắn hạn kèm số đã có trong tài khoản Trả nợ và tất cả khoản nợ; chỉ nợ ngắn hạn → không vế cuối; hết nợ ngắn hạn → lời chúc của ngày kèm nợ khác; bản ngắn không đổi", () => {
@@ -141,7 +161,7 @@ describe("dailyMessage", () => {
         { name: "Ăn uống", pct: 92, over: 0 },
       ],
       unassignedCount: 5,
-      reserveGoals: [{ name: "Du lịch", held: 4_500_000, target: 10_000_000 }],
+      reserveGoals: [{ name: "Du lịch", held: 4_500_000, target: 10_000_000, spent: 0 }],
       peace: 32_000_000,
       peaceMonths: { covered: 3.2, target: 6 },
       driftAccounts: [{ name: "VCB", amount: -120_000 }],
@@ -211,7 +231,7 @@ describe("dailyMessage — bản ngắn cho thông báo đẩy", () => {
     nearSpend: { amount: 4_100_000, payday: "2026-12-10", daysLeft: 29, perDay: 141_000 },
     limitNudges: [],
     unassignedCount: 0,
-    reserveGoals: [{ name: "Du lịch", held: 4_500_000, target: 10_000_000 }],
+    reserveGoals: [{ name: "Du lịch", held: 4_500_000, target: 10_000_000, spent: 0 }],
     peace: 32_000_000,
     peaceMonths: { covered: 3.2, target: 6 },
     shortDebt: { total: 15_379_000, count: 2, items: [{ heldFor: 0 }, { heldFor: 0 }] },

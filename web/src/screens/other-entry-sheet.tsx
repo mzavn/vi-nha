@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { api, errorText } from "../lib/api";
 import { defaultAccountFor, defaultBankFor, manualAccounts } from "../lib/categories";
+import { goalChoices, goalField } from "../lib/goal-choices";
 import { formatTypedVnd, formatVnd } from "../lib/money";
 import { incomeBody, opensCycleDefault, queuedBody, queuedMissing, type QueuedKind } from "../lib/other-entry";
 import { atForDay, dayKey } from "../lib/period";
@@ -14,7 +15,7 @@ import { draftFromTx, editedAt, MEANING_LABEL, withChosen, type TxDraft } from "
 import type { Bootstrap, Rental, SettingsData, TxRow } from "../lib/types";
 import { useResource } from "../state/resource";
 import { replaceEntry, saveEntry, toast, useApp } from "../state/store";
-import { AccountSelect, AmountInput, CategorySelect, newClientId } from "../ui/fields";
+import { AccountSelect, AmountInput, CategorySelect, GoalChips, newClientId } from "../ui/fields";
 import { NeedsNetwork, Seg, Sheet } from "../ui/parts";
 import { LinkSourcePicker, ReceivablePicker } from "./ref-pickers";
 
@@ -333,7 +334,7 @@ function QueuedForm({
   edit?: Editing;
   onDone: () => void;
 }) {
-  const { member, online } = useApp();
+  const { member, online, snap } = useApp();
   const memberId = member?.id ?? null;
   const d = edit?.draft;
   const [amount, setAmount] = useState(initialAmount);
@@ -347,6 +348,13 @@ function QueuedForm({
           : defaultAccountFor(boot, memberId, kind === "refund" || kind === "collect" ? "in" : "out"),
   );
   const [toAccountId, setToAccountId] = useState<string | null>(() => (d ? d.to_account_id : defaultAccountFor(boot, memberId, "in")));
+  // "Cho mục tiêu" của chi / chuyển ra từ tài khoản chung (pwa UC-705 AC-37, UC-715 AC-17): đổi tài khoản tiền ra là bỏ chọn.
+  const [goalId, setGoalId] = useState<string | null>(d?.goal_id ?? null);
+  const pickAccount = (id: string | null) => {
+    setAccountId(id);
+    setGoalId(null);
+  };
+  const goals = kind === "spend" || kind === "transfer" ? goalChoices(accountId, snap?.pockets) : [];
   const [categoryId, setCategoryId] = useState<string | null>(() => (d ? d.category_id : null));
   const [assetKind, setAssetKind] = useState<(typeof ASSET_KINDS)[number]["value"]>(
     () => ASSET_KINDS.find((a) => a.value === d?.asset_kind)?.value ?? "fund",
@@ -398,6 +406,7 @@ function QueuedForm({
       receivableId: memo?.id ?? null,
       assetKind,
       note,
+      goalId: goalField(goalId, goals).goal_id ?? null,
     });
     if (edit) {
       // Sửa ghi thẳng lên server (thay khoản cũ trong một lần), không qua hàng đợi.
@@ -430,8 +439,9 @@ function QueuedForm({
           </div>
           <div class="field">
             <label for="o-acct">Tiền ra từ</label>
-            <AccountSelect id="o-acct" accounts={manualAccounts(boot.accounts, "out", day)} value={accountId} onChange={setAccountId} />
+            <AccountSelect id="o-acct" accounts={manualAccounts(boot.accounts, "out", day)} value={accountId} onChange={pickAccount} />
           </div>
+          <GoalChips choices={goals} value={goalId} onChange={setGoalId} />
         </>
       )}
 
@@ -519,8 +529,9 @@ function QueuedForm({
         <>
           <div class="field">
             <label for="o-from">Từ</label>
-            <AccountSelect id="o-from" accounts={manualAccounts(boot.accounts, "out", day)} value={accountId} onChange={setAccountId} />
+            <AccountSelect id="o-from" accounts={manualAccounts(boot.accounts, "out", day)} value={accountId} onChange={pickAccount} />
           </div>
+          <GoalChips choices={goals} value={goalId} onChange={setGoalId} />
           <div class="field">
             <label for="o-to">Vào</label>
             <AccountSelect id="o-to" accounts={manualAccounts(boot.accounts, "in", day)} value={toAccountId} onChange={setToAccountId} />
@@ -545,7 +556,7 @@ function QueuedForm({
       </div>
 
       <div class="note" style={{ borderTop: "1px solid var(--border)" }}>
-        {kind === "spend" && "Chi cho một mục tiêu Dự phòng thì chọn đúng tài khoản của mục tiêu đó ở ô Trả từ."}
+        {kind === "spend" && "Chi cho một mục tiêu Dự phòng thì chọn đúng tài khoản của mục tiêu đó ở ô Tiền ra từ; tài khoản dùng chung cho nhiều mục tiêu thì chọn thêm Cho mục tiêu."}
         {kind === "refund" && "Hoàn tiền tính vào kỳ hiện tại và nối về khoản chi gốc. Tiền cho vay được trả lại thì chọn Nhận lại tiền cho vay."}
         {kind === "buy_asset" && "Tiền rời tài khoản thành tài sản — không phải chi tiêu."}
         {kind === "lend" && "Cho vay: tiền rời tài khoản nhưng vẫn là tiền của nhà. Gắn vào khoản phải thu để biết người đó còn nợ mình bao nhiêu."}

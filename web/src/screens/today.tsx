@@ -235,7 +235,7 @@ export function SavingsCard({ snap }: { snap: Snapshot }) {
   );
 }
 
-/** Thẻ Dự phòng (ADR-122, ADR-132): mỗi mục tiêu là một tài khoản thật, rồi phần an tâm đo bằng tháng vận hành, Ví Thưởng. */
+/** Thẻ Dự phòng (ADR-122, ADR-132): mục tiêu theo nhóm tài khoản (UC-702 bước 7), rồi phần an tâm đo bằng tháng vận hành, Ví Thưởng. */
 export function ReserveCard({ snap }: { snap: Snapshot }) {
   const v = reserveCard(snap.pockets);
   if (!v) return null;
@@ -252,27 +252,43 @@ export function ReserveCard({ snap }: { snap: Snapshot }) {
       ) : (
         <>
           <div class="pocket-total">{v.total}</div>
-          {v.goals.map((g) => (
-            <div class="tier" key={g.id}>
-              <div class="nm">
-                {g.name}
-                {g.full && <span class="chip ok">đủ</span>}
-              </div>
-              <div class="amt">{g.pct !== null ? `${g.pct}%` : ""}</div>
-              <div class="tsub">
-                <span>{g.amount}</span>
-              </div>
-              {g.pct !== null && <Bar pct={g.pct} tone="ok" />}
-              {g.sub && (
-                <div class="tsub">
-                  <span>{g.sub}</span>
+          {v.groups.map((grp) => (
+            <div class={grp.head ? "goal-group" : undefined} key={grp.key}>
+              {grp.head && (
+                <div class="goal-group-h">
+                  <span>{grp.head.title}</span>
+                  <span class={`chip ${grp.head.tone}`}>{grp.head.chip}</span>
                 </div>
               )}
-              {g.needsAccount && (
-                <button type="button" class="link" onClick={toPocketGoals}>
-                  Mở tài khoản thật ›
-                </button>
-              )}
+              {grp.goals.map((g) => (
+                <div class="tier" key={g.id}>
+                  <div class="nm">
+                    {g.name}
+                    {g.full && <span class="chip ok">đủ</span>}
+                  </div>
+                  <div class="amt">{g.pct !== null ? `${g.pct}%` : ""}</div>
+                  <div class={g.over ? "tsub bad" : "tsub"}>
+                    <span>{g.amount}</span>
+                  </div>
+                  {g.spent && (
+                    <div class="tsub">
+                      <span>{g.spent}</span>
+                    </div>
+                  )}
+                  {g.pct !== null && <Bar pct={g.pct} tone="ok" />}
+                  {g.sub && (
+                    <div class="tsub">
+                      <span>{g.sub}</span>
+                    </div>
+                  )}
+                  {g.needsAccount && (
+                    <button type="button" class="link" onClick={toPocketGoals}>
+                      Mở tài khoản thật ›
+                    </button>
+                  )}
+                </div>
+              ))}
+              {grp.note && <p class="goal-group-note">{grp.note}</p>}
             </div>
           ))}
           <div class="tier">

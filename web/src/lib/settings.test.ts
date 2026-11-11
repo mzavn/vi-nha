@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "./api";
+import { AUDIT_ACTIONS } from "../../../src/domain/audit-actions";
+import { pocketsShared, SHARED_ACCOUNTS, sharedGoals } from "./household-b.fixture";
 import {
-  accountGoal,
+  accountGoals,
+  AUDIT_ACTION,
   accountPayload,
   accountSubmitError,
   accountToForm,
@@ -18,10 +21,19 @@ import {
   feedFromSuggestion,
   followsCodeConvention,
   GOAL_POCKET_LOCK,
+  goalAccountNote,
   goalAccountOptions,
   goalLineText,
+  goalListGroups,
+  goalOrderError,
+  goalOrderPayload,
+  goalOrderPreview,
   goalPayload,
+  goalSubmitError,
   goalToForm,
+  ORDER_CHANGED,
+  TAX_ACCOUNT_SHARED,
+  type GoalAccountOption,
   isoFromVnInput,
   memberPayload,
   normalizePattern,
@@ -42,7 +54,7 @@ import {
 } from "./settings";
 import { groupAccountsByPocket, groupPayload, groupSummary, nextDueDate, pocketsPayload, unconfirmedChip } from "./pockets";
 import { setAmountsHidden } from "./money";
-import type { AuditEntry, CategoryGroup, Debt, NotifySchedule, ReserveGoal, SepayConnection, SettingsAccount } from "./types";
+import type { AuditEntry, CategoryGroup, Debt, NotifySchedule, ReserveGoal, SepayConnection, SettingsAccount, SettingsData } from "./types";
 
 const NBSP = "\u00a0";
 
@@ -100,6 +112,17 @@ describe("nhật ký thay đổi", () => {
     expect(auditView(entry({ action: "log.ignore", target: "log:L4" })).title).toBe("Bỏ qua giao dịch ngân hàng #L4");
     expect(auditView(entry({ action: "category.create", target: "category:qua-tang" })).title).toBe("Thêm danh mục qua-tang");
     expect(auditView(entry({ action: "category.update", target: "category:qua-tang" })).title).toBe("Sửa danh mục qua-tang");
+  });
+
+  it("UC-709 AC-50: mọi mã nhật ký server ghi (AUDIT_ACTIONS) đều có nhãn tiếng Việt; bốn nhãn mới; mã cũ (chia khoản thu, chốt tháng) giữ nhãn", () => {
+    for (const action of AUDIT_ACTIONS) expect(AUDIT_ACTION[action], action).toMatch(/^\p{Lu}/u);
+    const entry = (action: string, target: string | null): AuditEntry => ({ id: 1, at: "2026-11-12 02:05:00", memberId: "husband", memberName: "Chồng", via: "session", action, target, detail: null });
+    expect(auditView(entry("category_group.create", "category_group:an-uong")).title).toBe("Thêm nhóm danh mục an-uong");
+    expect(auditView(entry("category_group.update", "category_group:an-uong")).title).toBe("Sửa nhóm danh mục an-uong");
+    expect(auditView(entry("pockets.confirm", null)).title).toBe("Xác nhận ngăn tài khoản");
+    expect(auditView(entry("goal.order", "goal:*")).title).toBe("Đổi thứ tự mục tiêu *");
+    expect(AUDIT_ACTION["income.allocate"]).toBe("Chia khoản thu");
+    expect(AUDIT_ACTION["month.close"]).toBe("Chốt tháng");
   });
 });
 
@@ -497,6 +520,9 @@ describe("Ba ngăn (UC-709 AC-35…39)", () => {
     account_id: "bidv",
     suggested_account_id: null,
     held: 4_000_000,
+    need: 6_000_000,
+    spent: 0,
+    short: 2_000_000,
     target_amount: 6_000_000,
     target_pct: null,
     monthly_amount: 2_000_000,
@@ -550,11 +576,11 @@ describe("Ba ngăn (UC-709 AC-35…39)", () => {
     });
   });
 
-  it("UC-709 AC-35: tài khoản gắn mục tiêu đang dùng không chọn được ngăn khác Dự phòng, kèm câu 'Bỏ gắn mục tiêu trước khi đổi ngăn'; mục tiêu đã tắt không giữ", () => {
-    const list = [goal(), goal({ id: "cu", name: "Cũ", account_id: "mb", active: false })];
-    expect(accountGoal("bidv", list)?.name).toBe("Học phí");
-    expect(accountGoal("mb", list)).toBeUndefined();
-    expect(accountGoal("tcb", list)).toBeUndefined();
+  it("UC-709 AC-35: tài khoản gắn mục tiêu đang dùng không chọn được ngăn khác Dự phòng, kèm câu 'Bỏ gắn mục tiêu trước khi đổi ngăn'; mục tiêu đã tắt không giữ; tài khoản chung nêu đủ tên", () => {
+    const list = [goal(), goal({ id: "cu", name: "Cũ", account_id: "mb", active: false }), goal({ id: "nha", name: "Nhà ở" })];
+    expect(accountGoals("bidv", list).map((g) => g.name)).toEqual(["Học phí", "Nhà ở"]);
+    expect(accountGoals("mb", list)).toEqual([]);
+    expect(accountGoals("tcb", list)).toEqual([]);
     expect(GOAL_POCKET_LOCK).toBe("Bỏ gắn mục tiêu trước khi đổi ngăn");
   });
 
@@ -588,6 +614,7 @@ describe("Ba ngăn (UC-709 AC-35…39)", () => {
       "Điện nước · đã có 0 / 1.300.000 · trong BIDV · 1.300.000/tháng",
     );
     expect(goalLineText(goal(), names)).not.toMatch(/để riêng|giữ riêng/);
+    expect(goalLineText(goal({ held: 6_000_000, short: 0 }), names)).toBe("Học phí · đã có 6.000.000 / 6.000.000 · trong BIDV · đủ · hạn 15/01/2027 · 2.000.000/tháng, 3 tháng một lần");
   });
 
   it("UC-709 AC-36 (UC-718): đang che số tiền thì mọi số tiền trên dòng thành ••••, số tháng và % giữ nguyên", () => {
@@ -656,10 +683,110 @@ describe("Ba ngăn (UC-709 AC-35…39)", () => {
     goal({ id: "thue", name: "Thuế", account_id: null, held: null, target_pct: 10, target_amount: null, monthly_amount: null, repeat_months: null }),
   ];
 
-  it("UC-709 AC-46: sheet Hoá đơn có ô Tài khoản liệt kê phao, không liệt kê tài khoản tiết kiệm (đã gắn) và tài khoản dự phòng (Ví Thưởng); Học phí vẫn chọn lại được tài khoản của nó", () => {
-    expect(goalAccountOptions(houseE, goalsE, "du-phong", "hoa-don").map((a) => a.id)).toEqual(["phao"]);
-    expect(goalAccountOptions(houseE, goalsE, "du-phong", "hoc-phi").map((a) => a.id)).toEqual(["tiet-kiem", "phao"]);
-    expect(goalAccountOptions(houseE, goalsE, null).map((a) => a.id)).toEqual(["phao", "du-phong"]);
+  it("UC-709 AC-46: sheet Hoá đơn có ô Tài khoản liệt kê tài khoản tiết kiệm kèm 'dùng chung với Học phí' và phao, không liệt kê tài khoản dự phòng (Ví Thưởng)", () => {
+    const view = (list: GoalAccountOption[]) => list.map((a) => [a.id, a.shared, a.blocked]);
+    expect(view(goalAccountOptions(houseE, goalsE, "du-phong", "hoa-don", false))).toEqual([
+      ["tiet-kiem", "dùng chung với Học phí", null],
+      ["phao", null, null],
+    ]);
+    expect(view(goalAccountOptions(houseE, goalsE, "du-phong", "hoc-phi", false))).toEqual([
+      ["tiet-kiem", null, null],
+      ["phao", null, null],
+    ]);
+    expect(view(goalAccountOptions(houseE, goalsE, null, null, false)).map((x) => x[0])).toEqual(["tiet-kiem", "phao", "du-phong"]);
+  });
+
+  // Dữ liệu giả của pocket UC-1203 AC-11 ở dạng GET /v1/settings (goals theo thứ tự ưu tiên, goal_groups) + Ví Thưởng, tài khoản chính.
+  function sharedSettings(o: { saving?: number; spent?: Record<string, number> } = {}): SettingsData {
+    const v = pocketsShared(o);
+    const sorts = Object.fromEntries(sharedGoals().map((g) => [g.id, g.sort]));
+    const goals: ReserveGoal[] = v.reserve.goals.map((g) => ({
+      id: g.id,
+      name: g.name,
+      account_id: g.accountId,
+      suggested_account_id: null,
+      held: g.held,
+      need: g.need,
+      spent: g.spent,
+      short: g.short,
+      target_amount: g.target,
+      target_pct: g.targetPct,
+      monthly_amount: g.monthly,
+      repeat_months: g.repeatMonths,
+      due_date: g.dueDate,
+      debt_id: g.debtId,
+      sort: sorts[g.id]!,
+      active: true,
+    }));
+    const balance = Object.fromEntries(v.reserve.accounts.map((a) => [a.id, a.balance]));
+    return {
+      accounts: [
+        ...SHARED_ACCOUNTS.map((a) => account({ id: a.id, name: a.name, pocket: "reserve", book_balance: balance[a.id]! })),
+        account({ id: "vi-thuong", name: "Ví Thưởng", pocket: "reserve", book_balance: 1_000_000 }),
+        account({ id: "chinh", name: "Tài khoản chính", pocket: "operating" }),
+      ],
+      goals: [...goals, goal({ id: "du-lich", name: "Du lịch", account_id: null, held: null, need: null, short: null, due_date: null }), goal({ id: "cu", name: "Mục tiêu cũ", account_id: null, held: null, need: null, short: null, active: false })],
+      goal_groups: v.reserve.groups.map((g) => ({ account_id: g.accountId, balance: g.balance, need: g.need, spent: g.spent, short: g.short, extra: g.extra, goal_ids: g.goalIds })),
+      config: { surplus_reward_account: "vi-thuong" },
+    } as SettingsData;
+  }
+
+  it("UC-709 AC-36: dòng của mục tiêu trong nhóm chung bỏ 'trong {tài khoản}'; đã chi > 0 thêm 'đã chi X kỳ này' và 'đủ' theo đã có + đã chi; mục tiêu một mình giữ dòng cũ", () => {
+    const d = sharedSettings();
+    const of = (s: SettingsData, id: string) => s.goals.find((g) => g.id === id)!;
+    expect(goalLineText(of(d, "nha-o"), d.accounts, true)).toBe("Nhà ở · đã có 7.500.000 / 7.500.000 · đủ · hạn 05/12/2026 · 7.500.000/tháng");
+    expect(goalLineText(of(d, "hoc-tap"), d.accounts, true)).toBe("Học tập · đã có 4.500.000 / 6.000.000 · hạn 15/01/2027");
+    expect(goalLineText(of(d, "thue"), d.accounts)).toBe("Thuế · đã có 1.500.000 · trong TK thuế · 10% thu chịu thuế");
+    const paid = sharedSettings({ saving: 4_500_000, spent: { "nha-o": 7_500_000 } });
+    expect(goalLineText(of(paid, "nha-o"), paid.accounts, true)).toBe("Nhà ở · đã có 0 / 7.500.000 · đã chi 7.500.000 kỳ này · đủ · hạn 05/12/2026 · 7.500.000/tháng");
+    expect(goalOrderPreview(paid, "tk-tiet-kiem", ["nha-o", "hoc-tap"]).map((r) => `${r.name} · ${r.text}`)).toEqual(["Nhà ở · đã có 0 / 7.500.000 · đã chi 7.500.000 kỳ này · đủ", "Học tập · đã có 4.500.000 / 6.000.000"]);
+  });
+
+  it("UC-709 AC-48: danh sách nhóm theo tài khoản ('MB tiết kiệm · 12.000.000 ₫ · 2 mục tiêu · thiếu 1.500.000 ₫'), 'Chưa có tài khoản' cuối; đổi thứ tự xem trước bằng fillGoals; Lưu gửi một PUT với mọi mã đang dùng, VCB chung giữ thứ tự; 400 invalid_order → câu tải lại", () => {
+    const d = sharedSettings();
+    expect(goalListGroups(d).map((g) => [g.title, g.reorder, g.goals.map((x) => x.id)])).toEqual([
+      [`VCB chung · 9.000.000${NBSP}₫ · 3 mục tiêu · thiếu 800.000${NBSP}₫`, true, ["hoa-don", "bao-duong-xe", "hieu-hi"]],
+      [`MB tiết kiệm · 12.000.000${NBSP}₫ · 2 mục tiêu · thiếu 1.500.000${NBSP}₫`, true, ["nha-o", "hoc-tap"]],
+      [null, false, ["thue"]],
+      ["Chưa có tài khoản", false, ["du-lich"]],
+      [null, false, ["cu"]],
+    ]);
+    expect(goalOrderPreview(d, "tk-tiet-kiem", ["hoc-tap", "nha-o"]).map((r) => `${r.name} · ${r.text}`)).toEqual(["Học tập · đã có 6.000.000 / 6.000.000 · đủ", "Nhà ở · đã có 6.000.000 / 7.500.000"]);
+    const six = { ...d, goals: d.goals.filter((g) => g.account_id !== null) };
+    expect(goalOrderPayload(six.goals, "tk-tiet-kiem", ["hoc-tap", "nha-o"])).toEqual({ ids: ["hoa-don", "hoc-tap", "nha-o", "bao-duong-xe", "hieu-hi", "thue"] });
+    expect(goalOrderPayload(d.goals, "tk-chung", ["hieu-hi", "hoa-don", "bao-duong-xe"])).toEqual({ ids: ["hieu-hi", "nha-o", "hoc-tap", "hoa-don", "bao-duong-xe", "thue", "du-lich"] });
+    expect(goalOrderError(new ApiError(400, "invalid_order", "ids sai"))).toEqual({ message: ORDER_CHANGED, reload: true });
+    expect(ORDER_CHANGED).toBe("Danh sách mục tiêu vừa đổi ở máy khác — tải lại.");
+    expect(goalOrderError(new ApiError(500, "server_error", "Lỗi máy chủ."))).toEqual({ message: "Lỗi máy chủ.", reload: false });
+    setAmountsHidden(true);
+    try {
+      expect(goalListGroups(d)[1]!.title).toBe(`MB tiết kiệm · ••••${NBSP}₫ · 2 mục tiêu · thiếu ••••${NBSP}₫`);
+    } finally {
+      setAmountsHidden(false);
+    }
+  });
+
+  it("UC-709 AC-49: ô Tài khoản của Hiếu hỉ — VCB chung, MB tiết kiệm kèm 'dùng chung với …', phao, TK thuế tắt 'Thuế cần tài khoản riêng', không Ví Thưởng; chọn MB tiết kiệm có câu mềm; Thuế chỉ bật tài khoản không mục tiêu và TK thuế; mã lỗi tax_account_shared / account_is_reward", () => {
+    const d = sharedSettings();
+    const view = (list: GoalAccountOption[]) => list.map((a) => [a.name, a.shared, a.blocked]);
+    expect(view(goalAccountOptions(d.accounts, d.goals, "vi-thuong", "hieu-hi", false))).toEqual([
+      ["VCB chung", "dùng chung với Hoá đơn, Bảo dưỡng xe", null],
+      ["MB tiết kiệm", "dùng chung với Nhà ở, Học tập", null],
+      ["TK thuế", "dùng chung với Thuế", "Thuế cần tài khoản riêng"],
+      ["phao", null, null],
+    ]);
+    expect(goalAccountOptions(d.accounts, d.goals, "vi-thuong", "thue", true).filter((a) => !a.blocked).map((a) => a.name)).toEqual(["TK thuế", "phao"]);
+    expect(goalAccountOptions(d.accounts, d.goals, "vi-thuong", "thue", true).find((a) => a.id === "tk-chung")!.blocked).toBe("Thuế cần tài khoản riêng");
+    const hieuHi = d.goals.find((g) => g.id === "hieu-hi")!;
+    expect(goalAccountNote(d, "tk-tiet-kiem", hieuHi)).toBe(`MB tiết kiệm đang thiếu 1.500.000${NBSP}₫ cho Nhà ở, Học tập; mục tiêu này đứng thứ 3 trong tài khoản.`);
+    expect(goalAccountNote(d, "tk-chung", hieuHi)).toBeNull();
+    expect(goalAccountNote(d, "phao", hieuHi)).toBeNull();
+    expect(goalAccountNote(d, "tk-tiet-kiem", { id: null, due_date: "2026-12-20" })).toBe(`MB tiết kiệm đang thiếu 1.500.000${NBSP}₫ cho Nhà ở, Học tập; mục tiêu này đứng thứ 2 trong tài khoản.`);
+    expect(goalAccountNote(d, "tk-tiet-kiem", { id: null, due_date: null })).toMatch(/đứng thứ 3 trong tài khoản\.$/);
+    expect(goalSubmitError(new ApiError(409, "tax_account_shared", "x"), d.accounts, "tk-chung")).toEqual({ field: "account_id", message: TAX_ACCOUNT_SHARED });
+    expect(TAX_ACCOUNT_SHARED).toBe("Thuế cần tài khoản riêng: thuế đã nộp đếm mọi khoản chi từ tài khoản này.");
+    expect(goalSubmitError(new ApiError(409, "account_is_reward", "x"), d.accounts, "vi-thuong")).toEqual({ field: "account_id", message: "Ví Thưởng là tài khoản Ví Thưởng: chọn tài khoản Dự phòng khác cho mục tiêu." });
+    expect(goalSubmitError(new ApiError(400, "invalid_input", "Tên trống.", "name"), d.accounts, "")).toEqual({ field: null, message: "Tên trống." });
   });
 
   it("UC-709 AC-43: Ví Thưởng là danh sách tài khoản Dự phòng đang dùng không gắn mục tiêu", () => {

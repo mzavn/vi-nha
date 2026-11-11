@@ -58,10 +58,10 @@ export function householdB(): DatabaseSync {
     INSERT INTO debt_lines (debt_id, at, kind, amount) VALUES
       ('family', '2026-07-01', 'opening', 5000000), ('installment', '2026-07-01', 'opening', 3000000), ('mortgage', '2026-07-01', 'opening', 50000000);
     INSERT INTO reserve_goals (id, name, account_id, target_amount, target_pct, monthly_amount, repeat_months, due_date, debt_id, sort) VALUES
-      ('b-tuition', 'Học phí', 'b-tuition-acc', 6000000, NULL, 2000000, 3, '2027-01-15', NULL, 10),
-      ('b-car', 'Bảo dưỡng xe', 'b-car-acc', 4800000, NULL, NULL, NULL, '2027-03-31', NULL, 20),
-      ('b-tax', 'Thuế', 'b-tax-acc', NULL, 10, NULL, NULL, NULL, NULL, 30),
-      ('repay-family', 'Trả nợ Vay người thân', 'b-repay-acc', 1000000, NULL, 1000000, 1, '2026-11-15', 'family', 40);
+      ('b-tuition', 'Học phí', 'b-tuition-acc', 6000000, NULL, 2000000, 3, '2027-01-15', NULL, 20),
+      ('b-car', 'Bảo dưỡng xe', 'b-car-acc', 4800000, NULL, NULL, NULL, '2027-03-31', NULL, 30),
+      ('b-tax', 'Thuế', 'b-tax-acc', NULL, 10, NULL, NULL, NULL, NULL, 40),
+      ('repay-family', 'Trả nợ Vay người thân', 'b-repay-acc', 1000000, NULL, 1000000, 1, '2026-11-15', 'family', 10);
   `);
   tx(raw, { at: "2026-07-01 09:00", meaning: "spend", amount: 100_000, from: "vcb-husband" }); // giao dịch sớm nhất
   tx(raw, { at: "2026-08-20 12:00", meaning: "spend", amount: 9_000_000, from: "vcb-husband" }); // kỳ 10/8–9/9

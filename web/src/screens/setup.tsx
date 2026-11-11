@@ -29,6 +29,7 @@ import {
 } from "../lib/setup";
 import type { Pocket, SettingsAccount } from "../lib/types";
 import { completeSetup, useApp } from "../state/store";
+import { AmountInput } from "../ui/fields";
 import { Icon } from "../ui/icons";
 import { Seg } from "../ui/parts";
 import { BankOptions, Check, Field, Hint, invalid } from "./settings-sheets";
@@ -401,6 +402,7 @@ function PocketsStep({
   const paydayId = idOf("payday_day");
   const pctId = idOf("savings_pct");
   const taxId = idOf("taxable");
+  const choices = goalAccountChoices(f);
   return (
     <>
       <div class="set-sub" style={{ borderTop: 0 }}>
@@ -477,7 +479,6 @@ function PocketsStep({
       <div class="set-sub">Mục tiêu Dự phòng (tuỳ chọn)</div>
       {f.goals.map((g, i) => {
         const k = (field: string) => `goals.${i}.${field}`;
-        const choices = goalAccountChoices(f, i);
         const accountId = idOf(k("account"));
         return (
           <div key={i}>
@@ -495,15 +496,7 @@ function PocketsStep({
               />
             </Field>
             <Field id={idOf(k("monthly_amount"))} label="Số mỗi tháng" error={errors[k("monthly_amount")]}>
-              <input
-                id={idOf(k("monthly_amount"))}
-                class="ctl"
-                inputMode="numeric"
-                value={g.monthly}
-                placeholder="2.000.000"
-                onInput={(e) => setGoal(i, { monthly: e.currentTarget.value })}
-                {...invalid(errors, k("monthly_amount"), idOf(k("monthly_amount")))}
-              />
+              <AmountInput id={idOf(k("monthly_amount"))} value={g.monthly} invalid={Boolean(errors[k("monthly_amount")])} onChange={(n) => setGoal(i, { monthly: n })} />
             </Field>
             <Field id={idOf(k("repeat_months"))} label="Mấy tháng một lần" error={errors[k("repeat_months")]}>
               <input
@@ -538,7 +531,7 @@ function PocketsStep({
           </div>
         );
       })}
-      {f.goals.length > 0 && <Hint>Mỗi mục tiêu là một tài khoản thật ở ngăn Dự phòng; chưa có tài khoản thì chọn “Chưa có”, mở sau ở Cài đặt › Ba ngăn.</Hint>}
+      {f.goals.length > 0 && <Hint>Mỗi mục tiêu gắn một tài khoản thật ở ngăn Dự phòng, nhiều mục tiêu dùng chung một tài khoản được (đổi thứ tự ưu tiên sau ở Cài đặt › Ba ngăn); chưa có tài khoản thì chọn “Chưa có”.</Hint>}
       <ListError error={errors.goals} />
       <div class="pad">
         <button type="button" class="btn" disabled={f.goals.length >= MAX_GOALS} onClick={() => setF((x) => ({ ...x, goals: [...x.goals, newGoal()] }))}>

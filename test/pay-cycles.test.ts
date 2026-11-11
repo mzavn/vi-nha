@@ -4,9 +4,11 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import { app } from "../src/index";
+import { ingestLog } from "../src/services/ingest";
 import { afterWrite, linkTaskStatement, payCycleView } from "../src/services/pay-cycles";
 import { asD1 } from "./helpers/d1-sqlite";
 import { AT, client, householdC } from "./helpers/household-c";
+import { householdShared } from "./helpers/household-shared";
 
 let db: DatabaseSync;
 let call: ReturnType<typeof client>;
@@ -580,5 +582,50 @@ describe("nhập tay không ví (ledger UC-101)", () => {
     expect(one("SELECT COUNT(*) AS n FROM transactions WHERE meaning = 'fund'")).toEqual({ n: 0 });
     db.exec("INSERT INTO categories (id, name) VALUES ('new-cat', 'Mới')");
     expect((await call("POST", "/v1/transactions", { meaning: "spend", amount: 10_000, account_id: "main", category_id: "new-cat" })).status).toBe(201);
+  });
+});
+
+describe("việc ② khi nhiều mục tiêu chung một tài khoản (UC-1206 AC-12, AC-14)", () => {
+  const tkTasks = (s: { payCycle: { tasks: Task[] } }) =>
+    s.payCycle.tasks.filter((t) => t.kind === "goal" && t.toAccountId === "tk-tiet-kiem").map((t) => [t.goal?.name, t.amount, t.status, t.missing]);
+
+  it("UC-1206 AC-12: hai việc ② cùng tài khoản đích — Nhà ở 1.500.000 rồi Học tập 2.000.000; một chuyển khoản lấp theo thứ tự việc; huỷ chuyển khoản 2.500.000 → Nhà ở mở lại, Học tập giữ phần đã ghép", async () => {
+    db = householdShared({ cycle: false });
+    db.exec("UPDATE accounts SET opening_balance = 6000000 WHERE id = 'tk-tiet-kiem'");
+    call = client(db);
+    expect((await call("POST", "/v1/transactions", { meaning: "income", amount: 20_000_000, account_id: "cash-husband", income_stream_id: "salary-husband", at: AT("2026-11-10T08:00:00") })).status).toBe(201);
+    expect(tkTasks(await snap())).toEqual([
+      ["Nhà ở", 1_500_000, "open", 1_500_000],
+      ["Học tập", 2_000_000, "open", 2_000_000],
+    ]);
+    const first = await transfer(2_500_000, "cash-husband", "tk-tiet-kiem", "2026-11-10T09:00:00");
+    expect(tkTasks(await snap())).toEqual([
+      ["Nhà ở", 1_500_000, "done", 0],
+      ["Học tập", 2_000_000, "open", 1_000_000],
+    ]);
+    await transfer(1_000_000, "cash-husband", "tk-tiet-kiem", "2026-11-10T09:30:00");
+    expect(tkTasks(await snap()).map((t) => t[2])).toEqual(["done", "done"]);
+    expect((await call("POST", `/v1/transactions/${first.json.data.tx.id}/void`)).status).toBe(200);
+    expect(tkTasks(await snap())).toEqual([
+      ["Nhà ở", 1_500_000, "open", 1_500_000],
+      ["Học tập", 2_000_000, "open", 1_000_000],
+    ]);
+  });
+
+  it("UC-1206 AC-14: lương gán muộn — khoản chi 7.500.000 gắn Nhà ở lúc 08:30 trước khi gán log lương 08:00 → không có việc Nhà ở, Học tập 500.000; snapshot cùng số", async () => {
+    db = householdShared({ cycle: false });
+    call = client(db);
+    at("2026-11-10T08:30:00");
+    await ingestLog(asD1(db), { id: "luong", at: AT("2026-11-10T08:00:00"), amount: 20_000_000, direction: "in", accountNo: "0011xxxxxxx", content: "CK 1110", refCode: null, referenceNumber: null, raw: {} }, "webhook", new Date());
+    expect((await call("POST", "/v1/transactions", { meaning: "spend", amount: 7_500_000, account_id: "tk-tiet-kiem", category_id: "housing", goal_id: "nha-o", at: AT("2026-11-10T08:30:00") })).status).toBe(201);
+    at("2026-11-10T09:00:00");
+    const assigned = await call("POST", "/v1/logs/luong/assign", { splits: [{ meaning: "income", amount: 20_000_000, income_stream_id: "salary-husband" }] });
+    expect(assigned.status).toBe(201);
+    const s = await snap();
+    expect(s.payCycle.startedAt).toBe(AT("2026-11-10T08:00:00"));
+    expect(tkTasks(s)).toEqual([["Học tập", 500_000, "open", 500_000]]);
+    const goals = s.pockets.reserve.goals as { id: string; held: number; spent: number; short: number }[];
+    expect(goals.find((g) => g.id === "nha-o")).toMatchObject({ held: 0, spent: 7_500_000, short: 0 });
+    expect(goals.find((g) => g.id === "hoc-tap")).toMatchObject({ held: 4_500_000, short: 1_500_000 });
   });
 });

@@ -22,13 +22,15 @@ async function body(c: Context<AppEnv>): Promise<Record<string, unknown>> {
 }
 
 // Mục tiêu Dự phòng và nhóm danh mục (pocket UC-1209, UC-1204) đọc ở services/pockets, cùng một phản hồi (UC-505).
-settingsRoutes.get("/", async (c) =>
-  ok(c, {
+settingsRoutes.get("/", async (c) => {
+  const { goals, groups } = await pockets.listGoals(c.env.DB, new Date());
+  return ok(c, {
     ...(await settings.getSettings(c.env, new URL(c.req.url).origin)),
-    goals: await pockets.listGoals(c.env.DB),
+    goals,
+    goal_groups: groups,
     categoryGroups: await pockets.listCategoryGroups(c.env.DB),
-  }),
-);
+  });
+});
 settingsRoutes.get("/audit", async (c) => ok(c, await listAudit(c.env.DB)));
 
 /**
@@ -147,13 +149,19 @@ settingsRoutes.put("/pockets", async (c) => {
 /** Mục tiêu Dự phòng (UC-1209): không xoá, chỉ tắt; nhật ký ghi tên trường, đổi tài khoản thì kèm `changes.account_id`. */
 settingsRoutes.post("/goals", async (c) => {
   const b = await body(c);
-  const goal = await pockets.createGoal(c.env.DB, b);
+  const goal = await pockets.createGoal(c.env.DB, b, new Date());
   await recordChange(c, "goal.create", `goal:${goal.id}`, { fields: fieldNames(b) });
   return ok(c, { goal }, 201);
 });
+/** Đổi thứ tự ưu tiên (UC-1209 bước 10): nhật ký `goal.order` với thứ tự cũ / mới. */
+settingsRoutes.put("/goals/order", async (c) => {
+  const { goals, from, to } = await pockets.reorderGoals(c.env.DB, await body(c), new Date());
+  await recordChange(c, "goal.order", "goal:*", { changes: { from, to } });
+  return ok(c, { goals });
+});
 settingsRoutes.patch("/goals/:id", async (c) => {
   const b = await body(c);
-  const { goal, changes } = await pockets.updateGoal(c.env.DB, c.req.param("id"), b);
+  const { goal, changes } = await pockets.updateGoal(c.env.DB, c.req.param("id"), b, new Date());
   await recordChange(c, "goal.update", `goal:${goal.id}`, { fields: fieldNames(b), ...(Object.keys(changes).length ? { changes } : {}) });
   return ok(c, { goal });
 });
@@ -163,7 +171,7 @@ settingsRoutes.patch("/goals/:id", async (c) => {
  */
 settingsRoutes.post("/goals/:id/account", async (c) => {
   const b = await body(c);
-  const result = await pockets.createGoalAccount(c.env.DB, c.req.param("id"), b);
+  const result = await pockets.createGoalAccount(c.env.DB, c.req.param("id"), b, new Date());
   if (!result.created) return ok(c, result);
   await recordChange(c, "account.create", `account:${result.account.id}`, { fields: fieldNames(b) });
   await recordChange(c, "goal.update", `goal:${result.goal.id}`, { fields: ["account_id"], changes: { account_id: { from: null, to: result.account.id } } });

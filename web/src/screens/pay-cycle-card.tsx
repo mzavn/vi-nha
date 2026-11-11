@@ -1,9 +1,10 @@
 // Thẻ "Việc ngày lương" (pwa UC-702): hàng việc từ `snapshot.payCycle`, nút QR / Đã làm / Đã chuyển / Bỏ qua / Hoàn tác, chạm số để sửa.
 // Thao tác cần mạng (ghi thẳng lên server, server tick); mất mạng thì nút khoá kèm "Cần mạng". Chữ và trạng thái ở lib/pay-cycle.ts.
 
+import { Fragment } from "preact";
 import { useState } from "preact/hooks";
 import { errorText } from "../lib/api";
-import { amountProblem, noCycleStreamLine, payCycleCard, skipProblem, taskQr, type PayTaskRow, type TaskAction } from "../lib/pay-cycle";
+import { amountProblem, goalGroupQr, noCycleStreamLine, payCycleCard, skipProblem, taskQr, type PayTaskRow, type TaskAction, type TaskQr } from "../lib/pay-cycle";
 import type { PayCycleTask, Snapshot } from "../lib/types";
 import { go, payCycleAction, toast, useApp } from "../state/store";
 import { AmountInput } from "../ui/fields";
@@ -11,7 +12,7 @@ import { Money } from "../ui/money";
 import { Sheet } from "../ui/parts";
 import { TransferQrBlock } from "../ui/qr";
 
-type Open = { kind: "qr" | "skip" | "amount"; task: PayCycleTask } | null;
+type Open = { kind: "qr" | "skip" | "amount"; task: PayCycleTask } | { kind: "group-qr"; accountId: string } | null;
 
 export function PayCycleCard({ snap }: { snap: Snapshot }) {
   const { online } = useApp();
@@ -42,6 +43,8 @@ export function PayCycleCard({ snap }: { snap: Snapshot }) {
   }
   const taskOf = (r: PayTaskRow) => c.tasks.find((t) => t.id === r.id)!;
   const locked = !online || busy;
+  const groupAt = new Map(v.goalGroups.map((g) => [g.taskIds[0]!, g]));
+  const grouped = new Set(v.goalGroups.flatMap((g) => g.taskIds));
 
   return (
     <section class="card pocket" aria-label="Việc ngày lương">
@@ -56,59 +59,77 @@ export function PayCycleCard({ snap }: { snap: Snapshot }) {
             {v.chip && <span class="chip">{v.chip}</span>}
           </div>
           {v.overspent && <p class="note">{v.overspent}</p>}
-          {v.rows.map((r) => (
-            <div key={r.id} class="srow" style={{ display: "block", opacity: r.state === "skipped" ? 0.6 : 1 }}>
-              {r.noSavingsAccount ? (
-                // ① khi chưa có tài khoản Tích luỹ: tiêu đề nhắc mở tài khoản thật → Cài đặt › Ba ngăn.
-                <button type="button" class="link" style={{ textAlign: "left" }} onClick={() => go("settings", { settingsFocus: "pockets" })}>
-                  {r.title}
-                </button>
-              ) : r.canEdit ? (
-                <button type="button" class="link" style={{ textAlign: "left" }} disabled={locked} onClick={() => setOpen({ kind: "amount", task: taskOf(r) })}>
-                  {r.title}
-                </button>
-              ) : (
-                <div>{r.title}</div>
-              )}
-              {r.sub && <div class="sub-line">{r.sub}</div>}
-              {r.qrHint && <div class="sub-line">{r.qrHint}</div>}
-              <div class="flex gap-2" style={{ marginTop: "6px", flexWrap: "wrap" }}>
-                {r.qr && (
-                  <button type="button" class="btn" onClick={() => setOpen({ kind: "qr", task: taskOf(r) })}>
-                    QR
-                  </button>
+          {v.rows.map((r) => {
+            const head = groupAt.get(r.id);
+            return (
+              <Fragment key={r.id}>
+                {head && (
+                  <div class="srow" style={{ display: "block" }}>
+                    <div class="font-semibold">{head.title}</div>
+                    {head.qr && (
+                      <div class="flex gap-2" style={{ marginTop: "6px" }}>
+                        <button type="button" class="btn" onClick={() => setOpen({ kind: "group-qr", accountId: head.accountId })}>
+                          QR gộp
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 )}
-                {r.doneLabel && (
-                  <button type="button" class="btn" disabled={locked} onClick={() => void run(r.id, { kind: "done" })}>
-                    {r.doneLabel}
-                  </button>
-                )}
-                {r.canSkip && (
-                  <button type="button" class="btn btn-ghost" disabled={locked} onClick={() => (r.needsReason ? setOpen({ kind: "skip", task: taskOf(r) }) : void run(r.id, { kind: "skip", reason: "" }))}>
-                    Bỏ qua
-                  </button>
-                )}
-                {r.canUndo && (
-                  <button type="button" class="btn btn-ghost" disabled={locked} onClick={() => void run(r.id, { kind: "reopen" })}>
-                    Hoàn tác
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
+                <div class="srow" style={{ display: "block", opacity: r.state === "skipped" ? 0.6 : 1, paddingLeft: grouped.has(r.id) ? "28px" : undefined }}>
+                  {r.noSavingsAccount ? (
+                    // ① khi chưa có tài khoản Tích luỹ: tiêu đề nhắc mở tài khoản thật → Cài đặt › Ba ngăn.
+                    <button type="button" class="link" style={{ textAlign: "left" }} onClick={() => go("settings", { settingsFocus: "pockets" })}>
+                      {r.title}
+                    </button>
+                  ) : r.canEdit ? (
+                    <button type="button" class="link" style={{ textAlign: "left" }} disabled={locked} onClick={() => setOpen({ kind: "amount", task: taskOf(r) })}>
+                      {r.title}
+                    </button>
+                  ) : (
+                    <div>{r.title}</div>
+                  )}
+                  {r.sub && <div class="sub-line">{r.sub}</div>}
+                  {r.qrHint && <div class="sub-line">{r.qrHint}</div>}
+                  <div class="flex gap-2" style={{ marginTop: "6px", flexWrap: "wrap" }}>
+                    {r.qr && (
+                      <button type="button" class="btn" onClick={() => setOpen({ kind: "qr", task: taskOf(r) })}>
+                        QR
+                      </button>
+                    )}
+                    {r.doneLabel && (
+                      <button type="button" class="btn" disabled={locked} onClick={() => void run(r.id, { kind: "done" })}>
+                        {r.doneLabel}
+                      </button>
+                    )}
+                    {r.canSkip && (
+                      <button type="button" class="btn btn-ghost" disabled={locked} onClick={() => (r.needsReason ? setOpen({ kind: "skip", task: taskOf(r) }) : void run(r.id, { kind: "skip", reason: "" }))}>
+                        Bỏ qua
+                      </button>
+                    )}
+                    {r.canUndo && (
+                      <button type="button" class="btn btn-ghost" disabled={locked} onClick={() => void run(r.id, { kind: "reopen" })}>
+                        Hoàn tác
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </Fragment>
+            );
+          })}
           {v.offline && <p class="note">{v.offline}</p>}
         </>
       )}
-      {open?.kind === "qr" && <QrSheet snap={snap} task={open.task} onClose={() => setOpen(null)} />}
+      {open?.kind === "qr" && <QrSheet qrOf={(accountId) => taskQr(c, open.task, accountId)} onClose={() => setOpen(null)} />}
+      {open?.kind === "group-qr" && <QrSheet qrOf={() => goalGroupQr(c, open.accountId)} onClose={() => setOpen(null)} />}
       {open?.kind === "skip" && <SkipSheet task={open.task} busy={locked} onSubmit={(reason) => void run(open.task.id, { kind: "skip", reason })} onClose={() => setOpen(null)} />}
       {open?.kind === "amount" && <AmountSheet task={open.task} busy={locked} onSubmit={(amount, reason) => void run(open.task.id, { kind: "amount", amount, reason })} onClose={() => setOpen(null)} />}
     </section>
   );
 }
 
-function QrSheet({ snap, task, onClose }: { snap: Snapshot; task: PayCycleTask; onClose: () => void }) {
+function QrSheet({ qrOf, onClose }: { qrOf: (accountId?: string) => TaskQr; onClose: () => void }) {
   const [accountId, setAccountId] = useState<string | undefined>(undefined);
-  const qr = taskQr(snap.payCycle!, task, accountId);
+  const qr = qrOf(accountId);
   return (
     <Sheet open title="Mã QR chuyển khoản" onClose={onClose}>
       {"hint" in qr ? (

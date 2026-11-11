@@ -1,7 +1,9 @@
 // Logic thuần của màn Cài đặt: kiểm tra form, đổi form ↔ thân yêu cầu, hiện bí mật chỉ-ghi.
 // Không đụng DOM hay mạng để test được bằng vitest.
 
+import type { AuditAction } from "../../../src/domain/audit-actions";
 import { bankByCode } from "../../../src/domain/banks";
+import { fillGoals } from "../../../src/domain/pockets";
 import { INTEREST_MAX_AMOUNT_LIMIT } from "../../../src/domain/interest-deposit";
 import { clockMinutes } from "../../../src/domain/notify-schedule";
 import { DEFAULT_SEPAY_CONNECTION_ID } from "../../../src/domain/system-ids";
@@ -10,7 +12,7 @@ import { formatVnd, moneyDigits } from "./money";
 import { dueText, nextDueDate } from "./pockets";
 import { sqliteUtcToIso } from "./push";
 import { dayKey, shortDate, timeHM } from "./period";
-import type { AuditEntry, Debt, IncomeStream, NotifySchedule, Pocket, ReserveGoal, Rule, Secret, SepayConnection, SepaySyncResult, SettingsAccount, SettingsConfig, SettingsMember } from "./types";
+import type { AuditEntry, Debt, IncomeStream, NotifySchedule, Pocket, ReserveGoal, Rule, Secret, SepayConnection, SepaySyncResult, SettingsAccount, SettingsConfig, SettingsData, SettingsMember } from "./types";
 
 export type Errors = Record<string, string>;
 export type Result<T> = { ok: true; value: T } | { ok: false; errors: Errors };
@@ -418,42 +420,98 @@ export function configPayload(f: {
   }));
 }
 
-// ── Mục tiêu Dự phòng là một tài khoản thật (pocket UC-1209, pwa UC-709 AC-36, AC-39, AC-43) ──
+// ── Mục tiêu Dự phòng gắn tài khoản thật, nhiều mục tiêu dùng chung được một tài khoản (pocket UC-1209, pwa UC-709) ──
 
-/** Mục tiêu đang dùng gắn tài khoản này (tài khoản của mục tiêu); không có → undefined. */
-export function accountGoal(accountId: string, goals: ReserveGoal[]): ReserveGoal | undefined {
-  return goals.find((g) => g.active && g.account_id === accountId);
+/** Mục tiêu đang dùng gắn tài khoản này, theo thứ tự ưu tiên (thứ tự server); không có → []. */
+export function accountGoals(accountId: string, goals: ReserveGoal[]): ReserveGoal[] {
+  return goals.filter((g) => g.active && g.account_id === accountId);
 }
 
 /** Câu dưới ô Ngăn khi tài khoản đang gắn mục tiêu (server: 409 `account_has_goal`). */
 export const GOAL_POCKET_LOCK = "Bỏ gắn mục tiêu trước khi đổi ngăn";
+/** Luật Thuế (QĐ1-A): mục tiêu % không dùng chung tài khoản — câu ở ô chọn tài khoản. */
+export const TAX_OWN_ACCOUNT = "Thuế cần tài khoản riêng";
+/** 409 `tax_account_shared`. */
+export const TAX_ACCOUNT_SHARED = "Thuế cần tài khoản riêng: thuế đã nộp đếm mọi khoản chi từ tài khoản này.";
+/** 400 `invalid_order` của `PUT /v1/settings/goals/order`. */
+export const ORDER_CHANGED = "Danh sách mục tiêu vừa đổi ở máy khác — tải lại.";
 
 /** Tài khoản Dự phòng đang dùng chưa gắn mục tiêu đang dùng nào — chỗ chọn Ví Thưởng ở Tham số (UC-709 AC-43). */
 export function rewardAccountOptions(accounts: SettingsAccount[], goals: ReserveGoal[]): SettingsAccount[] {
-  return accounts.filter((a) => a.active && a.pocket === "reserve" && !accountGoal(a.id, goals));
+  return accounts.filter((a) => a.active && a.pocket === "reserve" && accountGoals(a.id, goals).length === 0);
+}
+
+/** Một dòng của ô Tài khoản: `shared` = "dùng chung với {tên}, {tên}"; `blocked` = lý do không chọn được (luật Thuế). */
+export interface GoalAccountOption extends SettingsAccount {
+  shared: string | null;
+  blocked: string | null;
 }
 
 /**
- * Tài khoản chọn được cho một mục tiêu (UC-1209 bước 2): đang dùng, ngăn Dự phòng, không gắn mục tiêu đang dùng khác,
- * không phải tài khoản Ví Thưởng. `goalId`: mục tiêu đang sửa — tài khoản nó đang gắn vẫn chọn lại được.
+ * Tài khoản cho một mục tiêu (UC-1209 bước 2, UC-709 AC-46, AC-49): đang dùng, ngăn Dự phòng, không phải Ví Thưởng; tài khoản
+ * đã có mục tiêu khác kèm "dùng chung với …". Luật Thuế (QĐ1-A): mục tiêu % (`pct`) chỉ chọn được tài khoản không có mục
+ * tiêu khác; mục tiêu khác không chọn được tài khoản của mục tiêu %. `goalId`: mục tiêu đang sửa (không tính là "khác").
  */
-export function goalAccountOptions(accounts: SettingsAccount[], goals: ReserveGoal[], rewardAccountId: string | null | undefined, goalId: string | null = null): SettingsAccount[] {
-  return accounts.filter((a) => {
-    if (!a.active || a.pocket !== "reserve" || a.id === rewardAccountId) return false;
-    const owner = accountGoal(a.id, goals);
-    return !owner || owner.id === goalId;
-  });
+export function goalAccountOptions(accounts: SettingsAccount[], goals: ReserveGoal[], rewardAccountId: string | null | undefined, goalId: string | null, pct: boolean): GoalAccountOption[] {
+  return accounts
+    .filter((a) => a.active && a.pocket === "reserve" && a.id !== rewardAccountId)
+    .map((a) => {
+      const others = accountGoals(a.id, goals).filter((g) => g.id !== goalId);
+      const blocked = others.length > 0 && (pct || others.some((g) => g.target_pct !== null)) ? TAX_OWN_ACCOUNT : null;
+      return { ...a, shared: others.length ? `dùng chung với ${others.map((g) => g.name).join(", ")}` : null, blocked };
+    });
 }
 
 /**
- * Một dòng ở Cài đặt › Ba ngăn › Mục tiêu Dự phòng (UC-709): "Học phí · đã có 4.000.000 / 6.000.000 · trong BIDV ·
- * hạn 15/01/2027 · 2.000.000/tháng, 3 tháng một lần"; chưa gắn → "Bảo dưỡng xe · chưa có tài khoản · hạn 31/03/2027".
+ * Câu mềm khi chọn tài khoản đang thiếu cho một mục tiêu (UC-709 bước 4u, AC-49) — không chặn: "{tài khoản} đang thiếu {X}
+ * cho {tên}, {tên}; mục tiêu này đứng thứ {k} trong tài khoản.". `k`: mục tiêu đã có giữ chỗ theo thứ tự ưu tiên hiện tại;
+ * mục tiêu mới chen theo hạn (không hạn xuống cuối, QĐ5-A). Tài khoản không thiếu / đang là tài khoản của mục tiêu → null.
  */
-export function goalLineText(g: ReserveGoal, accounts: { id: string; name: string }[]): string {
+export function goalAccountNote(d: Pick<SettingsData, "accounts" | "goals" | "goal_groups">, accountId: string, goal: { id: string | null; due_date: string | null }): string | null {
+  const group = d.goal_groups.find((g) => g.account_id === accountId);
+  if (!group || !group.short || (goal.id !== null && group.goal_ids.includes(goal.id))) return null;
+  const others = accountGoals(accountId, d.goals);
+  const index = goal.id === null ? -1 : d.goals.findIndex((g) => g.id === goal.id);
+  const due = goal.due_date || null;
+  const before =
+    index >= 0
+      ? others.filter((o) => d.goals.indexOf(o) < index).length
+      : due === null
+        ? others.length
+        : others.filter((o) => o.due_date !== null && o.due_date <= due).length;
+  const name = d.accounts.find((a) => a.id === accountId)?.name ?? accountId;
+  return `${name} đang thiếu ${formatVnd(group.short)} cho ${others.map((g) => g.name).join(", ")}; mục tiêu này đứng thứ ${before + 1} trong tài khoản.`;
+}
+
+/** Lỗi khi lưu mục tiêu: luật Thuế và Ví Thưởng về ô Tài khoản (`accountId` = tài khoản đang chọn); lỗi khác giữ câu server. */
+export function goalSubmitError(err: unknown, accounts: { id: string; name: string }[], accountId: string): { field: string | null; message: string } {
+  if (err instanceof ApiError && err.code === "tax_account_shared") return { field: "account_id", message: TAX_ACCOUNT_SHARED };
+  if (err instanceof ApiError && err.code === "account_is_reward") {
+    const name = accounts.find((a) => a.id === accountId)?.name ?? accountId;
+    return { field: "account_id", message: `${name} là tài khoản Ví Thưởng: chọn tài khoản Dự phòng khác cho mục tiêu.` };
+  }
+  return { field: null, message: errorText(err) };
+}
+
+/** Phần "đã có A / B" của một mục tiêu kèm "đã chi X kỳ này" và "đủ" (A + đã chi ≥ B) — chung cho dòng danh sách và xem trước. */
+function heldText(held: number, need: number | null, spent: number, where: string | null): string {
+  const parts = [`đã có ${moneyDigits(held)}${need !== null ? ` / ${moneyDigits(need)}` : ""}`];
+  if (where !== null) parts.push(`trong ${where}`);
+  if (spent > 0) parts.push(`đã chi ${moneyDigits(spent)} kỳ này`);
+  if (need !== null && held + spent >= need) parts.push("đủ");
+  return parts.join(" · ");
+}
+
+/**
+ * Một dòng ở Cài đặt › Ba ngăn › Mục tiêu Dự phòng (UC-709 AC-36): "Học phí · đã có 4.000.000 / 6.000.000 · trong BIDV ·
+ * hạn 15/01/2027 · 2.000.000/tháng, 3 tháng một lần"; trong nhóm tài khoản chung (`shared`) bỏ "trong {tài khoản}"; đã chi
+ * > 0 thêm "đã chi X kỳ này"; "đủ" theo đã có + đã chi; chưa gắn → "Bảo dưỡng xe · chưa có tài khoản · hạn 31/03/2027".
+ */
+export function goalLineText(g: ReserveGoal, accounts: { id: string; name: string }[], shared = false): string {
   const parts = [g.name];
   if (g.account_id) {
-    parts.push(`đã có ${moneyDigits(g.held ?? 0)}${g.target_amount !== null ? ` / ${moneyDigits(g.target_amount)}` : ""}`);
-    parts.push(`trong ${accounts.find((a) => a.id === g.account_id)?.name ?? g.account_id}`);
+    const where = shared ? null : (accounts.find((a) => a.id === g.account_id)?.name ?? g.account_id);
+    parts.push(heldText(g.held ?? 0, g.target_pct !== null ? null : g.target_amount, g.spent, where));
   } else parts.push("chưa có tài khoản");
   if (g.target_pct !== null) parts.push(`${g.target_pct}% thu chịu thuế`);
   if (g.due_date) parts.push(`hạn ${dueText(g.due_date)}`);
@@ -461,6 +519,59 @@ export function goalLineText(g: ReserveGoal, accounts: { id: string; name: strin
     parts.push(g.repeat_months === 1 ? `${moneyDigits(g.monthly_amount)}/tháng` : `${moneyDigits(g.monthly_amount)}/tháng, ${g.repeat_months} tháng một lần`);
   }
   return parts.join(" · ");
+}
+
+/** Một nhóm của danh sách mục tiêu (UC-709 bước 4u): `title` null = mục tiêu một mình / đã ngừng dùng; `reorder` = có nút Đổi thứ tự. */
+export interface GoalListGroup {
+  key: string;
+  accountId: string | null;
+  title: string | null;
+  shared: boolean;
+  reorder: boolean;
+  goals: ReserveGoal[];
+}
+
+/**
+ * Danh sách mục tiêu nhóm theo tài khoản như thẻ Dự phòng (`goal_groups`, thứ tự server): nhóm chung có dòng "{tài khoản} ·
+ * {số dư} · {n} mục tiêu · thiếu X / đủ / dư X"; mục tiêu đang dùng chưa gắn ở nhóm "Chưa có tài khoản"; mục tiêu ngừng dùng cuối.
+ */
+export function goalListGroups(d: Pick<SettingsData, "accounts" | "goals" | "goal_groups">): GoalListGroup[] {
+  const byId = new Map(d.goals.map((g) => [g.id, g]));
+  const out: GoalListGroup[] = d.goal_groups.map((grp) => {
+    const goals = grp.goal_ids.flatMap((id) => byId.get(id) ?? []);
+    const shared = goals.length > 1;
+    const name = d.accounts.find((a) => a.id === grp.account_id)?.name ?? grp.account_id;
+    const state = grp.short ? `thiếu ${formatVnd(grp.short)}` : grp.extra ? `dư ${formatVnd(grp.extra)}` : "đủ";
+    return { key: grp.account_id, accountId: grp.account_id, title: shared ? `${name} · ${formatVnd(grp.balance)} · ${goals.length} mục tiêu · ${state}` : null, shared, reorder: shared, goals };
+  });
+  const loose = d.goals.filter((g) => g.active && g.account_id === null);
+  if (loose.length) out.push({ key: "+none", accountId: null, title: "Chưa có tài khoản", shared: false, reorder: false, goals: loose });
+  const off = d.goals.filter((g) => !g.active);
+  if (off.length) out.push({ key: "+off", accountId: null, title: null, shared: false, reorder: false, goals: off });
+  return out;
+}
+
+/** Xem trước số mới khi đổi thứ tự trong một tài khoản (UC-709 AC-48): `fillGoals` với số dư nhóm và `goals[].spent`. */
+export function goalOrderPreview(d: Pick<SettingsData, "goals" | "goal_groups">, accountId: string, ids: string[]): { id: string; name: string; text: string }[] {
+  const balance = d.goal_groups.find((g) => g.account_id === accountId)?.balance ?? 0;
+  const goals = ids.flatMap((id) => d.goals.find((g) => g.id === id) ?? []);
+  const fill = fillGoals(
+    balance,
+    goals.map((g) => ({ id: g.id, need: g.need, spent: g.spent })),
+  );
+  return goals.map((g, i) => ({ id: g.id, name: g.name, text: heldText(fill.goals[i]!.held, g.need, g.spent, null) }));
+}
+
+/** Thân `PUT /v1/settings/goals/order`: mọi mục tiêu đang dùng; các ô của tài khoản `accountId` nhận thứ tự mới, mục tiêu khác giữ chỗ. */
+export function goalOrderPayload(goals: ReserveGoal[], accountId: string, ids: string[]): { ids: string[] } {
+  const next = [...ids];
+  return { ids: goals.filter((g) => g.active).map((g) => (g.account_id === accountId ? next.shift()! : g.id)) };
+}
+
+/** Lỗi khi lưu thứ tự: 400 `invalid_order` (máy khác vừa đổi danh sách) → câu tải lại + nút Tải lại. */
+export function goalOrderError(err: unknown): { message: string; reload: boolean } {
+  if (err instanceof ApiError && err.code === "invalid_order") return { message: ORDER_CHANGED, reload: true };
+  return { message: errorText(err), reload: false };
 }
 
 /** Cách đặt số của mục tiêu: lặp (số mỗi tháng + mấy tháng một lần) · một lần (số cần + hạn) · % thu chịu thuế. */
@@ -768,7 +879,8 @@ export function cycleStreamReminder(streams: IncomeStream[]): string | null {
 
 // ── Nhật ký thay đổi ──────────────────────────────────────────────
 
-const AUDIT_ACTION: Record<string, string> = {
+/** Nhãn của mọi mã nhật ký server ghi (`AUDIT_ACTIONS`), kèm mã cũ còn trong nhật ký trước v2 (chia khoản thu, chốt tháng). */
+export const AUDIT_ACTION: Record<AuditAction | "income.allocate" | "month.close", string> = {
   "tx.void": "Huỷ giao dịch",
   "tx.replace": "Sửa giao dịch",
   "tx.unassign": "Gỡ gán giao dịch ngân hàng",
@@ -805,6 +917,29 @@ const AUDIT_ACTION: Record<string, string> = {
   "log.ignore": "Bỏ qua giao dịch ngân hàng",
   "category.create": "Thêm danh mục",
   "category.update": "Sửa danh mục",
+  "category_group.create": "Thêm nhóm danh mục",
+  "category_group.update": "Sửa nhóm danh mục",
+  "pockets.confirm": "Xác nhận ngăn tài khoản",
+  "goal.order": "Đổi thứ tự mục tiêu",
+  "config.update": "Sửa tham số",
+  "member.create": "Thêm thành viên",
+  "member.activate": "Bật lại thành viên",
+  "member.deactivate": "Tắt thành viên",
+  "member.password": "Đổi mật khẩu riêng",
+  "income_plan.version": "Lưu kế hoạch thu nhập",
+  "report_class.set": "Xếp loại khoản cho báo cáo",
+  "report_class.clear": "Bỏ xếp loại khoản cho báo cáo",
+  "balance.item.create": "Thêm mục bảng cân đối",
+  "balance.item.update": "Sửa mục bảng cân đối",
+  "balance.item.delete": "Xoá mục bảng cân đối",
+  "balance.value.add": "Cập nhật giá trị tài sản",
+  "balance.value.void": "Huỷ giá trị tài sản",
+  "balance.lot.add": "Thêm lô tài sản",
+  "balance.lot.targets": "Đặt mục tiêu lô tài sản",
+  "balance.lot.sell": "Bán lô tài sản",
+  "balance.lot.void": "Huỷ lô tài sản",
+  "log.link": "Nối giao dịch ngân hàng vào khoản đã ghi",
+  "setup.done": "Thiết lập lần đầu",
 };
 const AUDIT_VIA: Record<AuditEntry["via"], string> = { session: "", token: " · qua API token", mcp: " · qua Claude" };
 
@@ -821,7 +956,7 @@ export function auditView(e: AuditEntry): { title: string; sub: string; fields: 
   const fields = [e.detail?.fields, e.detail?.set, e.detail?.cleared].flatMap((v) => (Array.isArray(v) ? v.map(String) : []));
   const iso = sqliteUtcToIso(e.at);
   return {
-    title: `${AUDIT_ACTION[e.action] ?? e.action}${object}`,
+    title: `${(AUDIT_ACTION as Record<string, string>)[e.action] ?? e.action}${object}`,
     sub: `${e.memberName ?? "Không rõ ai"}${AUDIT_VIA[e.via]} · ${timeHM(iso)} ${shortDate(iso)}`,
     fields: fields.length ? `đổi: ${fields.join(", ")}` : null,
   };

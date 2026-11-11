@@ -1,7 +1,7 @@
 // Tầng dịch vụ: đọc/ghi D1 rồi gọi các hàm thuần trong src/domain.
 // REST (/v1), MCP và cron đều đi qua đây — không route nào tự viết SQL nghiệp vụ.
 
-import { buildEntry, MANUAL_MEANINGS, type EntryInput, type TxRow } from "../domain/entry";
+import { buildEntry, INVALID_GOAL, MANUAL_MEANINGS, type EntryInput, type TxRow } from "../domain/entry";
 import { groupSpend, type CategoryGroupRef, type CycleRef, type LookBack, type LookBackCategory, type LookBackCycle, type LookBackInterestLine } from "../domain/look-back";
 import { cycleDays, cycleRanges, vnMidnight, type CycleRange, type TaskKind } from "../domain/pay-cycle";
 import { dayKey, monthKey, weekKey } from "../domain/period";
@@ -9,7 +9,8 @@ import { normalizeContent } from "../domain/rules";
 import { buildSnapshot, DEFAULT_PAYDAY_DAY, type Snapshot } from "../domain/snapshot";
 import { INTEREST_MAX_AMOUNT_DEFAULT, INTEREST_MAX_AMOUNT_LIMIT } from "../domain/interest-deposit";
 import { DomainError, type AccountRef, type Refs } from "../domain/types";
-import { DEFAULT_SAVINGS_PCT, pocketsView, type Pocket, type PocketDebt, type PocketGoalInput } from "../domain/pockets";
+import { DEFAULT_SAVINGS_PCT, goalOrder, pocketsView, type Pocket, type PocketDebt, type PocketGoalInput } from "../domain/pockets";
+import { goalSpentMap, goalSpentStatement } from "./pockets";
 import { formatMoney } from "../notify/format";
 import { itemsTotal } from "./balance";
 import { debtInterest } from "./debts";
@@ -25,7 +26,7 @@ const toMap = (list: { w: string; s: number | null }[]) => Object.fromEntries(li
 // ── Dữ liệu tham chiếu ─────────────────────────────────────────────
 
 export async function loadRefs(db: D1Database): Promise<Refs> {
-  const [categories, accounts, members, streams, tenants, rental, debts, receivables] = await db.batch([
+  const [categories, accounts, members, streams, tenants, rental, debts, receivables, goals] = await db.batch([
     db.prepare(`SELECT id, name, icon, sort, group_id AS groupId FROM categories WHERE active = 1 ORDER BY sort, name`),
     db.prepare(
       `SELECT id, name, kind, owner_member_id AS ownerMemberId, sepay_enabled AS sepayEnabled, sepay_out AS sepayOut, opened_at AS openedAt,
@@ -38,7 +39,12 @@ export async function loadRefs(db: D1Database): Promise<Refs> {
     db.prepare(`SELECT v FROM config WHERE k = 'rental_income_stream_id'`),
     db.prepare(`SELECT debt_id AS id, name, active, balance FROM v_debt_balance ORDER BY balance DESC, name`),
     db.prepare(`SELECT receivable_id AS id, name, active, balance FROM v_receivable_balance ORDER BY balance DESC, name`),
+    db.prepare(`SELECT id, name, account_id AS accountId, sort, due_date AS dueDate FROM reserve_goals WHERE active = 1 AND account_id IS NOT NULL`),
   ]);
+  const goalIdsOf = new Map<string, string[]>();
+  for (const g of rows<{ id: string; name: string; accountId: string; sort: number; dueDate: string | null }>(goals!).sort(goalOrder)) {
+    goalIdsOf.set(g.accountId, [...(goalIdsOf.get(g.accountId) ?? []), g.id]);
+  }
   const books = (res: D1Result) =>
     rows<{ id: string; name: string; active: number; balance: number }>(res).map((b) => ({ ...b, active: Boolean(b.active), balance: Number(b.balance) }));
   return {
@@ -48,6 +54,7 @@ export async function loadRefs(db: D1Database): Promise<Refs> {
       sepayEnabled: Boolean(a.sepayEnabled),
       sepayOut: Boolean(a.sepayEnabled) && Boolean(a.sepayOut),
       private: Boolean(a.private),
+      goalIds: goalIdsOf.get(a.id) ?? [],
     })),
     members: rows(members!) as unknown as Refs["members"],
     incomeStreams: rows<{ id: string; name: string; active: number; pocket: Pocket | null; opensCycle: number }>(streams!).map((s) => ({
@@ -75,10 +82,23 @@ export interface TxLogs {
 }
 const NO_LOGS: TxLogs = { log_id: null, log_id_2: null };
 
+/**
+ * `goal_id` ghi vào dòng mới (pocket UC-1209 bước 11): gửi thì giữ (đã kiểm ở `buildEntry`, trigger 0042 là chốt cuối); không
+ * gửi mà khoản là chi / chuyển ra từ tài khoản có đúng một mục tiêu đang dùng → tự gắn mục tiêu đó, lúc ghi — một luật cho
+ * mọi đường ghi (nhập tay, sửa, Gán, rule, ghép cặp, MCP).
+ */
+const GOAL_VALUE = "COALESCE(?, (SELECT MIN(g.id) FROM reserve_goals g WHERE g.account_id = ? AND g.active = 1 AND ? IN ('spend', 'transfer') HAVING COUNT(*) = 1))";
+const goalBinds = (row: TxRow) => [row.goal_id ?? null, row.account_id, row.meaning];
+
 export function insertTx(db: D1Database, row: TxRow, logs: TxLogs = NO_LOGS): D1PreparedStatement {
   return db
-    .prepare(`INSERT INTO transactions (log_id, log_id_2, ${TX_COLUMNS.join(", ")}) VALUES (?, ?, ${TX_COLUMNS.map(() => "?").join(", ")})`)
-    .bind(logs.log_id, logs.log_id_2, ...TX_COLUMNS.map((c) => row[c] ?? null));
+    .prepare(`INSERT INTO transactions (log_id, log_id_2, ${TX_COLUMNS.join(", ")}, goal_id) VALUES (?, ?, ${TX_COLUMNS.map(() => "?").join(", ")}, ${GOAL_VALUE})`)
+    .bind(logs.log_id, logs.log_id_2, ...TX_COLUMNS.map((c) => row[c] ?? null), ...goalBinds(row));
+}
+
+/** Trigger 0042 huỷ câu ghi có `goal_id` sai (máy khác vừa đổi tài khoản / tắt mục tiêu) → 400 như bước kiểm ở code. */
+export function rethrowInvalidGoal(err: unknown): void {
+  if (/invalid_goal/.test(String(err))) throw new DomainError("invalid_goal", INVALID_GOAL);
 }
 
 const linkedIds = (logs: TxLogs) => [logs.log_id, logs.log_id_2].filter((x): x is string => x !== null);
@@ -210,6 +230,7 @@ export async function createEntry(db: D1Database, input: EntryInput, memberId: s
     if (raced) return duplicate(raced);
     // Log định gắn vừa được gán ở request khác: khoản này giờ đã có trong sổ.
     if (/log_not_pending/.test(String(err))) throw new DomainError("bank_log_exists", BANK_LOG_EXISTS, 409);
+    rethrowInvalidGoal(err);
     throw err;
   }
   const { tasksDone } = await afterWrite(db);
@@ -319,10 +340,10 @@ export async function replaceTransaction(db: D1Database, id: number, input: Entr
   // Khoản mới chỉ được ghi khi khoản cũ còn hiệu lực ngay trong batch: huỷ chen ở request khác thì không ghi gì mới.
   const insert = db
     .prepare(
-      `INSERT INTO transactions (log_id, log_id_2, ${TX_COLUMNS.join(", ")}) SELECT ?, ?, ${TX_COLUMNS.map(() => "?").join(", ")}
+      `INSERT INTO transactions (log_id, log_id_2, ${TX_COLUMNS.join(", ")}, goal_id) SELECT ?, ?, ${TX_COLUMNS.map(() => "?").join(", ")}, ${GOAL_VALUE}
        WHERE EXISTS (SELECT 1 FROM transactions WHERE id = ? AND status = 'active')`,
     )
-    .bind(logs.log_id, logs.log_id_2, ...TX_COLUMNS.map((c) => row[c] ?? null), id);
+    .bind(logs.log_id, logs.log_id_2, ...TX_COLUMNS.map((c) => row[c] ?? null), ...goalBinds(row), id);
   // Ngay sau INSERT cùng điều kiện: last_insert_rowid() là khoản mới; khoản cũ đã huỷ chen thì không ghi, không trỏ.
   const relink = db
     .prepare(
@@ -361,6 +382,7 @@ export async function replaceTransaction(db: D1Database, id: number, input: Entr
     const raced = await existing();
     if (raced) return duplicate(raced);
     if (/log_not_pending/.test(String(err))) throw new DomainError("bank_log_exists", BANK_LOG_EXISTS, 409);
+    rethrowInvalidGoal(err);
     throw err;
   }
   const written = results[undo.length]!.meta;
@@ -733,7 +755,7 @@ export async function getSnapshot(db: D1Database, viewerId: string | null, now: 
   const hi = done.at(-1)?.end ?? t0;
   const hidden = await hiddenAccountIds(db, viewerId);
   const OPERATING = "SELECT id FROM accounts WHERE pocket = 'operating'";
-  const [config, pending, drift, accounts, goals, debts, accountsAt, flowsSince, opSpend, dataStart, hiddenLogs, claims] = await db.batch([
+  const [config, pending, drift, accounts, goals, debts, accountsAt, flowsSince, opSpend, dataStart, hiddenLogs, claims, goalSpent] = await db.batch([
     db.prepare("SELECT k, v FROM config WHERE k IN ('safety_fund_months', 'savings_pct', 'surplus_reward_account', 'conversion_state')"),
     db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(CASE direction WHEN 'in' THEN amount ELSE -amount END), 0) AS net FROM bank_logs WHERE status = 'pending'"),
     db.prepare("SELECT account_id AS accountId, name, book_drift AS bookDrift FROM v_reconcile"),
@@ -743,8 +765,8 @@ export async function getSnapshot(db: D1Database, viewerId: string | null, now: 
     ),
     db.prepare(
       `SELECT id, name, account_id AS accountId, target_amount AS target, target_pct AS targetPct, monthly_amount AS monthly,
-              repeat_months AS repeatMonths, due_date AS dueDate, debt_id AS debtId
-       FROM reserve_goals WHERE active = 1 ORDER BY sort, name`,
+              repeat_months AS repeatMonths, due_date AS dueDate, debt_id AS debtId, sort
+       FROM reserve_goals WHERE active = 1`,
     ),
     db.prepare(
       `SELECT d.id, d.name, d.term, d.active, b.balance, d.monthly_payment AS monthlyPayment, d.due_day AS dueDay
@@ -781,6 +803,8 @@ export async function getSnapshot(db: D1Database, viewerId: string | null, now: 
     db.prepare(`SELECT at FROM transactions WHERE status = 'active' AND (account_id IN (${OPERATING}) OR counter_account_id IN (${OPERATING})) ORDER BY at LIMIT 1`),
     db.prepare(`SELECT COUNT(*) AS n FROM bank_logs WHERE status = 'pending' AND account_id IN (${hidden.map(() => "?").join(", ") || "NULL"})`).bind(...hidden),
     db.prepare("SELECT step FROM conversion_claims"),
+    // Đã chi cho từng mục tiêu từ đầu kỳ lương hiện tại (pocket UC-1209 bước 11): mốc `started_at` / ngày lương danh nghĩa.
+    goalSpentStatement(db, t0),
   ]);
   const first = <T>(r: D1Result) => rows<T>(r)[0] ?? null;
   const cfg = new Map(rows<{ k: string; v: string }>(config!).map((r) => [r.k, r.v]));
@@ -789,9 +813,10 @@ export async function getSnapshot(db: D1Database, viewerId: string | null, now: 
   const flows = new Map(rows<{ acc: string; fromPrev: number; fromSince: number }>(flowsSince!).map((f) => [f.acc, f]));
   const cycleSpend = new Map(rows<{ cycle: number; amount: number }>(opSpend!).map((c) => [Number(c.cycle), Number(c.amount)]));
   const firstAt = first<{ at: string }>(dataStart!)?.at;
+  const spentOf = goalSpentMap(goalSpent!);
   const pockets = pocketsView({
     accounts: accountRows.map((a) => ({ id: a.id, name: a.name, pocket: a.pocket, confirmed: a.confirmed === 1, balance: Number(a.balance) })),
-    goals: rows<PocketGoalInput>(goals!),
+    goals: rows<Omit<PocketGoalInput, "spent">>(goals!).map((g) => ({ ...g, sort: Number(g.sort), spent: spentOf.get(g.id) ?? 0 })),
     rewardAccountId: cfg.get("surplus_reward_account") || null,
     debts: rows<Omit<PocketDebt, "active"> & { active: number }>(debts!).map((d) => ({ ...d, active: d.active === 1, balance: Number(d.balance) })),
     savingsPct: cfg.has("savings_pct") && Number.isInteger(savings) ? savings : DEFAULT_SAVINGS_PCT,
@@ -1047,7 +1072,8 @@ export async function reconcile(db: D1Database) {
 
 /**
  * Tích luỹ và Dự phòng (ledger UC-107, MCP `get_goals`): cùng số `snapshot.pockets` (BR-05) — tổng và thay đổi Tích luỹ theo
- * kỳ, % trích, kỳ này đã trích; mục tiêu Dự phòng, phần an tâm; nợ ngắn hạn. Không đọc view theo ví.
+ * kỳ, % trích, kỳ này đã trích; mục tiêu Dự phòng (đã có sau khi chia số dư tài khoản chung, đã chi trong kỳ), nhóm theo tài
+ * khoản, phần an tâm; nợ ngắn hạn. Không đọc view theo ví.
  */
 export async function goals(db: D1Database, viewerId: string | null, now: Date) {
   const s = await getSnapshot(db, viewerId, now);
@@ -1061,6 +1087,9 @@ export async function goals(db: D1Database, viewerId: string | null, now: Date) 
         name: g.name,
         accountId: g.accountId,
         held: g.held,
+        need: g.need,
+        spent: g.spent,
+        short: g.short,
         target: g.target,
         targetPct: g.targetPct,
         monthlyAmount: g.monthly,
@@ -1068,6 +1097,7 @@ export async function goals(db: D1Database, viewerId: string | null, now: Date) 
         dueDate: g.dueDate,
         debtId: g.debtId,
       })),
+      groups: reserve.groups,
       peace: reserve.peace,
       peaceMonths: reserve.peaceMonths,
     },

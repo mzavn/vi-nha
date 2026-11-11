@@ -417,14 +417,34 @@ describe("UC-510 thiết lập nhà lần đầu", () => {
       noWallets();
       const reserve = (await api("GET", "/v1/snapshot")).json.data as { pockets: { reserve: { goals: { id: string; accountId: string | null; held: number | null }[] } } };
       expect(reserve.pockets.reserve.goals.map((g) => [g.id, g.accountId, g.held])).toEqual([
-        ["hoa-don", null, null],
         ["hoc-phi", "mb-tiet-kiem", 0],
+        ["hoa-don", null, null],
       ]);
+    });
+
+    it("UC-510 AC-14: hai mục tiêu cùng account 1 → cả hai gắn tài khoản tiết kiệm; thứ tự ưu tiên theo hạn (không hạn xuống cuối), chia số dư theo thứ tự đó", async () => {
+      const res = await request(
+        "POST",
+        "/v1/setup",
+        setupBody({
+          accounts,
+          goals: [
+            { name: "Hoá đơn", monthly_amount: 1_300_000, account: 1 },
+            { name: "Học phí", monthly_amount: 2_000_000, repeat_months: 3, due_date: "2027-01-15", account: 1 },
+          ],
+        }),
+      );
+      expect(res.status).toBe(201);
+      expect(all("SELECT id, account_id, sort FROM reserve_goals ORDER BY sort")).toEqual([
+        { id: "hoc-phi", account_id: "mb-tiet-kiem", sort: 10 },
+        { id: "hoa-don", account_id: "mb-tiet-kiem", sort: 20 },
+      ]);
+      const reserve = (await api("GET", "/v1/snapshot")).json.data as { pockets: { reserve: { groups: { accountId: string; goalIds: string[] }[] } } };
+      expect(reserve.pockets.reserve.groups).toMatchObject([{ accountId: "mb-tiet-kiem", goalIds: ["hoc-phi", "hoa-don"] }]);
     });
 
     const cases: [string, unknown[], string][] = [
       ["account 0 (Vận hành)", [{ name: "Học phí", monthly_amount: 2_000_000, account: 0 }], "goals.0.account"],
-      ["hai mục tiêu cùng một tài khoản", [{ name: "Học phí", monthly_amount: 2_000_000, account: 1 }, { name: "Hoá đơn", monthly_amount: 1_300_000, account: 1 }], "goals.1.account"],
       ["chỉ số âm", [{ name: "Học phí", monthly_amount: 2_000_000, account: -1 }], "goals.0.account"],
       ["chỉ số không nguyên", [{ name: "Học phí", monthly_amount: 2_000_000, account: 1.5 }], "goals.0.account"],
     ];

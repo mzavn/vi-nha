@@ -6,6 +6,26 @@ bản cài cũ vẫn lên được bình thường (kể cả nâng database t�
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
 trước (xem README › Cập nhật bản mới).
 
+## v2.1.0 — 11/11/2026
+
+Có nâng cấp database: `0042` (nhiều mục tiêu Dự phòng dùng chung một tài khoản; khoản chi ghi được "cho mục tiêu nào").
+Database tự nâng khi cập nhật; số dư, báo cáo, thuế không đổi. Thứ tự mục tiêu ở Cài đặt được xếp lại theo hạn (giống Hôm nay).
+
+- **Nhiều mục tiêu Dự phòng chung một tài khoản.** "Đã có" của từng mục tiêu chia từ số dư tài khoản theo thứ tự ưu tiên
+  (mặc định hạn gần trước; đổi thứ tự ở Cài đặt › Ba ngăn › Mục tiêu Dự phòng › Đổi thứ tự). Mục tiêu cuối nhận phần còn
+  lại. Thẻ Dự phòng ở Hôm nay nhóm theo tài khoản: "thiếu", "đủ" hoặc "dư" cho cả nhóm.
+- **Thuế giữ tài khoản riêng.** Tài khoản của mục tiêu Thuế không gắn được mục tiêu khác.
+- **"Cho mục tiêu"** khi chi hay chuyển tiền ra từ tài khoản có từ hai mục tiêu (nhập nhanh, Loại khác, Gán, sửa khoản,
+  MCP): khoản chi cho mục tiêu nào thì không làm hụt các mục tiêu đứng trước nó; thẻ hiện "đã chi … kỳ này". Tài khoản một
+  mục tiêu tự gắn, không hỏi.
+- **Việc ngày lương**: các việc nạp cùng một tài khoản có một mã QR gộp.
+- API: thêm `PUT /v1/settings/goals/order`; `goal_id` ở ghi / sửa / gán giao dịch; `snapshot.pockets.accounts[].goalId` đổi
+  thành `goalIds`, thêm `reserve.groups`; lỗi tài khoản Ví Thưởng đổi mã thành `account_is_reward`; lỗi mới
+  `tax_account_shared`, `invalid_order`, `invalid_goal`.
+- Sửa: chữ còn sót của mô hình ví ("Chi thiết yếu tháng", "Đếm số dư", ghi chú Phải thu); nhật ký thay đổi có nhãn cho mọi
+  việc; bước 2 màn chuyển đổi không cắt tên tài khoản dài; "Số mỗi tháng" ở Thiết lập có dấu chấm nghìn; thẻ Tích luỹ hiện
+  đúng % đã cài; tab Tích luỹ đọc đủ mọi khoản mua tài sản.
+
 ## v2.0.0 — 11/11/2026
 
 Có nâng cấp database: `0038` (ngăn cho tài khoản, mục tiêu Dự phòng, nhóm danh mục), `0039` (kỳ lương và danh sách việc

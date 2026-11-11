@@ -1,6 +1,6 @@
 // Nợ (Ví & Quỹ › Nợ): tiền thật trước (GET /v1/networth), rồi hai sổ đối ứng — "Mình nợ" (sổ nợ) và "Người khác nợ mình" (sổ phải thu).
-// Hai sổ dùng chung một bộ giao diện (memo-book.tsx); số ở hai sổ là ghi nhớ ai nợ ai, nằm ngoài sổ cái, không phải tiền trong ví.
-// Trả nợ là khoản chi danh mục Trả nợ gắn vào khoản nợ; cho vay / nhận lại tiền là giao dịch đổi tài khoản, không đụng ví.
+// Hai sổ dùng chung một bộ giao diện (memo-book.tsx); số ở hai sổ là ghi nhớ ai nợ ai, nằm ngoài sổ cái, không phải tiền trong tài khoản.
+// Trả nợ là khoản chi danh mục Trả nợ gắn vào khoản nợ; cho vay / nhận lại tiền là giao dịch đổi tài khoản, không phải chi hay thu nhập.
 // Ba việc đó đi qua hàng đợi như mọi khoản nhập (ghi được khi không có mạng). Thêm khoản, thêm dòng, huỷ dòng ghi thẳng lên server nên cần mạng.
 
 import { useState } from "preact/hooks";
@@ -66,7 +66,7 @@ const BORROW = { title: "Vay thêm", placeholder: "vay thêm đóng học", hint
 
 const RECEIVABLE: BookLabels = {
   title: "Người khác nợ mình",
-  note: "Còn phải thu = đã cho vay − đã nhận lại. Cho vay và nhận lại tiền chỉ đổi tài khoản, không đụng ví nào; tiền nhận lại không phải thu nhập.",
+  note: "Còn phải thu = đã cho vay − đã nhận lại. Cho vay và nhận lại tiền chỉ đổi tài khoản, tiền nhận lại không phải thu nhập.",
   emptyTitle: "Chưa ghi khoản phải thu nào.",
   emptyBody: "Cho ai vay hay trả hộ ai thì thêm một khoản với số người đó còn nợ hôm nay; mỗi lần nhận lại tiền, số này tự giảm.",
   noun: "khoản phải thu",
@@ -90,7 +90,7 @@ const RECEIVABLE: BookLabels = {
     nameMissing: "Nhập ai nợ mình",
     amountLabel: "Còn nợ mình",
     notePlaceholder: "mượn mua xe, trả hộ tiền học",
-    hint: "Ghi số người đó còn nợ hôm nay; chưa nợ gì thì để 0. Thêm khoản chỉ để nhớ, không trừ tài khoản hay ví nào. Sau này cho vay thêm thì dùng Cho vay thêm ở khoản này.",
+    hint: "Ghi số người đó còn nợ hôm nay; chưa nợ gì thì để 0. Thêm khoản chỉ để nhớ, không trừ tài khoản nào. Sau này cho vay thêm thì dùng Cho vay thêm ở khoản này.",
     zeroButton: "Thêm người, chưa nợ gì",
   },
   adjust: {
@@ -182,7 +182,7 @@ export function DebtsTab() {
       </Loadable>
 
       <p class="hint" style={{ margin: "0 4px 12px" }}>
-        Số ở đây là ghi nhớ ai nợ ai — chưa phải tiền trong ví. Chỉ khi tiền thật đi hoặc về thì ví và tài khoản mới đổi.
+        Số ở đây là ghi nhớ ai nợ ai — chưa phải tiền trong tài khoản. Chỉ khi tiền thật đi hoặc về thì số dư tài khoản mới đổi.
       </p>
 
       {open?.kind === "add" &&
@@ -315,7 +315,7 @@ function CashFirst({ nw }: { nw: NetWorth }) {
 
 /**
  * Cho vay thêm / nhận lại tiền cho vay: tiền thật rời một tài khoản hoặc về một tài khoản, gắn vào khoản phải thu.
- * Không đụng ví nào và không phải thu nhập. Đi qua hàng đợi như mọi khoản nhập.
+ * Không phải chi, không phải thu nhập. Đi qua hàng đợi như mọi khoản nhập.
  */
 function MoneyMoveSheet(props: { meaning: "lend" | "collect"; refs: ReceivableRef[]; receivableId?: string; onClose: () => void }) {
   const { boot, member } = useApp();
@@ -387,8 +387,8 @@ function MoneyMoveSheet(props: { meaning: "lend" | "collect"; refs: ReceivableRe
       </div>
       <div class="note" style={{ borderTop: "1px solid var(--border)" }}>
         {lend
-          ? "Tiền rời tài khoản nhưng vẫn là tiền của nhà: không trừ ví nào, số phải thu tăng thêm đúng số này."
-          : "Tiền người ta trả lại, không phải thu nhập: không chia vào ví, không đụng ví nào. Chỉ tài khoản nhận tăng, số phải thu giảm."}
+          ? "Tiền rời tài khoản nhưng vẫn là tiền của nhà, không phải khoản chi: số phải thu tăng thêm đúng số này."
+          : "Tiền người ta trả lại, không phải thu nhập. Chỉ tài khoản nhận tăng, số phải thu giảm."}
       </div>
       <div class="pad">
         <button type="button" class="btn btn-primary btn-wide" disabled={!!problem || busy} onClick={() => void submit()}>

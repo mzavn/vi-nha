@@ -1,8 +1,10 @@
 // Ví & quỹ (pwa UC-707): Nhìn lại (chi theo nhóm danh mục trong kỳ lương, so hạn mức mềm và kỳ trước), Tích luỹ, Tài khoản,
 // Người thuê, Nợ. Ba trục tách bạch: nhóm kèm "còn / vượt" hạn mức mềm, tài khoản kèm "lệch", danh mục kèm "kỳ trước".
 
-import { useEffect, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { LookBack, LookBackCategory, LookBackGroup } from "../../../src/domain/look-back";
+import { ApiError } from "../lib/api";
+import { loadAllAssetBuys } from "../lib/asset-buys";
 import { DRIFT_LABEL, driftOf } from "../lib/drift";
 import { formatVnd, maskAmounts } from "../lib/money";
 import { interestLineText } from "../lib/interest";
@@ -12,7 +14,7 @@ import { monthKey, monthLabel, shortDate } from "../lib/period";
 import { NO_SAVINGS_ACCOUNT, savingsCard } from "../lib/pocket-cards";
 import { cycleFilter } from "../lib/tx-filter";
 import type { AccountRow, TxRow } from "../lib/types";
-import { useResource } from "../state/resource";
+import { type Resource, useResource } from "../state/resource";
 import { go, openTx, setLookBackCycle, setWalletsTab, useApp, viewSnapshot, type WalletsTab } from "../state/store";
 import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
@@ -336,6 +338,34 @@ function LookBackTable({ d, rows }: { d: CycleLookBack; rows: Rows }) {
 }
 
 // ── Tích luỹ ───────────────────────────────────────────────────────
+/** Mọi khoản mua tài sản (UC-707 AC-38), cùng trạng thái tải / lỗi / số cũ như `useResource`; ghi xong (version tăng) đọc lại. */
+function useAssetBuys(): Resource<TxRow[]> {
+  const { version } = useApp();
+  const [tick, setTick] = useState(0);
+  const fresh = useRef(false);
+  const [st, setSt] = useState<Omit<Resource<TxRow[]>, "reload">>({ data: null, error: null, loading: true, cachedAt: null });
+  useEffect(() => {
+    let alive = true;
+    setSt((s) => ({ ...s, loading: true, error: null }));
+    const noCache = fresh.current;
+    fresh.current = false;
+    loadAllAssetBuys(noCache)
+      .then(({ data, cachedAt }) => alive && setSt({ data, error: null, loading: false, cachedAt }))
+      .catch((err: unknown) => {
+        const e = err instanceof ApiError ? err : new ApiError(0, "offline", "Không có mạng.");
+        if (alive) setSt((s) => ({ ...s, error: e, loading: false }));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [tick, version]);
+  const reload = useCallback(() => {
+    fresh.current = true;
+    setTick((t) => t + 1);
+  }, []);
+  return { ...st, reload };
+}
+
 /**
  * Ví & quỹ › Tích luỹ (pwa UC-707, ADR-122): card đầu đọc `pockets.savings` — cùng số thẻ Tích luỹ ở Hôm nay; tài sản đang giữ
  * và nút Mua tài sản (UC-707 AC-37: không còn phần cách tính cũ, không gọi /v1/wealth-building).
@@ -344,11 +374,11 @@ function WealthBuildingTab() {
   const app = useApp();
   const snap = viewSnapshot(app);
   const [buying, setBuying] = useState(false);
-  const txs = useResource<TxRow[]>("/v1/transactions?limit=200");
+  const txs = useAssetBuys();
   const wide = useWide();
   if (!snap) return <Skeleton rows={4} />;
   const savings = savingsCard(snap.pockets, snap.payCycle);
-  const assets = (txs.data ?? []).filter((r) => r.meaning === "buy_asset" && r.status === "active");
+  const assets = (txs.data ?? []).filter((r) => r.status === "active");
   const assetLabel = (k: string | null) => ASSET_KINDS.find((a) => a.value === k)?.label ?? k ?? "";
 
   const current = (
