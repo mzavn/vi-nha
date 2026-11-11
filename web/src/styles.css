@@ -1855,47 +1855,99 @@
     padding-top: 0;
     padding-bottom: 10px;
   }
-  /* Chốt tháng: một dòng một hàng (tên · số tiền · bỏ), tổng dính đáy sheet. */
-  .settle-head,
-  .settle-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 128px 44px;
-    gap: 8px;
-    align-items: center;
-    padding: 0 8px 0 14px;
+  /* Bản tính người thuê (pwa UC-713): mỗi khoản một hàng tên · dấu · số · bỏ, vừa 390px; chân dính tổng + Chốt & gửi. */
+  .card.bill-card {
+    overflow: visible; /* để chân dính bám được theo trang */
   }
-  .settle-head {
-    padding-top: 8px;
-    padding-bottom: 4px;
-    border-top: 1px solid var(--border);
-    font-size: 11.5px;
-    color: var(--fg-3);
-  }
-  .settle-head span:nth-child(2) {
-    text-align: right;
-  }
-  .settle-row {
+  .bill-group {
     border: 0;
     margin: 0;
+    padding: 0 0 4px;
     min-width: 0;
-    padding-top: 4px;
-    padding-bottom: 4px;
+    border-top: 1px solid var(--border);
   }
-  .settle-row .ctl,
-  .settle-row .amt-in {
+  .bill-group-h {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 14px 4px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--fg-2);
+  }
+  .bill-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 44px minmax(96px, 128px) 44px;
+    gap: 4px 6px;
+    align-items: center;
+    padding: 4px 4px 4px 14px;
+    min-width: 0;
+  }
+  .bill-row .ctl,
+  .bill-row .amt-in {
     max-width: none;
     width: 100%;
+    min-width: 0;
   }
-  .settle-dir {
+  .bill-editor input,
+  .bill-editor select {
+    scroll-margin-bottom: 170px; /* ô đang gõ không nằm dưới chân dính */
+  }
+  .bill-sign {
+    min-height: 44px;
+    width: 44px;
+    padding: 0;
+    font-size: 18px;
+  }
+  .bill-sign[aria-pressed="true"] {
+    color: var(--bad);
+  }
+  .bill-sub {
     grid-column: 1 / -1;
-    padding-bottom: 4px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin: 0;
+    font-size: 12px;
+    color: var(--fg-3);
   }
-  .settle-foot {
+  .bill-sub.err {
+    color: var(--bad);
+  }
+  .bill-add {
+    min-height: 44px;
+    margin: 0 8px;
+  }
+  .bill-foot {
     position: sticky;
-    bottom: 0;
+    bottom: calc(var(--nav-h) + var(--safe-bottom));
+    z-index: 10;
     background: var(--surface);
     border-top: 1px solid var(--border);
+    border-radius: 0 0 var(--r) var(--r);
     padding: 10px 16px;
+  }
+  .bill-total {
+    margin: 0 0 8px;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+  .bill-confirm {
+    font-size: 13.5px;
+  }
+  .bill-text {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-family: inherit;
+    font-size: 13.5px;
+    line-height: 1.5;
+  }
+  .bill-owed {
+    margin: 0;
+    font-weight: 600;
   }
 
   /* ── danh sách log ── */

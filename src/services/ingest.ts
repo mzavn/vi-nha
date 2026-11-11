@@ -7,11 +7,13 @@ import { assertOpened, buildEntry, rejectOldFields, type EntryInput, type TxRow 
 import { isInterestLog } from "../domain/interest-deposit";
 import { dayKey, minuteOfDay, monthKey, weekKey } from "../domain/period";
 import { canPair, extractCode, looksLikeCashWithdrawal, matchRule, type PairCandidate, type RuleRow } from "../domain/rules";
+import { memoKey } from "../domain/rental";
 import { DomainError, type Refs } from "../domain/types";
 import { getTransaction, insertTx, interestMaxAmount, loadRefs, resolveLink, rethrowInvalidGoal, salaryMinAmount, writeEffects, type WriteEffects } from "./ledger";
 import { closest, feedMark, linkColumn, linkLogToTx, manualMatches } from "./manual-links";
 import { afterWrite, incomeStatements, resolveOpensCycle, voidTxStatements, type IncomePlan } from "./pay-cycles";
-import { assertLogChangeable, assertRowWritable, assertTxChangeable, hiddenAccountIds } from "./privacy";
+import { assertLogChangeable, assertRowWritable, assertTenantAccount, assertTxChangeable, hiddenAccountIds } from "./privacy";
+import { issuedBillMemos } from "./rental";
 
 type Row = Record<string, unknown>;
 const rows = <T = Row>(r: D1Result) => (r.results ?? []) as T[];
@@ -597,12 +599,16 @@ export async function listPendingLogs(db: D1Database, limit: number, viewerId: s
     .all<Row>();
   const list = rows(res);
   const ruleRows = await loadRuleRows(db);
-  const sepayOut = new Map(
-    rows<{ id: string; fed: number; since: string | null }>(await db.prepare("SELECT id, sepay_enabled AND sepay_out AS fed, sepay_out_from AS since FROM accounts").all()).map((a) => [
-      a.id,
-      { fed: Boolean(a.fed), since: a.since },
-    ]),
+  const accountRows = rows<{ id: string; fed: number; since: string | null; private: number }>(
+    await db.prepare("SELECT id, sepay_enabled AND sepay_out AS fed, sepay_out_from AS since, private FROM accounts").all(),
   );
+  const sepayOut = new Map(accountRows.map((a) => [a.id, { fed: Boolean(a.fed), since: a.since }]));
+  // Gợi ý người thuê (rental UC-805 AC-11): mã QR các bản tính đã gửi, đọc một lần cho cả danh sách; log của tài khoản
+  // riêng tư (bất kể người xem) không nhận gợi ý người thuê — tiền thuê không vào tài khoản riêng tư (N-1).
+  const tenantHints: TenantHints = {
+    privateAccounts: new Set(accountRows.filter((a) => a.private).map((a) => a.id)),
+    memos: list.some((r) => r.direction === "in") ? await issuedBillMemos(db) : [],
+  };
   // Tài khoản tiền mặt để gợi ý "Rút tiền mặt" chỉ phụ thuộc tài khoản nguồn: hỏi DB một lần cho mỗi tài khoản.
   const cashCache = new Map<string, Promise<string | null>>();
   const cashOf = (accountId: string) => {
@@ -649,7 +655,7 @@ export async function listPendingLogs(db: D1Database, limit: number, viewerId: s
       // Log ra không được coi là SePay báo (ADR-66), hay từ trước lúc bật "báo cả tiền ra" (ADR-113): nhắc có thể đã nhập tay.
       const out = sepayOut.get(log.account_id as string);
       const outNote = !out ? null : !out.fed ? OUT_NOT_FED_NOTE : out.since !== null && Date.parse(String(log.at)) < Date.parse(out.since) ? OUT_BEFORE_MARK_NOTE : null;
-      return { ...log, suggestion: await suggestFor(log, ruleRows, cashOf, outNote, interestOf, hidden) };
+      return { ...log, suggestion: await suggestFor(log, ruleRows, cashOf, outNote, interestOf, hidden, tenantHints) };
     }),
   );
 }
@@ -658,11 +664,16 @@ const OUT_NOT_FED_NOTE =
   "SePay vừa báo tiền ra cho tài khoản đang để 'chỉ tiền vào'. Nếu khoản này đã nhập tay thì Bỏ qua; rồi bật 'SePay báo cả tiền ra' ở Cài đặt.";
 const OUT_BEFORE_MARK_NOTE = "Khoản chi này từ trước lúc bật 'SePay báo cả tiền ra' — khi đó chi tiêu nhập tay. Nếu đã nhập tay thì Bỏ qua.";
 
+/** Dữ liệu gợi ý người thuê đọc một lần cho cả danh sách log chờ. */
+type TenantHints = { privateAccounts: Set<string>; memos: { tenantId: string; tenantName: string; key: string }[] };
+
 /**
  * Gợi ý cho màn Gán (không trường ví, ADR-123): rule chi khớp mã nhưng thiếu danh mục → gợi ý chọn danh mục; log `out` không
  * khớp rule mà nội dung trông như rút tiền mặt (`looksLikeCashWithdrawal` — ATM, RUT TIEN…) → gợi ý Rút tiền mặt; không khớp
  * gì khác → không gợi ý (trả QR, hoá đơn không phải rút tiền — màn Gán mặc định Chi tiêu);
- * log `in` khớp rule người thuê → gợi ý "Thu từ <tên>"; log `in` là log lãi tiền gửi → gợi ý "Lãi tiền gửi".
+ * log `in` khớp rule người thuê, hay nội dung chứa mã QR bản tính đã gửi của đúng một người thuê (so `memoKey` — chỉ chữ số,
+ * viết hoa; khớp nhiều người → không gợi ý) → gợi ý "Thu từ <tên>" (rental UC-805 AC-11; chỉ gợi ý, ADR-60) — trừ log của
+ * tài khoản riêng tư (N-1); log `in` là log lãi tiền gửi → gợi ý "Lãi tiền gửi".
  * Log `out` của tài khoản "chỉ tiền vào" (`outNotFed`, ADR-66) hay từ trước lúc bật "báo cả tiền ra" (ADR-113) không được tự
  * gán, nên gợi ý luôn theo rule khớp và kèm lời nhắc `outNote` (có thể đã nhập tay). Rule chuyển nội bộ có tài khoản đầu kia
  * (heo đất, ADR-77/ADR-82): tiền ra gợi ý chuyển sang đó; tiền vào khớp cùng rule là heo trả về — gợi ý chuyển chiều ngược lại,
@@ -675,15 +686,24 @@ async function suggestFor(
   outNote: string | null,
   interestOf: (log: Row) => Promise<boolean>,
   hidden: string[],
+  tenantHints: TenantHints,
 ): Promise<Record<string, unknown> | null> {
   if (!log.account_id) return null;
   const outNotFed = outNote !== null;
   const rules = allRules.filter((r) => !r.accountId || r.accountId === log.account_id);
   if (log.direction === "in") {
-    // Tiền vào luôn hỏi; chỉ gợi ý người thuê khi khớp rule của họ, người vẫn phải bấm xác nhận.
-    const tenantRules = rules.filter((r) => r.tenantId).map((r) => ({ ...r, meaning: "income" as const, isSalary: true }));
-    const hit = matchRule(tenantRules, "in", log.content as string | null, log.ref_code as string | null) as LoadedRule | null;
-    if (hit) return { meaning: "income", tenant_id: hit.tenantId, label: `Thu từ ${hit.tenantName ?? hit.tenantId}` };
+    // Tiền vào luôn hỏi; chỉ gợi ý người thuê khi khớp rule của họ hay mã QR bản tính, người vẫn phải bấm xác nhận.
+    if (!tenantHints.privateAccounts.has(String(log.account_id))) {
+      const tenantRules = rules.filter((r) => r.tenantId).map((r) => ({ ...r, meaning: "income" as const, isSalary: true }));
+      const hit = matchRule(tenantRules, "in", log.content as string | null, log.ref_code as string | null) as LoadedRule | null;
+      if (hit) return { meaning: "income", tenant_id: hit.tenantId, label: `Thu từ ${hit.tenantName ?? hit.tenantId}` };
+      const content = memoKey(String(log.content ?? ""));
+      const matched = new Map(tenantHints.memos.filter((m) => m.key && content.includes(m.key)).map((m) => [m.tenantId, m.tenantName]));
+      if (matched.size === 1) {
+        const [tenantId, tenantName] = [...matched][0]!;
+        return { meaning: "income", tenant_id: tenantId, label: `Thu từ ${tenantName}` };
+      }
+    }
     const backRules = rules.filter((r) => r.meaning === "transfer" && r.counterAccountId).map((r) => ({ ...r, meaning: "income" as const, isSalary: true }));
     const back = matchRule(backRules, "in", log.content as string | null, log.ref_code as string | null) as LoadedRule | null;
     if (back && !hidden.includes(back.counterAccountId!)) return { meaning: "transfer", other_account_id: back.counterAccountId, label: `Rút heo về ${log.account_name ?? log.account_id}` };
@@ -797,7 +817,10 @@ export async function assignLog(
 
   const refs = await loadRefs(db);
   const built = splits.map((s) => ({ split: s, row: { ...buildEntry(splitToEntryInput(log, s), refs, memberId, now), source: "sepay" as const } }));
-  for (const { row } of built) assertRowWritable(row, hidden);
+  for (const { row } of built) {
+    assertRowWritable(row, hidden);
+    assertTenantAccount(row, refs);
+  }
   for (const { row } of built) await resolveLink(db, row, undefined, hidden);
 
   // Mỗi khoản: câu INSERT rồi NGAY SAU là câu kèm của chính nó (kỳ / việc, phân loại lãi) — các câu kèm trỏ khoản vừa chèn

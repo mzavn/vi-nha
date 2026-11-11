@@ -1,4 +1,4 @@
-// Chép chữ vào bộ nhớ tạm rồi báo bằng toast. Dùng cho Cài đặt (địa chỉ, mã) và bảng kê người thuê.
+// Chép chữ vào bộ nhớ tạm rồi báo bằng toast. Dùng cho Cài đặt (địa chỉ, mã) và tin gửi người thuê.
 
 import { toast } from "../state/store";
 

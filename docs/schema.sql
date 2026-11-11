@@ -91,6 +91,10 @@
 --                     là thứ tự ưu tiên (0042 đánh số lại 10, 20, … theo hạn); mục tiêu % giữ tài khoản riêng
 --                     (trg_reserve_goals_tax_own(_insert) → tax_account_shared); transactions.goal_id (khoản chi / chuyển
 --                     ra cho mục tiêu nào; trg_tx_goal(_insert) → invalid_goal)
+--  v1.43 (12/11/2026): bản tính tháng cho người thuê — tenant_bills, tenant_bill_items (trg_tenant_bills_issued /
+--                     _no_delete → bill_issued); tenant_lines thêm kind 'bill' + bill_id (idx_tenant_lines_bill_active: tối
+--                     đa một dòng bill còn hiệu lực mỗi bản tính); bỏ tenant_fixed_fees, tenant_settlements, config
+--                     rental_headcount / rental_shared_categories (rental UC-806, UC-807)
 -- ============================================================
 --  NGUYÊN TẮC ENCODE:
 --   1. Hai lớp: bank_logs (thô, BẤT BIẾN) vs transactions (đã diễn giải)
@@ -367,38 +371,53 @@ CREATE TABLE tenants (
   active     INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE TABLE tenant_fixed_fees (
-  id        INTEGER PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants(id),
-  name      TEXT NOT NULL,
-  amount    INTEGER NOT NULL CHECK (amount > 0),
-  sort      INTEGER NOT NULL DEFAULT 100,
-  active    INTEGER NOT NULL DEFAULT 1
-);
 CREATE TABLE tenant_lines (
   id          INTEGER PRIMARY KEY,
   tenant_id   TEXT NOT NULL REFERENCES tenants(id),
   month_key   TEXT NOT NULL,
   at          TEXT NOT NULL,
-  kind        TEXT NOT NULL CHECK (kind IN ('opening','fixed','shared','one_off','paid_for_us','adjust')),
+  kind        TEXT NOT NULL CHECK (kind IN ('opening','fixed','shared','one_off','paid_for_us','adjust','bill')),
   name        TEXT,
   amount      INTEGER NOT NULL CHECK (amount <> 0),  -- > 0 người thuê nợ thêm; < 0 giảm nợ
   category_id TEXT REFERENCES categories(id),
   client_id   TEXT,
   status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','void')),
   created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-  CHECK (kind <> 'paid_for_us' OR (amount < 0 AND category_id IS NOT NULL))
+  bill_id     INTEGER REFERENCES tenant_bills(id),  -- dòng của một bản tính đã gửi (bill) hoặc dòng chốt cũ đã chép vào bản tính
+  CHECK (kind <> 'paid_for_us' OR (amount < 0 AND category_id IS NOT NULL)),
+  CHECK (kind <> 'bill' OR bill_id IS NOT NULL)
 );
+--  Từ v1.43 chỉ ghi 'opening' (tạo người thuê) và 'bill' (chốt & gửi / sửa bản tính); các kind khác là lịch sử.
 CREATE INDEX idx_tenant_lines ON tenant_lines(tenant_id, month_key) WHERE status='active';
 CREATE UNIQUE INDEX idx_tenant_lines_client ON tenant_lines(client_id) WHERE client_id IS NOT NULL;
-CREATE TABLE tenant_settlements (
-  tenant_id    TEXT NOT NULL REFERENCES tenants(id),
-  month_key    TEXT NOT NULL,
-  headcount    INTEGER NOT NULL CHECK (headcount > 0),
-  shared_total INTEGER NOT NULL,
-  at           TEXT NOT NULL DEFAULT (datetime('now')),
-  PRIMARY KEY (tenant_id, month_key)
+CREATE INDEX idx_tenant_lines_bill ON tenant_lines(bill_id) WHERE bill_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_tenant_lines_bill_active ON tenant_lines(bill_id) WHERE kind='bill' AND status='active';
+-- Bản tính tháng (rental UC-806): mỗi (người thuê, tháng ở) một bản; draft -> issued một chiều. Chốt & gửi ghi MỘT dòng
+-- tenant_lines kind='bill' = tổng, at = issued_at; sửa sau khi gửi huỷ dòng cũ + ghi dòng mới cùng at (revision chống ghi đè).
+CREATE TABLE tenant_bills (
+  id                 INTEGER PRIMARY KEY,
+  tenant_id          TEXT NOT NULL REFERENCES tenants(id),
+  month_key          TEXT NOT NULL,                                  -- tháng ở / tháng dùng điện (QĐ7)
+  status             TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','issued')),
+  copied_from_id     INTEGER REFERENCES tenant_bills(id) ON DELETE SET NULL,
+  receive_account_id TEXT REFERENCES accounts(id),                   -- tài khoản nhận cho QR; NULL = chưa chọn (QĐ6)
+  total              INTEGER NOT NULL DEFAULT 0,                     -- Σ khoản, ghi mỗi lần lưu
+  revision           INTEGER NOT NULL DEFAULT 0,                     -- khoá lạc quan: +1 mỗi lần lưu / chốt & gửi
+  issued_at          TEXT,                                           -- lần chốt đầu = `at` của mọi dòng bill; mốc "Các tháng trước"
+  edited_at          TEXT,                                           -- lần sửa gần nhất sau khi gửi; NULL = chưa sửa
+  created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (tenant_id, month_key),
+  CHECK ((status = 'issued') = (issued_at IS NOT NULL))
 );
+CREATE TABLE tenant_bill_items (
+  id       INTEGER PRIMARY KEY,
+  bill_id  INTEGER NOT NULL REFERENCES tenant_bills(id) ON DELETE CASCADE,
+  sort     INTEGER NOT NULL,
+  name     TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 60),      -- không trùng trong một bản tính (kiểm ở code)
+  category TEXT NOT NULL CHECK (category IN ('fixed','variable')),  -- fixed "Chi phí cứng" · variable "Chi phí"
+  amount   INTEGER NOT NULL CHECK (amount <> 0 AND abs(amount) <= 1000000000000)  -- âm = giảm trừ
+);
+CREATE INDEX idx_tenant_bill_items ON tenant_bill_items(bill_id, sort);
 
 -- 16. THÔNG BÁO ĐẨY TRÊN PWA — mỗi máy đã bật một dòng, gắn người đang đăng nhập ------
 --  Khoá VAPID tự sinh lần đầu cần, nằm trong config: secret:vapid_private_jwk · vapid_public · vapid_subject.
@@ -638,7 +657,7 @@ END;
 CREATE TRIGGER trg_tenant_lines_append_only BEFORE UPDATE ON tenant_lines
 WHEN NEW.id IS NOT OLD.id OR NEW.tenant_id IS NOT OLD.tenant_id OR NEW.month_key IS NOT OLD.month_key
   OR NEW.at IS NOT OLD.at OR NEW.kind IS NOT OLD.kind OR NEW.name IS NOT OLD.name OR NEW.amount IS NOT OLD.amount
-  OR NEW.category_id IS NOT OLD.category_id OR NEW.client_id IS NOT OLD.client_id
+  OR NEW.category_id IS NOT OLD.category_id OR NEW.client_id IS NOT OLD.client_id OR NEW.bill_id IS NOT OLD.bill_id
   OR NOT (OLD.status = 'active' AND NEW.status = 'void')
 BEGIN
   SELECT RAISE(ABORT, 'tenant_line_append_only');
@@ -646,6 +665,18 @@ END;
 CREATE TRIGGER trg_tenant_lines_no_delete BEFORE DELETE ON tenant_lines
 BEGIN
   SELECT RAISE(ABORT, 'tenant_line_append_only');
+END;
+
+-- Bản tính đã gửi không về nháp, không đổi lúc gửi đầu, không xoá.
+CREATE TRIGGER trg_tenant_bills_issued BEFORE UPDATE ON tenant_bills
+WHEN OLD.status = 'issued' AND (NEW.status IS NOT 'issued' OR NEW.issued_at IS NOT OLD.issued_at)
+BEGIN
+  SELECT RAISE(ABORT, 'bill_issued');
+END;
+CREATE TRIGGER trg_tenant_bills_no_delete BEFORE DELETE ON tenant_bills
+WHEN OLD.status = 'issued'
+BEGIN
+  SELECT RAISE(ABORT, 'bill_issued');
 END;
 
 -- Số dư phải thu = Σ dòng sổ − Σ tiền người thuê đã trả (income gắn tenant_id). Dương = còn nợ.
@@ -1051,4 +1082,4 @@ BEGIN
 END;
 
 -- Phiên bản schema — /v1/health đọc từ đây
-INSERT INTO config (k,v) VALUES ('schema_version','1.42');
+INSERT INTO config (k,v) VALUES ('schema_version','1.43');

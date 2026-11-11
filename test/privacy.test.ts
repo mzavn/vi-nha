@@ -246,4 +246,30 @@ describe("luật giấu ở mọi đường (UC-504, ADR-133) — hộ mẫu P",
     db.exec("UPDATE members SET active = 0 WHERE id = 'wife'");
     expect((await tasks("husband")).filter((t) => t.source !== null).every((t) => (t.source as { txId: number }).txId === txId)).toBe(true);
   });
+
+  it("UC-805 AC-10: vợ (chính chủ) ghi thu kèm tenant_id vào vcb-wife, sửa khoản thu thường thêm tenant_id, gán log L1 cho An → 400 tenant_private_account, không ghi gì, số dư An không đổi; chồng làm cùng việc → 403 private_account (sửa khoản bị giấu → 404)", async () => {
+    db.exec(`
+      INSERT INTO tenants (id, name) VALUES ('an', 'An');
+      INSERT INTO transactions (id, at, amount, meaning, counter_account_id, income_stream_id, by_member_id, week_key, month_key, source)
+        VALUES (110, '2026-11-10T12:00:00.000Z', 1000000, 'income', 'vcb-wife', 'salary-wife', 'wife', '2026-W46', '2026-11', 'manual');
+    `);
+    const tenantBalance = () => db.prepare("SELECT balance FROM v_tenant_balance WHERE tenant_id = 'an'").get();
+    const before = { tx: txCount(), audit: auditCount(), balance: tenantBalance() };
+    const rent = { meaning: "income", amount: 1_000_000, account_id: "vcb-wife", tenant_id: "an" };
+    const assign = { splits: [{ meaning: "income", amount: 3_000_000, tenant_id: "an" }] };
+    const wife = (m: string, p: string, b?: unknown) => call(m, p, b, "wife");
+    for (const r of [await wife("POST", "/v1/transactions", rent), await wife("POST", "/v1/transactions/110/replace", rent), await wife("POST", "/v1/logs/L1/assign", assign)]) {
+      expect(err(r)).toEqual([400, "tenant_private_account", "Tiền thuê không ghi vào tài khoản riêng tư — chọn tài khoản khác."]);
+    }
+    for (const r of [await call("POST", "/v1/transactions", rent), await call("POST", "/v1/logs/L1/assign", assign)]) {
+      expect([r.status, r.json.error?.code]).toEqual([403, "private_account"]);
+    }
+    expect(err(await call("POST", "/v1/transactions/110/replace", rent))).toEqual([404, "not_found", "Không có giao dịch này."]);
+    expect({ tx: txCount(), audit: auditCount(), balance: tenantBalance() }).toEqual(before);
+    expect(status(110)).toBe("active");
+    expect(db.prepare("SELECT status FROM bank_logs WHERE id = 'L1'").get()).toEqual({ status: "pending" });
+    // Cùng khoản vào tài khoản không riêng tư vẫn ghi được (sổ An giảm).
+    db.exec("UPDATE accounts SET sepay_enabled = 0 WHERE id = 'vcb-husband'");
+    expect((await wife("POST", "/v1/transactions", { ...rent, account_id: "vcb-husband" })).status).toBe(201);
+  });
 });

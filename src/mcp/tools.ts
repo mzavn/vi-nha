@@ -1,4 +1,4 @@
-// 15 tool MCP cho Claude (11 đọc, 4 ghi): mỗi tool chỉ gọi lại đúng hàm domain/service dùng chung với REST
+// 16 tool MCP cho Claude (12 đọc, 4 ghi): mỗi tool chỉ gọi lại đúng hàm domain/service dùng chung với REST
 // (src/services/ledger.ts, src/services/ingest.ts, src/services/rental.ts, src/services/debts.ts, src/services/receivables.ts)
 // — không viết SQL nghiệp vụ ở tầng này.
 // Mỗi kết nối Claude mang người đã uỷ quyền (OAuth, UC-601): tool đọc nhìn số liệu như người đó trên app (ví private cũ và
@@ -21,7 +21,7 @@ import { audit, type Actor } from "../services/audit";
 import { nearSpendLine } from "../notify/format";
 
 /** Tool ghi: cần quyền `mcp:write` — routes/mcp.ts kiểm ở tầng HTTP trước khi tới đây (UC-601 AC-11). */
-export const WRITE_TOOLS: readonly string[] = ["add_transaction", "assign_log", "add_tenant_shared_expense", "record_asset_value"];
+export const WRITE_TOOLS: readonly string[] = ["add_transaction", "assign_log", "set_tenant_bill_item", "record_asset_value"];
 
 /** Trường của mô hình cũ mà tool ghi từ chối (mcp UC-603 AC-31, UC-604 AC-13) — schema lỏng để zod không bỏ lặng lẽ. */
 const OLD_SPLIT_FIELDS = ["wallet_id", "counter_wallet_id", "from_wallet_id", "wealth_move", "allocate", "earmark_id"] as const;
@@ -52,7 +52,7 @@ function fail(err: unknown): CallToolResult {
 }
 
 /**
- * Đăng ký cả 15 tool lên một McpServer mới dựng riêng cho request hiện tại; `memberId` = người đã uỷ quyền kết nối.
+ * Đăng ký cả 16 tool lên một McpServer mới dựng riêng cho request hiện tại; `memberId` = người đã uỷ quyền kết nối.
  * `onCycleOpened(payday)`: tool ghi vừa mở kỳ lương — người gọi báo kỳ lương mới sau khi trả lời (notify UC-412), không chặn kết quả tool.
  */
 export async function registerTools(
@@ -353,12 +353,33 @@ export async function registerTools(
     "list_tenants",
     {
       description:
-        "Tenant ledger: tenants with their balance (positive = tenant still owes, negative = overpaid, deducted next month) " +
-        "and fixed monthly fees; the headcount sharing common expenses, the shared-expense categories and the rental income stream. No parameters.",
+        "Tenant ledger: the rental income stream and tenants with their balance (positive = tenant still owes, negative = overpaid) " +
+        "and the monthly bill of the previous month (bill: id, month, status draft|issued, total, revision, edited = changed after it was sent; " +
+        "null = not made yet). Read get_tenant_bill for the bill items and the message to send. No parameters.",
     },
     async () => {
       try {
-        return ok(await rental.getRental(db));
+        return ok(await rental.getRental(db, now()));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "get_tenant_bill",
+    {
+      description:
+        "One tenant's monthly bill (month = the month lived in / electricity used, 'YYYY-MM', default the previous month): status none|draft|issued, " +
+        "items (name, category fixed = 'Chi phí cứng' | variable = 'Chi phí', amount, previous = same item last bill), totals per category, " +
+        "previousBalance (earlier months: > 0 still owed, < 0 overpaid — a separate line, not in the QR), text (the message to send the tenant), " +
+        "qrAmount (the transfer amount = this bill's total), payments received since it was sent, and balance (everything still owed now). " +
+        "Seen as the member who authorised this connection. tenant_id from list_tenants. Read-only.",
+      inputSchema: { tenant_id: z.string().min(1), month: z.string().optional() },
+    },
+    async (args) => {
+      try {
+        return ok(await rental.getBill(db, args.tenant_id, args.month, memberId, now()));
       } catch (err) {
         return fail(err);
       }
@@ -403,24 +424,27 @@ export async function registerTools(
   );
 
   server.registerTool(
-    "add_tenant_shared_expense",
+    "set_tenant_bill_item",
     {
       description:
-        "Record a shared household expense paid by a tenant out of their own pocket (e.g. 'the tenant bought groceries for 300k') — " +
-        "lowers the tenant's balance and adds to the month's shared expenses. " +
-        "tenant_id from list_tenants; amount is a positive integer VND; category_id must be a shared-expense category (sharedCategoryIds from list_tenants).",
+        "Set one item on a tenant's DRAFT monthly bill (month 'YYYY-MM', default the previous month). The item is matched by name " +
+        "(trimmed, case-insensitive): found → its amount (and category, if given) is replaced; not found → it is added (category defaults to " +
+        "variable). No bill for that month yet → a draft is made by copying the latest earlier bill first. A bill already sent (issued) cannot be " +
+        "changed here (error bill_issued) — it is edited in the app. Does not change the tenant balance; sending the bill is done in the app. " +
+        "category: fixed = 'Chi phí cứng' (rent, parking, internet) | variable = 'Chi phí' (food, electricity, water). amount: non-zero integer VND " +
+        "(negative = a deduction). Returns the bill as get_tenant_bill.",
       inputSchema: {
         tenant_id: z.string().min(1),
-        amount: z.number().int().positive(),
-        category_id: z.string().min(1),
-        note: z.string().optional(),
+        month: z.string().optional(),
+        name: z.string().min(1),
+        category: z.enum(["fixed", "variable"]).optional(),
+        amount: z.number().int(),
       },
     },
     async (args) => {
       try {
-        const { line, duplicate } = await rental.addLine(db, args.tenant_id, { kind: "paid_for_us", amount: args.amount, category_id: args.category_id, name: args.note }, now());
-        if (!duplicate) await audit(db, actor, "tenant.paid_for_us", `tenant:${args.tenant_id}`, { category_id: args.category_id });
-        return ok(line, `Đã ghi người thuê chi hộ ${vnd(args.amount)}.`);
+        const bill = await rental.setBillItem(db, args, actor, now());
+        return ok(bill, `Đã ghi khoản "${args.name.trim()}" ${vnd(args.amount)} vào bản tính tháng ${bill.month} của ${bill.tenant.name} — tổng ${vnd(bill.total)}.`);
       } catch (err) {
         return fail(err);
       }

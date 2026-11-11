@@ -879,8 +879,8 @@ export function cycleStreamReminder(streams: IncomeStream[]): string | null {
 
 // ── Nhật ký thay đổi ──────────────────────────────────────────────
 
-/** Nhãn của mọi mã nhật ký server ghi (`AUDIT_ACTIONS`), kèm mã cũ còn trong nhật ký trước v2 (chia khoản thu, chốt tháng). */
-export const AUDIT_ACTION: Record<AuditAction | "income.allocate" | "month.close", string> = {
+/** Nhãn của mọi mã nhật ký server ghi (`AUDIT_ACTIONS`), kèm mã cũ còn trong nhật ký trước v2 (chia khoản thu, chốt tháng) và trước v2.2 (người thuê chi hộ). */
+export const AUDIT_ACTION: Record<AuditAction | "income.allocate" | "month.close" | "tenant.paid_for_us", string> = {
   "tx.void": "Huỷ giao dịch",
   "tx.replace": "Sửa giao dịch",
   "tx.unassign": "Gỡ gán giao dịch ngân hàng",
@@ -901,6 +901,12 @@ export const AUDIT_ACTION: Record<AuditAction | "income.allocate" | "month.close
   "log.assign": "Gán giao dịch ngân hàng",
   "income.allocate": "Chia khoản thu",
   "tenant.paid_for_us": "Người thuê trả hộ",
+  "tenant.bill_create": "Lập bản tính",
+  "tenant.bill_save": "Lưu bản tính nháp",
+  "tenant.bill_issue": "Chốt & gửi bản tính",
+  "tenant.bill_edit": "Sửa bản tính đã gửi",
+  "tenant.bill_delete": "Xoá bản tính nháp",
+  "tenant.bill_item": "Claude sửa khoản bản tính",
   "month.close": "Chốt tháng",
   "pay_cycle.open": "Mở kỳ lương",
   "pay_cycle.void": "Huỷ kỳ lương",

@@ -60,8 +60,7 @@ import type {
   SettingsAccount,
   SettingsData,
   SettingsMember,
-  Tenant,
-  TenantFee,
+  TenantSummary,
   ZaloWebhookResult,
 } from "../lib/types";
 import { useResource } from "../state/resource";
@@ -79,7 +78,6 @@ import {
   GoalOrderSheet,
   GoalSheet,
   FiConfigSheet,
-  FeeSheet,
   GroupSheet,
   MemberNewSheet,
   MemberPasswordSheet,
@@ -132,8 +130,7 @@ export type Edit =
   | { kind: "fi-config" }
   | { kind: "notify" }
   | { kind: "stream"; item: IncomeStream | null }
-  | { kind: "tenant"; item: Tenant | null }
-  | { kind: "fee"; tenant: Tenant; item: TenantFee | null }
+  | { kind: "tenant"; item: TenantSummary | null }
   | { kind: "rental-config"; rental: Rental }
   | { kind: "pockets" }
   | { kind: "goal"; item: ReserveGoal | null; prefill?: GoalForm }
@@ -334,7 +331,6 @@ export function Settings() {
       {edit?.kind === "notify" && s.data.notifySchedule && <NotifyScheduleSheet schedule={s.data.notifySchedule} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "stream" && <StreamSheet d={s.data} item={edit.item} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "tenant" && <TenantSheet item={edit.item} onClose={() => setEdit(null)} onSaved={saved} />}
-      {edit?.kind === "fee" && <FeeSheet tenant={edit.tenant} item={edit.item} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "rental-config" && <RentalConfigSheet d={s.data} rental={edit.rental} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "pockets" && <PocketsSheet d={s.data} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "goal" && <GoalSheet d={s.data} item={edit.item} prefill={edit.prefill} onClose={() => setEdit(null)} onSaved={saved} />}
@@ -1403,7 +1399,7 @@ function RentalSettings({ d, ro, open }: SectionProps) {
       title="Cho thuê"
       right={<AddButton ro={ro || !r} label="Thêm người thuê" onClick={() => open({ kind: "tenant", item: null })} />}
       flush
-      note="Người thuê không phải thành viên, không đăng nhập. Mỗi tháng: phí cố định + chi chung chia đều theo số người; chốt ở Ví & quỹ › Người thuê."
+      note="Người thuê không phải thành viên, không đăng nhập. Mỗi tháng lập bản tính ở Ví & quỹ › Người thuê: chép tháng trước, sửa số, chốt & gửi."
     >
       {!r ? (
         res.loading ? (
@@ -1419,9 +1415,8 @@ function RentalSettings({ d, ro, open }: SectionProps) {
       ) : (
         <>
           <Row
-            title="Chi chung"
-            sub={`${r.headcount} người chia · ${r.sharedCategoryIds.map((id) => nameOf(d.categories, id)).join(", ") || "chưa chọn danh mục"}`}
-            sub2={`Tiền người thuê trả vào nguồn: ${nameOf(d.incomeStreams ?? [], r.incomeStreamId) ?? "mặc định"}`}
+            title="Nguồn thu"
+            sub={`Tiền người thuê trả vào nguồn: ${nameOf(d.incomeStreams ?? [], r.incomeStreamId) ?? "chưa chọn"}`}
             onClick={ro ? undefined : () => open({ kind: "rental-config", rental: r })}
           />
           {r.tenants.length === 0 && <p class="empty">Chưa có người thuê.</p>}
@@ -1434,26 +1429,6 @@ function RentalSettings({ d, ro, open }: SectionProps) {
                 <span class="tnum">{balanceText(t.balance)}</span>
               </div>
               <Row title="Tên, đang ở" sub={t.active ? "đang ở" : "đã ra"} onClick={ro ? undefined : () => open({ kind: "tenant", item: t })} />
-              {t.fees.map((fee) => (
-                <Row
-                  key={fee.id}
-                  title={
-                    <>
-                      {fee.name} {!fee.active && <span class="chip">ngừng thu</span>}
-                    </>
-                  }
-                  sub="phí cố định mỗi tháng"
-                  right={<Money value={fee.amount} class="srow-amt" />}
-                  onClick={ro ? undefined : () => open({ kind: "fee", tenant: t, item: fee })}
-                />
-              ))}
-              {!ro && (
-                <div class="pad" style={{ paddingTop: "4px", paddingBottom: "8px" }}>
-                  <button type="button" class="btn btn-ghost" onClick={() => open({ kind: "fee", tenant: t, item: null })}>
-                    <Icon name="plus" size={16} /> Thêm phí cố định
-                  </button>
-                </div>
-              )}
             </div>
           ))}
         </>

@@ -297,6 +297,40 @@ describe("nguồn thu & người thuê (change 261001)", () => {
     expect(pending!.suggestion).toEqual({ meaning: "income", tenant_id: "tenant-binh", label: "Thu từ Anh Bình" });
   });
 
+  describe("gợi ý theo mã QR bản tính (rental UC-805 AC-11)", () => {
+    beforeEach(() => {
+      raw.exec(`
+        UPDATE accounts SET private = 1 WHERE id = 'vcb-wife';
+        INSERT INTO tenants (id, name) VALUES ('an', 'An'), ('nguoi-thue-so-1', 'Người thuê 1'), ('nguoi-thue-so-2', 'Người thuê 2');
+        INSERT INTO tenant_bills (tenant_id, month_key, status, total, revision, issued_at, receive_account_id) VALUES
+          ('an', '2026-10', 'issued', 4220000, 1, '2026-11-02T03:00:00.000Z', 'vcb-husband'),
+          ('nguoi-thue-so-1', '2026-10', 'issued', 3000000, 1, '2026-11-02T03:00:00.000Z', 'vcb-husband'),
+          ('nguoi-thue-so-2', '2026-10', 'issued', 3000000, 1, '2026-11-02T03:00:00.000Z', 'vcb-husband');
+      `);
+    });
+    const at = "2026-11-03T02:00:00.000Z";
+    const suggestionOf = async (id: string, viewer: string) => (await listPendingLogs(env.DB, 50, viewer)).find((l) => l.id === id)?.suggestion;
+
+    it("UC-805 AC-11: log 'TIEN-NHA-T10-AN' về tài khoản không riêng tư → pending, gợi ý Thu từ An dù không có rule; mã cắt khớp hai người → không gợi ý người thuê; 'TIEN NHA T10 AN' về vcb-wife (riêng tư) → không gợi ý người thuê", async () => {
+      await ingestLog(env.DB, log({ id: "q1", at, direction: "in", amount: 4_220_000, content: "TIEN-NHA-T10-AN" }), "webhook", now());
+      await ingestLog(env.DB, log({ id: "q2", at, direction: "in", amount: 3_000_000, content: "TIEN NHA T10 NGUOI-THUE-S" }), "webhook", now());
+      await ingestLog(env.DB, log({ id: "q3", at, direction: "in", amount: 4_220_000, accountNo: "0011yyyyyyy", content: "TIEN NHA T10 AN" }), "webhook", now());
+      expect(bankLog("q1")?.status).toBe("pending");
+      expect(txOf("q1")).toHaveLength(0);
+      expect(await suggestionOf("q1", "husband")).toEqual({ meaning: "income", tenant_id: "an", label: "Thu từ An" });
+      expect(await suggestionOf("q2", "husband")).toBeNull();
+      expect(await suggestionOf("q3", "wife")).toBeNull();
+    });
+
+    it("UC-805 AC-11: so mã chỉ giữ chữ số, viết hoa — 'tiennhat10an' khớp An; log của tài khoản riêng tư không nhận gợi ý theo rule người thuê", async () => {
+      await createRule(env.DB, { match_type: "content", pattern: "AN CK", meaning: "income", tenant_id: "an" }, "husband");
+      await ingestLog(env.DB, log({ id: "q4", at, direction: "in", amount: 4_220_000, content: "ck tiennhat10an" }), "webhook", now());
+      await ingestLog(env.DB, log({ id: "q5", at, direction: "in", amount: 4_220_000, accountNo: "0011yyyyyyy", content: "AN CK TIEN NHA" }), "webhook", now());
+      expect(await suggestionOf("q4", "husband")).toEqual({ meaning: "income", tenant_id: "an", label: "Thu từ An" });
+      expect(await suggestionOf("q5", "wife")).toBeNull();
+    });
+  });
+
   it("rule người thuê chỉ dùng cho tiền vào", async () => {
     tenant();
     await expect(createRule(env.DB, { match_type: "content", pattern: "BINH", meaning: "spend", tenant_id: "tenant-binh" }, "husband")).rejects.toMatchObject({

@@ -1,25 +1,25 @@
 // "Loại khác": thu nhập · chi tiêu · hoàn tiền · mua tài sản · cho vay · nhận lại tiền cho vay ·
-// chuyển nội bộ · người thuê chi hộ (pwa UC-705, Đợt C — không ví, không chia). Mọi loại trừ người thuê chi đi qua hàng đợi như khoản chi.
+// chuyển nội bộ (pwa UC-705, Đợt C — không ví, không chia). Mọi loại đi qua hàng đợi như khoản chi.
 // Có `edit`: cùng form, điền sẵn từ một khoản đã lên sổ; lưu là thay khoản đó (POST /v1/transactions/:id/replace, UC-715) nên cần mạng.
 
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { api, errorText } from "../lib/api";
+import { errorText } from "../lib/api";
 import { defaultAccountFor, defaultBankFor, manualAccounts } from "../lib/categories";
 import { goalChoices, goalField } from "../lib/goal-choices";
-import { formatTypedVnd, formatVnd } from "../lib/money";
+import { formatTypedVnd } from "../lib/money";
 import { incomeBody, opensCycleDefault, queuedBody, queuedMissing, type QueuedKind } from "../lib/other-entry";
 import { atForDay, dayKey } from "../lib/period";
-import { linePayload } from "../lib/rental";
+import { tenantAccountBlock } from "../lib/rental";
 import { collectToast, defaultReceivableId, lendToast } from "../lib/receivables";
 import { draftFromTx, editedAt, MEANING_LABEL, withChosen, type TxDraft } from "../lib/transactions";
 import type { Bootstrap, Rental, SettingsData, TxRow } from "../lib/types";
 import { useResource } from "../state/resource";
-import { replaceEntry, saveEntry, toast, useApp } from "../state/store";
+import { replaceEntry, saveEntry, useApp } from "../state/store";
 import { AccountSelect, AmountInput, CategorySelect, GoalChips, newClientId } from "../ui/fields";
 import { NeedsNetwork, Seg, Sheet } from "../ui/parts";
 import { LinkSourcePicker, ReceivablePicker } from "./ref-pickers";
 
-export type OtherKind = "income" | QueuedKind | "tenant_paid";
+export type OtherKind = "income" | QueuedKind;
 
 const KINDS: { value: OtherKind; label: string }[] = [
   { value: "income", label: "Thu nhập" },
@@ -29,7 +29,6 @@ const KINDS: { value: OtherKind; label: string }[] = [
   { value: "lend", label: "Cho vay" },
   { value: "collect", label: "Nhận lại tiền cho vay" },
   { value: "transfer", label: "Chuyển nội bộ" },
-  { value: "tenant_paid", label: "Người thuê chi" },
 ];
 
 export const ASSET_KINDS = [
@@ -66,8 +65,6 @@ export function OtherEntrySheet({
       {!heading && <Seg class="pad" label="Loại giao dịch" value={kind} options={KINDS} onChange={setKind} />}
       {kind === "income" ? (
         <IncomeForm boot={boot} initialAmount={initialAmount} edit={edit && draft ? { tx: edit, draft } : undefined} onDone={onClose} />
-      ) : kind === "tenant_paid" ? (
-        <TenantPaidForm boot={boot} initialAmount={initialAmount} onDone={onClose} />
       ) : (
         <QueuedForm boot={boot} kind={kind} initialAmount={initialAmount} edit={edit && draft ? { tx: edit, draft } : undefined} onDone={onClose} />
       )}
@@ -108,9 +105,11 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
     () => rental?.tenants.find((t) => t.id === d?.tenant_id),
   );
   const cycleOn = opensCycle ?? opensCycleDefault(streams, streamId);
+  // Tiền thuê không bao giờ vào tài khoản riêng tư (N-1, UC-705 AC-36): chặn ở máy, không vào hàng đợi.
+  const privateBlock = tenantAccountBlock(tenantId, boot.accounts.find((a) => a.id === accountId));
 
   async function submit() {
-    if (!accountId || !amount) return;
+    if (!accountId || !amount || privateBlock) return;
     const body = incomeBody({
       amount,
       at: edit ? editedAt(day, edit.tx.at, new Date()) : atForDay(day, new Date()),
@@ -220,102 +219,16 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
             {error}
           </p>
         )}
-        <button type="button" class="btn btn-primary btn-wide" disabled={busy || !amount || !accountId || (!!edit && !online)} onClick={() => void submit()}>
+        {privateBlock && (
+          <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
+            {privateBlock}
+          </p>
+        )}
+        <button type="button" class="btn btn-primary btn-wide" disabled={busy || !amount || !accountId || !!privateBlock || (!!edit && !online)} onClick={() => void submit()}>
           {busy ? "Đang ghi…" : edit ? "Lưu thay đổi" : amount ? `Ghi thu nhập ${formatTypedVnd(amount)}` : "Nhập số tiền"}
         </button>
         {edit && <p class="fhint" style={{ padding: "8px 0 0" }}>Lưu sẽ thay khoản cũ bằng khoản này; khoản cũ vẫn nằm trong sổ, ghi là đã xoá.</p>}
         {edit && !online && <NeedsNetwork what="Sửa khoản thu" />}
-      </div>
-    </>
-  );
-}
-
-function TenantPaidForm({ boot, initialAmount, onDone }: { boot: Bootstrap; initialAmount: number; onDone: () => void }) {
-  const { online } = useApp();
-  const res = useResource<Rental>(online ? "/v1/rental" : null);
-  const rental = res.data;
-  const tenants = (rental?.tenants ?? []).filter((t) => t.active);
-  const [tenantId, setTenantId] = useState("");
-  const [amount, setAmount] = useState(initialAmount);
-  const [categoryId, setCategoryId] = useState("");
-  const [note, setNote] = useState("");
-  const [day, setDay] = useState(() => dayKey(new Date()));
-  const [clientId] = useState(newClientId);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const today = dayKey(new Date());
-  const tenant = tenants.find((t) => t.id === tenantId) ?? tenants[0];
-  const sharedIds = rental?.sharedCategoryIds ?? [];
-  const shared = boot.categories.filter((c) => sharedIds.includes(c.id));
-  const category = categoryId || shared[0]?.id || "";
-
-  async function submit() {
-    if (!tenant) return;
-    const r = linePayload({ kind: "paid_for_us", amount, sign: 1, name: note, category_id: category }, sharedIds);
-    if (!r.ok) return setError(Object.values(r.errors)[0] ?? null);
-    setBusy(true);
-    setError(null);
-    try {
-      await api.post(`/v1/rental/tenants/${encodeURIComponent(tenant.id)}/lines`, { ...r.value, at: atForDay(day, new Date()), client_id: clientId });
-      toast(`Đã ghi ${tenant.name} chi ${formatVnd(amount)}. Trừ vào nợ của ${tenant.name}.`);
-      onDone();
-    } catch (err) {
-      setError(errorText(err));
-      setBusy(false);
-    }
-  }
-
-  if (online && rental && tenants.length === 0) {
-    return <p class="note">Chưa có người thuê. Thêm ở Cài đặt › Cho thuê.</p>;
-  }
-  return (
-    <>
-      <div class="field">
-        <label for="t-tenant">Ai chi</label>
-        <select id="t-tenant" class="ctl" value={tenant?.id ?? ""} onChange={(e) => setTenantId(e.currentTarget.value)}>
-          {tenants.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div class="field">
-        <label for="t-amount">Số tiền</label>
-        <AmountInput id="t-amount" value={amount} onChange={setAmount} autoFocus={!initialAmount} />
-      </div>
-      <div class="field">
-        <label for="t-cat">Chi cho</label>
-        <select id="t-cat" class="ctl" value={category} onChange={(e) => setCategoryId(e.currentTarget.value)}>
-          {shared.length === 0 && <option value="">Chưa có danh mục chi chung</option>}
-          {shared.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div class="field">
-        <label for="t-note">Ghi chú</label>
-        <input id="t-note" class="ctl" maxLength={120} placeholder="đi chợ" value={note} onInput={(e) => setNote(e.currentTarget.value)} />
-      </div>
-      <div class="field">
-        <label for="t-day">Ngày</label>
-        <input id="t-day" class="ctl" type="date" max={today} value={day} onInput={(e) => setDay(e.currentTarget.value || today)} />
-      </div>
-      <div class="note" style={{ borderTop: "1px solid var(--border)" }}>
-        Người thuê tự trả bằng tiền của mình một khoản chi chung: không trừ tiền của nhà, cộng vào tổng chi chung tháng và trừ vào nợ của người thuê.
-      </div>
-      <div class="pad">
-        {error && (
-          <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
-            {error}
-          </p>
-        )}
-        <button type="button" class="btn btn-primary btn-wide" disabled={!online || busy || !tenant || !amount} onClick={() => void submit()}>
-          {busy ? "Đang ghi…" : amount && tenant ? `Ghi ${tenant.name} chi ${formatTypedVnd(amount)}` : "Nhập số tiền"}
-        </button>
-        {!online && <NeedsNetwork what="Ghi sổ người thuê" />}
       </div>
     </>
   );

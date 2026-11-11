@@ -1,5 +1,5 @@
 // Tin sáng, gửi vào giờ cả nhà chọn ở Cài đặt (mặc định 07:00 VN, src/cron/schedule.ts). Gộp luôn: dòng 🔎 nhìn lại kỳ này,
-// việc ngày lương còn mở, nhắc đếm tiền mặt Chủ nhật, nhắc chốt tháng với người thuê ngày 1 — xem specs/notify/UC-402.
+// việc ngày lương còn mở, nhắc đếm tiền mặt Chủ nhật, nhắc lập bản tính tháng trước cho người thuê ngày 1 — xem specs/notify/UC-402.
 
 import { limitNudges } from "../domain/look-back";
 import { dayKey, isoWeekday, monthKey, previousMonth } from "../domain/period";
@@ -8,7 +8,7 @@ import { dailyMessage } from "../notify/format";
 import { notifyMembers } from "../notify/telegram";
 import { getSnapshot, loadRefs, reconcile, spendByCategory } from "../services/ledger";
 import { hiddenAccountIds } from "../services/privacy";
-import { unsettledTenants } from "../services/rental";
+import { billReminder } from "../services/rental";
 
 type ReconcileRow = {
   accountId: string;
@@ -22,8 +22,9 @@ export async function daily(env: Env, now: Date): Promise<void> {
   const today = dayKey(now);
   const dayOfMonth = Number(today.slice(8, 10));
 
-  // Ngày 1: nhắc chốt tháng trước với từng người thuê đang ở (chỉ nhắc — người chốt trên PWA, UC-804).
-  const rentalSettleReminder = dayOfMonth === 1 ? await unsettledTenants(db, previousMonth(monthKey(now))) : [];
+  // Ngày 1: nhắc lập bản tính tháng trước cho từng người thuê đang ở chưa gửi (chỉ nhắc — người lập trên PWA, rental UC-806 AC-12).
+  const billMonth = previousMonth(monthKey(now));
+  const rentalBillReminder = dayOfMonth === 1 ? { month: billMonth, tenants: await billReminder(db, billMonth) } : undefined;
 
   const snapshot = await getSnapshot(db, null, now);
 
@@ -122,7 +123,7 @@ export async function daily(env: Env, now: Date): Promise<void> {
     backfillScope,
     unreadableBankTransactions,
     cashCountReminder,
-    rentalSettleReminder,
+    rentalBillReminder,
     debts,
     receivables,
     interestYesterday,

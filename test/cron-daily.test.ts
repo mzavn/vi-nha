@@ -88,20 +88,26 @@ describe("múi giờ VN", () => {
   });
 });
 
-describe("ngày 1: chốt tháng với người thuê", () => {
-  it("nhắc chốt tháng với người thuê đang ở chưa chốt tháng trước; đã chốt hoặc đã ngừng thì không nhắc", async () => {
-    raw.prepare("INSERT INTO tenants (id, name) VALUES ('tenant-binh', 'Anh Bình'), ('tenant-an', 'An'), ('old-tenant', 'Người cũ')").run();
-    raw.prepare("UPDATE tenants SET active = 0 WHERE id = 'old-tenant'").run();
-    raw.prepare("INSERT INTO tenant_lines (tenant_id, month_key, at, kind, name, amount) VALUES ('tenant-binh', '2026-09', '2026-09-01T00:00:00Z', 'opening', 'Số dư mở sổ', 7075000)").run();
-    raw.prepare("INSERT INTO tenant_settlements (tenant_id, month_key, headcount, shared_total) VALUES ('tenant-an', '2026-09', 3, 0)").run();
-    await daily(env, new Date("2026-10-01T00:00:00Z"));
+describe("ngày 1: lập bản tính tháng trước cho người thuê", () => {
+  it("UC-806 AC-12 / UC-402 AC-16: ngày 1/12 An đang ở chưa gửi bản tính tháng 11, Bình đã gửi, Chi đã ra → đúng một dòng 🏠 Lập bản tính tháng 11 cho An (số dư …)", async () => {
+    raw.exec(`
+      INSERT INTO tenants (id, name) VALUES ('tenant-an', 'An'), ('tenant-binh', 'Bình'), ('tenant-chi', 'Chi');
+      UPDATE tenants SET active = 0 WHERE id = 'tenant-chi';
+      INSERT INTO tenant_lines (tenant_id, month_key, at, kind, name, amount) VALUES ('tenant-an', '2026-10', '2026-10-01T00:00:00Z', 'opening', 'Số dư mở sổ', 7075000);
+      INSERT INTO tenant_bills (tenant_id, month_key, status, total, revision, issued_at, receive_account_id) VALUES
+        ('tenant-an', '2026-11', 'draft', 0, 0, NULL, NULL),
+        ('tenant-binh', '2026-11', 'issued', 4300000, 1, '2026-11-30T03:00:00.000Z', 'vcb-husband');
+      INSERT INTO tenant_lines (tenant_id, month_key, at, kind, name, amount, bill_id)
+        SELECT 'tenant-binh', '2026-11', '2026-11-30T03:00:00.000Z', 'bill', 'Bản tính tháng 11/2026', 4300000, id FROM tenant_bills WHERE tenant_id = 'tenant-binh';
+    `);
+    await daily(env, new Date("2026-12-01T00:00:00Z"));
     const [{ text }] = sentMessages();
-    expect(text.split("\n").filter((l) => l.startsWith("🏠"))).toEqual(["🏠 Chốt tháng với Anh Bình (số dư 7.075.000 ₫)"]);
+    expect(text.split("\n").filter((l) => l.startsWith("🏠"))).toEqual(["🏠 Lập bản tính tháng 11 cho An (số dư 7.075.000 ₫)"]);
   });
 
-  it("ngày thường không nhắc chốt tháng người thuê", async () => {
+  it("UC-806 AC-12: ngày thường không nhắc lập bản tính", async () => {
     raw.prepare("INSERT INTO tenants (id, name) VALUES ('tenant-binh', 'Anh Bình')").run();
-    await daily(env, new Date("2026-10-02T00:00:00Z"));
+    await daily(env, new Date("2026-12-02T00:00:00Z"));
     expect(sentMessages()[0]!.text).not.toContain("🏠");
   });
 });

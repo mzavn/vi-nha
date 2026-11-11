@@ -170,11 +170,11 @@ export function HideAmountsButton(props: { class: string; label?: boolean }) {
   );
 }
 
-export function Seg<T extends string>(props: { value: T; options: { value: T; label: string }[]; onChange: (v: T) => void; label: string; class?: string }) {
+export function Seg<T extends string>(props: { value: T; options: { value: T; label: string; disabled?: boolean }[]; onChange: (v: T) => void; label: string; class?: string }) {
   return (
     <div class={`seg ${props.class ?? ""}`} role="group" aria-label={props.label}>
       {props.options.map((o) => (
-        <button type="button" key={o.value} aria-pressed={o.value === props.value} onClick={() => props.onChange(o.value)}>
+        <button type="button" key={o.value} aria-pressed={o.value === props.value} disabled={o.disabled} onClick={() => props.onChange(o.value)}>
           {o.label}
         </button>
       ))}

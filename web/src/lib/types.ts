@@ -28,6 +28,7 @@ import type {
   SafetyMilestone,
 } from "../../../src/domain/freedom";
 import type { Snapshot as DomainSnapshot } from "../../../src/domain/snapshot";
+import type { BillItem } from "../../../src/domain/rental";
 import type { AccountRef as DomainAccountRef, CategoryRef as DomainCategoryRef, MemberRef } from "../../../src/domain/types";
 
 export type { ManualMeaning, MemberRef, PayCycleTask, PayCycleView, QrTarget, TaskKind };
@@ -625,55 +626,69 @@ export interface McpSettings {
 
 // ── Người thuê (/v1/rental) ────────────────────────────────────────
 
-export interface TenantFee {
+export type BillStatus = "draft" | "issued";
+
+/** Bản tính tháng trước (tháng đang tới hạn gửi) trong danh sách người thuê. */
+export interface TenantBillSummary {
   id: number;
-  name: string;
-  amount: number;
-  sort: number;
-  active: boolean;
+  month: string;
+  status: BillStatus;
+  total: number;
+  revision: number;
+  /** Đã sửa sau khi gửi. */
+  edited: boolean;
 }
 
-export interface Tenant {
+export interface TenantSummary {
   id: string;
   name: string;
   active: boolean;
   /** Dương = còn nợ; âm = đã trả dư, trừ vào tháng sau. */
   balance: number;
-  fees: TenantFee[];
+  bill: TenantBillSummary | null;
 }
 
 export interface Rental {
-  headcount: number;
-  sharedCategoryIds: string[];
   incomeStreamId: string | null;
-  tenants: Tenant[];
+  tenants: TenantSummary[];
 }
 
-export type TenantLineKind = "opening" | "fixed" | "shared" | "one_off" | "paid_for_us" | "adjust";
-
-export interface TenantLine {
-  id: number;
-  kind: TenantLineKind;
-  name: string | null;
-  amount: number;
-  categoryId?: string | null;
-  at?: string | null;
+export interface BillItemView extends BillItem {
+  /** Số tháng trước của khoản cùng tên, `null` khi tháng trước không có. */
+  previous: number | null;
 }
 
-export interface TenantMonth {
+export type BillQr = { payload: string; label: string; memo: string; transfer: string } | { reason: string };
+
+/** GET /v1/rental/tenants/:id/bills/:month (rental UC-806, UC-807). */
+export interface BillView {
+  tenant: { id: string; name: string; active: boolean };
+  /** "2026-10" — tháng ở / tháng dùng điện. */
   month: string;
-  settled: boolean;
-  openingBalance: number;
-  sharedTotal: number;
-  headcount: number;
-  share: number;
-  draft: { kind: "fixed" | "shared"; name: string; amount: number }[];
-  /** Số dư đầu tháng + dòng tháng + tạm tính (chưa chốt) − đã chuyển trong tháng. */
-  closingBalance: number;
-  lines: TenantLine[];
+  status: "none" | BillStatus;
+  bill: null | {
+    id: number;
+    status: BillStatus;
+    revision: number;
+    issuedAt: string | null;
+    /** ≠ null: đã sửa sau khi gửi. */
+    editedAt: string | null;
+    receiveAccountId: string | null;
+    copiedFromMonth: string | null;
+    items: BillItemView[];
+  };
+  /** Bản tính gần nhất trước tháng này (nguồn chép khi chưa lập). */
+  previous: null | { month: string; total: number; items: BillItem[] };
+  totals: { fixed: number; variable: number; total: number };
+  total: number;
+  /** "Các tháng trước": dương còn nợ, âm trả dư. */
+  previousBalance: number;
+  text: string | null;
+  qrAmount: number;
+  qr: BillQr | null;
   payments: { transactionId: number; at: string; amount: number }[];
+  /** Số dư hiện tại ("Còn nợ tất cả"). */
   balance: number;
-  text: string;
 }
 
 // ── Sổ nợ (/v1/debts) ──────────────────────────────────────────────

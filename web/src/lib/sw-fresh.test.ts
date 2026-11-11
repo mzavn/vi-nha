@@ -15,13 +15,13 @@ describe("freshFor: bao lâu service worker trả bản lưu không hỏi mạng
       "/v1/transactions",
       "/v1/logs",
       "/v1/push",
-      "/v1/rental/tenants/t1/month",
+      "/v1/rental/tenants/t1/bills/2026-10",
     ])
       expect(freshFor(p), p).toBe(30_000);
   });
 
   it("đường con của nhóm 5 phút không thừa hưởng 5 phút", () => {
-    expect(freshFor("/v1/rental/tenants/t1/month")).toBe(30_000);
+    expect(freshFor("/v1/rental/tenants/t1/bills/2026-10")).toBe(30_000);
     expect(freshFor("/v1/settings/accounts")).toBe(30_000);
   });
 

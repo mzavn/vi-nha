@@ -67,38 +67,40 @@ describe("giao thức MCP", () => {
     expect(json?.result.protocolVersion).toBeTruthy();
   });
 
-  it("UC-601 AC-6: tools/list trả đúng 15 tên, không còn get_budget / allocate_income / preview_allocation / list_transfer_orders (không cần gọi initialize trước — server không giữ phiên)", async () => {
+  it("UC-601 AC-6: tools/list trả đúng 16 tên, không còn get_budget / allocate_income / preview_allocation / list_transfer_orders / add_tenant_shared_expense (không cần gọi initialize trước — server không giữ phiên)", async () => {
     const { status, json } = await mcp({ jsonrpc: "2.0", id: 1, method: "tools/list" });
     expect(status).toBe(200);
     const names = (json?.result.tools as { name: string }[]).map((t) => t.name).sort();
     expect(names).toEqual(
       [
-        "add_tenant_shared_expense",
         "add_transaction",
         "assign_log",
         "get_balance_sheet",
         "get_debts",
         "get_goals",
-        "get_reports",
         "get_receivables",
         "get_reconciliation",
+        "get_reports",
         "get_snapshot",
         "get_spending_by_category",
+        "get_tenant_bill",
         "list_categories",
         "list_pending_logs",
         "list_tenants",
         "record_asset_value",
+        "set_tenant_bill_item",
       ].sort(),
     );
   });
 
-  it("UC-602 AC-5: mô tả 15 tool không còn 'chưa triển khai' / 'phase 04', không nhắc tên tool cũ, tên cũ của Tích sản hay chữ khẩn cấp", async () => {
+  it("UC-602 AC-5: mô tả 16 tool không còn 'chưa triển khai' / 'phase 04', không nhắc tên tool cũ, tên cũ của Tích sản hay chữ khẩn cấp", async () => {
     const { json } = await mcp({ jsonrpc: "2.0", id: 1, method: "tools/list" });
     const tools = json?.result.tools as { name: string; description: string }[];
-    expect(tools).toHaveLength(15);
+    expect(tools).toHaveLength(16);
     for (const t of tools) {
       expect(t.description, t.name).not.toMatch(/chưa triển khai|chưa làm|phase 04/i);
-      expect(t.description, t.name).not.toMatch(/\b(reconcile|spend_by_category|allocate|get_tenants|add_tenant_paid_for_us)\b/);
+      expect(t.description, t.name).not.toMatch(/\b(reconcile|spend_by_category|allocate|get_tenants|add_tenant_paid_for_us|add_tenant_shared_expense)\b/);
+      expect(t.description, t.name).not.toMatch(/headcount|shared-expense|fixed monthly fees/i);
       expect(t.description, t.name).not.toMatch(/budget between two wallets|wealth-building money|locked shares|transfer orders?/i);
       expect(t.description, t.name).not.toMatch(/tichsan|phao khẩn cấp/i);
     }
@@ -303,24 +305,127 @@ describe("add_transaction", () => {
   });
 });
 
-describe("sổ người thuê", () => {
-  it("add_tenant_shared_expense ghi dòng âm; list_tenants thấy số dư giảm", async () => {
-    raw.prepare("INSERT INTO tenants (id, name) VALUES ('tenant-binh', 'Anh Bình')").run();
-    const added = await mcp(call("add_tenant_shared_expense", { tenant_id: "tenant-binh", amount: 300_000, category_id: "groceries", note: "Đi chợ" }));
-    expect(added.json?.result.isError).toBeFalsy();
-    expect(toolData(added.json!)).toMatchObject({ kind: "paid_for_us", amount: -300_000, categoryId: "groceries", name: "Đi chợ" });
+describe("bản tính người thuê qua MCP (rental UC-806, UC-807)", () => {
+  const bill = (month: string) => `(SELECT id FROM tenant_bills WHERE tenant_id = 'an' AND month_key = '${month}')`;
+  /** An: mở sổ 50.000; bản tính tháng 9 đã gửi 2/10 (4 khoản, 4.180.000) và đã trả đủ 5/10 — như rental UC-806 AC-1. */
+  const seedSeptember = () =>
+    raw.exec(`
+      INSERT INTO tenants (id, name) VALUES ('an', 'An');
+      INSERT INTO tenant_lines (tenant_id, month_key, at, kind, name, amount) VALUES ('an', '2026-09', '2026-09-01T03:00:00.000Z', 'opening', 'Số dư mở sổ', 50000);
+      INSERT INTO tenant_bills (tenant_id, month_key, status, total, revision, issued_at, receive_account_id)
+        VALUES ('an', '2026-09', 'issued', 4180000, 1, '2026-10-02T03:00:00.000Z', 'vcb-husband');
+      INSERT INTO tenant_bill_items (bill_id, sort, name, category, amount) VALUES
+        (${bill("2026-09")}, 1, 'Tiền nhà', 'fixed', 2500000), (${bill("2026-09")}, 2, 'Gửi xe', 'fixed', 100000),
+        (${bill("2026-09")}, 3, 'Tiền ăn', 'variable', 1200000), (${bill("2026-09")}, 4, 'Tiền điện', 'variable', 380000);
+      INSERT INTO tenant_lines (tenant_id, month_key, at, kind, name, amount, bill_id)
+        VALUES ('an', '2026-09', '2026-10-02T03:00:00.000Z', 'bill', 'Bản tính tháng 9/2026', 4180000, ${bill("2026-09")});
+      INSERT INTO transactions (id, at, amount, meaning, counter_account_id, income_stream_id, tenant_id, by_member_id, week_key, month_key, source)
+        VALUES (500, '2026-10-05T03:00:00.000Z', 4180000, 'income', 'vcb-husband', 'rental', 'an', 'husband', '2026-W41', '2026-10', 'manual');
+    `);
+  /** Bản tính tháng 10 đã gửi 2/11, tổng 4.220.000 (rental UC-806 AC-4, UC-807 AC-1). */
+  const seedOctober = () =>
+    raw.exec(`
+      INSERT INTO tenant_bills (tenant_id, month_key, status, copied_from_id, total, revision, issued_at, receive_account_id)
+        VALUES ('an', '2026-10', 'issued', ${bill("2026-09")}, 4220000, 4, '2026-11-02T03:00:00.000Z', 'vcb-husband');
+      INSERT INTO tenant_bill_items (bill_id, sort, name, category, amount) VALUES
+        (${bill("2026-10")}, 1, 'Tiền nhà', 'fixed', 2500000), (${bill("2026-10")}, 2, 'Gửi xe', 'fixed', 100000),
+        (${bill("2026-10")}, 3, 'Tiền ăn', 'variable', 1350000), (${bill("2026-10")}, 4, 'Tiền điện', 'variable', 420000),
+        (${bill("2026-10")}, 5, 'Trừ: An đi chợ', 'variable', -150000);
+      INSERT INTO tenant_lines (tenant_id, month_key, at, kind, name, amount, bill_id)
+        VALUES ('an', '2026-10', '2026-11-02T03:00:00.000Z', 'bill', 'Bản tính tháng 10/2026', 4220000, ${bill("2026-10")});
+    `);
+  const balance = () => raw.prepare("SELECT balance FROM v_tenant_balance WHERE tenant_id = 'an'").get();
+  const errorText = (json: JsonRpcResult) => (json.result.content as { text: string }[]).map((b) => b.text).join("\n");
 
-    const { json } = await mcp(call("list_tenants"));
-    const data = toolData(json!);
-    expect(data.headcount).toBe(3);
-    expect(data.tenants).toEqual([{ id: "tenant-binh", name: "Anh Bình", active: true, balance: -300_000, fees: [] }]);
+  beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-12T09:00:00+07:00"));
+    token = (await connectClaude(env, { memberId: "husband", password: "mat-khau-chung" })).access;
+    seedSeptember();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
-  it("add_tenant_shared_expense với danh mục không phải chi chung → tool error", async () => {
-    raw.prepare("INSERT INTO tenants (id, name) VALUES ('tenant-binh', 'Anh Bình')").run();
-    const { json } = await mcp(call("add_tenant_shared_expense", { tenant_id: "tenant-binh", amount: 50_000, category_id: "fuel-parking" }));
-    expect(json?.result.isError).toBe(true);
-    expect(raw.prepare("SELECT COUNT(*) n FROM tenant_lines").get()).toEqual({ n: 0 });
+  it("UC-806 AC-15: set_tenant_bill_item 'tiền điện' tháng 10 → lập nháp chép tháng 9, đổi Tiền điện thành 420.000, revision tăng; 'Tiền nước' → thêm khoản Chi phí; tháng 9 đã gửi → lỗi bill_issued, không ghi gì; mỗi lần ghi nhật ký tenant.bill_item via mcp; số dư An không đổi", async () => {
+    const before = balance();
+    const args = { tenant_id: "an", month: "2026-10", name: "tiền điện", amount: 420_000 };
+
+    const first = await mcp(call("set_tenant_bill_item", args));
+    expect(first.json?.result.isError).toBeFalsy();
+    const one = toolData(first.json!);
+    expect(one).toMatchObject({ month: "2026-10", status: "draft", bill: { status: "draft", copiedFromMonth: "2026-09", receiveAccountId: "vcb-husband" } });
+    expect(one.bill.items.map(({ name, category, amount }: { name: string; category: string; amount: number }) => [name, category, amount])).toEqual([
+      ["Tiền nhà", "fixed", 2_500_000],
+      ["Gửi xe", "fixed", 100_000],
+      ["Tiền ăn", "variable", 1_200_000],
+      ["Tiền điện", "variable", 420_000],
+    ]);
+    expect(one.bill.revision).toBeGreaterThan(0);
+    expect(one.total).toBe(4_220_000);
+
+    const second = toolData((await mcp(call("set_tenant_bill_item", { ...args, name: "Tiền nước", amount: 90_000 }))).json!);
+    expect(second.bill.items.at(-1)).toEqual({ name: "Tiền nước", category: "variable", amount: 90_000, previous: null });
+    expect(second.bill.items).toHaveLength(5);
+    expect(second.bill.revision).toBe(one.bill.revision + 1);
+    expect(second.total).toBe(4_310_000);
+
+    const septemberItems = () => raw.prepare(`SELECT name, amount FROM tenant_bill_items WHERE bill_id = ${bill("2026-09")} ORDER BY sort`).all();
+    const septBefore = septemberItems();
+    const auditBefore = raw.prepare("SELECT COUNT(*) AS n FROM audit_log").get();
+    const third = await mcp(call("set_tenant_bill_item", { ...args, month: "2026-09" }));
+    expect(third.json?.result.isError).toBe(true);
+    expect(errorText(third.json!)).toBe("Bản tính đã gửi — sửa trên app.");
+    expect(septemberItems()).toEqual(septBefore);
+    expect(raw.prepare("SELECT COUNT(*) AS n FROM audit_log").get()).toEqual(auditBefore);
+
+    expect(raw.prepare("SELECT member_id, via, target FROM audit_log WHERE action = 'tenant.bill_item' ORDER BY id").all()).toEqual([
+      { member_id: "husband", via: "mcp", target: "tenant:an" },
+      { member_id: "husband", via: "mcp", target: "tenant:an" },
+    ]);
+    expect(raw.prepare("SELECT COUNT(*) AS n FROM tenant_bills WHERE tenant_id = 'an' AND month_key = '2026-10'").get()).toEqual({ n: 1 });
+    expect(balance()).toEqual(before);
+  });
+
+  it("UC-807 AC-7: get_tenant_bill tháng 10 trả cùng khoản, status, total, text, qrAmount 4.220.000, previousBalance 50.000 như GET /v1/rental/tenants/an/bills/2026-10; nhìn như người uỷ quyền (khoản trả vào tài khoản riêng tư của vợ không có); không ghi gì", async () => {
+    seedOctober();
+    raw.exec(`
+      UPDATE accounts SET private = 1 WHERE id = 'vcb-wife';
+      INSERT INTO transactions (id, at, amount, meaning, counter_account_id, income_stream_id, tenant_id, by_member_id, week_key, month_key, source) VALUES
+        (501, '2026-11-03T03:00:00.000Z', 4000000, 'income', 'vcb-husband', 'rental', 'an', 'husband', '2026-W45', '2026-11', 'manual'),
+        (502, '2026-11-03T04:00:00.000Z', 100000, 'income', 'vcb-wife', 'rental', 'an', 'wife', '2026-W45', '2026-11', 'manual');
+    `);
+    const writes = () => raw.prepare("SELECT (SELECT COUNT(*) FROM audit_log) AS audit, (SELECT COUNT(*) FROM tenant_bills) AS bills, (SELECT COUNT(*) FROM tenant_lines) AS lines").get();
+    const before = writes();
+    const res = await mcp(call("get_tenant_bill", { tenant_id: "an", month: "2026-10" }));
+    expect(res.json?.result.isError).toBeFalsy();
+    const tool = toolData(res.json!);
+    const rest = await client(raw)("GET", "/v1/rental/tenants/an/bills/2026-10");
+    expect(rest.status).toBe(200);
+    expect(tool).toEqual(rest.json.data);
+    expect(tool).toMatchObject({ month: "2026-10", status: "issued", total: 4_220_000, qrAmount: 4_220_000, previousBalance: 50_000 });
+    expect(tool.text).toContain("Tổng tháng 10: 4.220.000 ₫ (tháng 9: 4.180.000 ₫, nhiều hơn 40.000 ₫)");
+    expect(tool.text).toContain("Các tháng trước: còn nợ 50.000 ₫ (chưa gồm trong số trên)");
+    expect(tool.payments.map((p: { transactionId: number }) => p.transactionId)).toEqual([501]);
+    expect(tool.balance).toBe(50_000 + 4_220_000 - 4_000_000 - 100_000);
+    expect(writes()).toEqual(before);
+  });
+
+  it("list_tenants trả đúng GET /v1/rental: nguồn thu, người thuê kèm số dư và bản tính tháng trước; không còn headcount / phí cố định", async () => {
+    seedOctober();
+    const data = toolData((await mcp(call("list_tenants"))).json!);
+    expect(data).toEqual((await client(raw)("GET", "/v1/rental")).json.data);
+    expect(data.incomeStreamId).toBe("rental");
+    expect(data.tenants).toMatchObject([{ id: "an", name: "An", active: true, balance: 4_270_000, bill: { month: "2026-10", status: "issued", total: 4_220_000, edited: false } }]);
+    expect(data).not.toHaveProperty("headcount");
+    expect(data.tenants[0]).not.toHaveProperty("fees");
+  });
+
+  it("UC-602 AC-16: add_tenant_shared_expense đã gỡ → lỗi không có tool, không ghi gì", async () => {
+    const res = await mcp(call("add_tenant_shared_expense", { tenant_id: "an", amount: 300_000, category_id: "groceries" }));
+    expect(res.json?.error ?? res.json?.result.isError).toBeTruthy();
+    expect(res.json?.error?.message ?? res.json?.result.content[0].text).toMatch(/not found/i);
+    expect(raw.prepare("SELECT COUNT(*) AS n FROM tenant_lines").get()).toEqual({ n: 2 });
   });
 });
 
@@ -660,6 +765,21 @@ describe("tài khoản riêng tư ở MCP (UC-504, ADR-133) — hộ mẫu P", (
     expect(list.find((t) => t.name === "add_transaction")!.description).toContain("Accounts marked private by another member cannot be written to (error private_account).");
   });
 
+  it("UC-805 AC-10: add_transaction thu kèm tenant_id vào vcb-wife — vợ uỷ quyền → lỗi tenant_private_account, chồng → lỗi private_account như REST; không ghi gì, số dư An không đổi", async () => {
+    raw.prepare("INSERT INTO tenants (id, name) VALUES ('an', 'An')").run();
+    const rent = { meaning: "income", amount: 1_000_000, account_id: "vcb-wife", tenant_id: "an" };
+    const before = { tx: txCount(), balance: raw.prepare("SELECT balance FROM v_tenant_balance WHERE tenant_id = 'an'").get() };
+    const husband = await mcp(call("add_transaction", rent));
+    expect(husband.json?.result.isError).toBe(true);
+    expect(errorText(husband.json!)).toBe((await client(raw)("POST", "/v1/transactions", rent)).json.error?.message);
+    expect(errorText(husband.json!)).toBe("Tài khoản riêng tư của người khác — chỉ chủ tài khoản ghi được khoản vào tài khoản này.");
+    token = (await connectClaude(env, { memberId: "wife", password: "mat-khau-chung" })).access;
+    const wife = await mcp(call("add_transaction", rent));
+    expect(wife.json?.result.isError).toBe(true);
+    expect(errorText(wife.json!)).toBe("Tiền thuê không ghi vào tài khoản riêng tư — chọn tài khoản khác.");
+    expect({ tx: txCount(), balance: raw.prepare("SELECT balance FROM v_tenant_balance WHERE tenant_id = 'an'").get() }).toEqual(before);
+  });
+
   it("UC-504 AC-15: get_debts / get_receivables của chồng không có #108, #109; paid / lent / balance vẫn cộng; bằng đúng REST của chồng", async () => {
     const debts = toolData((await mcp(call("get_debts"))).json!);
     expect(debts.debts.find((d: { id: string }) => d.id === "vay-anh-ba")).toMatchObject({ paid: 400_000, balance: 1_600_000, payments: [] });
@@ -731,7 +851,7 @@ describe("mục tiêu chung một tài khoản qua MCP (UC-602 AC-18, UC-603 AC-
     expect(held(snap.pockets.reserve.goals)).toEqual({ "hoa-don": 2_000_000, "nha-o": 7_500_000, "hoc-tap": 4_500_000, "bao-duong-xe": 4_800_000, "hieu-hi": 2_200_000, thue: 1_500_000 });
     const tools = (await mcp({ jsonrpc: "2.0", id: 1, method: "tools/list" })).json!.result.tools as { name: string; description: string }[];
     for (const name of ["get_snapshot", "get_goals"]) expect(tools.find((t) => t.name === name)!.description).toContain("share one account");
-    expect(tools).toHaveLength(15);
+    expect(tools).toHaveLength(16);
   });
 
   it("UC-603 AC-33: add_transaction chi 7.500.000 từ MB tiết kiệm goal_id nha-o → ghi, Nhà ở spent 7.500.000, nhật ký via mcp có goal_id; goal_id bao-duong-xe → lỗi invalid_goal, không ghi gì", async () => {

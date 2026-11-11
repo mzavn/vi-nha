@@ -8,8 +8,8 @@ describe("migrations", () => {
     const fromDocs = openDb();
     const migrated = migratedDb();
     expect(schemaShape(migrated)).toEqual(schemaShape(fromDocs));
-    expect(migrated.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.42" });
-    expect(fromDocs.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.42" });
+    expect(migrated.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.43" });
+    expect(fromDocs.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.43" });
   });
 
   it("dựng được DB và mọi view chạy sạch", () => {
@@ -17,7 +17,7 @@ describe("migrations", () => {
     const views = db.prepare("SELECT name FROM sqlite_master WHERE type='view'").all() as { name: string }[];
     expect(views.length).toBeGreaterThan(0);
     for (const v of views) db.prepare(`SELECT * FROM ${v.name} LIMIT 1`).all();
-    expect(db.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.42" });
+    expect(db.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.43" });
   });
 
   it("đã bỏ hai view ngân sách mù kỳ", () => {
@@ -96,7 +96,7 @@ describe("seed", () => {
     expect(config).toMatchObject({ rental_income_stream_id: "rental", tz: "Asia/Ho_Chi_Minh", safety_fund_months: "6", currency: "VND" });
     expect(config.split_days).toBeUndefined();
     expect(count(`SELECT COUNT(*) n FROM income_streams WHERE id = '${config.rental_income_stream_id}'`)).toBe(1);
-    for (const id of config.rental_shared_categories!.split(",")) expect(count(`SELECT COUNT(*) n FROM categories WHERE id = '${id}'`), id).toBe(1);
+    expect(Object.keys(config).filter((k) => k.startsWith("rental_"))).toEqual(["rental_income_stream_id"]);
     expect(Object.keys(config).filter((k) => k.startsWith("notify_")).sort()).toEqual([
       "notify_daily_enabled", "notify_daily_time", "notify_pending_enabled", "notify_quiet_end", "notify_quiet_start",
       "notify_weekly_day", "notify_weekly_enabled", "notify_weekly_time",

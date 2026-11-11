@@ -65,7 +65,7 @@ import {
 } from "../lib/settings";
 import { memberSubmitError, newMemberPayload, passwordPayload, proofMode } from "../lib/members";
 import { dateText } from "../lib/net-worth";
-import { feePayload, rentalConfigPayload, tenantPayload } from "../lib/rental";
+import { rentalConfigPayload, tenantPayload } from "../lib/rental";
 import type {
   CategoryGroup,
   DebtsData,
@@ -84,8 +84,7 @@ import type {
   SettingsConfig,
   SettingsData,
   SettingsMember,
-  Tenant,
-  TenantFee,
+  TenantSummary,
   ZaloLinkCode,
 } from "../lib/types";
 import { signedOut, toast, useApp } from "../state/store";
@@ -1316,7 +1315,7 @@ export function StreamSheet({ d, item, onClose, onSaved }: { d: SettingsData; it
 
 // ── Cho thuê ──────────────────────────────────────────────────────
 
-export function TenantSheet({ item, onClose, onSaved }: { item: Tenant | null; onClose: () => void; onSaved: Saved }) {
+export function TenantSheet({ item, onClose, onSaved }: { item: TenantSummary | null; onClose: () => void; onSaved: Saved }) {
   const [f, setF] = useState({ name: item?.name ?? "", opening: 0, openingSign: 1 as 1 | -1, active: item?.active ?? true });
   const { busy, error, errors, run } = useSubmit(onSaved, onClose);
   const isNew = !item;
@@ -1353,60 +1352,18 @@ export function TenantSheet({ item, onClose, onSaved }: { item: Tenant | null; o
         </>
       )}
       {!isNew && <Check id="t-active" label="Đang ở" checked={f.active} onChange={(v) => setF({ ...f, active: v })} />}
-      {!isNew && !f.active && <Hint>Tắt sau khi đã chốt tháng cuối. Số dư khác 0 thì vẫn hiện ở màn Người thuê tới khi về 0.</Hint>}
+      {!isNew && !f.active && <Hint>Tắt sau khi đã gửi bản tính tháng cuối. Số dư khác 0 thì vẫn hiện ở màn Người thuê tới khi về 0.</Hint>}
       <Footer busy={busy} error={error} label={isNew ? "Thêm người thuê" : "Lưu người thuê"} onSubmit={submit} />
     </Sheet>
   );
 }
 
-export function FeeSheet({ tenant, item, onClose, onSaved }: { tenant: Tenant; item: TenantFee | null; onClose: () => void; onSaved: Saved }) {
-  const [f, setF] = useState({ name: item?.name ?? "", amount: item?.amount ?? 0, active: item?.active ?? true });
-  const { busy, error, errors, run } = useSubmit(onSaved, onClose);
-  const isNew = !item;
-  function submit() {
-    void run(
-      feePayload(f, isNew),
-      (body) => (isNew ? api.post(`/v1/rental/tenants/${encodeURIComponent(tenant.id)}/fees`, body) : api.patch(`/v1/rental/fees/${item.id}`, body)),
-      `${isNew ? "Đã thêm" : "Đã lưu"} phí ${f.name.trim()} của ${tenant.name}. Áp dụng từ lần chốt tháng tới.`,
-    );
-  }
-  return (
-    <Sheet open title={isNew ? `Thêm phí cố định · ${tenant.name}` : `Sửa phí ${item.name}`} onClose={onClose}>
-      <Field id="f-name" label="Tên khoản" error={errors.name} first>
-        <input id="f-name" class="ctl" value={f.name} maxLength={60} placeholder="Nhà" onInput={(ev) => setF({ ...f, name: ev.currentTarget.value })} {...invalid(errors, "name", "f-name")} />
-      </Field>
-      <Field id="f-amount" label="Mỗi tháng" error={errors.amount}>
-        <AmountInput id="f-amount" value={f.amount} onChange={(amount) => setF({ ...f, amount })} invalid={!!errors.amount} />
-      </Field>
-      {!isNew && <Check id="f-active" label="Đang thu" checked={f.active} onChange={(v) => setF({ ...f, active: v })} />}
-      <Footer busy={busy} error={error} label={isNew ? "Thêm phí" : "Lưu phí"} onSubmit={submit} />
-    </Sheet>
-  );
-}
-
 export function RentalConfigSheet({ d, rental, onClose, onSaved }: { d: SettingsData; rental: Rental; onClose: () => void; onSaved: Saved }) {
-  const [headcount, setHeadcount] = useState(String(rental.headcount));
-  const [cats, setCats] = useState<string[]>(rental.sharedCategoryIds);
   const [stream, setStream] = useState(rental.incomeStreamId ?? "");
   const { busy, error, errors, run } = useSubmit(onSaved, onClose);
   return (
     <Sheet open title="Cấu hình cho thuê" onClose={onClose}>
-      <Field id="rc-head" label="Số người chia" error={errors.headcount} first>
-        <input id="rc-head" class="ctl money" inputMode="numeric" pattern="[0-9]*" autocomplete="off" value={headcount} onInput={(ev) => setHeadcount(ev.currentTarget.value)} {...invalid(errors, "headcount", "rc-head")} />
-      </Field>
-      <Hint>Tính cả nhà và người thuê. Lúc chốt tháng vẫn sửa được.</Hint>
-      <div class="set-sub">Danh mục chi chung</div>
-      {d.categories.map((c) => (
-        <Check
-          key={c.id}
-          id={`rc-cat-${c.id}`}
-          label={c.name}
-          checked={cats.includes(c.id)}
-          onChange={(v) => setCats((xs) => (v ? [...xs, c.id] : xs.filter((x) => x !== c.id)))}
-        />
-      ))}
-      {errors.shared_category_ids && <p class="err ferr">{errors.shared_category_ids}</p>}
-      <Field id="rc-stream" label="Tiền người thuê vào nguồn" error={errors.income_stream_id}>
+      <Field id="rc-stream" label="Tiền người thuê vào nguồn" error={errors.income_stream_id} first>
         <select id="rc-stream" class="ctl" value={stream} onChange={(ev) => setStream(ev.currentTarget.value)} {...invalid(errors, "income_stream_id", "rc-stream")}>
           {!stream && <option value="">Chọn nguồn thu</option>}
           {(d.incomeStreams ?? [])
@@ -1418,12 +1375,13 @@ export function RentalConfigSheet({ d, rental, onClose, onSaved }: { d: Settings
             ))}
         </select>
       </Field>
+      <Hint>Tài khoản nhận tiền (mã QR) chọn trên từng bản tính ở Ví & quỹ › Người thuê.</Hint>
       <Footer
         busy={busy}
         error={error}
         label="Lưu cấu hình"
         onSubmit={() =>
-          void run(rentalConfigPayload({ headcount, shared_category_ids: cats, income_stream_id: stream }), (body) => api.patch("/v1/rental/config", body), "Đã lưu cấu hình cho thuê.")
+          void run(rentalConfigPayload({ income_stream_id: stream }), (body) => api.patch("/v1/rental/config", body), "Đã lưu cấu hình cho thuê.")
         }
       />
     </Sheet>

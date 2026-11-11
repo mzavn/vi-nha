@@ -134,8 +134,8 @@ export interface DailyMessageInput {
   unreadableBankTransactions?: number;
   /** Tên tài khoản cần đếm tiền mặt / nhập số dư tay; chỉ có giá trị vào Chủ nhật. Rỗng = không cần nhắc. */
   cashCountReminder: string[];
-  /** Ngày 1: người thuê đang ở chưa chốt tháng trước, kèm số dư hiện tại (dương = còn nợ). */
-  rentalSettleReminder?: { name: string; balance: number }[];
+  /** Ngày 1: tháng trước (`YYYY-MM`) và người thuê đang ở chưa gửi bản tính tháng đó, kèm số dư hiện tại (dương = còn nợ). */
+  rentalBillReminder?: { month: string; tenants: { name: string; balance: number }[] };
   /** Sổ nợ: tổng còn nợ và số khoản còn nợ của mọi khoản (đang theo dõi, còn nợ > 0) — vế "tất cả khoản nợ còn / còn nợ khác". */
   debts?: { balance: number; count: number } | null;
   /** Sổ phải thu: tổng người khác còn nợ và số khoản (đang theo dõi, còn phải thu > 0). Không có hoặc tổng 0 thì không hiện dòng. */
@@ -185,11 +185,12 @@ export function dailyMessage(input: DailyMessageInput): NotifyMessage {
     todo.push("đếm tiền mặt");
   }
 
-  const tenants = input.rentalSettleReminder ?? [];
+  const bill = input.rentalBillReminder;
+  const tenants = bill?.tenants ?? [];
   for (const t of tenants) {
-    lines.push(`🏠 Chốt tháng với ${escapeHtml(t.name)} (số dư ${formatMoney(t.balance)})`);
+    lines.push(`🏠 Lập bản tính tháng ${Number(bill!.month.slice(5, 7))} cho ${escapeHtml(t.name)} (số dư ${formatMoney(t.balance)})`);
   }
-  if (tenants.length > 0) todo.push(`chốt tháng ${tenants.map((t) => t.name).join(", ")}`);
+  if (tenants.length > 0) todo.push(`lập bản tính ${tenants.map((t) => t.name).join(", ")}`);
 
   // ── Thông tin ──
   // % = phần của mục tiêu (đã có + đã chi trong kỳ) ÷ B, kẹp 0…100 — cùng luật "đủ" của thẻ Dự phòng (pocket UC-1209 bước 9).

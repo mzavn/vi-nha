@@ -202,9 +202,10 @@ describe("dailyMessage", () => {
     expect(text).not.toContain("ví tiền mặt");
   });
 
-  it("ngày 1: mỗi người thuê chưa chốt tháng trước một dòng nhắc kèm số dư", () => {
-    const text = dailyMessage({ ...base, rentalSettleReminder: [{ name: "Anh Bình", balance: -80_000 }, { name: "An", balance: 5_111_667 }] }).full;
-    expect(text.split("\n")).toEqual([FIRST, "🏠 Chốt tháng với Anh Bình (số dư −80.000 ₫)", "🏠 Chốt tháng với An (số dư 5.111.667 ₫)", BLESS, "🏦 Đối soát: khớp"]);
+  it("UC-402 AC-17: ngày 1: mỗi người thuê chưa gửi bản tính tháng trước một dòng nhắc lập bản tính kèm tháng và số dư", () => {
+    const text = dailyMessage({ ...base, rentalBillReminder: { month: "2026-10", tenants: [{ name: "An", balance: -80_000 }, { name: "Bình", balance: 5_111_667 }] } }).full;
+    expect(text.split("\n")).toEqual([FIRST, "🏠 Lập bản tính tháng 10 cho An (số dư −80.000 ₫)", "🏠 Lập bản tính tháng 10 cho Bình (số dư 5.111.667 ₫)", BLESS, "🏦 Đối soát: khớp"]);
+    expect(dailyMessage({ ...base, rentalBillReminder: { month: "2026-10", tenants: [] } }).full).not.toContain("🏠");
   });
 
   it("tin sáng báo người khác nợ mình X (N khoản) ngay sau dòng còn nợ, không còn ai nợ thì không có dòng", () => {
@@ -252,7 +253,7 @@ describe("dailyMessage — bản ngắn cho thông báo đẩy", () => {
     expect(dailyMessage({ ...base, driftAccounts: [{ name: "MB", amount: -120_000 }] }).push.body).toBe("Lệch 120.000 ₫ ở MB");
   });
 
-  it("UC-402 AC-26: việc cần làm theo thứ tự chưa gán → xem tay → nhóm 🔎 → việc ngày lương → đếm tiền mặt → chốt người thuê, rồi chỗ lệch; không còn \"chốt tháng <m>\"", () => {
+  it("UC-402 AC-26: việc cần làm theo thứ tự chưa gán → xem tay → nhóm 🔎 → việc ngày lương → đếm tiền mặt → lập bản tính người thuê, rồi chỗ lệch; không còn \"chốt tháng <m>\"", () => {
     const push = dailyMessage({
       ...base,
       unassignedCount: 3,
@@ -266,9 +267,9 @@ describe("dailyMessage — bản ngắn cho thông báo đẩy", () => {
     const dayOne = dailyMessage({
       ...base,
       cashCountReminder: ["Tiền mặt"],
-      rentalSettleReminder: [{ name: "Anh Bình", balance: 7_075_000 }],
+      rentalBillReminder: { month: "2026-10", tenants: [{ name: "Anh Bình", balance: 7_075_000 }] },
     }).push;
-    expect(dayOne.body).toBe("Đếm tiền mặt · chốt tháng Anh Bình");
+    expect(dayOne.body).toBe("Đếm tiền mặt · lập bản tính Anh Bình");
   });
 
   it("UC-402 AC-27: tin dài nhất (ba nhóm tên dài): tiêu đề ≤ 25, nội dung ≤ 150; cắt từ cuối, giữ việc đứng đầu, kết thúc bằng …", () => {
@@ -284,7 +285,7 @@ describe("dailyMessage — bản ngắn cho thông báo đẩy", () => {
         { name: "Chơi (chồng)", pct: 92, over: 0 },
       ],
       cashCountReminder: ["Tiền mặt (chồng)", "Tiền mặt (vợ)"],
-      rentalSettleReminder: [{ name: "Anh Bình", balance: 7_075_000 }, { name: "An", balance: -80_000 }],
+      rentalBillReminder: { month: "2026-11", tenants: [{ name: "Anh Bình", balance: 7_075_000 }, { name: "An", balance: -80_000 }] },
       receivables: { balance: 3_000_000, count: 1 },
       driftAccounts: [{ name: "VCB (vợ)", amount: 1_000_000 }],
       interestYesterday: { total: 155, count: 3, accounts: ["Tài khoản chính"] },

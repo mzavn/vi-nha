@@ -17,7 +17,7 @@ import { debtInterest } from "./debts";
 import { closest, feedMark, linkColumn } from "./manual-links";
 import { afterWrite, incomeStatements, payCycleView, resolveOpensCycle, voidTxStatements, type IncomePlan } from "./pay-cycles";
 import { conversionProgress } from "./conversion";
-import { assertRowWritable, assertTxChangeable, assertTxReadable, hiddenAccountIds, hiddenTxSql, txNotFound, txVisibility } from "./privacy";
+import { assertRowWritable, assertTenantAccount, assertTxChangeable, assertTxReadable, hiddenAccountIds, hiddenTxSql, txNotFound, txVisibility } from "./privacy";
 
 type Row = Record<string, unknown>;
 const rows = <T = Row>(r: D1Result) => (r.results ?? []) as T[];
@@ -204,6 +204,7 @@ export async function createEntry(db: D1Database, input: EntryInput, memberId: s
   const refs = await loadRefs(db);
   const row = buildEntry(input, refs, memberId, now);
   assertRowWritable(row, hidden);
+  assertTenantAccount(row, refs);
 
   // Chiều tiền mà SePay báo về thì tự về từ ngân hàng. Ghi tay thêm chiều đó là đếm cùng một khoản tiền hai lần
   // (nhập tay rồi lại gán log), và đối soát không bắt được vì nó chỉ so log với log (ADR-48, tinh chỉnh ADR-66):
@@ -317,6 +318,7 @@ export async function replaceTransaction(db: D1Database, id: number, input: Entr
   };
   const row = buildEntry(input, refs, author, now);
   assertRowWritable(row, hidden);
+  assertTenantAccount(row, refs);
 
   const fed = fedAccount(refs, row);
   if (fed) {

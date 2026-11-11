@@ -6,6 +6,34 @@ bản cài cũ vẫn lên được bình thường (kể cả nâng database t�
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
 trước (xem README › Cập nhật bản mới).
 
+## v2.2.0 — 11/11/2026
+
+Có nâng cấp database: `0043` (bản tính tháng cho người thuê).
+Database tự nâng khi cập nhật; số dư từng người thuê, bảng
+cân đối, tài sản ròng không đổi. Mỗi tháng đã chốt thành bản tính tháng đó **đã gửi**; người thuê đang ở có phí cố định được
+sẵn một bản **nháp** của tháng chưa chốt gần nhất (gồm các phí cố định). Phí cố định, số người chia và danh mục chi chung bỏ.
+
+- **Người thuê làm lại: bản tính tháng.** Mỗi người thuê mỗi tháng một bản tính, khoản chia hai nhóm "Chi phí cứng" (tiền
+  nhà, gửi xe, mạng) và "Chi phí" (ăn, điện, nước). Lập bản tính tháng mới là chép tháng trước, chỉ sửa vài con số; mỗi khoản
+  hiện số tháng trước, khoản "Chi phí" vừa chép nhắc "kiểm lại số". Ghi được số âm (người thuê đi chợ hộ, trừ tiền cọc…).
+- **Chốt & gửi kèm mã QR.** Tin gửi người thuê có từng khoản, tổng tháng, so với tháng trước; nợ hoặc trả dư các tháng trước
+  là một dòng riêng, mã QR chỉ lấy tiền của tháng đó. Chọn tài khoản nhận ngay trên bản tính. "Gửi cho …" chia sẻ tin kèm ảnh
+  QR (hoặc chép tin).
+- **Sửa được sau khi gửi.** Bấm Sửa, "Lưu & gửi lại": số dư người thuê tự đúng, nhật ký ghi tổng cũ → mới, bản tính hiện
+  "Đã sửa — gửi lại" tới khi bạn gửi lại.
+- Tiền chuyển về có nội dung đúng mã QR của bản tính được gợi ý "Thu từ <tên>" (vẫn chỉ gợi ý, bạn bấm gán).
+- **Tiền thuê không ghi vào tài khoản riêng tư** (ghi tay, sửa khoản, gán, Claude) — chọn tài khoản chung.
+- Ngày 1, tin sáng nhắc "Lập bản tính tháng … cho <tên>" thay cho "Chốt tháng với …".
+- Bỏ: phí cố định, chia chi chung theo số người, ghi tay chi hộ / phí một lần / chỉnh, "Người thuê chi" ở Loại khác. Dòng
+  cũ vẫn nằm trong sổ, vẫn tính số dư.
+- Claude (MCP): thêm `get_tenant_bill` (xem bản tính) và `set_tenant_bill_item` (sửa khoản trong bản nháp — tool ghi, kết
+  nối Claude cần duyệt lại quyền tool); gỡ `add_tenant_shared_expense`; `list_tenants` trả bản tính tháng trước thay cho
+  phí cố định. Còn 16 tool.
+- API: thêm `POST /v1/rental/tenants/:id/bills`, `GET /v1/rental/tenants/:id/bills/:month`, `PUT /v1/rental/bills/:id`,
+  `POST /v1/rental/bills/:id/issue`, `DELETE /v1/rental/bills/:id`; `/fees`, `/lines`, `/settle`, `/month` trả 410
+  `model_changed`; `PATCH /v1/rental/config` chỉ còn `income_stream_id`; lỗi mới `tenant_private_account`, `bill_changed`,
+  `bill_issued`, `duplicate_item`, `invalid_category`.
+
 ## v2.1.0 — 11/11/2026
 
 Có nâng cấp database: `0042` (nhiều mục tiêu Dự phòng dùng chung một tài khoản; khoản chi ghi được "cho mục tiêu nào").

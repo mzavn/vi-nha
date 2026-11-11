@@ -73,3 +73,19 @@ export function assertRowWritable(row: TxSides, hidden: string[]): void {
     throw new DomainError("private_account", "Tài khoản riêng tư của người khác — chỉ chủ tài khoản ghi được khoản vào tài khoản này.", 403);
   }
 }
+
+/**
+ * Tiền thuê không vào tài khoản riêng tư (rental UC-805 AC-10, đóng N-1): khoản `income` mang `tenant_id` mà một phía là tài
+ * khoản có cờ riêng tư → 400 `tenant_private_account`, bất kể người ghi. Gọi SAU các kiểm riêng tư (`assertRowWritable`,
+ * `assertTxChangeable`, `assertLogChangeable`) để người không phải chủ vẫn nhận 403 `private_account` trước.
+ */
+export function assertTenantAccount(
+  row: TxSides & { meaning?: unknown; tenant_id?: unknown },
+  refs: { accounts: readonly { id: string; private: boolean }[] },
+): void {
+  if (row.meaning !== "income" || !row.tenant_id) return;
+  const sides = [row.account_id, row.counter_account_id].filter((a) => a !== null && a !== undefined).map(String);
+  if (refs.accounts.some((a) => a.private && sides.includes(a.id))) {
+    throw new DomainError("tenant_private_account", "Tiền thuê không ghi vào tài khoản riêng tư — chọn tài khoản khác.", 400);
+  }
+}

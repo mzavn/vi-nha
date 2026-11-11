@@ -1,5 +1,5 @@
 // Mã QR chuyển khoản VietQR (ADR-116): vẽ trên máy, nền trắng cố định để quét được cả khi app ở nền tối. Dùng cho việc ngày
-// lương ở Hôm nay (pocket UC-1206 bước 10).
+// lương ở Hôm nay (pocket UC-1206 bước 10) và bản tính người thuê (pwa UC-713).
 
 import { useMemo } from "preact/hooks";
 import { encode } from "uqr";
@@ -17,6 +17,17 @@ export function qrPng(payload: string): string {
   ctx.fillStyle = "#000";
   data.forEach((row, y) => row.forEach((on, x) => on && ctx.fillRect(x * scale, y * scale, scale, scale)));
   return canvas.toDataURL("image/png");
+}
+
+/** Ảnh QR dạng tệp PNG để chia sẻ kèm tin (Web Share); không vẽ được thì null. */
+export function qrPngFile(payload: string, name: string): File | null {
+  const url = qrPng(payload);
+  const b64 = url.split(",")[1];
+  if (!b64 || typeof File === "undefined") return null;
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new File([bytes], name, { type: "image/png" });
 }
 
 export function TransferQrBlock({ payload, label, memo }: { payload: string; label: string; memo: string }) {

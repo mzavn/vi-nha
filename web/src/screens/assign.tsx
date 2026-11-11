@@ -14,6 +14,7 @@ import { opensCycleDefault } from "../lib/other-entry";
 import { localNearSpend } from "../lib/pending";
 import { dayKey, shortDate, timeHM } from "../lib/period";
 import { defaultReceivableId } from "../lib/receivables";
+import { tenantChipBlock } from "../lib/rental";
 import {
   ASSIGN_CHOICES,
   assignBody,
@@ -185,7 +186,13 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmIgnore, setConfirmIgnore] = useState(false);
-  const options = isIn ? ASSIGN_CHOICES.in.filter((o) => o.value !== "tenant" || tenants.length > 0 || rows.some((r) => r.tenantMode)) : ASSIGN_CHOICES.out;
+  // Log của tài khoản riêng tư không gán được cho người thuê (N-1, UC-706 AC-38): chip tắt kèm câu.
+  const tenantBlock = isIn ? tenantChipBlock(boot.accounts.find((a) => a.id === log.account_id)) : null;
+  const options = isIn
+    ? ASSIGN_CHOICES.in
+        .filter((o) => o.value !== "tenant" || tenants.length > 0 || rows.some((r) => r.tenantMode))
+        .map((o) => (o.value === "tenant" && tenantBlock ? { ...o, disabled: true } : o))
+    : ASSIGN_CHOICES.out;
   const check = validateSplits(log.amount, rows);
   const noTenant = rows.some((r) => r.tenantMode && !r.tenant_id);
   // Dòng đang hỏi tên người mới (ô Ai trả / Cho ai vay): gán lúc này là gán khi chưa có người — chờ Thêm người.
@@ -365,6 +372,7 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
           <p class="fhint" style={{ padding: "0 16px 8px" }}>
             {options.find((o) => o.value === (r.tenantMode ? "tenant" : r.interestMode ? "interest" : r.meaning))?.hint}
           </p>
+          {tenantBlock && <p class="fhint" style={{ padding: "0 16px 8px" }}>{tenantBlock}</p>}
           <div class="field">
             <label for={`s-amt-${r.key}`}>Số tiền</label>
             <AmountInput id={`s-amt-${r.key}`} value={r.amount} onChange={(n) => update(r.key, { amount: n })} invalid={!r.amount} />

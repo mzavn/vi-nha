@@ -261,22 +261,22 @@ describe("UC-601 AC-9: trang uỷ quyền", () => {
 });
 
 describe("UC-601 AC-6, AC-11: quyền xem / ghi", () => {
-  it("UC-601 AC-6: token chỉ Xem: initialize, tools/list (15 tool) và tool đọc chạy", async () => {
+  it("UC-601 AC-6: token chỉ Xem: initialize, tools/list (16 tool) và tool đọc chạy", async () => {
     const { access, scope } = await connectClaude(env, { memberId: "husband", password: SHARED, write: false });
     expect(scope).toBe("mcp:read");
     const init = await mcpPost(env, access, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } } });
     expect(init.status).toBe(200);
     const list = await json(await listTools(access));
-    expect(list.result.tools).toHaveLength(15);
+    expect(list.result.tools).toHaveLength(16);
     expect((await mcpPost(env, access, toolCall("get_snapshot"))).status).toBe(200);
   });
 
-  it("UC-601 AC-11: token chỉ Xem gọi add_transaction, assign_log, add_tenant_shared_expense hoặc record_asset_value (cả bốn tool trong WRITE_TOOLS) → HTTP 403 insufficient_scope, challenge ghi đủ mcp:read mcp:write; không ghi gì", async () => {
+  it("UC-601 AC-11: token chỉ Xem gọi add_transaction, assign_log, set_tenant_bill_item hoặc record_asset_value (cả bốn tool trong WRITE_TOOLS) → HTTP 403 insufficient_scope, challenge ghi đủ mcp:read mcp:write; không ghi gì", async () => {
     const { access } = await connectClaude(env, { memberId: "husband", password: SHARED, write: false });
     for (const [name, args] of [
       ["add_transaction", { meaning: "spend", amount: 200_000, category_id: "fuel-parking" }],
       ["assign_log", { log_id: "L1", splits: [{ meaning: "spend", amount: 1 }] }],
-      ["add_tenant_shared_expense", { tenant_id: "t", amount: 1, category_id: "groceries" }],
+      ["set_tenant_bill_item", { tenant_id: "t", name: "Tiền điện", amount: 1 }],
       ["record_asset_value", { item_id: "vang", unit_price: 5_250_000 }],
     ] as const) {
       const res = await mcpPost(env, access, toolCall(name, args));
@@ -287,13 +287,14 @@ describe("UC-601 AC-6, AC-11: quyền xem / ghi", () => {
       expect(challenge).toContain('resource_metadata="http://localhost/.well-known/oauth-protected-resource/mcp"');
     }
     expect(txCount()).toBe(0);
+    expect(raw.prepare("SELECT COUNT(*) AS n FROM tenant_bills").get()).toEqual({ n: 0 });
   });
 
-  it("UC-602 AC-16: kết nối chỉ Xem — tools/list không có get_budget / allocate_income / preview_allocation / list_transfer_orders, đúng 15 tool; gọi get_budget → lỗi không có tool, không ghi gì", async () => {
+  it("UC-602 AC-16: kết nối chỉ Xem — tools/list không có get_budget / allocate_income / preview_allocation / list_transfer_orders / add_tenant_shared_expense, đúng 16 tool; gọi get_budget → lỗi không có tool, không ghi gì", async () => {
     const { access } = await connectClaude(env, { memberId: "husband", password: SHARED, write: false });
     const names = ((await json(await listTools(access))).result.tools as { name: string }[]).map((t) => t.name);
-    expect(names).toHaveLength(15);
-    for (const gone of ["get_budget", "allocate_income", "preview_allocation", "list_transfer_orders"]) expect(names).not.toContain(gone);
+    expect(names).toHaveLength(16);
+    for (const gone of ["get_budget", "allocate_income", "preview_allocation", "list_transfer_orders", "add_tenant_shared_expense"]) expect(names).not.toContain(gone);
     const res = await mcpPost(env, access, toolCall("get_budget", { period: "2026-11" }));
     expect(res.status).toBe(200);
     const body = await json(res);

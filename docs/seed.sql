@@ -66,8 +66,7 @@ INSERT INTO rules (priority,match_type,pattern,meaning,is_salary,category_id,by_
 INSERT INTO config (k,v) VALUES
  ('tz','Asia/Ho_Chi_Minh'),
  ('safety_fund_months','6'), ('currency','VND'),
- ('rental_income_stream_id','rental'), ('rental_headcount','3'),
- ('rental_shared_categories','groceries,eating-out,utilities'),
+ ('rental_income_stream_id','rental'),
  ('notify_daily_time','07:00'), ('notify_weekly_day','1'), ('notify_weekly_time','08:00'),
  ('notify_quiet_start','22:00'), ('notify_quiet_end','06:30'),
  ('notify_daily_enabled','1'), ('notify_weekly_enabled','1'), ('notify_pending_enabled','1'),
