@@ -32,10 +32,14 @@ function docsDb(): DatabaseSync {
   return db;
 }
 
-/** Mọi dòng của mọi bảng — dữ liệu hệ thống của DB mới. */
+/** Mọi dòng của mọi bảng — dữ liệu hệ thống của DB mới. `created_at` là giờ lúc dựng DB: hai DB dựng cách nhau có thể lệch qua
+ *  ranh giới một giây, nên bỏ khỏi phép so. */
 const dump = (db: DatabaseSync) =>
   (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[])
-    .map(({ name }) => ({ name, rows: db.prepare(`SELECT * FROM ${name} ORDER BY 1`).all() }));
+    .map(({ name }) => ({
+      name,
+      rows: (db.prepare(`SELECT * FROM ${name} ORDER BY 1`).all() as Record<string, unknown>[]).map(({ created_at: _, ...row }) => row),
+    }));
 
 describe("migration baseline của bản public", () => {
   it("baseline + migration sau nó dựng đúng schema và dữ liệu hệ thống của docs/schema.sql, không có hộ mẫu", () => {
