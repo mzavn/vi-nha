@@ -91,6 +91,14 @@
 --                     là thứ tự ưu tiên (0042 đánh số lại 10, 20, … theo hạn); mục tiêu % giữ tài khoản riêng
 --                     (trg_reserve_goals_tax_own(_insert) → tax_account_shared); transactions.goal_id (khoản chi / chuyển
 --                     ra cho mục tiêu nào; trg_tx_goal(_insert) → invalid_goal)
+--  v1.44 (12/11/2026): tài khoản con (khoản gửi kỳ hạn) và mục tiêu trả thẳng từ tiền chi tiêu — accounts.parent_account_id
+--                     (trg_accounts_parent(_insert) → invalid_parent, trg_accounts_parent_goal → goal_on_child,
+--                     trg_accounts_parent_follow(_insert) → pocket_follows_parent, trg_accounts_children_follow,
+--                     trg_accounts_keep_children → account_has_children, trg_config_reward_child(_insert) → reward_is_child);
+--                     reserve_goals.pays_from (trg_reserve_goals_operating(_insert) → operating_goal_monthly,
+--                     trg_reserve_goals_not_child(_insert) → goal_on_child); trg_tx_goal(_insert) dựng lại (mẹ / con; Vận
+--                     hành cho mục tiêu trả từ tiền chi tiêu); transactions.from_interest (trg_tx_interest(_insert) →
+--                     invalid_interest) (ADR-140, ADR-141)
 --  v1.43 (12/11/2026): bản tính tháng cho người thuê — tenant_bills, tenant_bill_items (trg_tenant_bills_issued /
 --                     _no_delete → bill_issued); tenant_lines thêm kind 'bill' + bill_id (idx_tenant_lines_bill_active: tối
 --                     đa một dòng bill còn hiệu lực mỗi bản tính); bỏ tenant_fixed_fees, tenant_settlements, config
@@ -187,9 +195,11 @@ CREATE TABLE accounts (
   pocket_confirmed INTEGER NOT NULL DEFAULT 0    -- 0 = ngăn do app đề xuất, chưa xác nhận; 1 = người dùng đã xác nhận / tự chọn
                   CHECK (pocket_confirmed IN (0,1)),
   private         INTEGER NOT NULL DEFAULT 0      -- tài khoản riêng tư (access UC-504): người khác chỉ thấy tổng; chỉ chủ tài khoản bật
-                  CHECK (private IN (0,1))
+                  CHECK (private IN (0,1)),
+  parent_account_id TEXT REFERENCES accounts(id)  -- tài khoản mẹ của khoản gửi kỳ hạn (v1.44, ADR-140); NULL = không phải tài khoản con
 );
 CREATE UNIQUE INDEX idx_acct_no ON accounts(account_no) WHERE account_no IS NOT NULL;
+CREATE INDEX idx_accounts_parent ON accounts(parent_account_id) WHERE parent_account_id IS NOT NULL;
 
 -- 5a. NHÓM DANH MỤC (v1.38, pocket UC-1204) — gom danh mục chi để nhìn lại; hạn mức mềm chỉ để so, không giữ tiền ---
 CREATE TABLE category_groups (
@@ -268,6 +278,7 @@ CREATE TABLE transactions (
   interest_debt_id TEXT REFERENCES debts(id),         -- spend: trả LÃI cho khoản nợ (chi phí, không giảm nợ)
   legacy_class TEXT CHECK (legacy_class IS NULL OR legacy_class IN ('essential','flex','tax','savings','holding')),  -- loại chi cũ (ADR-131): chỉ dòng trước v1.40
   goal_id      TEXT REFERENCES reserve_goals(id),      -- spend / transfer: mục tiêu Dự phòng dùng tiền (v1.42); NULL = không cho mục tiêu nào
+  from_interest INTEGER NOT NULL DEFAULT 0 CHECK (from_interest IN (0,1)),  -- chi / chuyển ra khỏi nhóm mẹ + con, lấy từ tiền lãi (v1.44, ADR-140)
   CHECK (meaning <> 'spend'  OR category_id IS NOT NULL)
 );
 CREATE INDEX idx_tx_cat          ON transactions(category_id, month_key) WHERE status='active';
@@ -902,6 +913,7 @@ CREATE TABLE reserve_goals (
   sort                 INTEGER NOT NULL DEFAULT 100,        -- thứ tự ưu tiên của cả nhà (nhỏ đứng trước, v1.42)
   active               INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
   created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+  pays_from            TEXT NOT NULL DEFAULT 'account' CHECK (pays_from IN ('account','operating')),  -- operating = trả thẳng từ tiền chi tiêu (v1.44, ADR-141)
   CHECK ((target_amount IS NULL) <> (target_pct IS NULL)),
   CHECK ((monthly_amount IS NULL) = (repeat_months IS NULL)),
   CHECK (monthly_amount IS NULL OR target_amount = monthly_amount * repeat_months),
@@ -969,20 +981,140 @@ WHEN NEW.active = 1 AND NEW.account_id IS NOT NULL
 BEGIN
   SELECT RAISE(ABORT, 'tax_account_shared');
 END;
--- Khoản chi / chuyển ra cho mục tiêu (v1.42, QĐ3): mục tiêu đang dùng và gắn đúng tài khoản tiền ra lúc ghi.
+-- Khoản chi / chuyển ra cho mục tiêu (v1.42, QĐ3; v1.44): mục tiêu tài khoản — tiền ra từ tài khoản của nó hoặc con của nó;
+--  mục tiêu trả từ tiền chi tiêu — tiền ra từ một tài khoản ngăn Vận hành.
 CREATE TRIGGER trg_tx_goal_insert BEFORE INSERT ON transactions
 WHEN NEW.goal_id IS NOT NULL
   AND (NEW.meaning NOT IN ('spend', 'transfer')
-    OR NOT EXISTS (SELECT 1 FROM reserve_goals g WHERE g.id = NEW.goal_id AND g.active = 1 AND g.account_id = NEW.account_id))
+    OR NOT EXISTS (SELECT 1 FROM reserve_goals g JOIN accounts a ON a.id = NEW.account_id WHERE g.id = NEW.goal_id AND g.active = 1
+      AND ((g.pays_from = 'account' AND g.account_id = COALESCE(a.parent_account_id, a.id))
+        OR (g.pays_from = 'operating' AND a.pocket = 'operating'))))
 BEGIN
   SELECT RAISE(ABORT, 'invalid_goal');
 END;
 CREATE TRIGGER trg_tx_goal BEFORE UPDATE OF goal_id, account_id, meaning ON transactions
 WHEN NEW.goal_id IS NOT NULL
   AND (NEW.meaning NOT IN ('spend', 'transfer')
-    OR NOT EXISTS (SELECT 1 FROM reserve_goals g WHERE g.id = NEW.goal_id AND g.active = 1 AND g.account_id = NEW.account_id))
+    OR NOT EXISTS (SELECT 1 FROM reserve_goals g JOIN accounts a ON a.id = NEW.account_id WHERE g.id = NEW.goal_id AND g.active = 1
+      AND ((g.pays_from = 'account' AND g.account_id = COALESCE(a.parent_account_id, a.id))
+        OR (g.pays_from = 'operating' AND a.pocket = 'operating'))))
 BEGIN
   SELECT RAISE(ABORT, 'invalid_goal');
+END;
+-- Tài khoản con (v1.44, ADR-140): một tầng, mẹ và con đều là ngân hàng, mẹ đang dùng và không ở Vận hành, con không SePay,
+--  không là Ví Thưởng, không có con, không gắn mục tiêu đang dùng; con luôn cùng ngăn / xác nhận / riêng tư / chủ với mẹ
+--  (sửa mẹ thì con theo trong cùng câu ghi); mẹ có con đang dùng không tắt, không sang Vận hành, không đổi loại.
+CREATE TRIGGER trg_accounts_parent_insert BEFORE INSERT ON accounts
+WHEN NEW.parent_account_id IS NOT NULL AND (
+  NEW.parent_account_id = NEW.id OR NEW.kind <> 'bank' OR NEW.sepay_enabled <> 0
+  OR NEW.id = (SELECT v FROM config WHERE k = 'surplus_reward_account')
+  OR (NEW.active = 1 AND NOT EXISTS (SELECT 1 FROM accounts p WHERE p.id = NEW.parent_account_id AND p.active = 1
+    AND p.parent_account_id IS NULL AND p.kind = 'bank' AND p.pocket IS NOT 'operating')))
+BEGIN
+  SELECT RAISE(ABORT, 'invalid_parent');
+END;
+CREATE TRIGGER trg_accounts_parent BEFORE UPDATE OF parent_account_id, kind, active, sepay_enabled ON accounts
+WHEN NEW.parent_account_id IS NOT NULL AND (
+  NEW.parent_account_id = NEW.id OR NEW.kind <> 'bank' OR NEW.sepay_enabled <> 0
+  OR NEW.id = (SELECT v FROM config WHERE k = 'surplus_reward_account')
+  OR EXISTS (SELECT 1 FROM accounts c WHERE c.parent_account_id = NEW.id)
+  OR (NEW.active = 1 AND NOT EXISTS (SELECT 1 FROM accounts p WHERE p.id = NEW.parent_account_id AND p.active = 1
+    AND p.parent_account_id IS NULL AND p.kind = 'bank' AND p.pocket IS NOT 'operating')))
+BEGIN
+  SELECT RAISE(ABORT, 'invalid_parent');
+END;
+CREATE TRIGGER trg_accounts_parent_goal BEFORE UPDATE OF parent_account_id ON accounts
+WHEN NEW.parent_account_id IS NOT NULL
+  AND EXISTS (SELECT 1 FROM reserve_goals g WHERE g.account_id = NEW.id AND g.active = 1)
+BEGIN
+  SELECT RAISE(ABORT, 'goal_on_child');
+END;
+CREATE TRIGGER trg_accounts_parent_follow_insert BEFORE INSERT ON accounts
+WHEN NEW.parent_account_id IS NOT NULL AND EXISTS (SELECT 1 FROM accounts p WHERE p.id = NEW.parent_account_id
+  AND (p.pocket IS NOT NEW.pocket OR p.pocket_confirmed IS NOT NEW.pocket_confirmed OR p.private IS NOT NEW.private
+    OR p.owner_member_id IS NOT NEW.owner_member_id))
+BEGIN
+  SELECT RAISE(ABORT, 'pocket_follows_parent');
+END;
+CREATE TRIGGER trg_accounts_parent_follow BEFORE UPDATE OF parent_account_id, pocket, pocket_confirmed, private, owner_member_id ON accounts
+WHEN NEW.parent_account_id IS NOT NULL AND EXISTS (SELECT 1 FROM accounts p WHERE p.id = NEW.parent_account_id
+  AND (p.pocket IS NOT NEW.pocket OR p.pocket_confirmed IS NOT NEW.pocket_confirmed OR p.private IS NOT NEW.private
+    OR p.owner_member_id IS NOT NEW.owner_member_id))
+BEGIN
+  SELECT RAISE(ABORT, 'pocket_follows_parent');
+END;
+CREATE TRIGGER trg_accounts_children_follow AFTER UPDATE OF pocket, pocket_confirmed, private, owner_member_id ON accounts
+WHEN EXISTS (SELECT 1 FROM accounts c WHERE c.parent_account_id = NEW.id)
+BEGIN
+  UPDATE accounts SET pocket = NEW.pocket, pocket_confirmed = NEW.pocket_confirmed, private = NEW.private, owner_member_id = NEW.owner_member_id
+  WHERE parent_account_id = NEW.id;
+END;
+CREATE TRIGGER trg_accounts_keep_children BEFORE UPDATE OF active, pocket, kind ON accounts
+WHEN (NEW.active = 0 OR NEW.pocket IS 'operating' OR NEW.kind <> 'bank')
+  AND EXISTS (SELECT 1 FROM accounts c WHERE c.parent_account_id = NEW.id AND c.active = 1)
+BEGIN
+  SELECT RAISE(ABORT, 'account_has_children');
+END;
+-- Ví Thưởng không là tài khoản con (v1.44).
+CREATE TRIGGER trg_config_reward_child_insert BEFORE INSERT ON config
+WHEN NEW.k = 'surplus_reward_account'
+  AND EXISTS (SELECT 1 FROM accounts a WHERE a.id = NEW.v AND a.parent_account_id IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'reward_is_child');
+END;
+CREATE TRIGGER trg_config_reward_child BEFORE UPDATE OF v ON config
+WHEN NEW.k = 'surplus_reward_account'
+  AND EXISTS (SELECT 1 FROM accounts a WHERE a.id = NEW.v AND a.parent_account_id IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'reward_is_child');
+END;
+-- Mục tiêu trả thẳng từ tiền chi tiêu (v1.44, ADR-141): chỉ mục tiêu lặp mỗi tháng, không tài khoản, không theo %. Mục tiêu
+--  gắn tài khoản mẹ, không gắn tài khoản con.
+CREATE TRIGGER trg_reserve_goals_operating_insert BEFORE INSERT ON reserve_goals
+WHEN NEW.pays_from = 'operating'
+  AND (NEW.account_id IS NOT NULL OR NEW.repeat_months IS NOT 1 OR NEW.monthly_amount IS NULL OR NEW.target_pct IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'operating_goal_monthly');
+END;
+CREATE TRIGGER trg_reserve_goals_operating BEFORE UPDATE OF pays_from, account_id, repeat_months, monthly_amount, target_pct ON reserve_goals
+WHEN NEW.pays_from = 'operating'
+  AND (NEW.account_id IS NOT NULL OR NEW.repeat_months IS NOT 1 OR NEW.monthly_amount IS NULL OR NEW.target_pct IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'operating_goal_monthly');
+END;
+CREATE TRIGGER trg_reserve_goals_not_child_insert BEFORE INSERT ON reserve_goals
+WHEN NEW.active = 1 AND NEW.account_id IS NOT NULL
+  AND EXISTS (SELECT 1 FROM accounts a WHERE a.id = NEW.account_id AND a.parent_account_id IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'goal_on_child');
+END;
+CREATE TRIGGER trg_reserve_goals_not_child BEFORE UPDATE OF account_id, active ON reserve_goals
+WHEN NEW.active = 1 AND NEW.account_id IS NOT NULL
+  AND EXISTS (SELECT 1 FROM accounts a WHERE a.id = NEW.account_id AND a.parent_account_id IS NOT NULL)
+BEGIN
+  SELECT RAISE(ABORT, 'goal_on_child');
+END;
+-- Rút từ tiền lãi (v1.44, ADR-140): chi / chuyển ra khỏi nhóm mẹ có mục tiêu + con, không kèm mục tiêu. Trần "không vượt
+--  tiền lãi đang có" kiểm ở code (tiền lãi tính cộng dồn, src/domain/pockets.ts › groupInterest).
+CREATE TRIGGER trg_tx_interest_insert BEFORE INSERT ON transactions
+WHEN NEW.from_interest = 1 AND (
+  NEW.meaning NOT IN ('spend', 'transfer') OR NEW.goal_id IS NOT NULL
+  OR NOT EXISTS (SELECT 1 FROM accounts a JOIN reserve_goals g ON g.account_id = COALESCE(a.parent_account_id, a.id) AND g.active = 1
+    WHERE a.id = NEW.account_id)
+  OR EXISTS (SELECT 1 FROM accounts a JOIN accounts c ON c.id = NEW.counter_account_id
+    WHERE a.id = NEW.account_id AND COALESCE(c.parent_account_id, c.id) = COALESCE(a.parent_account_id, a.id)))
+BEGIN
+  SELECT RAISE(ABORT, 'invalid_interest');
+END;
+CREATE TRIGGER trg_tx_interest BEFORE UPDATE OF from_interest, meaning, goal_id, account_id, counter_account_id ON transactions
+WHEN NEW.from_interest = 1 AND (
+  NEW.meaning NOT IN ('spend', 'transfer') OR NEW.goal_id IS NOT NULL
+  OR NOT EXISTS (SELECT 1 FROM accounts a JOIN reserve_goals g ON g.account_id = COALESCE(a.parent_account_id, a.id) AND g.active = 1
+    WHERE a.id = NEW.account_id)
+  OR EXISTS (SELECT 1 FROM accounts a JOIN accounts c ON c.id = NEW.counter_account_id
+    WHERE a.id = NEW.account_id AND COALESCE(c.parent_account_id, c.id) = COALESCE(a.parent_account_id, a.id)))
+BEGIN
+  SELECT RAISE(ABORT, 'invalid_interest');
 END;
 
 -- % Tích luỹ mỗi kỳ lương (UC-507), "1".."100"; D1 trống không có luật Tích sản nên mặc định.
@@ -1082,4 +1214,4 @@ BEGIN
 END;
 
 -- Phiên bản schema — /v1/health đọc từ đây
-INSERT INTO config (k,v) VALUES ('schema_version','1.43');
+INSERT INTO config (k,v) VALUES ('schema_version','1.44');

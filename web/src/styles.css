@@ -580,6 +580,9 @@
     color: var(--fg-3);
     padding: 10px 14px 13px;
   }
+  .note.warn {
+    color: var(--warn);
+  }
   .sub-line {
     font-size: 11.5px;
     color: var(--fg-3);
@@ -1929,6 +1932,14 @@
     border-radius: 0 0 var(--r) var(--r);
     padding: 10px 16px;
   }
+  /* Điện thoại: nút "+" nổi (56px, cách mép phải 16px) đè lên góc phải chân dính — chừa bề ngang của nó để dòng tổng và nút chính không bị che. */
+  .has-fab .bill-foot {
+    padding-right: 72px;
+  }
+  /* Máy tính không có thanh dưới: chân dính sát đáy màn. */
+  .dk-main .bill-foot {
+    bottom: var(--safe-bottom);
+  }
   .bill-total {
     margin: 0 0 8px;
     font-size: 13px;
@@ -2779,5 +2790,151 @@
     .dk-cols.dk-wide-l {
       grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
     }
+  }
+}
+
+/* ── v2.3 Hôm nay (TodayPwa): dòng "Đã chừa …", khối nhắc chuyển thêm, mức Tích luỹ dưới 1% ── */
+@layer components {
+  .near-reserved {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-height: 44px;
+    margin: 6px 0 0;
+    padding: 0;
+    font-size: 14px;
+    text-align: left;
+    color: var(--fg-2);
+    overflow-wrap: anywhere;
+  }
+  button.near-reserved {
+    color: var(--fg);
+    background: none;
+    border: 0;
+    cursor: pointer;
+  }
+  .near-topup {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--warn-bg);
+    border: 1px solid color-mix(in srgb, var(--warn) 32%, transparent);
+    color: var(--warn);
+    font-size: 14px;
+    overflow-wrap: anywhere;
+  }
+  .near-topup p {
+    margin: 6px 0 0;
+  }
+  .near-topup-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 44px;
+    margin-top: 4px;
+  }
+  .near-topup-row .btn {
+    flex: none;
+    min-height: 44px;
+  }
+  .pocket-meta p.pocket-warn {
+    color: var(--warn);
+  }
+}
+
+/* v2.3 Cài đặt (SettingsPwa): thanh % Tích luỹ 1 · 10 · 30, khoản gửi kỳ hạn lồng dưới mẹ, hai phần danh sách mục tiêu. */
+@layer components {
+  .sv-slider {
+    padding: 4px 14px 8px;
+    min-width: 0;
+  }
+  .sv-track {
+    position: relative;
+    padding: 10px 0;
+  }
+  .sv-range {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    margin: 0;
+    accent-color: var(--primary);
+  }
+  .sv-ticks {
+    position: absolute;
+    inset: auto 9px 4px;
+    height: 8px;
+    pointer-events: none;
+  }
+  .sv-tick {
+    position: absolute;
+    top: 0;
+    width: 2px;
+    height: 8px;
+    margin-left: -1px;
+    background: var(--border-strong);
+  }
+  .sv-marks {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .sv-mark {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    min-width: 0;
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--surface);
+    color: var(--fg-2);
+    font-size: 12px;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+  .sv-mark b {
+    color: var(--fg);
+    font-size: 13.5px;
+  }
+  .sv-mark.on {
+    border-color: var(--primary);
+    background: var(--surface-3);
+  }
+  .sv-mark:disabled {
+    opacity: 0.5;
+  }
+  .acct-child .srow,
+  .tier.acct-child {
+    padding-left: 30px;
+  }
+  .acct-child > td:first-child {
+    padding-left: 28px;
+  }
+  .field.child-row {
+    padding-left: 30px;
+    flex-wrap: wrap;
+    gap: 2px 10px;
+  }
+  .field.child-row > .k {
+    overflow-wrap: anywhere;
+  }
+  /* Đổi thứ tự luôn cùng dòng với tiêu đề nhóm; tiêu đề dài thì xuống dòng trong chỗ của nó. */
+  .goal-list-h {
+    flex-wrap: nowrap;
+  }
+  .goal-list-h > span {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .goal-list-h > .btn {
+    flex: 0 0 auto;
+    min-height: 44px;
+  }
+  .goal-section-h {
+    color: var(--fg);
+    font-size: 12.5px;
   }
 }

@@ -5,7 +5,8 @@ import { ApiError, errorText, request } from "./api";
 import { clashWith, MAX_MEMBERS, nameError, passwordError } from "./members";
 import { MAX_AMOUNT } from "./money";
 import { POCKET_ORDER, pocketLabel } from "./pockets";
-import { done, type Errors, parseInteger, type Result } from "./settings";
+import { SAVINGS_SCALE_TEXT } from "./savings-scale";
+import { done, type Errors, parseInteger, type Result, sliderPct } from "./settings";
 import type { Pocket, SettingsAccount } from "./types";
 
 export const SETUP_STEPS = ["Mật khẩu chung", "Thành viên", "Tài khoản", "Ba ngăn"] as const;
@@ -142,6 +143,11 @@ function accountErrors(accounts: SetupAccount[], memberCount: number): Errors {
  *  server đặt thứ tự ưu tiên mặc định (UC-510 AC-14). */
 export function goalAccountChoices(f: SetupForm): { index: number; name: string }[] {
   return f.accounts.flatMap((a, i) => (a.pocket === "reserve" ? [{ index: i, name: a.name.trim() || `Tài khoản ${i + 1}` }] : []));
+}
+
+/** Bước % Tích luỹ (UC-510 AC-16): thanh 1–100% vạch 1 · 10 · 30, chọn sẵn 10; ô gõ sai thì thanh đứng ở 10; câu thang. */
+export function savingsStep(f: SetupForm): { pct: number; text: string } {
+  return { pct: sliderPct(f.savingsPct), text: SAVINGS_SCALE_TEXT };
 }
 
 function pocketErrors(f: SetupForm): Errors {

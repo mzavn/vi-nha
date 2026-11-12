@@ -214,3 +214,22 @@ describe("Sổ giao dịch lọc đúng kỳ lương", () => {
     expect([both2.status, both2.json.error?.code]).toEqual([400, "invalid_input"]);
   });
 });
+
+describe("Tích luỹ của từng kỳ trong Nhìn lại (ledger UC-108, ADR-142)", () => {
+  it("UC-108 AC-7: kỳ 10/10 (lương 30.000.000, đã trích 3.000.000) → savings { 3.000.000, 30.000.000, 10to30 }; kỳ 10/11 bỏ qua ① có lý do → { 0, 20.000.000, zero, lý do }; kỳ danh nghĩa → null; tháng lịch không có khối", async () => {
+    db.exec(`
+      UPDATE transactions SET amount = 30000000 WHERE id = 1;
+      INSERT INTO transactions (id, at, amount, meaning, account_id, counter_account_id, week_key, month_key, source)
+        VALUES (300, '${AT("2026-10-10T10:00")}', 3000000, 'transfer', 'main', 'savings', '2026-W41', '2026-10', 'manual');
+      INSERT INTO pay_cycle_tasks (id, cycle_id, kind, source_tx_id, to_pocket, pct, suggested, amount, status, done_at)
+        VALUES (901, 1, 'savings', 1, 'savings', 10, 3000000, 3000000, 'done', '${AT("2026-10-10T10:00")}');
+      INSERT INTO pay_cycle_task_tx (task_id, tx_id, amount) VALUES (901, 300, 3000000);
+      INSERT INTO pay_cycle_tasks (id, cycle_id, kind, source_tx_id, to_pocket, pct, suggested, amount, status, reason)
+        VALUES (902, 2, 'savings', 20, 'savings', 10, 2000000, 2000000, 'skipped', 'Tháng này trả viện phí');
+    `);
+    expect((await data("?cycle=2026-10-10")).savings).toEqual({ amount: 3_000_000, base: 30_000_000, level: "10to30", reason: null });
+    expect((await data("?cycle=2026-11-10")).savings).toEqual({ amount: 0, base: 20_000_000, level: "zero", reason: "Tháng này trả viện phí" });
+    expect((await data("?cycle=2026-09-10")).savings).toBeNull();
+    expect(await data("?period=2026-11")).not.toHaveProperty("savings");
+  });
+});

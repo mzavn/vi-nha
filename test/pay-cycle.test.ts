@@ -150,20 +150,60 @@ describe("việc ngày lương", () => {
     const fresh = [t("savings", 2_000_000), t("goal", 2_000_000), t("goal", 760_000), t("surplus", 600_000), t("surplus", 600_000), t("move", 4_000_000)];
     expect(pendingTasks(fresh, "operating")).toBe(5_960_000);
     expect(pendingTasks(fresh, "reserve")).toBe(3_200_000);
-    expect(savingsDone(fresh)).toEqual({ amount: 0, base: 20_000_000, pct: 0 });
+    expect(savingsDone(fresh)).toEqual({ amount: 0, base: 20_000_000, pct: 0, level: null });
     const after = [t("savings", 2_000_000, 2_000_000), t("goal", 2_000_000, 2_000_000), t("goal", 760_000, 760_000), t("surplus", 600_000, 600_000), t("surplus", 600_000, 240_000)];
     expect(pendingTasks(after, "operating")).toBe(360_000);
-    expect(savingsDone(after)).toEqual({ amount: 2_000_000, base: 20_000_000, pct: 10 });
+    expect(savingsDone(after)).toEqual({ amount: 2_000_000, base: 20_000_000, pct: 10, level: "10to30" });
     // ① tick tay (kể cả khi chưa có tài khoản Tích luỹ, UC-1206 AC-10): xong, không cộng vào đã trích, không còn trong chưa làm.
     const manual = [t("savings", 2_000_000, 0, { status: "done" })];
-    expect(savingsDone(manual)).toEqual({ amount: 0, base: 20_000_000, pct: 0 });
+    expect(savingsDone(manual)).toEqual({ amount: 0, base: 20_000_000, pct: 0, level: "below1" });
     expect(pendingTasks(manual, "operating")).toBe(0);
     expect(savingsDone([t("savings", 2_000_000, 500_000, { status: "done" })]).amount).toBe(500_000);
-    expect(savingsDone([])).toEqual({ amount: 0, base: 0, pct: null });
+    expect(savingsDone([])).toEqual({ amount: 0, base: 0, pct: null, level: null });
+  });
+
+  it("UC-702 AC-36: mức đạt của kỳ — base 30.000.000: đã trích 200.000 / 1.500.000 / 3.000.000 / 9.000.000 → below1 / 1to10 / 10to30 / from30; bỏ qua cả hai ① → zero; vừa có lương, ① còn mở chưa ghép → null", () => {
+    const t = (amount: number, source: number, linked: number, o: Partial<TaskFigures> = {}): TaskFigures => ({
+      kind: "savings", status: "open", amount, linked, sourceAmount: source, toPocket: "savings", ...o,
+    });
+    // Hai khoản lương 20.000.000 + 10.000.000; phần đã trích chia vào hai ① (số của việc đủ lớn để không chặn).
+    const two = (a: number, b: number) => [t(9_000_000, 20_000_000, a), t(9_000_000, 10_000_000, b)];
+    expect(savingsDone(two(200_000, 0)).level).toBe("below1");
+    expect(savingsDone(two(1_000_000, 500_000)).level).toBe("1to10");
+    expect(savingsDone(two(2_000_000, 1_000_000)).level).toBe("10to30");
+    expect(savingsDone(two(6_000_000, 3_000_000))).toMatchObject({ amount: 9_000_000, base: 30_000_000, level: "from30" });
+    const skipped = [t(2_000_000, 20_000_000, 0, { status: "skipped" }), t(1_000_000, 10_000_000, 0, { status: "skipped" })];
+    expect(savingsDone(skipped).level).toBe("zero");
+    expect(savingsDone([t(0, 20_000_000, 0), t(1_000_000, 10_000_000, 0, { status: "skipped" })]).level).toBe("zero");
+    expect(savingsDone([t(2_000_000, 20_000_000, 0), t(1_000_000, 10_000_000, 0)]).level).toBeNull();
+  });
+
+  it("UC-1209 AC-20: phần chưa làm bỏ qua ② của mục tiêu trả từ tiền chi tiêu (chốt hai lớp)", () => {
+    const t = (kind: TaskFigures["kind"], amount: number, o: Partial<TaskFigures> = {}): TaskFigures => ({ kind, status: "open", amount, linked: 0, sourceAmount: null, toPocket: null, ...o });
+    expect(pendingTasks([t("goal", 2_000_000, { operatingGoal: true }), t("goal", 760_000)], "operating")).toBe(760_000);
+  });
+
+  it("UC-1206 AC-15: ② đích tài khoản mẹ — chuyển nội bộ mẹ → con không ghép; chuyển từ tài khoản chính sang con ghép; con → mẹ cũng là nội bộ", () => {
+    const tasks = [{ id: 1, toPocket: null, toAccountId: "tk-tiet-kiem", missing: 2_000_000 }];
+    const parent = { id: "tk-tiet-kiem", pocket: "reserve" as const, parentId: null };
+    const child = { id: "gui-6-thang", pocket: "reserve" as const, parentId: "tk-tiet-kiem" };
+    const main = { id: "tk-chinh", pocket: "operating" as const, parentId: null };
+    expect(allocateTransfer(tasks, { from: parent, to: child, available: 5_000_000 })).toEqual([]);
+    expect(allocateTransfer(tasks, { from: main, to: child, available: 2_000_000 })).toEqual([{ taskId: 1, amount: 2_000_000 }]);
+    expect(allocateTransfer(tasks, { from: child, to: parent, available: 2_000_000 })).toEqual([]);
+    expect(allocateTransfer(tasks, { from: main, to: parent, available: 2_000_000 })).toEqual([{ taskId: 1, amount: 2_000_000 }]);
   });
 });
 
 describe("số mỗi ngày", () => {
+  it("UC-103 AC-24: trừ phần còn phải trả — Vận hành 15.000.000, 20 ngày, R 3.500.000 → 575.000 (không phải 750.000); trả đủ: 11.500.000, R 0 → vẫn 575.000; 3.000.000 với R 3.500.000 → null", () => {
+    const cycle = { cyclePayday: "2026-11-10", pendingTasks: 0 };
+    expect(nearSpendView(15_000_000, "2026-11-20", 10, { ...cycle, goalRemaining: 3_500_000 })).toMatchObject({ daysLeft: 20, perDay: 575_000, goalRemaining: 3_500_000 });
+    expect(nearSpendView(15_000_000, "2026-11-20", 10, cycle)).toMatchObject({ perDay: 750_000, goalRemaining: 0 });
+    expect(nearSpendView(11_500_000, "2026-11-20", 10, { ...cycle, goalRemaining: 0 }).perDay).toBe(575_000);
+    expect(nearSpendView(3_000_000, "2026-11-20", 10, { ...cycle, goalRemaining: 3_500_000 }).perDay).toBeNull();
+  });
+
   it("UC-103 AC-21: 21.200.000 trừ 5.960.000 chưa làm, 30 ngày → 508.000/ngày; sau hai chuyển khoản 15.600.000 trừ 360.000 → 508.000", () => {
     const cycle = { cyclePayday: "2026-11-10", pendingTasks: 5_960_000 };
     expect(nearSpendView(21_200_000, "2026-11-10", 10, cycle)).toMatchObject({ payday: "2026-12-10", daysLeft: 30, perDay: 508_000, pendingTasks: 5_960_000 });

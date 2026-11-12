@@ -17,19 +17,25 @@ import { formatVnd } from "../lib/money";
 import { dayKey, previousDay, shortDate } from "../lib/period";
 import { conversionSettingsRow } from "../lib/convert";
 import { groupAccountsByPocket, groupSummary, unconfirmedChip } from "../lib/pockets";
+import { nestAccounts } from "../lib/accounts-total";
 import {
   ACCOUNT_KIND_LABEL,
+  type AccountForm,
   appVersionLabel,
   auditView,
   bankName,
   cycleStreamReminder,
   debtGoalSuggestions,
+  depositPreset,
   fiConfigSummary,
+  GOAL_SECTION_LABEL,
   type GoalForm,
+  type GoalListGroup,
   goalLineText,
   goalListGroups,
   MATCH_LABEL,
   MEANING_LABEL,
+  operatingGoalLines,
   scheduleRows,
   secretLabel,
   sepayLabel,
@@ -118,7 +124,7 @@ const ADVANCED = SECTIONS.filter((x) => x.advanced);
 const NO_SECRET: Secret = { set: false, hint: null };
 
 export type Edit =
-  | { kind: "account"; item: SettingsAccount | null }
+  | { kind: "account"; item: SettingsAccount | null; preset?: Partial<AccountForm> }
   | { kind: "rule"; item: Rule | null }
   | { kind: "member"; item: SettingsMember }
   | { kind: "member-new" }
@@ -307,7 +313,17 @@ export function Settings() {
         </>
       )}
 
-      {edit?.kind === "account" && <AccountSheet d={s.data} item={edit.item} onClose={() => setEdit(null)} onSaved={saved} />}
+      {edit?.kind === "account" && (
+        <AccountSheet
+          key={edit.item?.id ?? `+new${edit.preset?.parent_account_id ?? ""}`}
+          d={s.data}
+          item={edit.item}
+          preset={edit.preset}
+          onAddDeposit={(parent) => setEdit({ kind: "account", item: null, preset: depositPreset(parent) })}
+          onClose={() => setEdit(null)}
+          onSaved={saved}
+        />
+      )}
       {edit?.kind === "rule" && <RuleSheet d={s.data} item={edit.item} onClose={() => setEdit(null)} onSaved={saved} />}
       {edit?.kind === "member" && (
         <MemberSheet
@@ -363,8 +379,10 @@ function JumpBar({ onAdvanced }: { onAdvanced: () => void }) {
     const on = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
-        // Phần vừa nhảy tới dừng ngay dưới hàng chip (lệch lẻ vài px): chừa 16px để chip của nó được tô.
-        const line = (bar.current?.getBoundingClientRect().bottom ?? 0) + 16;
+        // Phần đang xem: phần cuối cùng có đầu đã qua vạch đọc — một phần ba khoảng màn dưới hàng chip, nên card vừa cuộn
+        // tới (đầu cách hàng chip vài chục px) được tô, không phải phần trước nó.
+        const bottom = bar.current?.getBoundingClientRect().bottom ?? 0;
+        const line = bottom + Math.max(16, (innerHeight - bottom) / 3);
         const ids = [...MAIN.map((x) => x.id), "advanced"];
         const seen = ids.filter((id) => (document.getElementById(id)?.getBoundingClientRect().top ?? Infinity) <= line);
         setCurrent(seen[seen.length - 1] ?? ids[0]!);
@@ -1112,6 +1130,8 @@ function PushNotifications() {
 
 function Accounts({ d, ro, wide, open }: SectionProps) {
   const rows = [...d.accounts].sort((a, b) => Number(b.active) - Number(a.active));
+  // Khoản gửi kỳ hạn đang dùng lồng ngay dưới mẹ (ADR-140): "↳ Gửi 6 tháng · 100.000.000 ₫", mẹ "gồm 1 khoản gửi · tổng …".
+  const nested = nestAccounts(rows, (a) => ({ id: a.id, name: a.name, balance: a.book_balance ?? 0, parentId: a.active ? (a.parent_account_id ?? null) : null }));
   const owner = (a: SettingsAccount) => nameOf(d.members, a.owner_member_id) ?? "chung";
   const connections = d.integrations.sepay_connections ?? [];
   // Nhà có từ hai kết nối SePay thì nhãn kèm tên kết nối để biết tài khoản về qua đâu.
@@ -1143,9 +1163,12 @@ function Accounts({ d, ro, wide, open }: SectionProps) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((a) => (
-                <tr key={a.id}>
-                  <td>{a.name}</td>
+              {nested.map(({ row: a, child, line, sub }) => (
+                <tr key={a.id} class={child ? "acct-child" : undefined}>
+                  <td>
+                    {child ? line : a.name}
+                    {sub && <div class="sub-line">{sub}</div>}
+                  </td>
                   <td class="l">{ACCOUNT_KIND_LABEL[a.kind]}</td>
                   <td class="l">{bankName(a.bank) ?? "—"}</td>
                   <td class="l num">
@@ -1165,23 +1188,25 @@ function Accounts({ d, ro, wide, open }: SectionProps) {
           </table>
         </div>
       ) : (
-        rows.map((a) => (
-          <Row
-            key={a.id}
-            title={
-              <>
-                {a.name} {a.sepay_enabled && <span class="chip">{sepay(a)}</span>} {!a.active && <span class="chip">ngừng dùng</span>}
-              </>
-            }
-            sub={[ACCOUNT_KIND_LABEL[a.kind], bankName(a.bank), a.account_no, owner(a)].filter(Boolean).join(" · ")}
-            right={
-              <span class="srow-v">
-                <Money value={a.opening_balance} />
-                <span class="sub-line">số dư đầu</span>
-              </span>
-            }
-            onClick={ro ? undefined : () => open({ kind: "account", item: a })}
-          />
+        nested.map(({ row: a, child, line, sub }) => (
+          <div key={a.id} class={child ? "acct-child" : undefined}>
+            <Row
+              title={
+                <>
+                  {child ? line : a.name} {a.sepay_enabled && <span class="chip">{sepay(a)}</span>} {!a.active && <span class="chip">ngừng dùng</span>}
+                </>
+              }
+              sub={[ACCOUNT_KIND_LABEL[a.kind], bankName(a.bank), a.account_no, owner(a)].filter(Boolean).join(" · ")}
+              sub2={sub ?? undefined}
+              right={
+                <span class="srow-v">
+                  <Money value={a.opening_balance} />
+                  <span class="sub-line">số dư đầu</span>
+                </span>
+              }
+              onClick={ro ? undefined : () => open({ kind: "account", item: a })}
+            />
+          </div>
         ))
       )}
     </Card>
@@ -1202,6 +1227,36 @@ function Pockets({ d, ro, open }: SectionProps) {
     .map((g) => `${g.label} ${g.accounts.length}`)
     .join(" · ");
   const goalGroups = goalListGroups(d);
+  const saving = goalGroups.filter((g) => g.key !== "+off");
+  const stopped = goalGroups.filter((g) => g.key === "+off");
+  const monthly = operatingGoalLines(d.goals);
+  const goalGroupView = (grp: GoalListGroup) => (
+    <div key={grp.key}>
+      {grp.title && (
+        <div class="set-sub goal-list-h">
+          <span>{grp.title}</span>
+          {grp.reorder && !ro && (
+            <button type="button" class="btn btn-ghost" onClick={() => open({ kind: "goal-order", accountId: grp.accountId! })}>
+              Đổi thứ tự
+            </button>
+          )}
+        </div>
+      )}
+      {grp.note && <p class="fhint">{grp.note}</p>}
+      {grp.goals.map((g) => (
+        <Row
+          key={g.id}
+          title={
+            <>
+              {goalLineText(g, d.accounts, grp.shared)} {!g.active && <span class="chip">ngừng dùng</span>}
+            </>
+          }
+          sub={g.active && !g.account_id ? <span class="chip warn">Mở tài khoản thật</span> : undefined}
+          onClick={ro ? undefined : () => open({ kind: "goal", item: g })}
+        />
+      ))}
+    </div>
+  );
   const groups = [...(d.categoryGroups ?? [])].sort((a, b) => Number(b.active) - Number(a.active) || a.sort - b.sort);
   const debts = useResource<DebtsData>(ro ? null : "/v1/debts");
   const suggestions = debts.data ? debtGoalSuggestions(debts.data.debts, d.goals, dayKey(new Date())) : [];
@@ -1224,35 +1279,17 @@ function Pockets({ d, ro, open }: SectionProps) {
         title="Mục tiêu Dự phòng"
         right={<AddButton ro={ro} label="Thêm" onClick={() => open({ kind: "goal", item: null })} />}
         flush
-        note="Mỗi mục tiêu gắn một tài khoản thật ở ngăn Dự phòng; nhiều mục tiêu dùng chung được một tài khoản — số dư lấp lần lượt theo thứ tự ưu tiên"
+        note="Khoản phải trả để dành ở một tài khoản Dự phòng (nhiều khoản dùng chung được, số dư lấp lần lượt theo thứ tự ưu tiên) hoặc trả thẳng từ tiền chi tiêu mỗi tháng"
       >
-        {goalGroups.length === 0 && suggestions.length === 0 && <p class="empty">Chưa có mục tiêu nào.</p>}
-        {goalGroups.map((grp) => (
-          <div key={grp.key}>
-            {grp.title && (
-              <div class="set-sub goal-list-h">
-                <span>{grp.title}</span>
-                {grp.reorder && !ro && (
-                  <button type="button" class="btn btn-ghost" onClick={() => open({ kind: "goal-order", accountId: grp.accountId! })}>
-                    Đổi thứ tự
-                  </button>
-                )}
-              </div>
-            )}
-            {grp.goals.map((g) => (
-              <Row
-                key={g.id}
-                title={
-                  <>
-                    {goalLineText(g, d.accounts, grp.shared)} {!g.active && <span class="chip">ngừng dùng</span>}
-                  </>
-                }
-                sub={g.active && !g.account_id ? <span class="chip warn">Mở tài khoản thật</span> : undefined}
-                onClick={ro ? undefined : () => open({ kind: "goal", item: g })}
-              />
-            ))}
-          </div>
+        {goalGroups.length === 0 && monthly.length === 0 && suggestions.length === 0 && <p class="empty">Chưa có mục tiêu nào.</p>}
+        {saving.length > 0 && <div class="set-sub goal-section-h">{GOAL_SECTION_LABEL.account}</div>}
+        {saving.map(goalGroupView)}
+        {monthly.length > 0 && <div class="set-sub goal-section-h">{GOAL_SECTION_LABEL.operating}</div>}
+        {monthly.map((l) => (
+          <Row key={l.goal.id} title={l.text} onClick={ro ? undefined : () => open({ kind: "goal", item: l.goal })} />
         ))}
+        {stopped.length > 0 && <div class="set-sub goal-section-h">Ngừng dùng</div>}
+        {stopped.map(goalGroupView)}
         {suggestions.map((s) => (
           <Row key={s.debt.id} title={s.text} sub="Gợi ý từ sổ nợ: nợ ngắn hạn chưa có mục tiêu" onClick={ro ? undefined : () => open({ kind: "goal", item: null, prefill: s.prefill })} />
         ))}

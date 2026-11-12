@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { pocketsView } from "../../../src/domain/pockets";
-import { nearSpend } from "../../../src/domain/snapshot";
-import { nearSpendB, pocketsB } from "./household-b.fixture";
+import { nearSpend, topUpView, type NearSpend } from "../../../src/domain/snapshot";
+import { nearSpendB, nearSpendV23, pocketsB, pocketsV23, TOP_UP_TARGET } from "./household-b.fixture";
 import { setAmountsHidden } from "./money";
 import { nearSpendCard } from "./near-spend";
 
@@ -118,5 +118,69 @@ describe("thẻ Vận hành ở Hôm nay (ADR-122)", () => {
     setAmountsHidden(true);
     expect(nearSpendCard(nearSpendB(), TODAY, pocketsB()).debt?.line).toBe(`Nợ ngắn hạn còn ••••${NBSP}₫ (2 khoản) · đã có ••••${NBSP}₫ trong tài khoản Trả nợ`);
     expect(nearSpendCard(nearSpendB(), TODAY, free).blessing).toBe("Không còn nợ ngắn hạn 🎉 — tiền vận hành là của mình trọn vẹn");
+  });
+
+  it("UC-702 AC-33: Vận hành 15.000.000, còn 20 ngày, R 3.500.000 → 'Chi khoảng 575.000/ngày' và 'Đã chừa 3.500.000 ₫ cho 4 khoản phải trả kỳ này ›', danh sách 'còn / mỗi tháng' + 'đã trả'; trả đủ → 'Các khoản phải trả kỳ này đã trả đủ ✓'; không mục tiêu → không dòng; che số", () => {
+    const p = pocketsV23();
+    const v = nearSpendCard(nearSpendV23(p), "2026-11-20", p);
+    expect(v).toMatchObject({ head: "Vận hành tới kỳ lương 10/12 · còn 20 ngày", amount: `15.000.000${NBSP}₫`, big: "Chi khoảng 575.000/ngày" });
+    expect(v.reserved).toEqual({
+      line: `Đã chừa 3.500.000${NBSP}₫ cho 4 khoản phải trả kỳ này ›`,
+      done: false,
+      items: [
+        { id: "dien-nuoc", title: `Điện nước · còn 1.000.000 / 2.000.000${NBSP}₫`, spent: `đã trả 1.000.000${NBSP}₫` },
+        { id: "thuoc", title: `Thuốc · còn 500.000 / 500.000${NBSP}₫`, spent: `đã trả 0${NBSP}₫` },
+        { id: "thien-phuoc", title: `Thiện phước · còn 1.000.000 / 1.000.000${NBSP}₫`, spent: `đã trả 0${NBSP}₫` },
+        { id: "ve-que", title: `Về quê · còn 1.000.000 / 1.000.000${NBSP}₫`, spent: `đã trả 0${NBSP}₫` },
+      ],
+    });
+    // n = số khoản còn phải trả: Về quê trả đủ → 3 khoản.
+    const three = pocketsV23({ spent: { "dien-nuoc": 1_000_000, "ve-que": 1_000_000 } });
+    expect(nearSpendCard(nearSpendV23(three), "2026-11-20", three).reserved!.line).toBe(`Đã chừa 2.500.000${NBSP}₫ cho 3 khoản phải trả kỳ này ›`);
+    // Chi đủ 3.500.000 gắn các khoản (Vận hành 11.500.000) → R 0, số mỗi ngày vẫn 575.000.
+    const paid = pocketsV23({ operating: [{ id: "tk-chi-tieu-chong", name: "MB chi tiêu chồng", balance: 11_500_000 }], spent: { "dien-nuoc": 2_000_000, thuoc: 500_000, "thien-phuoc": 1_000_000, "ve-que": 1_000_000 } });
+    const after = nearSpendCard(nearSpendV23(paid), "2026-11-20", paid);
+    expect(after.big).toBe("Chi khoảng 575.000/ngày");
+    expect(after.reserved).toMatchObject({ line: "Các khoản phải trả kỳ này đã trả đủ ✓", done: true });
+    expect(nearSpendCard(nearSpendB(), TODAY, pocketsB()).reserved).toBeNull();
+    // Bản lưu cũ thiếu operating.goals / goalRemaining: không dòng, số mỗi ngày như trước.
+    const { goals: _g, ...oldOperating } = p.operating;
+    const { goalRemaining: _r, ...oldNs } = nearSpendV23(p);
+    const old = nearSpendCard(oldNs as NearSpend, "2026-11-20", { ...p, operating: oldOperating as typeof p.operating });
+    expect([old.reserved, old.big]).toEqual([null, "Chi khoảng 750.000/ngày"]);
+    setAmountsHidden(true);
+    const hidden = nearSpendCard(nearSpendV23(p), "2026-11-20", p);
+    expect(hidden.reserved!.line).toBe(`Đã chừa ••••${NBSP}₫ cho 4 khoản phải trả kỳ này ›`);
+    expect(JSON.stringify(hidden)).not.toMatch(/\d\.\d{3}/);
+  });
+
+  it("UC-702 AC-33: thiếu tiền chi tiêu → khối 'Tiền chi tiêu sắp không đủ: cần chuyển thêm 5.500.000 ₫', 'từ BIDV (Ví Thưởng) 2.000.000 ₫' rồi 'từ Phao 3.500.000 ₫' có Mở QR; chỉ tiền mặt → không QR, 'Chuyển vào tiền chi tiêu'; nguồn không đủ → 'chưa có nguồn'; che số", () => {
+    const p = pocketsV23({ operating: [{ id: "tk-chi-tieu-chong", name: "MB chi tiêu chồng", balance: 4_000_000 }] });
+    const ns = nearSpendV23(p);
+    const base = { amount: ns.amount, pendingTasks: 0, payCycle: null, goalRemaining: p.operating.remaining, daysLeft: ns.daysLeft, pockets: p, target: TOP_UP_TARGET };
+    const topUp = topUpView(base);
+    expect(nearSpendCard(ns, "2026-11-20", p, topUp).topUp).toEqual({
+      title: `Tiền chi tiêu sắp không đủ: cần chuyển thêm 5.500.000${NBSP}₫`,
+      sources: [
+        { accountId: "tk-bidv", text: `từ BIDV (Ví Thưởng) 2.000.000${NBSP}₫`, qr: true },
+        { accountId: "phao", text: `từ Phao 3.500.000${NBSP}₫`, qr: true },
+      ],
+      hint: null,
+      missing: null,
+    });
+    const cash = nearSpendCard(ns, "2026-11-20", p, topUpView({ ...base, target: null })).topUp!;
+    expect(cash.sources.map((s) => s.qr)).toEqual([false, false]);
+    expect(cash.hint).toBe("Chuyển vào tiền chi tiêu");
+    const short = nearSpendCard(ns, "2026-11-20", p, { amount: 7_000_000, sources: topUp!.sources, toAccountId: TOP_UP_TARGET.accountId, target: TOP_UP_TARGET }).topUp!;
+    expect(short.missing).toBe(`1.500.000${NBSP}₫ chưa có nguồn`);
+    expect(nearSpendCard(ns, "2026-11-20", p, null).topUp).toBeNull();
+    expect(nearSpendCard(ns, "2026-11-20", p).topUp).toBeNull();
+    // Tên tài khoản Ví Thưởng đã có chữ "Ví Thưởng" → không lặp lại.
+    const named = { ...topUp!, sources: [{ ...topUp!.sources[0]!, name: "MB Ví Thưởng" }] };
+    expect(nearSpendCard(ns, "2026-11-20", p, named).topUp!.sources[0]!.text).toBe(`từ MB Ví Thưởng 2.000.000${NBSP}₫`);
+    setAmountsHidden(true);
+    const hidden = nearSpendCard(ns, "2026-11-20", p, topUp).topUp!;
+    expect(hidden.title).toBe(`Tiền chi tiêu sắp không đủ: cần chuyển thêm ••••${NBSP}₫`);
+    expect(hidden.sources[0]!.text).toBe(`từ BIDV (Ví Thưởng) ••••${NBSP}₫`);
   });
 });

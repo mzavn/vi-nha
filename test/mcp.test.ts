@@ -9,6 +9,7 @@ import { AT, client, householdC } from "./helpers/household-c";
 import { D_NOW, householdD } from "./helpers/household-d";
 import { householdP, P_NOW } from "./helpers/household-p";
 import { householdShared, SHARED_NOW, vnAt } from "./helpers/household-shared";
+import { householdParent, PARENT_NOW } from "./helpers/household-parent";
 import { connectClaude, MemoryKV, mcpPost, stubClientMetadata, toolCall as call, type JsonRpc } from "./helpers/oauth";
 
 vi.mock("../src/notify/pay-cycle", () => ({ notifyPayCycle: vi.fn(async () => {}) }));
@@ -875,5 +876,65 @@ describe("mục tiêu chung một tài khoản qua MCP (UC-602 AC-18, UC-603 AC-
     const r = await mcp(call("assign_log", { log_id: "m1", splits: [{ meaning: "spend", amount: 6_000_000, category_id: "work-gear", goal_id: "hoc-tap" }] }));
     expect(r.json!.result.isError).toBeFalsy();
     expect(raw.prepare("SELECT goal_id FROM transactions WHERE log_id = 'm1'").get()).toEqual({ goal_id: "hoc-tap" });
+  });
+});
+
+describe("tài khoản con, tiền lãi, mục tiêu trả từ tiền chi tiêu qua MCP (UC-602 AC-19, UC-603 AC-34, UC-604 AC-15)", () => {
+  beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(PARENT_NOW);
+    raw = householdParent({ operatingGoals: true });
+    env = { DB: asD1(raw), OAUTH_KV: new MemoryKV() as unknown as KVNamespace, API_TOKEN: "tok", APP_PASSWORD: "mat-khau-chung" } as Env;
+    token = (await connectClaude(env, { memberId: "husband", password: "mat-khau-chung" })).access;
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const rest = async (path: string) =>
+    ((await (await app.request(`https://app.example.com${path}`, { headers: { Authorization: "Bearer tok", "X-Member-Id": "husband" } }, env)).json()) as { data: any }).data;
+
+  it("UC-602 AC-19: get_snapshot bằng đúng GET /v1/snapshot ở operating.goals, nearSpend.goalRemaining, topUp, accounts[].parentId, groups[].interest; get_goals bằng đúng GET /v1/goals, có mục tiêu trả từ tiền chi tiêu; mô tả tool nói các trường mới", async () => {
+    const snap = toolData((await mcp(call("get_snapshot", {}))).json!);
+    const restSnap = await rest("/v1/snapshot");
+    expect(snap).toEqual(restSnap);
+    expect(snap.pockets.operating.goals.map((g: { id: string }) => g.id)).toEqual(["dien-nuoc", "thuoc", "thien-phuoc", "ve-que"]);
+    expect(snap.nearSpend.goalRemaining).toBe(4_500_000);
+    expect(snap).toHaveProperty("topUp");
+    expect(snap.pockets.reserve.accounts.find((a: { id: string }) => a.id === "gui-6-thang").parentId).toBe("tk-tiet-kiem");
+    expect(snap.pockets.reserve.groups[0]).toMatchObject({ accountId: "tk-tiet-kiem", interest: 0, childIds: ["gui-6-thang"] });
+    const goals = toolData((await mcp(call("get_goals", {}))).json!);
+    expect(goals).toEqual(await rest("/v1/goals"));
+    expect(goals.operating.goals.map((g: { id: string; remaining: number }) => [g.id, g.remaining])).toEqual([
+      ["dien-nuoc", 2_000_000],
+      ["thuoc", 500_000],
+      ["thien-phuoc", 1_000_000],
+      ["ve-que", 1_000_000],
+    ]);
+    const tools = (await mcp({ jsonrpc: "2.0", id: 1, method: "tools/list" })).json!.result.tools as { name: string; description: string; inputSchema: { properties: Record<string, unknown> } }[];
+    const description = (name: string) => tools.find((t) => t.name === name)!.description;
+    for (const word of ["operating.goals", "goalRemaining", "topUp", "parentId", "interest"]) expect(description("get_snapshot")).toContain(word);
+    for (const word of ["operating.goals", "interest"]) expect(description("get_goals")).toContain(word);
+    for (const name of ["add_transaction", "assign_log"]) expect(description(name)).toMatch(/is_interest/);
+    expect(Object.keys(tools.find((t) => t.name === "add_transaction")!.inputSchema.properties)).toEqual(expect.arrayContaining(["goal_id", "is_interest", "from_interest"]));
+  });
+
+  it("UC-603 AC-34: add_transaction chi 1.000.000 từ tk-chi-tieu-vo goal_id dien-nuoc → ghi, goalRemaining giảm 1.000.000; from_interest vượt tiền lãi → lỗi invalid_interest", async () => {
+    const remaining = async () => toolData((await mcp(call("get_snapshot", {}))).json!).nearSpend.goalRemaining as number;
+    expect(await remaining()).toBe(4_500_000);
+    const r = await mcp(call("add_transaction", { meaning: "spend", amount: 1_000_000, category_id: "housing", account_id: "tk-chi-tieu-vo", goal_id: "dien-nuoc" }));
+    expect(r.json!.result.isError).toBeFalsy();
+    expect(toolData(r.json!).tx.goal_id).toBe("dien-nuoc");
+    expect(await remaining()).toBe(3_500_000);
+    const over = await mcp(call("add_transaction", { meaning: "transfer", amount: 100_000, account_id: "tk-tiet-kiem", to_account_id: "tk-chi-tieu-chong", from_interest: true }));
+    expect(over.json!.result.isError).toBe(true);
+    expect(over.json!.result.content[0].text).toMatch(/^Tiền lãi của MB tiết kiệm chỉ còn 0 ₫/);
+  });
+
+  it("UC-604 AC-15: assign_log log in 3.000.000 của khoản gửi với is_interest: true → khoản có phân loại passive_income, tiền lãi của nhóm +3.000.000", async () => {
+    raw.exec(`INSERT INTO bank_logs (id, at, amount, direction, account_id, content, source, status) VALUES ('m1', '${vnAt("2026-11-20 09:00")}', 3000000, 'in', 'gui-6-thang', 'TAT TOAN LAI', 'webhook', 'pending')`);
+    const r = await mcp(call("assign_log", { log_id: "m1", splits: [{ meaning: "income", amount: 3_000_000, is_interest: true }] }));
+    expect(r.json!.result.isError).toBeFalsy();
+    const id = toolData(r.json!).transactions[0].id as number;
+    expect(raw.prepare("SELECT report_class FROM transaction_report_classes WHERE transaction_id = ?").get(id)).toEqual({ report_class: "passive_income" });
+    expect((await rest("/v1/snapshot")).pockets.reserve.groups[0]).toMatchObject({ accountId: "tk-tiet-kiem", interest: 3_000_000 });
   });
 });

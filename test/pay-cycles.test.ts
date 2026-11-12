@@ -247,7 +247,7 @@ describe("danh sách việc ngày lương (UC-1206)", () => {
     const t1 = await transfer(2_600_000, "main", "savings", "2026-11-10T10:00:00");
     expect(t1.json.data.effects.tasksDone.map((t: { kind: string }) => t.kind)).toEqual(["savings", "surplus"]);
     let s = await snap();
-    expect(s.payCycle.savingsDone).toEqual({ amount: 2_000_000, base: 20_000_000, pct: 10 });
+    expect(s.payCycle.savingsDone).toEqual({ amount: 2_000_000, base: 20_000_000, pct: 10, level: "10to30" });
     expect(s.payCycle.tasks[0]).toMatchObject({ status: "done", auto: true, linked: 2_000_000, lastTxAt: AT("2026-11-10T10:00:00") });
     at("2026-11-10T10:05:00");
     const t2 = await transfer(3_000_000, "main", "reserve", "2026-11-10T10:05:00");
@@ -406,7 +406,7 @@ describe("danh sách việc ngày lương (UC-1206)", () => {
     const res = await call("POST", `/v1/pay-cycle-tasks/${savingsTask}/done`);
     expect(res.status).toBe(200);
     expect(res.json.data.tasks[0]).toMatchObject({ status: "done", auto: false });
-    expect(res.json.data.savingsDone).toEqual({ amount: 0, base: 20_000_000, pct: 0 });
+    expect(res.json.data.savingsDone).toEqual({ amount: 0, base: 20_000_000, pct: 0, level: "below1" });
     s = await snap();
     expect(s.nearSpend.pendingTasks).toBe(pending - 2_000_000);
     expect(s.pockets.savings.total).toBe(0);
@@ -414,7 +414,7 @@ describe("danh sách việc ngày lương (UC-1206)", () => {
     const surplusDone = await call("POST", `/v1/pay-cycle-tasks/${surplusTask}/done`);
     expect(surplusDone.status).toBe(200);
     expect(surplusDone.json.data.tasks[1]).toMatchObject({ status: "done", auto: false });
-    expect(surplusDone.json.data.savingsDone).toEqual({ amount: 0, base: 20_000_000, pct: 0 });
+    expect(surplusDone.json.data.savingsDone).toEqual({ amount: 0, base: 20_000_000, pct: 0, level: "below1" });
     expect((await call("POST", `/v1/pay-cycle-tasks/${savingsTask}/done`)).json.error?.code).toBe("task_done");
     expect((await call("POST", `/v1/pay-cycle-tasks/${savingsTask}/reopen`)).json.data.tasks[0]).toMatchObject({ status: "open", missing: 2_000_000 });
     await call("POST", `/v1/transactions/${r.json.data.tx.id}/void`);
@@ -627,5 +627,47 @@ describe("việc ② khi nhiều mục tiêu chung một tài khoản (UC-1206 A
     const goals = s.pockets.reserve.goals as { id: string; held: number; spent: number; short: number }[];
     expect(goals.find((g) => g.id === "nha-o")).toMatchObject({ held: 0, spent: 7_500_000, short: 0 });
     expect(goals.find((g) => g.id === "hoc-tap")).toMatchObject({ held: 4_500_000, short: 1_500_000 });
+  });
+});
+
+describe("tài khoản con và thang Tích luỹ (UC-1206 AC-15, AC-16)", () => {
+  it("UC-1206 AC-15: ② Học tập 2.000.000 đích tk-tiet-kiem — chuyển 5.000.000 từ tk-tiet-kiem sang con không ghép (chuyển nội bộ); chuyển 2.000.000 từ tài khoản chính sang con → ghép, Học tập xong", async () => {
+    db = householdShared({ cycle: false });
+    db.exec(`
+      UPDATE accounts SET opening_balance = 7000000 WHERE id = 'tk-tiet-kiem';
+      UPDATE reserve_goals SET active = 0 WHERE id = 'nha-o';
+      UPDATE reserve_goals SET target_amount = 13000000 WHERE id = 'hoc-tap';
+      INSERT INTO accounts (id, name, kind, bank, opening_balance, pocket, pocket_confirmed, parent_account_id) VALUES ('gui-6-thang', 'Gửi 6 tháng', 'bank', 'MBBank', 0, 'reserve', 1, 'tk-tiet-kiem');
+    `);
+    call = client(db);
+    expect((await call("POST", "/v1/transactions", { meaning: "income", amount: 20_000_000, account_id: "cash-husband", income_stream_id: "salary-husband", at: AT("2026-11-10T08:00:00") })).status).toBe(201);
+    const hocTap = async () => ((await snap()).payCycle.tasks as Task[]).filter((t) => t.goal?.id === "hoc-tap").map((t) => [t.toAccountId, t.amount, t.status, t.missing]);
+    expect(await hocTap()).toEqual([["tk-tiet-kiem", 2_000_000, "open", 2_000_000]]);
+    await transfer(5_000_000, "tk-tiet-kiem", "gui-6-thang", "2026-11-10T09:00:00");
+    expect(await hocTap()).toEqual([["tk-tiet-kiem", 2_000_000, "open", 2_000_000]]);
+    expect(one("SELECT COUNT(*) AS n FROM pay_cycle_task_tx")).toEqual({ n: 0 });
+    await transfer(2_000_000, "cash-husband", "gui-6-thang", "2026-11-10T09:30:00");
+    expect(await hocTap()).toEqual([["tk-tiet-kiem", 2_000_000, "done", 0]]);
+  });
+
+  it("UC-1206 AC-16: ① của lương 30.000.000 (10%, 3.000.000) — sửa 9.000.000 → pct 30; 200.000 → pct 0; 0 không lý do và bỏ qua không lý do → 400 reason_required; 0 có lý do → lưu, nhật ký có lý do; 40.000.000 → lưu, pct 100", async () => {
+    await salary(30_000_000, "2026-11-10T08:00:00");
+    const id = await taskId("savings", "savings");
+    const row = () => one<{ amount: number; pct: number; reason: string | null }>("SELECT amount, pct, reason FROM pay_cycle_tasks WHERE id = ?", id);
+    expect(row()).toMatchObject({ amount: 3_000_000, pct: 10 });
+    expect((await call("PATCH", `/v1/pay-cycle-tasks/${id}`, { amount: 9_000_000 })).status).toBe(200);
+    expect(row()).toMatchObject({ amount: 9_000_000, pct: 30 });
+    expect((await call("PATCH", `/v1/pay-cycle-tasks/${id}`, { amount: 200_000 })).status).toBe(200);
+    expect(row()).toMatchObject({ amount: 200_000, pct: 0 });
+    const zero = await call("PATCH", `/v1/pay-cycle-tasks/${id}`, { amount: 0 });
+    expect([zero.status, zero.json.error?.code]).toEqual([400, "reason_required"]);
+    const skip = await call("POST", `/v1/pay-cycle-tasks/${id}/skip`, {});
+    expect([skip.status, skip.json.error?.code]).toEqual([400, "reason_required"]);
+    expect((await call("PATCH", `/v1/pay-cycle-tasks/${id}`, { amount: 0, reason: "Tháng này trả viện phí" })).status).toBe(200);
+    expect(row()).toEqual({ amount: 0, pct: 0, reason: "Tháng này trả viện phí" });
+    expect(all("SELECT detail FROM audit_log WHERE action = 'pay_cycle_task.amount'").at(-1)).toEqual({ detail: JSON.stringify({ from: 200_000, to: 0, reason: "Tháng này trả viện phí" }) });
+    const big = await call("PATCH", `/v1/pay-cycle-tasks/${id}`, { amount: 40_000_000 });
+    expect(big.status).toBe(200);
+    expect(row()).toMatchObject({ amount: 40_000_000, pct: 100 });
   });
 });

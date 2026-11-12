@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FROM_INTEREST } from "./goal-choices";
 import { formatVnd } from "./money";
 import { ASSIGN_CHOICES, assignBody, assignToast, counterpartAccounts, hiddenLogsLine, interestToast, linkToast, logChip, manualMatchLabel, validateSplits, type AssignChoice, type AssignRow, type SplitMeaning } from "./splits";
 import type { AccountRef } from "./types";
@@ -96,13 +97,27 @@ describe("thân yêu cầu Gán (UC-706)", () => {
       { id: "nha-o", name: "Nhà ở" },
       { id: "hoc-tap", name: "Học tập" },
     ];
-    const body = assignBody([row({ meaning: "spend", amount: 6_000_000, category_id: "tuition", goal_id: "hoc-tap" })], false, choices);
+    const goals = () => ({ kind: "account" as const, label: "Cho mục tiêu", noneLabel: "Không cho mục tiêu nào", choices, fromInterest: false });
+    const body = assignBody([row({ meaning: "spend", amount: 6_000_000, category_id: "tuition", goal_id: "hoc-tap" })], false, { goals });
     expect(body.splits).toEqual([{ meaning: "spend", amount: 6_000_000, category_id: "tuition", goal_id: "hoc-tap" }]);
-    expect(assignBody([row({ meaning: "transfer", amount: 1_000, other_account_id: "main", goal_id: "nha-o" })], false, choices).splits[0]).toMatchObject({ goal_id: "nha-o" });
-    expect(assignBody([row({ meaning: "buy_asset", amount: 1_000, asset_kind: "gold", goal_id: "nha-o" })], false, choices).splits[0]).not.toHaveProperty("goal_id");
-    expect(assignBody([row({ meaning: "spend", amount: 1_000, category_id: "food", goal_id: null })], false, choices).splits[0]).not.toHaveProperty("goal_id");
-    expect(assignBody([row({ meaning: "spend", amount: 1_000, category_id: "food", goal_id: "thue" })], false, choices).splits[0]).not.toHaveProperty("goal_id");
+    expect(assignBody([row({ meaning: "transfer", amount: 1_000, other_account_id: "main", goal_id: "nha-o" })], false, { goals }).splits[0]).toMatchObject({ goal_id: "nha-o" });
+    expect(assignBody([row({ meaning: "buy_asset", amount: 1_000, asset_kind: "gold", goal_id: "nha-o" })], false, { goals }).splits[0]).not.toHaveProperty("goal_id");
+    expect(assignBody([row({ meaning: "spend", amount: 1_000, category_id: "food", goal_id: null })], false, { goals }).splits[0]).not.toHaveProperty("goal_id");
+    expect(assignBody([row({ meaning: "spend", amount: 1_000, category_id: "food", goal_id: "thue" })], false, { goals }).splits[0]).not.toHaveProperty("goal_id");
     expect(assignBody([row({ meaning: "spend", amount: 1_000, category_id: "food", goal_id: "hoc-tap" })], false).splits[0]).not.toHaveProperty("goal_id");
+  });
+
+  it("UC-705 AC-38 · UC-706 Gán: log tiền vào của khoản gửi gán thu nhập với ô 'Đây là tiền lãi' → split mang is_interest; log tiền ra của mẹ chọn 'Từ tiền lãi' → from_interest, không goal_id; chuyển sang con (hàng không có chip) → không gửi", () => {
+    const income = row({ meaning: "income", amount: 3_000_000, is_interest: true });
+    expect(assignBody([income], false, { interest: true }).splits[0]).toMatchObject({ meaning: "income", amount: 3_000_000, is_interest: true });
+    expect(assignBody([income], false).splits[0]).not.toHaveProperty("is_interest");
+    expect(assignBody([{ ...income, is_interest: false }], false, { interest: true }).splits[0]).not.toHaveProperty("is_interest");
+    const goals = (to: string | null) => ({ kind: "account" as const, label: "Cho mục tiêu", noneLabel: "Không cho mục tiêu nào", choices: [], fromInterest: to !== "gui-6t" });
+    const out = assignBody([row({ meaning: "transfer", amount: 3_000_000, other_account_id: "main", goal_id: FROM_INTEREST })], false, { goals }).splits[0]!;
+    expect(out).toMatchObject({ meaning: "transfer", other_account_id: "main", from_interest: true });
+    expect(out).not.toHaveProperty("goal_id");
+    expect(assignBody([row({ meaning: "spend", amount: 500_000, category_id: "food", goal_id: FROM_INTEREST })], false, { goals }).splits[0]).toMatchObject({ from_interest: true });
+    expect(assignBody([row({ meaning: "transfer", amount: 1_000, other_account_id: "gui-6t", goal_id: FROM_INTEREST })], false, { goals }).splits[0]).not.toHaveProperty("from_interest");
   });
 
   it("UC-706 AC-36: log chờ của tài khoản riêng tư bị giấu → '1 khoản của tài khoản riêng tư'; 0 / thiếu → không dòng", () => {

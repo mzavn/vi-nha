@@ -1,16 +1,34 @@
-// Thẻ "Việc ngày lương" (pwa UC-702): hàng việc từ `snapshot.payCycle`, nút QR / Đã làm / Đã chuyển / Bỏ qua / Hoàn tác, chạm số để sửa.
-// Thao tác cần mạng (ghi thẳng lên server, server tick); mất mạng thì nút khoá kèm "Cần mạng". Chữ và trạng thái ở lib/pay-cycle.ts.
+// Thẻ "Việc ngày lương" (pwa UC-702): hàng việc từ `snapshot.payCycle`, nút QR / Đã làm / Đã chuyển / Bỏ qua / Hoàn tác, chạm số để sửa
+// (① mở sheet "Trích Tích luỹ" có thanh 1 · 10 · 30 — ADR-142). Thao tác cần mạng (ghi thẳng lên server, server tick); mất mạng thì nút
+// khoá kèm "Cần mạng". Chữ và trạng thái ở lib/pay-cycle.ts.
 
 import { Fragment } from "preact";
 import { useState } from "preact/hooks";
 import { errorText } from "../lib/api";
-import { amountProblem, goalGroupQr, noCycleStreamLine, payCycleCard, skipProblem, taskQr, type PayTaskRow, type TaskAction, type TaskQr } from "../lib/pay-cycle";
+import {
+  amountProblem,
+  goalGroupQr,
+  noCycleStreamLine,
+  payCycleCard,
+  savingsSheetAction,
+  savingsSheetDrag,
+  savingsSheetOpen,
+  savingsSheetType,
+  savingsSheetView,
+  SKIP_REASON_REQUIRED,
+  skipProblem,
+  taskQr,
+  type PayTaskRow,
+  type TaskAction,
+  type TaskQr,
+} from "../lib/pay-cycle";
 import type { PayCycleTask, Snapshot } from "../lib/types";
 import { go, payCycleAction, toast, useApp } from "../state/store";
 import { AmountInput } from "../ui/fields";
 import { Money } from "../ui/money";
 import { Sheet } from "../ui/parts";
 import { TransferQrBlock } from "../ui/qr";
+import { SavingsSlider } from "../ui/savings-slider";
 
 type Open = { kind: "qr" | "skip" | "amount"; task: PayCycleTask } | { kind: "group-qr"; accountId: string } | null;
 
@@ -122,12 +140,18 @@ export function PayCycleCard({ snap }: { snap: Snapshot }) {
       {open?.kind === "qr" && <QrSheet qrOf={(accountId) => taskQr(c, open.task, accountId)} onClose={() => setOpen(null)} />}
       {open?.kind === "group-qr" && <QrSheet qrOf={() => goalGroupQr(c, open.accountId)} onClose={() => setOpen(null)} />}
       {open?.kind === "skip" && <SkipSheet task={open.task} busy={locked} onSubmit={(reason) => void run(open.task.id, { kind: "skip", reason })} onClose={() => setOpen(null)} />}
-      {open?.kind === "amount" && <AmountSheet task={open.task} busy={locked} onSubmit={(amount, reason) => void run(open.task.id, { kind: "amount", amount, reason })} onClose={() => setOpen(null)} />}
+      {open?.kind === "amount" &&
+        (open.task.kind === "savings" ? (
+          <SavingsSheet task={open.task} busy={locked} onSubmit={(action) => void run(open.task.id, action)} onClose={() => setOpen(null)} />
+        ) : (
+          <AmountSheet task={open.task} busy={locked} onSubmit={(amount) => void run(open.task.id, { kind: "amount", amount, reason: "" })} onClose={() => setOpen(null)} />
+        ))}
     </section>
   );
 }
 
-function QrSheet({ qrOf, onClose }: { qrOf: (accountId?: string) => TaskQr; onClose: () => void }) {
+/** Sheet mã QR chuyển khoản (ADR-116) — dùng chung việc ngày lương và nhắc chuyển thêm ở thẻ Vận hành. */
+export function QrSheet({ qrOf, onClose }: { qrOf: (accountId?: string) => TaskQr; onClose: () => void }) {
   const [accountId, setAccountId] = useState<string | undefined>(undefined);
   const qr = qrOf(accountId);
   return (
@@ -179,25 +203,50 @@ function SkipSheet({ task, busy, onSubmit, onClose }: { task: PayCycleTask; busy
   );
 }
 
-function AmountSheet({ task, busy, onSubmit, onClose }: { task: PayCycleTask; busy: boolean; onSubmit: (amount: number, reason: string) => void; onClose: () => void }) {
+/** Sửa số của việc khác ① (② / ④ / chuyển theo ngăn): không cần lý do. */
+function AmountSheet({ task, busy, onSubmit, onClose }: { task: PayCycleTask; busy: boolean; onSubmit: (amount: number) => void; onClose: () => void }) {
   const [amount, setAmount] = useState<number | null>(task.amount);
-  const [reason, setReason] = useState("");
-  const problem = amountProblem(task, amount, reason);
+  const problem = amountProblem(task, amount, "");
   return (
     <Sheet open title="Sửa số" onClose={onClose}>
       <div class="field">
         <label for="task-amount">Số tiền</label>
         <AmountInput id="task-amount" value={amount ?? 0} onChange={(n, valid) => setAmount(valid || n === 0 ? n : null)} />
       </div>
-      {task.kind === "savings" && amount === 0 && (
-        <div class="field">
-          <label for="task-reason">Lý do</label>
-          <input id="task-reason" class="ctl" maxLength={500} value={reason} onInput={(e) => setReason(e.currentTarget.value)} />
-        </div>
-      )}
       {problem && <p class="fhint">{problem}</p>}
       <div class="pad">
-        <button type="button" class="btn btn-primary btn-wide" disabled={busy || !!problem} onClick={() => onSubmit(amount!, reason)}>
+        <button type="button" class="btn btn-primary btn-wide" disabled={busy || !!problem} onClick={() => onSubmit(amount!)}>
+          Lưu
+        </button>
+      </div>
+    </Sheet>
+  );
+}
+
+/** Sheet "Trích Tích luỹ" (UC-702 AC-35): thanh 1–100% có vạch 1 · 10 · 30 và ô số tiền đi cùng nhau; số 0 bắt lý do. */
+function SavingsSheet({ task, busy, onSubmit, onClose }: { task: PayCycleTask; busy: boolean; onSubmit: (action: TaskAction) => void; onClose: () => void }) {
+  const [s, setS] = useState(() => savingsSheetOpen(task));
+  const v = savingsSheetView(s);
+  return (
+    <Sheet open title="Trích Tích luỹ" onClose={onClose}>
+      <div class="field">
+        <span class="k">{s.pct}% khoản lương</span>
+        <SavingsSlider id="sv-pct" pct={s.pct} disabled={s.income === null} onPct={(pct) => setS((x) => savingsSheetDrag(x, pct))} />
+      </div>
+      <div class="field">
+        <label for="sv-amount">Số tiền</label>
+        <AmountInput id="sv-amount" value={s.amount ?? 0} onChange={(n, valid) => setS((x) => savingsSheetType(x, valid || n === 0 ? n : null))} />
+      </div>
+      {v.warn && <p class="note warn">{v.warn}</p>}
+      {v.needsReason && (
+        <div class="field">
+          <label for="sv-reason">Lý do</label>
+          <input id="sv-reason" class="ctl" maxLength={500} placeholder={SKIP_REASON_REQUIRED} value={s.reason} onInput={(e) => setS((x) => ({ ...x, reason: e.currentTarget.value }))} />
+        </div>
+      )}
+      {v.problem && <p class="fhint">{v.problem}</p>}
+      <div class="pad">
+        <button type="button" class="btn btn-primary btn-wide" disabled={busy || !v.canSave} onClick={() => onSubmit(savingsSheetAction(s))}>
           Lưu
         </button>
       </div>

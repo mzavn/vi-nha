@@ -103,6 +103,10 @@ export interface EntryBody {
   opens_cycle?: boolean;
   /** Mục tiêu Dự phòng mà khoản chi / chuyển ra này dùng tiền (pocket UC-1209 bước 11); chỉ gửi khi người nhập chọn. */
   goal_id?: string;
+  /** Khoản thu là tiền lãi (QĐ2, ADR-140): chỉ gửi khi thu vào mẹ có mục tiêu hoặc con của nó. */
+  is_interest?: boolean;
+  /** Khoản chi / chuyển ra khỏi nhóm mẹ + con lấy từ tiền lãi ("Từ tiền lãi"); không đi cùng `goal_id`. */
+  from_interest?: boolean;
 }
 
 /** Hệ quả lên kỳ lương của một lần ghi (POST /v1/transactions, /replace, gán log). */
@@ -158,6 +162,10 @@ export interface TxRow {
   legacy?: boolean;
   /** Mục tiêu Dự phòng của khoản chi / chuyển ra (pocket UC-1209 bước 11); null = không cho mục tiêu nào. */
   goal_id?: string | null;
+  /** Khoản thu có phân loại "tiền lãi" tường minh (`passive_income`). */
+  is_interest?: boolean;
+  /** Khoản chi / chuyển ra lấy từ tiền lãi của nhóm. */
+  from_interest?: boolean;
 }
 
 /** Loại chi (cách tính cũ) của giao dịch trước v2 (transactions.legacy_class). */
@@ -316,6 +324,8 @@ export interface SettingsAccount {
   pocket_confirmed?: boolean;
   /** Tài khoản riêng tư (UC-504): người khác chỉ thấy tổng. Bản cài đặt lưu offline cũ thiếu. */
   private?: boolean;
+  /** Tài khoản mẹ khi đây là khoản gửi kỳ hạn (ADR-140); null = không phải tài khoản con. Bản cài đặt lưu offline cũ thiếu. */
+  parent_account_id?: string | null;
 }
 
 /** Ba ngăn (v2): Tích luỹ · Dự phòng · Vận hành. */
@@ -329,6 +339,10 @@ export interface ReserveGoal {
   id: string;
   name: string;
   account_id: string | null;
+  /** Nơi để tiền (ADR-141): `account` một tài khoản để dành · `operating` trả thẳng từ tiền chi tiêu. Bản lưu cũ thiếu = `account`. */
+  pays_from?: "account" | "operating";
+  /** Mục tiêu `operating`: còn phải trả kỳ này = max(0, mỗi tháng − đã chi từ Vận hành); null với mục tiêu `account`. */
+  remaining?: number | null;
   /** Tài khoản đề xuất của bản cập nhật (chỉ gợi ý cho màn chuyển đổi, không phải gắn); null = không có. */
   suggested_account_id: string | null;
   held: number | null;
@@ -358,6 +372,10 @@ export interface SettingsGoalGroup {
   short: number | null;
   extra: number | null;
   goal_ids: string[];
+  /** Tài khoản con đang dùng của mẹ; `balance` = số dư gộp (mẹ + con). */
+  child_ids?: string[];
+  /** Tiền lãi của nhóm: số chia cho mục tiêu = `balance − interest`. */
+  interest?: number;
 }
 
 /** Nhóm danh mục và hạn mức mềm mỗi kỳ lương (UC-1204); `cycle_limit` null = không đặt. */

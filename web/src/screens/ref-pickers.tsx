@@ -1,16 +1,73 @@
-// Hai ô chọn "khoản nào" dùng chung cho màn Gán (UC-706) và Loại khác (UC-705):
+// Các ô chọn "khoản nào" dùng chung cho màn Nhập (UC-703), Gán (UC-706), Loại khác (UC-705) và Sửa khoản (UC-715):
 //  - LinkSourcePicker: khoản tiền về trả cho khoản gốc nào (`link_id`) — tuỳ chọn. Hoàn tiền → khoản chi (chọn thì danh mục
 //    & ví theo khoản đó); nhận lại tiền cho vay → khoản cho vay (chọn thì "Ai trả" theo người của khoản đó).
 //  - ReceivablePicker: cho ai vay / ai trả (`receivable_id`), kèm "+ Người mới…" tạo khoản phải thu số 0 ngay tại chỗ.
+//  - GoalRowField: hàng "Cho mục tiêu" (chip, kèm "Từ tiền lãi") / ô gọn "Cho khoản phải trả" của khoản chi / chuyển ra.
+//  - InterestCheck: ô "Đây là tiền lãi" của khoản thu vào nhóm mẹ có mục tiêu.
 
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, errorText } from "../lib/api";
+import { FROM_INTEREST, FROM_INTEREST_LABEL, IS_INTEREST_LABEL, NO_GOAL, OPERATING_UNSET_LABEL, type GoalRow } from "../lib/goal-choices";
 import { bookRefLabel } from "../lib/memo-books";
 import { overpaidHint, receivableEffect, receivableOptions } from "../lib/receivables";
 import { lendDiffText, linkCandidateLabel, linkPickHint, linkCandidatesPath, rankLinkCandidates, refundDiffText, type LinkKind } from "../lib/refunds";
 import type { LinkCandidate, Receivable, ReceivableRef } from "../lib/types";
 import { useResource } from "../state/resource";
 import { getState, refresh, setState, useApp } from "../state/store";
+
+/**
+ * Hàng chọn của khoản chi / chuyển ra (`goalChoices`). Mục tiêu để ở tài khoản: chip theo thứ tự ưu tiên (+ "Từ tiền lãi" khi
+ * nhóm có tiền lãi, loại trừ nhau) + "Không cho mục tiêu nào"; chạm lại chip đang chọn là bỏ chọn (pwa UC-703 AC-17, QĐ2).
+ * Khoản phải trả từ tiền chi tiêu: một dòng "Cho khoản phải trả: không ▾", không chọn sẵn (UC-703 AC-18). Không hàng → không vẽ.
+ */
+export function GoalRowField({ id, row, value, onChange }: { id: string; row: GoalRow | null; value: string | null; onChange: (value: string | null) => void }) {
+  if (!row) return null;
+  if (row.kind === "operating") {
+    return (
+      <div class="field">
+        <label for={id}>{row.label}</label>
+        <select id={id} class="ctl" value={value ?? ""} onChange={(e) => onChange(e.currentTarget.value || null)}>
+          <option value="">{OPERATING_UNSET_LABEL}</option>
+          {row.choices.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+          <option value={NO_OPERATING_VALUE}>{row.noneLabel}</option>
+        </select>
+      </div>
+    );
+  }
+  const chips = [...row.choices, ...(row.fromInterest ? [{ id: FROM_INTEREST, name: FROM_INTEREST_LABEL }] : []), ...(row.choices.length > 0 ? [{ id: NO_GOAL, name: row.noneLabel }] : [])];
+  return (
+    <div class="field goal-chips">
+      <span class="k">{row.label}</span>
+      <div class="goal-chip-row" role="group" aria-label={row.label}>
+        {chips.map((c) => (
+          <button type="button" key={c.id} class="goal-chip" aria-pressed={value === c.id} onClick={() => onChange(value === c.id ? null : c.id)}>
+            {c.name}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Giá trị của "Không cho khoản nào" trong ô chọn (ô `<select>` cần giá trị khác "" của "không"); không gửi `goal_id`. */
+const NO_OPERATING_VALUE = "@none";
+
+/** Ô "Đây là tiền lãi" (QĐ2): chỉ vẽ khi khoản thu vào mẹ có mục tiêu hoặc con của nó (`incomeInterest`). */
+export function InterestCheck({ shown, checked, onChange }: { shown: boolean; checked: boolean; onChange: (checked: boolean) => void }) {
+  if (!shown) return null;
+  return (
+    <div class="field">
+      <label class="check">
+        <input type="checkbox" checked={checked} onChange={(e) => onChange(e.currentTarget.checked)} />
+        {IS_INTEREST_LABEL}
+      </label>
+    </div>
+  );
+}
 
 /**
  * Ô "Trả lại cho khoản chi" (`kind="spend"`) / "Trả cho khoản cho vay" (`kind="lend"`): mục đầu "không chỉ khoản nào", rồi

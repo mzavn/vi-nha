@@ -649,15 +649,15 @@ describe("ba ngăn: cấu hình (261112-ba-ngan-nen-du-lieu)", () => {
     expect(data.config.savings_pct).toBe(30);
     for (const g of data.goals) {
       expect(Object.keys(g).sort()).toEqual(
-        ["account_id", "active", "debt_id", "due_date", "held", "id", "monthly_amount", "name", "need", "repeat_months", "short", "sort", "spent", "suggested_account_id", "target_amount", "target_pct"].sort(),
+        ["account_id", "active", "debt_id", "due_date", "held", "id", "monthly_amount", "name", "need", "pays_from", "remaining", "repeat_months", "short", "sort", "spent", "suggested_account_id", "target_amount", "target_pct"].sort(),
       );
     }
     expect(data.goals).toEqual([
-      { id: "tuition", name: "Học phí", account_id: "mb-tuition", suggested_account_id: null, held: 2_500_000, need: 6_000_000, spent: 0, short: 3_500_000, target_amount: 6_000_000, target_pct: null, monthly_amount: 2_000_000, repeat_months: 3, due_date: "2027-01-15", debt_id: null, sort: 10, active: true },
-      { id: "car-service", name: "Bảo dưỡng xe", account_id: null, suggested_account_id: null, held: null, need: null, spent: 0, short: null, target_amount: 4_800_000, target_pct: null, monthly_amount: null, repeat_months: null, due_date: "2027-03-31", debt_id: null, sort: 20, active: true },
-      { id: "income-tax", name: "Thuế thu nhập", account_id: null, suggested_account_id: null, held: null, need: null, spent: 0, short: null, target_amount: null, target_pct: 10, monthly_amount: null, repeat_months: null, due_date: null, debt_id: null, sort: 30, active: true },
+      { id: "tuition", name: "Học phí", account_id: "mb-tuition", suggested_account_id: null, held: 2_500_000, need: 6_000_000, spent: 0, short: 3_500_000, target_amount: 6_000_000, target_pct: null, monthly_amount: 2_000_000, repeat_months: 3, due_date: "2027-01-15", debt_id: null, sort: 10, active: true, pays_from: "account", remaining: null },
+      { id: "car-service", name: "Bảo dưỡng xe", account_id: null, suggested_account_id: null, held: null, need: null, spent: 0, short: null, target_amount: 4_800_000, target_pct: null, monthly_amount: null, repeat_months: null, due_date: "2027-03-31", debt_id: null, sort: 20, active: true, pays_from: "account", remaining: null },
+      { id: "income-tax", name: "Thuế thu nhập", account_id: null, suggested_account_id: null, held: null, need: null, spent: 0, short: null, target_amount: null, target_pct: 10, monthly_amount: null, repeat_months: null, due_date: null, debt_id: null, sort: 30, active: true, pays_from: "account", remaining: null },
     ]);
-    expect(data.goal_groups).toEqual([{ account_id: "mb-tuition", balance: 2_500_000, need: 6_000_000, spent: 0, short: 3_500_000, extra: 0, goal_ids: ["tuition"] }]);
+    expect(data.goal_groups).toEqual([{ account_id: "mb-tuition", balance: 2_500_000, need: 6_000_000, spent: 0, short: 3_500_000, extra: 0, goal_ids: ["tuition"], child_ids: [], interest: 0 }]);
     // Mục tiêu đã tắt vẫn có trong danh sách.
     raw.exec("UPDATE reserve_goals SET active = 0 WHERE id = 'car-service'");
     expect((await call("GET", "/v1/settings")).json.data.goals.find((g: any) => g.id === "car-service")).toMatchObject({ active: false });
@@ -681,7 +681,7 @@ describe("ba ngăn: cấu hình (261112-ba-ngan-nen-du-lieu)", () => {
       expect(data.goals.find((g: any) => g.id === "nha-o")).toMatchObject({ held: 0, spent: 7_500_000, short: 0 });
       const snap = (await call("GET", "/v1/snapshot", undefined, true, as("husband"))).json.data.pockets.reserve;
       expect(data.goal_groups).toEqual(
-        snap.groups.map((g: any) => ({ account_id: g.accountId, balance: g.balance, need: g.need, spent: g.spent, short: g.short, extra: g.extra, goal_ids: g.goalIds })),
+        snap.groups.map((g: any) => ({ account_id: g.accountId, balance: g.balance, need: g.need, spent: g.spent, short: g.short, extra: g.extra, goal_ids: g.goalIds, child_ids: g.childIds, interest: g.interest })),
       );
       expect(heldOf(data.goals)).toEqual(heldOf(snap.goals));
     } finally {
@@ -751,5 +751,128 @@ describe("ba ngăn: cấu hình (261112-ba-ngan-nen-du-lieu)", () => {
       const r = await call("PUT", "/v1/settings/config", { savings_pct: v });
       expect([r.status, r.json.error?.code]).toEqual([400, "invalid_input"]);
     }
+  });
+});
+
+describe("tài khoản con — khoản gửi kỳ hạn (261112-tai-khoan-me-va-quy-chi-chung)", () => {
+  const auditOf = (action: string) =>
+    (raw.prepare("SELECT target, detail FROM audit_log WHERE action = ? ORDER BY id").all(action) as { target: string; detail: string }[]).map((r) => ({
+      target: r.target,
+      detail: JSON.parse(r.detail),
+    }));
+  const accountRow = (id: string) =>
+    raw.prepare("SELECT parent_account_id, pocket, pocket_confirmed, private, owner_member_id, active FROM accounts WHERE id = ?").get(id) as Record<string, unknown>;
+  const settingsAccounts = async () => (await call("GET", "/v1/settings")).json.data.accounts as any[];
+  /** Số dư gộp: tài khoản + con đang dùng của nó, theo sổ (GET /v1/settings). */
+  const combined = (accounts: any[], id: string) =>
+    accounts.filter((a) => a.id === id || (a.parent_account_id === id && a.active)).reduce((s, a) => s + Number(a.book_balance ?? 0), 0);
+  const reserveTotal = (accounts: any[]) => accounts.filter((a) => a.active && a.pocket === "reserve").reduce((s, a) => s + Number(a.book_balance ?? 0), 0);
+  const err = (r: { status: number; json: Json }) => [r.status, r.json.error?.code];
+
+  beforeEach(() => {
+    raw.exec(`
+      INSERT INTO accounts (id, name, kind, bank, account_no, owner_member_id, opening_balance, opened_at, pocket, pocket_confirmed) VALUES
+        ('tk-tiet-kiem', 'MB tiết kiệm', 'bank', 'MBBank', '0999000001', 'husband', 20000000, date('now', '-10 days'), 'reserve', 1),
+        ('tk-chi-tieu-chong', 'VCB chi tiêu chồng', 'bank', 'Vietcombank', '0999000002', 'husband', 0, date('now', '-10 days'), 'operating', 1),
+        ('gui-ky-han', 'Tiền gửi kỳ hạn MB', 'bank', 'MBBank', NULL, 'husband', 22000000, date('now', '-10 days'), 'savings', 1),
+        ('tk-hoc-phi', 'TK học phí', 'bank', 'MBBank', NULL, 'husband', 0, date('now', '-10 days'), 'reserve', 1),
+        ('tk-bidv', 'BIDV', 'bank', 'BIDV', NULL, 'wife', 0, date('now', '-10 days'), 'reserve', 1);
+      INSERT INTO reserve_goals (id, name, account_id, target_amount, sort) VALUES ('hoc-phi', 'Học phí', 'tk-hoc-phi', 5000000, 40);
+      UPDATE config SET v = 'tk-bidv' WHERE k = 'surplus_reward_account';
+    `);
+  });
+
+  it("UC-506 AC-33: tạo khoản gửi là tài khoản con — con theo ngăn / xác nhận / riêng tư / chủ của mẹ; chuyển sang con không đổi tổng Dự phòng; con của con, con của tài khoản Vận hành 400 invalid_parent; gửi pocket 400 pocket_follows_parent; bật SePay cho con E14", async () => {
+    const created = await call("POST", "/v1/settings/accounts", { name: "Gửi 6 tháng", kind: "bank", parent_account_id: "tk-tiet-kiem", opening_balance: 0 });
+    expect(created.status).toBe(201);
+    expect(created.json.data).toMatchObject({ id: "gui-6-thang", parent_account_id: "tk-tiet-kiem", pocket: "reserve", pocket_confirmed: true, private: false, owner_member_id: "husband" });
+    expect((await settingsAccounts()).find((a) => a.id === "gui-6-thang").parent_account_id).toBe("tk-tiet-kiem");
+    expect((await settingsAccounts()).find((a) => a.id === "tk-tiet-kiem").parent_account_id).toBeNull();
+
+    const before = reserveTotal(await settingsAccounts());
+    const moved = await call("POST", "/v1/transactions", { meaning: "transfer", amount: 15_000_000, account_id: "tk-tiet-kiem", to_account_id: "gui-6-thang" });
+    expect(moved.status).toBe(201);
+    const after = await settingsAccounts();
+    expect(reserveTotal(after)).toBe(before);
+    expect(combined(after, "tk-tiet-kiem")).toBe(20_000_000);
+
+    const count = () => (raw.prepare("SELECT COUNT(*) AS n FROM accounts").get() as { n: number }).n;
+    const n = count();
+    expect(err(await call("POST", "/v1/settings/accounts", { name: "Gửi con của con", kind: "bank", parent_account_id: "gui-6-thang" }))).toEqual([400, "invalid_parent"]);
+    expect(err(await call("POST", "/v1/settings/accounts", { name: "Gửi từ chi tiêu", kind: "bank", parent_account_id: "tk-chi-tieu-chong" }))).toEqual([400, "invalid_parent"]);
+    expect(err(await call("POST", "/v1/settings/accounts", { name: "Gửi 12 tháng", kind: "bank", parent_account_id: "tk-tiet-kiem", pocket: "savings" }))).toEqual([400, "pocket_follows_parent"]);
+    expect(count()).toBe(n);
+    const sepay = await call("PATCH", "/v1/settings/accounts/gui-6-thang", { sepay_enabled: true, account_no: "0999000099" });
+    expect(err(sepay)).toEqual([400, "bank_not_supported"]);
+    expect(sepay.json.error?.message).toMatch(/khoản gửi/i);
+    expect(raw.prepare("SELECT sepay_enabled, account_no FROM accounts WHERE id = 'gui-6-thang'").get()).toEqual({ sepay_enabled: 0, account_no: null });
+    // Mẹ không tồn tại / chính nó cũng là mẹ không hợp lệ.
+    expect(err(await call("POST", "/v1/settings/accounts", { name: "Gửi lạc", kind: "bank", parent_account_id: "khong-co" }))).toEqual([400, "invalid_parent"]);
+    expect(err(await call("POST", "/v1/settings/accounts", { name: "Gửi tiền mặt", kind: "cash", parent_account_id: "tk-tiet-kiem" }))).toEqual([400, "invalid_parent"]);
+    expect(count()).toBe(n);
+  });
+
+  it("UC-506 AC-34: sửa mẹ kéo con theo cùng câu ghi (nhật ký mẹ có changes.children); mẹ có con không sang Vận hành, không đổi kind, không tắt (409 account_has_children); tắt con, tắt mẹ được; bật lại con khi mẹ tắt 400 invalid_parent", async () => {
+    expect((await call("POST", "/v1/settings/accounts", { name: "Gửi 6 tháng", kind: "bank", parent_account_id: "tk-tiet-kiem", opening_balance: 0 })).status).toBe(201);
+    expect((await call("PATCH", "/v1/settings/accounts/tk-tiet-kiem", { pocket: "savings" })).status).toBe(200);
+    expect(accountRow("gui-6-thang")).toMatchObject({ pocket: "savings", pocket_confirmed: 1 });
+    expect((await call("PATCH", "/v1/settings/accounts/tk-tiet-kiem", { private: true }, true, as("husband"))).status).toBe(200);
+    expect(accountRow("gui-6-thang")).toMatchObject({ pocket: "savings", private: 1, owner_member_id: "husband" });
+    const parentAudit = auditOf("account.update").filter((r) => r.target === "account:tk-tiet-kiem");
+    expect(parentAudit.map((r) => r.detail.changes)).toEqual([
+      { pocket: { from: "reserve", to: "savings" }, children: ["gui-6-thang"] },
+      { private: { from: false, to: true }, children: ["gui-6-thang"] },
+    ]);
+
+    const snapshot = () => [accountRow("tk-tiet-kiem"), accountRow("gui-6-thang"), (raw.prepare("SELECT kind FROM accounts WHERE id = 'tk-tiet-kiem'").get() as any).kind];
+    const kept = snapshot();
+    for (const b of [{ pocket: "operating" }, { kind: "cash", bank: null }, { active: false }]) {
+      const r = await call("PATCH", "/v1/settings/accounts/tk-tiet-kiem", b, true, as("husband"));
+      expect(err(r)).toEqual([409, "account_has_children"]);
+      expect(r.json.error?.message).toBe("Tất toán / tắt các khoản gửi của MB tiết kiệm trước.");
+    }
+    expect(snapshot()).toEqual(kept);
+
+    expect((await call("PATCH", "/v1/settings/accounts/gui-6-thang", { active: false }, true, as("husband"))).status).toBe(200);
+    expect((await call("PATCH", "/v1/settings/accounts/tk-tiet-kiem", { active: false }, true, as("husband"))).status).toBe(200);
+    expect(err(await call("PATCH", "/v1/settings/accounts/gui-6-thang", { active: true }, true, as("husband")))).toEqual([400, "invalid_parent"]);
+    expect(accountRow("gui-6-thang").active).toBe(0);
+  });
+
+  it("UC-506 AC-35: PATCH biến tài khoản có sẵn thành con — sang ngăn của mẹ, nhật ký parent_account_id và pocket; tài khoản gắn mục tiêu 409 goal_on_child; Ví Thưởng, tài khoản bật SePay 400 invalid_parent; đặt Ví Thưởng là con 400 invalid_account; bỏ mẹ giữ ngăn", async () => {
+    const before = combined(await settingsAccounts(), "tk-tiet-kiem");
+    const r = await call("PATCH", "/v1/settings/accounts/gui-ky-han", { parent_account_id: "tk-tiet-kiem" });
+    expect(r.status).toBe(200);
+    expect(r.json.data).toMatchObject({ parent_account_id: "tk-tiet-kiem", pocket: "reserve", pocket_confirmed: true, private: false, owner_member_id: "husband" });
+    expect(auditOf("account.update").at(-1)).toEqual({
+      target: "account:gui-ky-han",
+      detail: { fields: ["parent_account_id"], changes: { parent_account_id: { from: null, to: "tk-tiet-kiem" }, pocket: { from: "savings", to: "reserve" } } },
+    });
+    expect(combined(await settingsAccounts(), "tk-tiet-kiem") - before).toBe(22_000_000);
+
+    const goal = await call("PATCH", "/v1/settings/accounts/tk-hoc-phi", { parent_account_id: "tk-tiet-kiem" });
+    expect(err(goal)).toEqual([409, "goal_on_child"]);
+    expect(err(await call("PATCH", "/v1/settings/accounts/tk-bidv", { parent_account_id: "tk-tiet-kiem" }))).toEqual([400, "invalid_parent"]);
+    expect(err(await call("PATCH", "/v1/settings/accounts/tk-tiet-kiem", { parent_account_id: "tk-chi-tieu-chong" }))).toEqual([400, "invalid_parent"]);
+    raw.exec("UPDATE accounts SET pocket = 'reserve' WHERE id = 'vcb-wife'");
+    expect(err(await call("PATCH", "/v1/settings/accounts/vcb-wife", { parent_account_id: "tk-tiet-kiem" }, true, as("wife")))).toEqual([400, "invalid_parent"]);
+    expect([accountRow("tk-hoc-phi").parent_account_id, accountRow("tk-bidv").parent_account_id, accountRow("vcb-wife").parent_account_id]).toEqual([null, null, null]);
+
+    const reward = await call("PUT", "/v1/settings/config", { surplus_reward_account: "gui-ky-han" });
+    expect(err(reward)).toEqual([400, "invalid_account"]);
+    expect((raw.prepare("SELECT v FROM config WHERE k = 'surplus_reward_account'").get() as { v: string }).v).toBe("tk-bidv");
+
+    const detached = await call("PATCH", "/v1/settings/accounts/gui-ky-han", { parent_account_id: null });
+    expect(detached.status).toBe(200);
+    expect(detached.json.data).toMatchObject({ parent_account_id: null, pocket: "reserve" });
+    expect(auditOf("account.update").at(-1)!.detail.changes).toEqual({ parent_account_id: { from: "tk-tiet-kiem", to: null } });
+  });
+
+  it("UC-507 AC-23: D1 mới không có khoá savings_pct → GET /v1/settings savings_pct 10; kỳ mở với lương 20.000.000 → ① 2.000.000", async () => {
+    raw.exec("DELETE FROM config WHERE k = 'savings_pct'");
+    expect((await call("GET", "/v1/settings")).json.data.config.savings_pct).toBe(10);
+    const salary = await call("POST", "/v1/transactions", { meaning: "income", amount: 20_000_000, account_id: "cash-husband", income_stream_id: "salary-husband" });
+    expect(salary.status).toBe(201);
+    expect(raw.prepare("SELECT amount FROM pay_cycle_tasks WHERE kind = 'savings'").all()).toEqual([{ amount: 2_000_000 }]);
   });
 });

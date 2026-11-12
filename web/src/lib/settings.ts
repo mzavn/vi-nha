@@ -3,13 +3,13 @@
 
 import type { AuditAction } from "../../../src/domain/audit-actions";
 import { bankByCode } from "../../../src/domain/banks";
-import { fillGoals } from "../../../src/domain/pockets";
+import { DEFAULT_SAVINGS_PCT, goalGroups, type PocketGoalInput } from "../../../src/domain/pockets";
 import { INTEREST_MAX_AMOUNT_LIMIT } from "../../../src/domain/interest-deposit";
 import { clockMinutes } from "../../../src/domain/notify-schedule";
 import { DEFAULT_SEPAY_CONNECTION_ID } from "../../../src/domain/system-ids";
 import { ApiError, errorText } from "./api";
 import { formatVnd, moneyDigits } from "./money";
-import { dueText, nextDueDate } from "./pockets";
+import { dueText, groupAccountsByPocket, nextDueDate, type PocketChoice } from "./pockets";
 import { sqliteUtcToIso } from "./push";
 import { dayKey, shortDate, timeHM } from "./period";
 import type { AuditEntry, Debt, IncomeStream, NotifySchedule, Pocket, ReserveGoal, Rule, Secret, SepayConnection, SepaySyncResult, SettingsAccount, SettingsConfig, SettingsData, SettingsMember } from "./types";
@@ -210,11 +210,13 @@ export interface AccountForm {
   pocket_touched: boolean;
   /** "Riêng tư — người khác chỉ thấy tổng" (UC-504, UC-709); chỉ chủ tài khoản đổi được. */
   private: boolean;
+  /** Tài khoản mẹ khi đây là khoản gửi kỳ hạn (ADR-140); "" = không thuộc tài khoản nào. */
+  parent_account_id: string;
 }
 
 export function accountToForm(a: SettingsAccount | null): AccountForm {
   if (!a)
-    return { name: "", kind: "bank", bank: "", account_no: "", sub_account: "", sepay_enabled: false, sepay_out: false, sepay_connection_id: "", owner_member_id: "", opening_balance: 0, opened_at: "", feed_mode: "enabled", feed_from: "", active: true, pocket: "operating", pocket_touched: false, private: false };
+    return { name: "", kind: "bank", bank: "", account_no: "", sub_account: "", sepay_enabled: false, sepay_out: false, sepay_connection_id: "", owner_member_id: "", opening_balance: 0, opened_at: "", feed_mode: "enabled", feed_from: "", active: true, pocket: "operating", pocket_touched: false, private: false, parent_account_id: "" };
   return {
     name: a.name,
     kind: a.kind,
@@ -234,6 +236,7 @@ export function accountToForm(a: SettingsAccount | null): AccountForm {
     pocket: a.pocket ?? null,
     pocket_touched: false,
     private: a.private ?? false,
+    parent_account_id: a.parent_account_id ?? "",
   };
 }
 
@@ -268,6 +271,8 @@ export function accountSubmitError(err: unknown): { field: string | null; messag
  * `existing` = tài khoản đang sửa (null khi thêm). Như server, "SePay chưa hỗ trợ ngân hàng này" chỉ chặn khi bật SePay
  * hoặc đổi ngân hàng/loại — tài khoản cũ đã nối SePay trước khi có danh mục vẫn sửa tên được. `viewerId`: người đang xem —
  * chỉ chủ tài khoản gửi `private`; tài khoản riêng tư của người khác không gửi `owner_member_id` (server: 403 `not_owner`).
+ * Khoản gửi kỳ hạn (`parent_account_id`, ADR-140): không SePay; không gửi `pocket` / `private` / `owner_member_id` — con
+ * luôn theo mẹ (server 400 `pocket_follows_parent` khi lệch). `parent_account_id` chỉ gửi khi thêm / đổi; bỏ mẹ gửi null.
  */
 export function accountPayload(f: AccountForm, existing: SettingsAccount | null, viewerId: string | null = null): Result<Record<string, unknown>> {
   const errors: Errors = {};
@@ -275,33 +280,107 @@ export function accountPayload(f: AccountForm, existing: SettingsAccount | null,
   if (!name) errors.name = "Nhập tên tài khoản.";
   const accountNo = f.account_no.replace(/\s/g, "");
   if (accountNo && !/^[0-9A-Za-z]+$/.test(accountNo)) errors.account_no = "Số tài khoản chỉ gồm chữ số (và chữ cái nếu ngân hàng cấp).";
-  if (f.sepay_enabled && f.kind !== "bank") errors.sepay_enabled = "SePay chỉ nối được tài khoản ngân hàng.";
-  else if (f.sepay_enabled && !bankByCode(f.bank)?.sepay && (!existing?.sepay_enabled || f.bank !== (existing.bank ?? "") || f.kind !== existing.kind)) errors.sepay_enabled = "SePay chưa hỗ trợ ngân hàng này.";
-  else if (f.sepay_enabled && !accountNo) errors.account_no = "SePay khớp giao dịch theo số tài khoản — nhập số tài khoản.";
+  const parent = f.parent_account_id || null;
+  const wasChild = !!existing?.parent_account_id;
+  if (parent && f.kind !== "bank") errors.parent_account_id = "Khoản gửi kỳ hạn là tài khoản ngân hàng.";
+  const sepay = f.sepay_enabled && !parent;
+  if (sepay && f.kind !== "bank") errors.sepay_enabled = "SePay chỉ nối được tài khoản ngân hàng.";
+  else if (sepay && !bankByCode(f.bank)?.sepay && (!existing?.sepay_enabled || f.bank !== (existing.bank ?? "") || f.kind !== existing.kind)) errors.sepay_enabled = "SePay chưa hỗ trợ ngân hàng này.";
+  else if (sepay && !accountNo) errors.account_no = "SePay khớp giao dịch theo số tài khoản — nhập số tài khoản.";
   // Mốc theo dõi chỉ gửi khi sửa tài khoản đang / sắp nối SePay; tài khoản mới chưa có gì trong sổ để trùng.
-  const feed = existing && f.sepay_enabled && f.kind === "bank" ? f.feed_mode : null;
+  const feed = existing && sepay && f.kind === "bank" ? f.feed_mode : null;
   if (feed === "time" && !f.feed_from) errors.feed_from = "Chọn giờ bắt đầu theo dõi.";
   const cash = f.kind === "cash";
+  const follows = !!parent || wasChild;
   return done(errors, () => ({
     name,
     kind: f.kind,
     bank: cash ? null : orNull(f.bank),
     account_no: cash ? null : accountNo || null,
-    sub_account: cash || !f.sepay_enabled ? null : orNull(f.sub_account),
-    sepay_enabled: f.sepay_enabled,
-    sepay_out: f.sepay_enabled && f.sepay_out,
-    ...(f.sepay_enabled && f.sepay_connection_id ? { sepay_connection_id: f.sepay_connection_id } : {}),
-    ...(canSetOwner(existing, viewerId) ? { owner_member_id: f.owner_member_id || null } : {}),
+    sub_account: cash || !sepay ? null : orNull(f.sub_account),
+    sepay_enabled: sepay,
+    sepay_out: sepay && f.sepay_out,
+    ...(sepay && f.sepay_connection_id ? { sepay_connection_id: f.sepay_connection_id } : {}),
+    ...(!follows && canSetOwner(existing, viewerId) ? { owner_member_id: f.owner_member_id || null } : {}),
     opening_balance: f.opening_balance,
     opened_at: f.opened_at || null,
     ...(feed === "opening" ? { feed_from: null } : feed === "time" ? { feed_from: f.feed_from } : {}),
     ...(existing ? { active: f.active } : {}),
     // Không bao giờ gửi `spendable` / `role` / `locked` (bỏ ở v2, server trả 400 `model_changed`).
-    // Sửa thì luôn gửi ngăn (lưu là xác nhận); bản cài đặt cũ chưa có ngăn thì chỉ gửi khi người dùng chọn.
-    ...(f.pocket_touched || (existing && existing.pocket !== undefined) ? { pocket: f.pocket } : {}),
-    ...(canSetPrivate(existing, viewerId) && f.private !== (existing?.private ?? false) ? { private: f.private } : {}),
+    // Sửa thì luôn gửi ngăn (lưu là xác nhận); bản cài đặt cũ chưa có ngăn thì chỉ gửi khi người dùng chọn. Con theo mẹ: không gửi.
+    ...(!follows && (f.pocket_touched || (existing && existing.pocket !== undefined)) ? { pocket: f.pocket } : {}),
+    ...(!follows && canSetPrivate(existing, viewerId) && f.private !== (existing?.private ?? false) ? { private: f.private } : {}),
+    ...(parent !== (existing?.parent_account_id ?? null) ? { parent_account_id: parent } : {}),
   }));
 }
+
+// ── Khoản gửi kỳ hạn: tài khoản con (ADR-140, pwa UC-709 AC-51) ──────
+
+/** Lý do ô "Thuộc tài khoản" tắt (server: E14 / `invalid_parent`). */
+export const PARENT_SEPAY = "Tài khoản đang nối SePay: khoản gửi kỳ hạn không có số báo riêng — tắt SePay trước.";
+export const PARENT_REWARD = "Ví Thưởng không là khoản gửi kỳ hạn.";
+
+export const accountParentHint = (parent: string): string => `Khoản gửi kỳ hạn mở từ tài khoản này. Tiền vẫn tính là của ${parent}; mục tiêu gắn ${parent} thấy cả khoản này.`;
+
+/** Chữ ở ô Ngăn của tài khoản con (sheet tài khoản, sheet xếp ngăn). */
+export const parentPocketText = (parent: string): string => `theo ${parent}`;
+
+/** Tài khoản đang có con đang dùng (là mẹ). */
+const hasChildren = (accountId: string, accounts: SettingsAccount[]) => accounts.some((a) => a.active && a.parent_account_id === accountId);
+
+/**
+ * Ô "Thuộc tài khoản" (ngoài "Không"): tài khoản ngân hàng đang dùng ở Dự phòng, Tích luỹ hoặc ngoài ngăn (không Vận hành),
+ * không phải tài khoản con, không phải Ví Thưởng, không phải chính tài khoản đang sửa.
+ */
+export function accountParentOptions(accounts: SettingsAccount[], item: SettingsAccount | null, rewardAccountId: string | null | undefined): SettingsAccount[] {
+  return accounts.filter(
+    (a) => a.active && a.kind === "bank" && a.pocket !== "operating" && !a.parent_account_id && a.id !== rewardAccountId && a.id !== item?.id,
+  );
+}
+
+/**
+ * Ô "Thuộc tài khoản" của sheet: tài khoản đang là mẹ → không có ô; tài khoản đang nối SePay / gắn mục tiêu / là Ví Thưởng
+ * → ô tắt kèm lý do (server: E14, 409 `goal_on_child`, 400 `invalid_parent`). Ô chỉ hiện với tài khoản ngân hàng (sheet tự xét).
+ */
+export function accountParentField(item: SettingsAccount | null, accounts: SettingsAccount[], goals: ReserveGoal[], rewardAccountId: string | null | undefined): { show: boolean; disabled: string | null } {
+  if (!item) return { show: true, disabled: null };
+  if (hasChildren(item.id, accounts)) return { show: false, disabled: null };
+  const names = accountGoals(item.id, goals).map((g) => g.name);
+  const disabled = item.sepay_enabled ? PARENT_SEPAY : names.length ? `Tài khoản của mục tiêu ${names.join(", ")}: bỏ gắn mục tiêu trước.` : item.id === rewardAccountId ? PARENT_REWARD : null;
+  return { show: true, disabled };
+}
+
+/** Nút "+ Thêm khoản gửi kỳ hạn" ở sheet của một tài khoản: chỉ khi tài khoản đó làm mẹ được. */
+export function canAddDeposit(item: SettingsAccount, accounts: SettingsAccount[], rewardAccountId: string | null | undefined): boolean {
+  return accountParentOptions(accounts, null, rewardAccountId).some((a) => a.id === item.id);
+}
+
+/** Điền sẵn sheet thêm khoản gửi kỳ hạn: mẹ và ngân hàng của mẹ (ngăn / chủ / riêng tư theo mẹ, không gửi). */
+export function depositPreset(parent: SettingsAccount): Partial<AccountForm> {
+  return { parent_account_id: parent.id, bank: parent.bank ?? "" };
+}
+
+/** Câu đầu sheet xếp ngăn (UC-709 rà Ba ngăn). */
+export const POCKETS_SHEET_HEAD = "Tiền chi tiêu hằng ngày để ở Vận hành; tiền để dành cho khoản sắp trả ở Dự phòng; tiền không đụng ở Tích luỹ.";
+
+/** Một nhóm ngăn của sheet xếp ngăn; mỗi dòng là tài khoản không phải con, kèm các con đang dùng của nó. */
+export interface PocketSheetGroup {
+  key: string;
+  label: string;
+  rows: { account: SettingsAccount; children: SettingsAccount[] }[];
+}
+
+/** Sheet xếp ngăn: nhóm như `groupAccountsByPocket` trên tài khoản không phải con; mỗi dòng kèm các con đang dùng ("theo {mẹ}"). */
+export function pocketSheetGroups(accounts: SettingsAccount[], choice: PocketChoice): PocketSheetGroup[] {
+  const children = accounts.filter((a) => a.active && a.parent_account_id);
+  return groupAccountsByPocket(
+    accounts.filter((a) => !a.parent_account_id),
+    choice,
+  ).map(({ accounts: list, ...g }) => ({ ...g, rows: list.map((a) => ({ account: a, children: children.filter((c) => c.parent_account_id === a.id) })) }));
+}
+
+/** Vị trí thanh % Tích luỹ theo chữ đang gõ: số nguyên 1–100, sai → 10 (mặc định của thang). */
+export const sliderPct = (text: string): number => parseInteger(text, 1, 100) ?? DEFAULT_SAVINGS_PCT;
 
 // ── Mã chuyển khoản (rule) ────────────────────────────────────────
 
@@ -441,24 +520,31 @@ export function rewardAccountOptions(accounts: SettingsAccount[], goals: Reserve
   return accounts.filter((a) => a.active && a.pocket === "reserve" && accountGoals(a.id, goals).length === 0);
 }
 
-/** Một dòng của ô Tài khoản: `shared` = "dùng chung với {tên}, {tên}"; `blocked` = lý do không chọn được (luật Thuế). */
+/**
+ * Một dòng của ô Tài khoản: `shared` = "dùng chung với {tên}, {tên}"; `blocked` = lý do không chọn được (luật Thuế);
+ * `deposits` = "gồm khoản gửi kỳ hạn" khi tài khoản có con.
+ */
 export interface GoalAccountOption extends SettingsAccount {
   shared: string | null;
   blocked: string | null;
+  deposits: string | null;
 }
 
+export const DEPOSITS_NOTE = "gồm khoản gửi kỳ hạn";
+
 /**
- * Tài khoản cho một mục tiêu (UC-1209 bước 2, UC-709 AC-46, AC-49): đang dùng, ngăn Dự phòng, không phải Ví Thưởng; tài khoản
- * đã có mục tiêu khác kèm "dùng chung với …". Luật Thuế (QĐ1-A): mục tiêu % (`pct`) chỉ chọn được tài khoản không có mục
- * tiêu khác; mục tiêu khác không chọn được tài khoản của mục tiêu %. `goalId`: mục tiêu đang sửa (không tính là "khác").
+ * Tài khoản cho một mục tiêu (UC-1209 bước 2, UC-709 AC-46, AC-49, AC-52): đang dùng, ngăn Dự phòng, không phải Ví Thưởng, không
+ * phải tài khoản con (mục tiêu gắn mẹ — 409 `goal_on_child`); tài khoản đã có mục tiêu khác kèm "dùng chung với …". Luật Thuế
+ * (QĐ1-A): mục tiêu % (`pct`) chỉ chọn được tài khoản không có mục tiêu khác; mục tiêu khác không chọn được tài khoản của mục
+ * tiêu %. `goalId`: mục tiêu đang sửa (không tính là "khác").
  */
 export function goalAccountOptions(accounts: SettingsAccount[], goals: ReserveGoal[], rewardAccountId: string | null | undefined, goalId: string | null, pct: boolean): GoalAccountOption[] {
   return accounts
-    .filter((a) => a.active && a.pocket === "reserve" && a.id !== rewardAccountId)
+    .filter((a) => a.active && a.pocket === "reserve" && a.id !== rewardAccountId && !a.parent_account_id)
     .map((a) => {
       const others = accountGoals(a.id, goals).filter((g) => g.id !== goalId);
       const blocked = others.length > 0 && (pct || others.some((g) => g.target_pct !== null)) ? TAX_OWN_ACCOUNT : null;
-      return { ...a, shared: others.length ? `dùng chung với ${others.map((g) => g.name).join(", ")}` : null, blocked };
+      return { ...a, shared: others.length ? `dùng chung với ${others.map((g) => g.name).join(", ")}` : null, blocked, deposits: hasChildren(a.id, accounts) ? DEPOSITS_NOTE : null };
     });
 }
 
@@ -521,19 +607,29 @@ export function goalLineText(g: ReserveGoal, accounts: { id: string; name: strin
   return parts.join(" · ");
 }
 
-/** Một nhóm của danh sách mục tiêu (UC-709 bước 4u): `title` null = mục tiêu một mình / đã ngừng dùng; `reorder` = có nút Đổi thứ tự. */
+/**
+ * Một nhóm của danh sách mục tiêu (UC-709 bước 4u): `title` null = mục tiêu một mình / đã ngừng dùng; `reorder` = có nút Đổi
+ * thứ tự (cùng dòng tiêu đề); `note` = "Tiền lãi {I} (không tính vào mục tiêu)" khi nhóm có tiền lãi.
+ */
 export interface GoalListGroup {
   key: string;
   accountId: string | null;
   title: string | null;
   shared: boolean;
   reorder: boolean;
+  note: string | null;
   goals: ReserveGoal[];
 }
 
+/** Hai phần của danh sách mục tiêu (UC-709 AC-53). */
+export const GOAL_SECTION_LABEL = { account: "Để dành ở tài khoản", operating: "Trả từ tiền chi tiêu mỗi tháng" } as const;
+
+const paysOperating = (g: ReserveGoal) => g.pays_from === "operating";
+
 /**
- * Danh sách mục tiêu nhóm theo tài khoản như thẻ Dự phòng (`goal_groups`, thứ tự server): nhóm chung có dòng "{tài khoản} ·
- * {số dư} · {n} mục tiêu · thiếu X / đủ / dư X"; mục tiêu đang dùng chưa gắn ở nhóm "Chưa có tài khoản"; mục tiêu ngừng dùng cuối.
+ * Phần "Để dành ở tài khoản": nhóm theo tài khoản mẹ như thẻ Dự phòng (`goal_groups`, thứ tự server, số dư gộp): nhóm chung có
+ * dòng "{tài khoản} · {số dư} · {n} mục tiêu · thiếu X / đủ / dư X"; mục tiêu tài khoản đang dùng chưa gắn ở nhóm "Chưa có tài
+ * khoản"; mục tiêu ngừng dùng cuối. Mục tiêu trả từ tiền chi tiêu đang dùng ở `operatingGoalLines`.
  */
 export function goalListGroups(d: Pick<SettingsData, "accounts" | "goals" | "goal_groups">): GoalListGroup[] {
   const byId = new Map(d.goals.map((g) => [g.id, g]));
@@ -542,24 +638,58 @@ export function goalListGroups(d: Pick<SettingsData, "accounts" | "goals" | "goa
     const shared = goals.length > 1;
     const name = d.accounts.find((a) => a.id === grp.account_id)?.name ?? grp.account_id;
     const state = grp.short ? `thiếu ${formatVnd(grp.short)}` : grp.extra ? `dư ${formatVnd(grp.extra)}` : "đủ";
-    return { key: grp.account_id, accountId: grp.account_id, title: shared ? `${name} · ${formatVnd(grp.balance)} · ${goals.length} mục tiêu · ${state}` : null, shared, reorder: shared, goals };
+    const note = grp.interest ? `Tiền lãi ${formatVnd(grp.interest)} (không tính vào mục tiêu)` : null;
+    return { key: grp.account_id, accountId: grp.account_id, title: shared ? `${name} · ${formatVnd(grp.balance)} · ${goals.length} mục tiêu · ${state}` : null, shared, reorder: shared, note, goals };
   });
-  const loose = d.goals.filter((g) => g.active && g.account_id === null);
-  if (loose.length) out.push({ key: "+none", accountId: null, title: "Chưa có tài khoản", shared: false, reorder: false, goals: loose });
+  const loose = d.goals.filter((g) => g.active && g.account_id === null && !paysOperating(g));
+  if (loose.length) out.push({ key: "+none", accountId: null, title: "Chưa có tài khoản", shared: false, reorder: false, note: null, goals: loose });
   const off = d.goals.filter((g) => !g.active);
-  if (off.length) out.push({ key: "+off", accountId: null, title: null, shared: false, reorder: false, goals: off });
+  if (off.length) out.push({ key: "+off", accountId: null, title: null, shared: false, reorder: false, note: null, goals: off });
   return out;
 }
 
-/** Xem trước số mới khi đổi thứ tự trong một tài khoản (UC-709 AC-48): `fillGoals` với số dư nhóm và `goals[].spent`. */
+/** Phần "Trả từ tiền chi tiêu mỗi tháng": "{tên} · {mỗi tháng}/tháng · còn {R_g} kỳ này", theo thứ tự ưu tiên. */
+export function operatingGoalLines(goals: ReserveGoal[]): { goal: ReserveGoal; text: string }[] {
+  return goals
+    .filter((g) => g.active && paysOperating(g))
+    .map((g) => {
+      const monthly = g.monthly_amount ?? 0;
+      const remaining = g.remaining ?? Math.max(0, monthly - g.spent);
+      return { goal: g, text: `${g.name} · ${moneyDigits(monthly)}/tháng · còn ${moneyDigits(remaining)} kỳ này` };
+    });
+}
+
+/**
+ * Xem trước số mới khi đổi thứ tự trong một tài khoản (UC-709 AC-48): luật chia chung `goalGroups` với số dư gộp của nhóm,
+ * tiền lãi của nhóm (số chia = `balance − interest`, QĐ2) và `goals[].spent`.
+ */
 export function goalOrderPreview(d: Pick<SettingsData, "goals" | "goal_groups">, accountId: string, ids: string[]): { id: string; name: string; text: string }[] {
-  const balance = d.goal_groups.find((g) => g.account_id === accountId)?.balance ?? 0;
+  const group = d.goal_groups.find((g) => g.account_id === accountId);
   const goals = ids.flatMap((id) => d.goals.find((g) => g.id === id) ?? []);
-  const fill = fillGoals(
-    balance,
-    goals.map((g) => ({ id: g.id, need: g.need, spent: g.spent })),
+  const { filled } = goalGroups(
+    [{ id: accountId, name: accountId, balance: group?.balance ?? 0, parentId: null }],
+    goals.map((g) => pocketGoal(g, accountId)),
+    { [accountId]: group?.interest ?? 0 },
   );
-  return goals.map((g, i) => ({ id: g.id, name: g.name, text: heldText(fill.goals[i]!.held, g.need, g.spent, null) }));
+  return goals.map((g) => ({ id: g.id, name: g.name, text: heldText(filled.get(g.id)?.held ?? 0, g.need, g.spent, null) }));
+}
+
+/** Mục tiêu ở dạng đầu vào của luật chia chung (`goalGroups`); `accountId` = tài khoản đang xét (lựa chọn chưa lưu). */
+export function pocketGoal(g: ReserveGoal, accountId: string | null): PocketGoalInput {
+  return {
+    id: g.id,
+    name: g.name,
+    accountId,
+    target: g.target_pct !== null ? null : (g.need ?? g.target_amount),
+    targetPct: g.target_pct,
+    monthly: g.monthly_amount,
+    repeatMonths: g.repeat_months,
+    dueDate: g.due_date,
+    debtId: g.debt_id,
+    sort: g.sort,
+    spent: g.spent,
+    paysFrom: g.pays_from ?? "account",
+  };
 }
 
 /** Thân `PUT /v1/settings/goals/order`: mọi mục tiêu đang dùng; các ô của tài khoản `accountId` nhận thứ tự mới, mục tiêu khác giữ chỗ. */
@@ -583,6 +713,8 @@ export interface GoalForm {
   name: string;
   /** Tài khoản của mục tiêu; "" = Chưa có. */
   account_id: string;
+  /** "Tiền để ở đâu" (ADR-141): một tài khoản để dành · trả thẳng từ tiền chi tiêu. */
+  pays_from: "account" | "operating";
   mode: GoalMode;
   monthly_amount: number;
   repeat_months: string;
@@ -596,10 +728,11 @@ export interface GoalForm {
 }
 
 export function goalToForm(g: ReserveGoal | null): GoalForm {
-  if (!g) return { name: "", account_id: "", mode: "repeat", monthly_amount: 0, repeat_months: "1", target_amount: 0, due_date: "", target_pct: "", debt_id: "", active: true };
+  if (!g) return { name: "", account_id: "", pays_from: "account", mode: "repeat", monthly_amount: 0, repeat_months: "1", target_amount: 0, due_date: "", target_pct: "", debt_id: "", active: true };
   return {
     name: g.name,
     account_id: g.account_id ?? "",
+    pays_from: g.pays_from ?? "account",
     mode: g.target_pct !== null ? "pct" : g.monthly_amount !== null && g.repeat_months !== null ? "repeat" : "once",
     monthly_amount: g.monthly_amount ?? 0,
     repeat_months: String(g.repeat_months ?? 1),
@@ -611,12 +744,36 @@ export function goalToForm(g: ReserveGoal | null): GoalForm {
   };
 }
 
+// ── "Tiền để ở đâu" của mục tiêu (ADR-141, UC-709 AC-52) ──────────────
+
+export const GOAL_PLACE_LABEL = "Tiền để ở đâu";
+export const PLACE_LABEL = { account: "Một tài khoản để dành", operating: "Trả thẳng từ tiền chi tiêu" } as const;
+export const OPERATING_MONTHLY_ONLY = "Chỉ khoản trả mỗi tháng";
+export const OPERATING_HINT = "Không phải chuyển tiền. App chừa số này khỏi 'Chi khoảng …/ngày' tới khi trả.";
+
+/**
+ * Lựa chọn "Trả thẳng từ tiền chi tiêu": mục tiêu % (Thuế) không có (Thuế cần tài khoản riêng); "một lần" hoặc số tháng ≠ 1
+ * thì tắt kèm "Chỉ khoản trả mỗi tháng" (server: 400 `operating_goal_monthly`).
+ */
+export function operatingChoice(f: Pick<GoalForm, "mode" | "repeat_months">): { show: boolean; disabled: string | null } {
+  if (f.mode === "pct") return { show: false, disabled: null };
+  return { show: true, disabled: f.mode === "repeat" && parseInteger(f.repeat_months, 1, 12) === 1 ? null : OPERATING_MONTHLY_ONLY };
+}
+
+/** Nơi để tiền đang có hiệu lực: chọn "trả từ tiền chi tiêu" mà lựa chọn đang tắt thì là "một tài khoản để dành" — sheet hiện và gửi đúng số này. */
+export function goalPlace(f: Pick<GoalForm, "mode" | "repeat_months" | "pays_from">): GoalForm["pays_from"] {
+  const choice = operatingChoice(f);
+  return f.pays_from === "operating" && choice.show && choice.disabled === null ? "operating" : "account";
+}
+
 /** Trần số tiền như server (B, số mỗi tháng). */
 const MAX_TARGET = 1_000_000_000_000;
 
 /**
  * Thân POST (existing = null) / PATCH mục tiêu, kiểm như server (UC-1209). Lặp: số mỗi tháng + số tháng, kèm B = tích
  * (server kiểm khớp); một lần: B; thuế: %; cột của cách khác về null để không sót số cũ. Tài khoản "" → null (Chưa có).
+ * Trả thẳng từ tiền chi tiêu: `pays_from: "operating"`, không `account_id` (server tự bỏ tài khoản); đổi về tài khoản gửi
+ * `pays_from: "account"`; mục tiêu tài khoản không đổi nơi để tiền thì không gửi `pays_from`.
  */
 export function goalPayload(f: GoalForm, existing: ReserveGoal | null): Result<Record<string, unknown>> {
   const errors: Errors = {};
@@ -645,9 +802,11 @@ export function goalPayload(f: GoalForm, existing: ReserveGoal | null): Result<R
     if (pct === null) errors.target_pct = "% là số nguyên từ 1 đến 100.";
     amounts = { ...amounts, target_pct: pct };
   }
+  const place = goalPlace(f);
+  const wasOperating = existing?.pays_from === "operating";
   return done(errors, () => ({
     name,
-    account_id: f.account_id || null,
+    ...(place === "operating" ? (wasOperating ? {} : { pays_from: "operating" }) : { ...(wasOperating ? { pays_from: "account" } : {}), account_id: f.account_id || null }),
     ...amounts,
     due_date: f.due_date || null,
     debt_id: f.debt_id || null,
@@ -914,6 +1073,7 @@ export const AUDIT_ACTION: Record<AuditAction | "income.allocate" | "month.close
   "pay_cycle_task.skip": "Bỏ qua việc ngày lương",
   "pay_cycle_task.reopen": "Hoàn tác việc ngày lương",
   "pay_cycle_task.amount": "Sửa số việc ngày lương",
+  "pay_cycle_task.void": "Huỷ việc ngày lương",
   "goal.create": "Thêm mục tiêu Dự phòng",
   "goal.update": "Sửa mục tiêu Dự phòng",
   "conversion.step": "Chuyển sang ba ngăn: xong một bước",

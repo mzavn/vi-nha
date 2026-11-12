@@ -84,7 +84,7 @@ async function patchRow(db: D1Database, table: string, id: string | number, cols
 // ── Đọc ─────────────────────────────────────────────────────────────
 // `first_log_at`: log SePay sớm nhất của tài khoản — sheet tài khoản gợi ý đặt mốc theo dõi khi log này sau ngày số dư đầu (ADR-113).
 const ACCOUNT_SQL =
-  "SELECT id, name, kind, bank, account_no, sub_account, sepay_enabled, sepay_out, sepay_connection_id, owner_member_id, opening_balance, opened_at, feed_from, sepay_out_from, active, deactivated_at, pocket, pocket_confirmed, private, (SELECT b.book_balance FROM v_account_book b WHERE b.account_id = accounts.id) AS book_balance, (SELECT MIN(l.at) FROM bank_logs l WHERE l.account_id = accounts.id) AS first_log_at FROM accounts";
+  "SELECT id, name, kind, bank, account_no, sub_account, sepay_enabled, sepay_out, sepay_connection_id, owner_member_id, opening_balance, opened_at, feed_from, sepay_out_from, active, deactivated_at, pocket, pocket_confirmed, private, parent_account_id, (SELECT b.book_balance FROM v_account_book b WHERE b.account_id = accounts.id) AS book_balance, (SELECT MIN(l.at) FROM bank_logs l WHERE l.account_id = accounts.id) AS first_log_at FROM accounts";
 const toAccount = (r: Row) => ({
   ...r,
   id: String(r.id),
@@ -127,14 +127,58 @@ export async function assertNoGoal(db: D1Database, accountId: string): Promise<v
   fail("account_has_goal", `${goal.account} đang gắn mục tiêu "${goal.name}": bỏ gắn tài khoản hoặc tắt mục tiêu trước.`, 409, "pocket");
 }
 
-/** Chạy batch ghi tài khoản; trigger chặn (hai máy cùng lúc) → 409 account_has_goal, không đổi gì. */
+// ── Tài khoản con: khoản gửi kỳ hạn (access UC-506, ADR-140) ─────────
+const PARENT_TEXT = "Tài khoản mẹ phải là tài khoản ngân hàng đang dùng, không ở ngăn Vận hành, không là khoản gửi của tài khoản khác.";
+const invalidParent = (message = PARENT_TEXT): never => fail("invalid_parent", message, 400, "parent_account_id");
+const pocketFollowsParent = (parent: string, field: string): never =>
+  fail("pocket_follows_parent", `Khoản gửi theo ngăn, riêng tư và chủ của ${parent}: bỏ ô ${field}.`, 400, field);
+const childSepay = (): never => fail("bank_not_supported", "Khoản gửi kỳ hạn không bật SePay: giao dịch ngân hàng báo về tài khoản mẹ.", 400, "sepay_enabled");
+const hasChildren = (parent: string): never => fail("account_has_children", `Tất toán / tắt các khoản gửi của ${parent} trước.`, 409);
+
+type ParentRow = { id: string; name: string; active: number; pocket: Pocket | null; pocket_confirmed: number; private: number; owner_member_id: string | null };
+
+/** Tài khoản mẹ hợp lệ cho `childId` (null = tài khoản sắp tạo): đang dùng nếu con đang dùng, ngân hàng, không ở Vận hành, không là con. */
+async function readParent(db: D1Database, parentId: string, childId: string | null, childActive: boolean): Promise<ParentRow> {
+  if (parentId === childId) invalidParent("Tài khoản không là khoản gửi của chính nó.");
+  const parent = await db
+    .prepare("SELECT id, name, active, pocket, pocket_confirmed, private, owner_member_id FROM accounts WHERE id = ? AND kind = 'bank' AND parent_account_id IS NULL AND pocket IS NOT 'operating'")
+    .bind(parentId)
+    .first<ParentRow>();
+  if (!parent) return invalidParent();
+  if (childActive && !parent.active) invalidParent(`${parent.name} đang tắt: bật lại tài khoản mẹ trước.`);
+  return parent;
+}
+
+/** Mọi tài khoản con (kể cả đã tắt) của một tài khoản — sửa mẹ thì cả bọn theo (trg_accounts_children_follow). */
+export async function childAccountIds(db: D1Database, id: string): Promise<string[]> {
+  return rows<{ id: string }>(await db.prepare("SELECT id FROM accounts WHERE parent_account_id = ? ORDER BY id").bind(id).all()).map((r) => r.id);
+}
+
+/**
+ * Chạy batch ghi tài khoản; trigger chặn (hai máy cùng lúc) → lỗi API tương ứng, không đổi gì: 409 account_has_goal,
+ * 409 account_has_children, 409 goal_on_child, 400 invalid_parent, 400 pocket_follows_parent.
+ */
 export async function accountBatch(db: D1Database, statements: D1PreparedStatement[], accountIds: string[]): Promise<void> {
   try {
     await db.batch(statements);
   } catch (err) {
-    if (!/account_has_goal/.test(String(err))) throw err;
-    for (const id of accountIds) await assertNoGoal(db, id);
-    fail("account_has_goal", "Tài khoản đang gắn mục tiêu Dự phòng: bỏ gắn tài khoản hoặc tắt mục tiêu trước.", 409, "pocket");
+    const raised = String(err);
+    if (/account_has_goal/.test(raised)) {
+      for (const id of accountIds) await assertNoGoal(db, id);
+      fail("account_has_goal", "Tài khoản đang gắn mục tiêu Dự phòng: bỏ gắn tài khoản hoặc tắt mục tiêu trước.", 409, "pocket");
+    }
+    if (/account_has_children/.test(raised)) {
+      const marks = accountIds.map(() => "?").join(", ");
+      const parent = await db
+        .prepare(`SELECT name FROM accounts a WHERE a.id IN (${marks}) AND EXISTS (SELECT 1 FROM accounts c WHERE c.parent_account_id = a.id AND c.active = 1)`)
+        .bind(...accountIds)
+        .first<{ name: string }>();
+      hasChildren(parent?.name ?? "tài khoản mẹ");
+    }
+    if (/goal_on_child/.test(raised)) fail("goal_on_child", "Tài khoản đang gắn mục tiêu không làm khoản gửi được: bỏ gắn tài khoản hoặc tắt mục tiêu trước.", 409, "parent_account_id");
+    if (/invalid_parent/.test(raised)) invalidParent();
+    if (/pocket_follows_parent/.test(raised)) fail("pocket_follows_parent", "Khoản gửi theo ngăn, riêng tư và chủ của tài khoản mẹ.", 400, "pocket");
+    throw err;
   }
 }
 
@@ -228,6 +272,8 @@ async function accountFields(db: D1Database, b: Input, currentId: string | null)
     opened_at: openedAt,
     active: has(b, "active") ? bool(b, "active") : undefined,
     pocket: has(b, "pocket") ? pocketValue(b.pocket) : undefined,
+    // Tài khoản mẹ của khoản gửi kỳ hạn; null = tài khoản riêng (bỏ mẹ).
+    parent_account_id: has(b, "parent_account_id") ? text(b, "parent_account_id") : undefined,
   };
 }
 
@@ -302,27 +348,38 @@ export async function accountInsert(db: D1Database, b: Input, where?: { sql: str
   const id = newId(b, name);
   if (await db.prepare("SELECT 1 FROM accounts WHERE id = ?").bind(id).first()) fail("duplicate", "Đã có tài khoản với mã này.", 409);
   const f = await accountFields(db, { kind: "bank", ...b, name }, null);
+  // Khoản gửi kỳ hạn (access UC-506): ngân hàng, không SePay; ngăn / xác nhận / riêng tư / chủ lấy của mẹ trong cùng câu chèn.
+  let parent: ParentRow | null = null;
+  if (f.parent_account_id) {
+    if (f.kind !== "bank") invalidParent("Khoản gửi kỳ hạn là tài khoản ngân hàng.");
+    if (f.sepay_enabled) childSepay();
+    parent = await readParent(db, f.parent_account_id, id, true);
+    if (f.pocket !== undefined) pocketFollowsParent(parent.name, "pocket");
+    if (f.owner_member_id !== undefined && f.owner_member_id !== parent.owner_member_id) pocketFollowsParent(parent.name, "owner_member_id");
+  }
   if (f.sepay_enabled && !f.account_no) fail("missing_account_no", "Bật SePay thì cần số tài khoản để nhận diện giao dịch.");
   const { sepay_out } = sepayFields(f, { kind: "bank", bank: null, sepay_enabled: false, sepay_out: false });
   const connectionId = await sepayConnectionId(db, Boolean(f.sepay_enabled), f.sepay_connection_id, null);
   // Không gửi ngăn thì Vận hành (mọi loại, kể cả thẻ tín dụng), chưa xác nhận (pocket UC-1201 bước 4); gửi ngăn = đã xác nhận.
-  const pocket = f.pocket !== undefined ? f.pocket : DEFAULT_ACCOUNT_POCKET;
-  // Tài khoản mới luôn công khai (`private` 0, access UC-504): chủ tài khoản tự bật ở sheet tài khoản.
+  const pocket = parent ? parent.pocket : f.pocket !== undefined ? f.pocket : DEFAULT_ACCOUNT_POCKET;
+  const confirmed = parent ? parent.pocket_confirmed : f.pocket !== undefined ? 1 : 0;
+  const owner = parent ? parent.owner_member_id : (f.owner_member_id ?? null);
+  // Tài khoản mới luôn công khai (`private` 0, access UC-504): chủ tài khoản tự bật ở sheet tài khoản. Khoản gửi theo mẹ.
   const statement = db
     .prepare(
-      `INSERT INTO accounts (id, name, kind, bank, account_no, sub_account, sepay_enabled, sepay_out, sepay_connection_id, owner_member_id, opening_balance, opened_at, pocket, pocket_confirmed)
-       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, date('now')), ?, ? WHERE ${where?.sql ?? "1"}`,
+      `INSERT INTO accounts (id, name, kind, bank, account_no, sub_account, sepay_enabled, sepay_out, sepay_connection_id, owner_member_id, opening_balance, opened_at, pocket, pocket_confirmed, private, parent_account_id)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, date('now')), ?, ?, ?, ? WHERE ${where?.sql ?? "1"}`,
     )
     .bind(
       id, f.name, f.kind, f.bank ?? null, f.account_no ?? null, f.sub_account ?? null, f.sepay_enabled ? 1 : 0, sepay_out ? 1 : 0, connectionId,
-      f.owner_member_id ?? null, f.opening_balance ?? 0, f.opened_at ?? null, pocket, f.pocket !== undefined ? 1 : 0, ...(where?.binds ?? []),
+      owner, f.opening_balance ?? 0, f.opened_at ?? null, pocket, confirmed, parent?.private ?? 0, parent?.id ?? null, ...(where?.binds ?? []),
     );
   return { id, statement };
 }
 
 export async function createAccount(db: D1Database, b: Input) {
   const { id, statement } = await accountInsert(db, b);
-  await statement.run();
+  await accountBatch(db, [statement], [id]);
   return toAccount((await db.prepare(`${ACCOUNT_SQL} WHERE id = ?`).bind(id).first<Row>())!);
 }
 
@@ -332,6 +389,32 @@ export async function updateAccount(db: D1Database, id: string, b: Input, now: D
   if (!current) fail("not_found", "Không có tài khoản này.", 404);
   rejectOldAccountFields(b);
   const f = await accountFields(db, b, id);
+  // Khoản gửi kỳ hạn (access UC-506): `parentId` là mẹ sau khi sửa — gắn mẹ bằng PATCH được khi tài khoản không gắn mục tiêu,
+  // không bật SePay, không là Ví Thưởng, không có con; con theo ngăn / riêng tư / chủ của mẹ. Bỏ mẹ thì giữ ngăn đang có.
+  const currentParent = (current!.parent_account_id as string | null) ?? null;
+  const parentId = f.parent_account_id === undefined ? currentParent : f.parent_account_id;
+  const attaching = parentId !== null && parentId !== currentParent;
+  let parent: ParentRow | null = null;
+  if (parentId !== null) {
+    if ((f.kind ?? current!.kind) !== "bank") invalidParent("Khoản gửi kỳ hạn là tài khoản ngân hàng.");
+    if (f.sepay_enabled ?? Boolean(current!.sepay_enabled)) {
+      if (current!.sepay_enabled && f.sepay_enabled !== true) invalidParent(`${current!.name} đang bật SePay: tắt SePay trước rồi mới làm khoản gửi.`);
+      childSepay();
+    }
+    if (attaching) {
+      const goal = await db.prepare("SELECT name FROM reserve_goals WHERE account_id = ? AND active = 1").bind(id).first<{ name: string }>();
+      if (goal) fail("goal_on_child", `${current!.name} đang gắn mục tiêu "${goal.name}": bỏ gắn tài khoản hoặc tắt mục tiêu trước.`, 409, "parent_account_id");
+      if (await db.prepare("SELECT 1 FROM config WHERE k = 'surplus_reward_account' AND v = ?").bind(id).first()) {
+        invalidParent(`${current!.name} là Ví Thưởng: Ví Thưởng không làm khoản gửi được.`);
+      }
+      if ((await childAccountIds(db, id)).length) invalidParent(`${current!.name} đang có khoản gửi riêng: không làm khoản gửi của tài khoản khác được.`);
+    }
+    parent = await readParent(db, parentId, id, f.active ?? Boolean(current!.active));
+    if (f.pocket !== undefined) pocketFollowsParent(parent.name, "pocket");
+  } else if (f.active === false || f.pocket === "operating" || (f.kind != null && f.kind !== "bank")) {
+    // Mẹ có con đang dùng: không tắt, không sang Vận hành, không đổi loại (trg_accounts_keep_children).
+    if (await db.prepare("SELECT 1 FROM accounts WHERE parent_account_id = ? AND active = 1").bind(id).first()) hasChildren(String(current!.name));
+  }
   if (f.opened_at) {
     // Không giao dịch nào được nằm trước ngày mở sổ (ADR-76): lưu chuyển tiền giữ bất biến đầu kỳ + ba nhóm = cuối kỳ.
     const first = await db
@@ -400,16 +483,20 @@ export async function updateAccount(db: D1Database, id: string, b: Input, now: D
   // (lưu cả sheet) không phải là đổi.
   if (has(b, "private") && typeof b.private !== "boolean") fail("invalid_input", "private phải là true hoặc false.", 400, "private");
   const requested = b.private as boolean | undefined;
+  // Khoản gửi: gửi riêng tư / chủ khác mẹ → 400 pocket_follows_parent; gắn mẹ thì lấy của mẹ.
+  if (parent && requested !== undefined && requested !== Boolean(parent.private)) pocketFollowsParent(parent.name, "private");
+  if (parent && f.owner_member_id !== undefined && f.owner_member_id !== parent.owner_member_id) pocketFollowsParent(parent.name, "owner_member_id");
   const currentOwner = (current!.owner_member_id as string | null) ?? null;
-  const owner = f.owner_member_id === undefined ? currentOwner : f.owner_member_id;
-  const privateChanged = requested !== undefined && requested !== Boolean(current!.private);
+  const owner = parent ? parent.owner_member_id : f.owner_member_id === undefined ? currentOwner : f.owner_member_id;
+  const nextPrivate = parent ? Boolean(parent.private) : (requested ?? Boolean(current!.private));
+  const privateChanged = nextPrivate !== Boolean(current!.private);
   // Đổi chủ tài khoản đang riêng tư mà chủ còn hoạt động: chỉ chủ đổi được (access UC-504 bước 1, ADR-133 (4)). Chủ đã tắt
   // thì tài khoản không còn bị giấu — ai cũng đổi được.
   if (owner !== currentOwner && current!.private && currentOwner !== null && currentOwner !== actor) {
     const ownerActive = await db.prepare("SELECT 1 FROM members WHERE id = ? AND active = 1").bind(currentOwner).first();
     if (ownerActive) fail("not_owner", "Chỉ chủ tài khoản riêng tư đổi được chủ.", 403, "owner_member_id");
   }
-  if ((requested ?? Boolean(current!.private)) && !owner) {
+  if (nextPrivate && !owner) {
     fail("private_needs_owner", "Tài khoản riêng tư cần có chủ: chọn chủ tài khoản trước.", 400, "private");
   }
   if (privateChanged && [currentOwner, owner].some((o) => o !== null && o !== actor)) {
@@ -426,7 +513,9 @@ export async function updateAccount(db: D1Database, id: string, b: Input, now: D
     feed_from,
     sepay_out_from,
     pocket_confirmed,
-    private: privateChanged ? requested : undefined,
+    private: privateChanged ? nextPrivate : undefined,
+    // Gắn mẹ: ngăn / xác nhận / chủ theo mẹ trong cùng câu ghi (trg_accounts_parent_follow).
+    ...(attaching && parent ? { pocket: parent.pocket, pocket_confirmed: Boolean(parent.pocket_confirmed), owner_member_id: parent.owner_member_id } : {}),
   });
   if (patch) await accountBatch(db, [patch], [id]);
   return toAccount((await db.prepare(`${ACCOUNT_SQL} WHERE id = ?`).bind(id).first<Row>())!);
@@ -673,10 +762,12 @@ async function readConfig(db: D1Database) {
 /** Tham số chốt tháng đã bỏ (ADR-123): gửi lên dù giá trị gì → 400 model_changed, không ghi gì. */
 const MONTH_CLOSE_KEYS = ["month_close_wealth_pct", "month_close_reward_wallet"] as const;
 
+const REWARD_ACCOUNT_TEXT = "Ví Thưởng phải là một tài khoản đang dùng ở ngăn Dự phòng, không gắn mục tiêu nào, không là khoản gửi của tài khoản khác.";
+
 /**
  * Dư kỳ trước (pocket UC-1207, UC-1209 bước 4): `surplus_savings_pct` số nguyên 0–100 → 400 invalid_input;
- * `surplus_reward_account` là tài khoản đang dùng, ngăn Dự phòng, không gắn mục tiêu đang dùng → không thì 400
- * invalid_account; null / "" = bỏ chọn.
+ * `surplus_reward_account` là tài khoản đang dùng, ngăn Dự phòng, không gắn mục tiêu đang dùng, không là tài khoản con
+ * (khoản gửi kỳ hạn) → không thì 400 invalid_account; null / "" = bỏ chọn.
  */
 async function surplusConfigWrites(db: D1Database, b: Input): Promise<D1PreparedStatement[]> {
   const upsert = (k: string, v: string) => db.prepare("INSERT INTO config (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v").bind(k, v);
@@ -697,12 +788,12 @@ async function surplusConfigWrites(db: D1Database, b: Input): Promise<D1Prepared
         typeof v === "string" &&
         (await db
           .prepare(
-            `SELECT 1 FROM accounts a WHERE a.id = ? AND a.active = 1 AND a.pocket = 'reserve'
+            `SELECT 1 FROM accounts a WHERE a.id = ? AND a.active = 1 AND a.pocket = 'reserve' AND a.parent_account_id IS NULL
                AND NOT EXISTS (SELECT 1 FROM reserve_goals g WHERE g.account_id = a.id AND g.active = 1)`,
           )
           .bind(v)
           .first());
-      if (!ok) fail("invalid_account", "Ví Thưởng phải là một tài khoản đang dùng ở ngăn Dự phòng, không gắn mục tiêu nào.", 400, "surplus_reward_account");
+      if (!ok) fail("invalid_account", REWARD_ACCOUNT_TEXT, 400, "surplus_reward_account");
       out.push(upsert("surplus_reward_account", v as string));
     }
   }
@@ -781,9 +872,9 @@ export async function updateConfig(db: D1Database, b: Input, now: Date = new Dat
   try {
     if (statements.length) await db.batch(statements);
   } catch (err) {
-    // Trigger 0041 (ADR-134): máy khác vừa gắn tài khoản này vào một mục tiêu — không ghi gì.
-    if (!/reward_has_goal/.test(String(err))) throw err;
-    fail("invalid_account", "Ví Thưởng phải là một tài khoản đang dùng ở ngăn Dự phòng, không gắn mục tiêu nào.", 400, "surplus_reward_account");
+    // Trigger 0041 (ADR-134) / 0044: máy khác vừa gắn tài khoản này vào một mục tiêu hay biến nó thành khoản gửi — không ghi gì.
+    if (!/reward_has_goal|reward_is_child/.test(String(err))) throw err;
+    fail("invalid_account", REWARD_ACCOUNT_TEXT, 400, "surplus_reward_account");
   }
   return readConfig(db);
 }

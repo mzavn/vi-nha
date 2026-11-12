@@ -18,6 +18,8 @@ export interface IncomeDraft {
   tenantId: string;
   note: string;
   opensCycle: boolean;
+  /** Ô "Đây là tiền lãi" (QĐ2): chỉ bật được khi tài khoản nhận thuộc nhóm mẹ có mục tiêu (`incomeInterest`). */
+  isInterest?: boolean;
 }
 
 /** Thân POST /v1/transactions của "Ghi thu nhập": luôn gửi `opens_cycle` (trừ tiền người thuê — nguồn cho thuê không mở kỳ). */
@@ -32,6 +34,7 @@ export function incomeBody(d: IncomeDraft): EntryBody {
     ...(d.streamId ? { income_stream_id: d.streamId } : {}),
     ...(d.tenantId ? { tenant_id: d.tenantId } : { opens_cycle: d.opensCycle }),
     ...(d.note.trim() ? { note: d.note.trim() } : {}),
+    ...(d.isInterest ? { is_interest: true } : {}),
   };
 }
 
@@ -51,6 +54,8 @@ export interface QueuedDraft {
   note: string;
   /** "Cho mục tiêu" (pocket UC-1209 bước 11): đã kiểm thuộc tài khoản tiền ra (`goalField`); chỉ chi / chuyển gửi. */
   goalId?: string | null;
+  /** Chip "Từ tiền lãi" (QĐ2, đã kiểm bằng `goalField`): chỉ chi / chuyển gửi, thay cho `goal_id`. */
+  fromInterest?: boolean;
 }
 
 /** Lý do nút ghi còn tắt (chữ trên nút); null = ghi được. Chuyển nội bộ: bắt buộc hai tài khoản khác nhau (UC-705 AC-35). */
@@ -79,6 +84,6 @@ export function queuedBody(d: QueuedDraft): EntryBody {
     ...((kind === "lend" || kind === "collect") && d.receivableId ? { receivable_id: d.receivableId } : {}),
     ...(kind === "buy_asset" && d.assetKind ? { asset_kind: d.assetKind } : {}),
     ...(d.note.trim() ? { note: d.note.trim() } : {}),
-    ...((kind === "spend" || kind === "transfer") && d.goalId ? { goal_id: d.goalId } : {}),
+    ...((kind === "spend" || kind === "transfer") && (d.fromInterest ? { from_interest: true } : d.goalId ? { goal_id: d.goalId } : {})),
   };
 }

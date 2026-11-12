@@ -16,6 +16,7 @@ import {
   removeMember,
   SETUP_POCKET_OPTIONS,
   SETUP_STEPS,
+  savingsStep,
   setupPayload,
   setupServerError,
   setupSummary,
@@ -32,6 +33,7 @@ import { completeSetup, useApp } from "../state/store";
 import { AmountInput } from "../ui/fields";
 import { Icon } from "../ui/icons";
 import { Seg } from "../ui/parts";
+import { SavingsSlider } from "../ui/savings-slider";
 import { BankOptions, Check, Field, Hint, invalid } from "./settings-sheets";
 
 /** Id của ô theo khoá lỗi: "members.0.name" → "s-members-0-name". */
@@ -451,7 +453,8 @@ function PocketsStep({
           {...invalid(errors, "savings_pct", pctId)}
         />
       </Field>
-      <Hint>Trích mỗi kỳ lương — lương về sẽ có việc “Trích Tích luỹ”.</Hint>
+      <SavingsSlider pct={savingsStep(f).pct} onPct={(p) => set({ savingsPct: String(p) })} />
+      <Hint>Trích mỗi kỳ lương — lương về sẽ có việc “Trích Tích luỹ”. {savingsStep(f).text}</Hint>
       <Field id={taxId} label="Nhà có tự nộp thuế không?" error={errors.taxable} wrap>
         <Seg<"" | "yes" | "no">
           label="Nhà có tự nộp thuế không"

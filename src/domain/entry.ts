@@ -57,10 +57,15 @@ export interface EntryInput {
   /** Chỉ dùng cho `income`: ghi đè "Mở kỳ lương" của nguồn (pocket UC-1205 bước 2); không gửi = cờ của nguồn. */
   opens_cycle?: boolean;
   /**
-   * Chỉ dùng cho `spend` / `transfer`: mục tiêu Dự phòng mà khoản này dùng tiền (pocket UC-1209 bước 11) — phải là mục tiêu
-   * đang dùng của tài khoản tiền ra. Không gửi: tài khoản đúng một mục tiêu thì tự gắn khi ghi (`insertTx`), còn lại NULL.
+   * Chỉ dùng cho `spend` / `transfer`: mục tiêu mà khoản này dùng tiền (pocket UC-1209 bước 11) — mục tiêu tài khoản: tiền ra
+   * từ tài khoản của mục tiêu hoặc con của nó; mục tiêu trả từ tiền chi tiêu: tiền ra từ một tài khoản Vận hành. Không gửi: tài
+   * khoản đúng một mục tiêu tài khoản thì tự gắn khi ghi (`insertTx`), còn lại NULL — mục tiêu trả từ tiền chi tiêu không tự gắn.
    */
   goal_id?: string | null;
+  /** Chỉ dùng cho `income` vào tài khoản mẹ có mục tiêu hoặc con của nó: khoản lãi (ghi phân loại `passive_income`, ADR-140). */
+  is_interest?: boolean;
+  /** Chỉ dùng cho `spend` / `transfer` ra khỏi nhóm mẹ có mục tiêu + con, không kèm `goal_id`: rút từ tiền lãi (trần kiểm ở services). */
+  from_interest?: boolean;
 }
 
 export interface TxRow {
@@ -86,9 +91,13 @@ export interface TxRow {
   receivable_id?: string | null;
   interest_debt_id?: string | null;
   goal_id?: string | null;
+  /** 1 = rút từ tiền lãi của nhóm (`transactions.from_interest`); thiếu = 0. */
+  from_interest?: number;
 }
 
 export const INVALID_GOAL = "Mục tiêu này không thuộc tài khoản chi.";
+export const INVALID_INTEREST = "Khoản này không lấy từ tiền lãi được: chỉ khoản chi / chuyển ra khỏi tài khoản có mục tiêu (hoặc khoản gửi của nó), không kèm mục tiêu.";
+const INTEREST_INCOME_ONLY = "Tiền lãi chỉ ghi cho khoản thu vào tài khoản có mục tiêu hoặc khoản gửi của nó.";
 
 const fail = (code: string, message: string): never => {
   throw new DomainError(code, message);
@@ -254,10 +263,28 @@ export function buildEntry(input: EntryInput, refs: Refs, memberId: string | nul
       break;
     }
   }
+  const ref = (id: string | null) => (id ? refs.accounts.find((a) => a.id === id) : undefined);
+  // Nhóm mẹ + con (ADR-140): mục tiêu tài khoản gắn tài khoản mẹ.
+  const rootOf = (id: string | null) => {
+    const a = ref(id);
+    return a?.parentId ? ref(a.parentId) : a;
+  };
+  const outFlow = row.meaning === "spend" || row.meaning === "transfer";
   if (input.goal_id) {
-    const from = row.account_id ? refs.accounts.find((a) => a.id === row.account_id) : undefined;
-    if ((row.meaning !== "spend" && row.meaning !== "transfer") || !from?.goalIds?.includes(input.goal_id)) fail("invalid_goal", INVALID_GOAL);
+    const from = ref(row.account_id);
+    const forAccount = rootOf(row.account_id)?.goalIds?.includes(input.goal_id) ?? false;
+    const forOperating = from?.pocket === "operating" && (refs.operatingGoalIds ?? []).includes(input.goal_id);
+    if (!outFlow || !(forAccount || forOperating)) fail("invalid_goal", INVALID_GOAL);
     row.goal_id = input.goal_id;
+  }
+  if (input.is_interest) {
+    if (row.meaning !== "income" || input.opens_cycle === true || !rootOf(row.counter_account_id)?.goalIds?.length) fail("invalid_input", INTEREST_INCOME_ONLY);
+  }
+  if (input.from_interest) {
+    const root = rootOf(row.account_id);
+    const internal = root !== undefined && rootOf(row.counter_account_id)?.id === root.id;
+    if (!outFlow || row.goal_id || !root?.goalIds?.length || internal) fail("invalid_interest", INVALID_INTEREST);
+    row.from_interest = 1;
   }
   for (const id of [row.account_id, row.counter_account_id]) {
     const touched = id ? refs.accounts.find((a) => a.id === id) : undefined;

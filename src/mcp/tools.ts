@@ -31,9 +31,17 @@ const rows = <T = Row>(r: D1Result) => (r.results ?? []) as T[];
 const vnd = (n: number) => `${Math.round(n).toLocaleString("vi-VN")} ₫`;
 /** Mô tả tham số `goal_id` của add_transaction / assign_log (mcp UC-603, UC-604; pocket UC-1209 bước 11). */
 const GOAL_ID_HINT =
-  "the reserve goal this spend / outgoing transfer uses money for (goal ids per account: get_snapshot pockets accounts[].goalIds) — " +
-  "only when the paying account has two or more goals, which share one account; leave it out = for no goal (an account with one goal is " +
-  "filled in automatically). A goal that does not belong to the paying account is an error (invalid_goal).";
+  "the goal this spend / outgoing transfer uses money for. Account goals (goal ids per account: get_snapshot pockets accounts[].goalIds): " +
+  "money leaves the goal's account or one of its term deposits (child accounts, parentId) — only needed when that account has two or more " +
+  "goals, which share one account; leave it out = for no goal (an account with one goal is filled in automatically). Goals paid from " +
+  "spending money (pockets.operating.goals): money leaves any operating account; never filled in automatically — send goal_id to count it. " +
+  "Any other goal is an error (invalid_goal).";
+/** Mô tả `is_interest` / `from_interest` (mcp UC-603, UC-604; pocket UC-1209 bước 9, ADR-140). */
+const INTEREST_HINT =
+  "is_interest (income only) = this income is deposit interest into an account with goals or its term deposit: it is recorded as passive " +
+  "income and kept out of the goals (reserve.groups[].interest); otherwise invalid_input. from_interest (spend / outgoing transfer leaving " +
+  "such an account group, never with goal_id) = paid from that interest; more than the group's current interest, a transfer between the " +
+  "account and its own term deposit, or any other account is an error (invalid_interest).";
 
 /** Kết quả tool thành công: JSON gọn kèm một dòng tóm tắt tiếng Việt (khi có ích cho việc trả lời). */
 function ok(data: unknown, summary?: string): CallToolResult {
@@ -77,10 +85,16 @@ export async function registerTools(
         "savings / reserve / operating / outside), savings change this / previous pay cycle (savings.change), reserve goals (each goal sits in " +
         "a real reserve account and several goals can share one account; held = what the goal has after splitting the account balance by " +
         "priority order, counting spent = what was spent for the goal this pay cycle; null = no account yet; target or % of taxable income; " +
-        "sorted by priority), reserve.groups = per account with goals: balance, need, spent, short / extra; accounts[].goalIds = goals of each account; peace-of-mind amount " +
+        "sorted by priority), reserve.groups = per account with goals: balance (the account plus its term deposits), interest (deposit interest " +
+        "kept out of the goals; the goals split balance − interest), childIds, need, spent, short / extra; accounts[].goalIds = goals of each " +
+        "account; accounts[].parentId = the parent account of a term deposit (child account, same pocket); peace-of-mind amount " +
         "(reserve accounts without a goal) and months of operating spend it covers (reserve.peace, reserve.peaceMonths), reward account " +
-        "(reserve.reward), short-term debts (shortDebt, reminder only — not subtracted). nearSpend: the operating pocket counted until the " +
-        "next payday, per day / per meal / per market trip, minus payday tasks not done yet (pendingTasks). " +
+        "(reserve.reward), short-term debts (shortDebt, reminder only — not subtracted). operating.goals = goals paid straight from spending " +
+        "money each month ({ id, name, monthly, spent, remaining }), operating.remaining = what is still to pay for them this pay cycle. " +
+        "nearSpend: the operating pocket counted until the next payday, per day / per meal / per market trip, minus payday tasks not done yet " +
+        "(pendingTasks) and minus what goals paid from spending money still need this cycle (goalRemaining). topUp: spending money will not " +
+        "last until payday — { amount, sources: [{ accountId, name, amount }] (reward account first, then peace-of-mind accounts), toAccountId, " +
+        "target (QR destination; null = cash only) }; null = enough. " +
         "payCycle: current pay cycle (opened by salary) and its payday checklist — savings transfer, reserve goal funding, moves, last cycle surplus. " +
         "Also items needing attention (unassigned bank logs, reconciliation drift). " +
         "conversion: one-time switch to pockets still pending ({ done, total: 5, next }; null when done). " +
@@ -102,8 +116,9 @@ export async function registerTools(
       description:
         "Savings pocket total and change per pay cycle, savings % and done this cycle, reserve goals vs target (several goals can share one " +
         "account; held = what the goal has after splitting the account balance by priority, counting spent this pay cycle; null = no account yet), " +
-        "groups per account (balance, need, spent, short / extra), peace-of-mind amount (reserve accounts without a goal) and months, " +
-        "short-term debts. Same numbers as get_snapshot pockets. No parameters.",
+        "groups per account (balance incl. term deposits, interest kept out of the goals, childIds, need, spent, short / extra), peace-of-mind " +
+        "amount (reserve accounts without a goal) and months, short-term debts, and operating.goals = goals paid straight from spending money " +
+        "each month ({ id, name, monthly, spent, remaining }) with operating.remaining. Same numbers as get_snapshot pockets. No parameters.",
     },
     async () => {
       try {
@@ -138,10 +153,11 @@ export async function registerTools(
         "Assign one pending bank log (log_id from list_pending_logs) to 1..N transactions (splits); " +
         "the split amounts must add up to exactly the log amount. A payment on an interest-bearing debt is two splits: " +
         "interest (spend, interest_debt_id) and principal (spend, debt_id). " +
-        "Bank deposit interest (suggestion.interest from list_pending_logs) is ONE split { meaning: income, interest: true }: " +
-        "it records the income in the receiving account, reported as passive income. " +
+        "Bank deposit interest (suggestion.interest from list_pending_logs) is ONE split { meaning: income, interest: true } (is_interest: true " +
+        "is the same): it records the income in the receiving account, reported as passive income, and for an account with goals or its term " +
+        "deposit it is kept out of the goals. " +
         "income: opens_cycle overrides whether this income opens a new pay cycle (default: the income stream's setting, e.g. salary). " +
-        `spend / outgoing transfer: goal_id = ${GOAL_ID_HINT} ` +
+        `spend / outgoing transfer: goal_id = ${GOAL_ID_HINT} from_interest: see add_transaction. ` +
         "There are no wallets: sending wallet_id, from_wallet_id, wealth_move, earmark_id or transfer_order_id is an error (model_changed).",
       inputSchema: z.looseObject({
         log_id: z.string().min(1),
@@ -161,6 +177,8 @@ export async function registerTools(
               taxable: z.boolean().optional(),
               asset_kind: z.string().optional(),
               interest: z.boolean().optional(),
+              is_interest: z.boolean().optional(),
+              from_interest: z.boolean().optional(),
               note: z.string().optional(),
               opens_cycle: z.boolean().optional(),
               goal_id: z.string().optional(),
@@ -186,10 +204,11 @@ export async function registerTools(
           link_id: s.link_id ?? null,
           taxable: s.taxable,
           asset_kind: s.asset_kind ?? null,
-          interest: s.interest === true,
+          interest: s.interest === true || s.is_interest === true,
           note: s.note ?? null,
           opens_cycle: s.opens_cycle,
           goal_id: s.goal_id ?? null,
+          from_interest: s.from_interest === true,
         }));
         const result = await ingest.assignLog(db, args.log_id, splits, memberId, now());
         await audit(db, actor, "log.assign", `log:${args.log_id}`, { splits: splits.length });
@@ -222,7 +241,7 @@ export async function registerTools(
         "without a stream the rental stream is used); opens_cycle overrides whether this income opens a new pay cycle " +
         "(default: the stream's setting, e.g. salary) — the result's effects.cycle tells whether a cycle opened and how many payday tasks it has. " +
         "spend: money paid from a reserve goal's account lowers what the goals of that account hold; " +
-        `goal_id (spend / outgoing transfer) = ${GOAL_ID_HINT} ` +
+        `goal_id (spend / outgoing transfer) = ${GOAL_ID_HINT} ${INTEREST_HINT} ` +
         "debt_id = a debt repayment of PRINCIPAL (id from get_debts; without category_id the debt-repayment category is used); " +
         "interest_debt_id = INTEREST paid on that debt (spend only, never together with debt_id; without category_id the 'loan-interest' category). " +
         "When paying a debt with interestRate > 0, record TWO transactions: interest = min(amount, interestThisMonth − interestPaidThisMonth from get_debts) " +
@@ -251,6 +270,8 @@ export async function registerTools(
         confirm_duplicate: z.boolean().optional(),
         opens_cycle: z.boolean().optional(),
         goal_id: z.string().optional(),
+        is_interest: z.boolean().optional(),
+        from_interest: z.boolean().optional(),
       }),
     },
     async (args) => {
@@ -279,6 +300,8 @@ export async function registerTools(
           confirm_duplicate: args.confirm_duplicate === true,
           opens_cycle: args.opens_cycle,
           goal_id: args.goal_id ?? null,
+          is_interest: args.is_interest === true,
+          from_interest: args.from_interest === true,
         };
         // Người ghi có thể là `by_member_id`; luật tài khoản riêng tư nhìn theo người đã uỷ quyền (access UC-504 AC-14).
         const result = await ledger.createEntry(db, input, by, now(), memberId);

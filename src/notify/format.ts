@@ -8,7 +8,7 @@ import { limitFigures, NEAR_LIMIT_PCT, weeklyRhythm, type LimitNudge } from "../
 import { lacksSavingsAccount, type PayCycleTask } from "../domain/pay-cycle";
 import { blessingFor, type PeaceMonths, type Pocket, type PocketGoal, type PocketsView, type ShortDebtItem } from "../domain/pockets";
 import { dayKey } from "../domain/period";
-import type { NearSpend } from "../domain/snapshot";
+import type { NearSpend, TopUp } from "../domain/snapshot";
 import type { PushText } from "../services/push";
 import { escapeHtml } from "./telegram";
 
@@ -101,8 +101,10 @@ function nearSpendTitle(ns: Pick<NearSpend, "amount" | "payday" | "perDay">): st
 }
 
 export interface DailyMessageInput {
-  /** Tiền vận hành — dòng đầu bản đầy đủ và tiêu đề bản ngắn. */
+  /** Tiền vận hành — dòng đầu bản đầy đủ và tiêu đề bản ngắn; `perDay` đã trừ phần còn phải trả (ledger UC-103 bước 7b). */
   nearSpend: Pick<NearSpend, "amount" | "payday" | "daysLeft" | "perDay">;
+  /** Nhắc chuyển thêm (`snapshot.topUp`, ADR-141): có → dòng 💰 thêm câu "cần chuyển thêm …" kèm nguồn đầu; null / thiếu = không. */
+  topUp?: Pick<TopUp, "amount" | "sources"> | null;
   /** Nhóm có hạn mức cần nhìn lại ở kỳ hiện tại (`limitNudges`, notify UC-402 bước 4): đã lọc & sắp — vượt trước, rồi % giảm dần. */
   limitNudges: LimitNudge[];
   /** Số giao dịch (bank_logs) còn `pending`, chưa gán. */
@@ -153,7 +155,8 @@ export interface DailyMessageInput {
  * (🎯 💳 🤝 🏦 🔗 🩹). Bản ngắn: tiêu đề là tiền vận hành mỗi ngày, nội dung là việc cần làm theo cùng thứ tự, rồi chỗ lệch đối soát.
  */
 export function dailyMessage(input: DailyMessageInput): NotifyMessage {
-  const lines: string[] = [`💰 ${nearSpendLine(input.nearSpend)}`];
+  const topUp = input.topUp ? ` · cần chuyển thêm ${formatMoney(input.topUp.amount)} vào tiền chi tiêu${input.topUp.sources[0] ? ` (từ ${escapeHtml(input.topUp.sources[0].name)})` : ""}` : "";
+  const lines: string[] = [`💰 ${nearSpendLine(input.nearSpend)}${topUp}`];
   /** Việc cần làm, bản ngắn cho thông báo đẩy — cùng thứ tự với các dòng việc của bản đầy đủ. */
   const todo: string[] = [];
 

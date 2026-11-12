@@ -9,7 +9,7 @@ import { dayKey, minuteOfDay, monthKey, weekKey } from "../domain/period";
 import { canPair, extractCode, looksLikeCashWithdrawal, matchRule, type PairCandidate, type RuleRow } from "../domain/rules";
 import { memoKey } from "../domain/rental";
 import { DomainError, type Refs } from "../domain/types";
-import { getTransaction, insertTx, interestMaxAmount, loadRefs, resolveLink, rethrowInvalidGoal, salaryMinAmount, writeEffects, type WriteEffects } from "./ledger";
+import { assertInterestCap, getTransaction, insertTx, interestMaxAmount, loadRefs, resolveLink, rethrowEntryTrigger, salaryMinAmount, writeEffects, type WriteEffects } from "./ledger";
 import { closest, feedMark, linkColumn, linkLogToTx, manualMatches } from "./manual-links";
 import { afterWrite, incomeStatements, resolveOpensCycle, voidTxStatements, type IncomePlan } from "./pay-cycles";
 import { assertLogChangeable, assertRowWritable, assertTenantAccount, assertTxChangeable, hiddenAccountIds } from "./privacy";
@@ -42,11 +42,15 @@ export interface Split {
   asset_kind?: string | null;
   /** income: lãi tiền gửi — một dòng, khoản thu Thu nhập thụ động, không mở kỳ, không việc. */
   interest?: boolean;
+  /** Cùng nghĩa `interest` (tên chung với `POST /v1/transactions`, ADR-140). */
+  is_interest?: boolean;
   /** income: ghi đè "Mở kỳ lương" của nguồn (pocket UC-1205 bước 2); không gửi = cờ của nguồn. */
   opens_cycle?: boolean;
   note?: string | null;
   /** spend / transfer ra: mục tiêu Dự phòng của tài khoản log dùng tiền (pocket UC-1209 bước 11); bỏ trống = tự gắn nếu tài khoản một mục tiêu. */
   goal_id?: string | null;
+  /** spend / transfer ra khỏi nhóm mẹ có mục tiêu + con: rút từ tiền lãi (không kèm `goal_id`; không vượt tiền lãi hiện có). */
+  from_interest?: boolean;
 }
 
 // ── Chuẩn hoá payload SePay → dữ liệu thô lưu vào bank_logs ──────────
@@ -203,7 +207,7 @@ async function commit(db: D1Database, statements: D1PreparedStatement[]): Promis
     return true;
   } catch (err) {
     if (/log_not_pending/.test(String(err))) return false;
-    rethrowInvalidGoal(err);
+    rethrowEntryTrigger(err);
     throw err;
   }
 }
@@ -745,6 +749,7 @@ function splitToEntryInput(log: Row, split: Split): EntryInput {
     link_id: split.link_id ?? undefined,
     opens_cycle: split.opens_cycle,
     goal_id: split.goal_id ?? undefined,
+    from_interest: split.from_interest === true,
   };
   const accountId = (log.account_id as string | null) ?? undefined;
   if (split.meaning === "transfer") {
@@ -786,8 +791,8 @@ export async function assignLog(
   if (total !== Number(log.amount)) {
     fail("split_mismatch", `Tổng các dòng (${total}) phải bằng đúng số tiền log (${log.amount}).`);
   }
-  // Lãi tiền gửi: đúng một dòng thu nhập của tiền vào, không bao giờ mở kỳ (pocket UC-1205 bước 2).
-  const interest = splits.some((s) => s.interest);
+  // Lãi tiền gửi: đúng một dòng thu nhập của tiền vào, không bao giờ mở kỳ (pocket UC-1205 bước 2). `is_interest` cùng nghĩa `interest`.
+  const interest = splits.some((s) => s.interest || s.is_interest);
   if (interest) {
     const s = splits[0]!;
     if (log.direction !== "in" || splits.length !== 1 || s.meaning !== "income" || s.tenant_id || s.income_stream_id || s.link_id || s.taxable) {
@@ -822,6 +827,9 @@ export async function assignLog(
     assertTenantAccount(row, refs);
   }
   for (const { row } of built) await resolveLink(db, row, undefined, hidden);
+  // "Từ tiền lãi" (UC-1209 bước 9): mọi dòng rút từ lãi của log (cùng tài khoản) cộng lại không vượt tiền lãi của nhóm.
+  const fromInterest = built.filter(({ row }) => row.from_interest === 1).map(({ row }) => row);
+  if (fromInterest.length) await assertInterestCap(db, refs, { ...fromInterest[0]!, amount: fromInterest.reduce((s, r) => s + r.amount, 0) });
 
   // Mỗi khoản: câu INSERT rồi NGAY SAU là câu kèm của chính nó (kỳ / việc, phân loại lãi) — các câu kèm trỏ khoản vừa chèn
   // bằng MAX(id), nên không được chen khoản khác vào giữa.

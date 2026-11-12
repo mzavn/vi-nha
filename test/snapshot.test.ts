@@ -6,6 +6,7 @@ import type { Snapshot } from "../src/domain/snapshot";
 import { getSnapshot } from "../src/services/ledger";
 import { asD1, openDb } from "./helpers/d1-sqlite";
 import { B_NOW, householdB, tx, vnAt } from "./helpers/household-b";
+import { householdParent, householdTopUp, PARENT_NOW, parentTx } from "./helpers/household-parent";
 
 const NOW = new Date("2026-11-12T03:00:00Z");
 const withoutPockets = ({ pockets: _, nearSpend: __, ...rest }: Snapshot) => rest;
@@ -45,10 +46,10 @@ describe("snapshot.pockets", () => {
     const book = raw.prepare("SELECT SUM(book_balance) AS s FROM v_account_book").get() as { s: number };
     expect(p.savings.total + p.reserve.total + p.operating.total + p.outside.total).toBe(book.s);
     expect(book.s).toBe(18_900_000);
-    expect(p.reserve.accounts.find((a) => a.id === "mb-husband")).toEqual({ id: "mb-husband", name: "MB (Thuế)", balance: 10_000_000, goalIds: [] });
-    expect(p.reserve.accounts.find((a) => a.id === "mb-tuition")).toEqual({ id: "mb-tuition", name: "MB (học phí)", balance: 0, goalIds: ["tuition"] });
+    expect(p.reserve.accounts.find((a) => a.id === "mb-husband")).toEqual({ id: "mb-husband", name: "MB (Thuế)", balance: 10_000_000, goalIds: [], parentId: null });
+    expect(p.reserve.accounts.find((a) => a.id === "mb-tuition")).toEqual({ id: "mb-tuition", name: "MB (học phí)", balance: 0, goalIds: ["tuition"], parentId: null });
     expect(p.reserve.reward).toEqual({ accountId: "mb-reward", balance: 0 });
-    expect(p.operating.accounts.find((a) => a.id === "card")).toEqual({ id: "card", name: "Thẻ tín dụng", balance: -800_000, goalIds: [] });
+    expect(p.operating.accounts.find((a) => a.id === "card")).toEqual({ id: "card", name: "Thẻ tín dụng", balance: -800_000, goalIds: [], parentId: null });
     expect(p.outside.accounts.map((a) => a.id)).toEqual(["momo"]);
     expect(p.reserve.goals.map((g) => [g.id, g.accountId, g.held, g.target, g.targetPct])).toEqual([
       ["tuition", "mb-tuition", 0, 6_000_000, null],
@@ -136,5 +137,53 @@ describe("snapshot.pockets", () => {
 
   it("UC-1203 AC-7: hộ mẫu B → reserve.goals theo hạn: Trả nợ Vay người thân, Học phí, Bảo dưỡng xe, Thuế", async () => {
     expect((await pocketsAt(householdB())).reserve.goals.map((g) => g.name)).toEqual(["Trả nợ Vay người thân", "Học phí", "Bảo dưỡng xe", "Thuế"]);
+  });
+});
+
+// Mục tiêu trả thẳng từ tiền chi tiêu (ADR-141): chừa phần còn phải trả khỏi "Chi khoảng X/ngày", nhắc chuyển thêm khi thiếu.
+describe("snapshot: phần còn phải trả và nhắc chuyển thêm (ledger UC-103 bước 7b)", () => {
+  const snap = async (raw: DatabaseSync) => getSnapshot(asD1(raw), null, PARENT_NOW);
+
+  it("UC-103 AC-24: Vận hành 15.000.000, 20 ngày, R 3.500.000 → goalRemaining 3.500.000, perDay 575.000 (không phải 750.000); chi đủ 3.500.000 gắn mục tiêu → amount 11.500.000, goalRemaining 0, perDay vẫn 575.000; Vận hành 3.000.000 với R 3.500.000 → perDay null", async () => {
+    const raw = householdParent({ operating: 16_000_000, operatingGoals: true });
+    parentTx(raw, { at: "2026-11-15 09:00", meaning: "spend", amount: 1_000_000, from: "tk-chi-tieu-vo", goal: "dien-nuoc" });
+    let s = await snap(raw);
+    expect(s.nearSpend).toMatchObject({ amount: 15_000_000, daysLeft: 20, goalRemaining: 3_500_000, perDay: 575_000, pendingTasks: 0 });
+
+    for (const [goal, amount] of [["dien-nuoc", 1_000_000], ["thuoc", 500_000], ["thien-phuoc", 1_000_000], ["ve-que", 1_000_000]] as const) {
+      parentTx(raw, { at: "2026-11-20 09:00", meaning: "spend", amount, from: "cash-husband", goal });
+    }
+    s = await snap(raw);
+    expect(s.nearSpend).toMatchObject({ amount: 11_500_000, goalRemaining: 0, perDay: 575_000 });
+
+    const low = householdParent({ operating: 4_000_000, operatingGoals: true });
+    parentTx(low, { at: "2026-11-15 09:00", meaning: "spend", amount: 1_000_000, from: "tk-chi-tieu-vo", goal: "dien-nuoc" });
+    expect((await snap(low)).nearSpend).toMatchObject({ amount: 3_000_000, goalRemaining: 3_500_000, perDay: null });
+  });
+
+  it("UC-103 AC-25: Vận hành 4.000.000, R 3.500.000, ăn tiêu 6.000.000 cho 20 ngày, ④ → Ví Thưởng 600.000 đang mở → topUp 5.500.000 từ BIDV 2.000.000 rồi Phao 3.500.000, đích Chi tiêu chồng (không Gửi 3 tháng, không Tích luỹ); chuyển đủ → null; chưa đủ dữ liệu → null; chỉ tiền mặt → không đích", async () => {
+    const raw = householdTopUp({ history: true });
+    let s = await snap(raw);
+    expect(s.pockets.reserve.peaceMonths.monthly).toBe(13_500_000);
+    expect(s.nearSpend).toMatchObject({ amount: 4_000_000, goalRemaining: 3_500_000 });
+    expect(s.topUp).toEqual({
+      amount: 5_500_000,
+      sources: [
+        { accountId: "tk-bidv", name: "BIDV", amount: 2_000_000 },
+        { accountId: "phao", name: "Phao", amount: 3_500_000 },
+      ],
+      toAccountId: "tk-chi-tieu-chong",
+      target: { accountId: "tk-chi-tieu-chong", name: "Chi tiêu chồng", bank: "Vietcombank", accountNo: "01010000001", subAccount: null },
+    });
+
+    parentTx(raw, { at: "2026-11-20 09:00", meaning: "transfer", amount: 2_000_000, from: "tk-bidv", to: "tk-chi-tieu-chong" });
+    parentTx(raw, { at: "2026-11-20 09:05", meaning: "transfer", amount: 3_500_000, from: "phao", to: "tk-chi-tieu-chong" });
+    expect((await snap(raw)).topUp).toBeNull();
+
+    expect((await snap(householdTopUp({ history: false }))).topUp).toBeNull();
+
+    const cashOnly = householdTopUp({ history: true });
+    cashOnly.exec("UPDATE accounts SET account_no = NULL WHERE id IN ('tk-chi-tieu-chong', 'tk-chi-tieu-vo')");
+    expect((await snap(cashOnly)).topUp).toMatchObject({ amount: 5_500_000, toAccountId: null, target: null });
   });
 });

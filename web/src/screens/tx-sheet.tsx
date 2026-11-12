@@ -9,6 +9,7 @@
 import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import { api, errorText } from "../lib/api";
+import { FROM_INTEREST_LABEL, GOAL_CHOICE_LABEL, IS_INTEREST_LABEL } from "../lib/goal-choices";
 import { formatVnd, maskAmounts } from "../lib/money";
 import { shortDate, timeHM } from "../lib/period";
 import { linkOriginText, returnedText } from "../lib/refunds";
@@ -67,6 +68,8 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
     ...(tx.debt_id ? [["Trả nợ cho", tx.debt_name ?? tx.debt_id] as [string, string]] : []),
     ...(tx.receivable_id ? [[tx.meaning === "lend" ? "Cho ai vay" : "Ai trả", tx.receivable_name ?? tx.receivable_id] as [string, string]] : []),
     ...(tx.tenant_id ? [["Người thuê trả", tx.tenant_name ?? tx.tenant_id] as [string, string]] : []),
+    ...(tx.is_interest ? [["Tiền lãi", IS_INTEREST_LABEL] as [string, string]] : []),
+    ...(tx.from_interest ? [[GOAL_CHOICE_LABEL, FROM_INTEREST_LABEL] as [string, string]] : []),
     ...(who ? [["Người ghi", who] as [string, string]] : []),
     ...(tx.note ? [["Ghi chú", maskAmounts(tx.note)] as [string, string]] : []),
     ["Nguồn", ORIGIN_LABEL[txOrigin(tx)]],

@@ -8,13 +8,14 @@ import { app } from "../src/index";
 import { assignLog, ingestLog, type ParsedBankLog } from "../src/services/ingest";
 import { asD1 } from "./helpers/d1-sqlite";
 import { householdShared, SHARED_NOW, sharedTx, vnAt } from "./helpers/household-shared";
+import { householdParent, PARENT_NOW } from "./helpers/household-parent";
 
 let raw: DatabaseSync;
 let env: Env;
 
 type Json<T> = { ok: boolean; data: T; error?: { code: string; message: string } };
 type Goal = { id: string; held: number | null; need: number | null; spent: number; short: number | null };
-type Group = { accountId: string; balance: number; need: number | null; spent: number; short: number | null; extra: number | null; goalIds: string[] };
+type Group = { accountId: string; balance: number; need: number | null; spent: number; short: number | null; extra: number | null; goalIds: string[]; childIds?: string[]; interest?: number };
 type Tx = { id: number; goal_id: string | null; account_id: string | null; status: string };
 
 async function call<T = unknown>(method: string, path: string, body?: unknown) {
@@ -196,5 +197,150 @@ describe("gán log có goal_id (UC-305 AC-36)", () => {
     raw.exec("INSERT INTO rules (match_type, pattern, meaning, category_id, account_id) VALUES ('content', 'TIEN NHA', 'spend', 'housing', 'tk-tiet-kiem')");
     await ingestLog(env.DB, bankLog({ id: "l3", amount: 1_000_000, content: "TIEN NHA THANG 11" }), "webhook", SHARED_NOW);
     expect(raw.prepare("SELECT goal_id FROM transactions WHERE log_id = 'l3'").get()).toEqual({ goal_id: null });
+  });
+});
+
+// Tài khoản con (khoản gửi kỳ hạn) và tiền lãi của nhóm (QĐ2, ADR-140) — hộ mẫu test/helpers/household-parent.ts.
+describe("tài khoản con và tiền lãi (UC-1209 AC-16, AC-19, UC-101 AC-31, UC-102 AC-29)", () => {
+  beforeEach(() => {
+    vi.setSystemTime(PARENT_NOW);
+    raw = householdParent();
+    env = { DB: asD1(raw), API_TOKEN: "tok" } as Env;
+  });
+  const held = (r: { goals: Goal[] }) => ["nha-o", "hoc-tap", "tap-luyen"].map((id) => goalIn(r, id).held);
+  const post = <T = { tx: Tx }>(body: Record<string, unknown>) => call<T>("POST", "/v1/transactions", body);
+  const out = (amount: number, extra: Record<string, unknown> = {}) =>
+    post({ meaning: "transfer", amount, account_id: "tk-tiet-kiem", to_account_id: "tk-chi-tieu-chong", ...extra });
+  /** Đáo hạn: lãi 3.000.000 vào con (`is_interest`), chuyển 103.000.000 con → mẹ, tắt con. */
+  const mature = async () => {
+    expect((await post({ meaning: "income", amount: 3_000_000, account_id: "gui-6-thang", is_interest: true })).status).toBe(201);
+    expect((await post({ meaning: "transfer", amount: 103_000_000, account_id: "gui-6-thang", to_account_id: "tk-tiet-kiem" })).status).toBe(201);
+    raw.exec("UPDATE accounts SET active = 0, deactivated_at = '2026-11-20' WHERE id = 'gui-6-thang'");
+  };
+
+  it("UC-1209 AC-16: mẹ + con gộp 105.000.000, lãi 0 → 60/30/15 triệu, childIds [con]; gắn mục tiêu vào con → 409 goal_on_child; đáo hạn (con đã tắt) → gộp 108.000.000, interest 3.000.000, Tập luyện vẫn 15.000.000; rút từ lãi → interest 0, mục tiêu không đổi; rút không chọn → interest 3.000.000, Tập luyện 12.000.000; tiền bố mẹ cho không thành lãi; lãi ở Thu nhập thụ động", async () => {
+    let r = await reserve();
+    expect(savingGroup(r)).toMatchObject({ balance: 105_000_000, interest: 0, childIds: ["gui-6-thang"] });
+    expect(held(r)).toEqual([60_000_000, 30_000_000, 15_000_000]);
+    expect(err(await call("PATCH", "/v1/settings/goals/nha-o", { account_id: "gui-6-thang" }))).toEqual([409, "goal_on_child"]);
+
+    await mature();
+    r = await reserve();
+    expect(savingGroup(r)).toMatchObject({ balance: 108_000_000, interest: 3_000_000 });
+    expect(held(r)).toEqual([60_000_000, 30_000_000, 15_000_000]);
+    const interestTx = raw.prepare("SELECT r.report_class AS c FROM transactions t JOIN transaction_report_classes r ON r.transaction_id = t.id WHERE t.counter_account_id = 'gui-6-thang' AND t.meaning = 'income'").get();
+    expect(interestTx).toEqual({ c: "passive_income" });
+
+    const fromInterest = await out(3_000_000, { from_interest: true });
+    expect(fromInterest.status).toBe(201);
+    r = await reserve();
+    expect(savingGroup(r)).toMatchObject({ balance: 105_000_000, interest: 0 });
+    expect(held(r)).toEqual([60_000_000, 30_000_000, 15_000_000]);
+
+    expect((await call("POST", `/v1/transactions/${fromInterest.json.data.tx.id}/void`)).status).toBe(200);
+    expect((await out(3_000_000)).status).toBe(201);
+    r = await reserve();
+    expect(savingGroup(r)).toMatchObject({ balance: 105_000_000, interest: 3_000_000 });
+    expect(held(r)).toEqual([60_000_000, 30_000_000, 12_000_000]);
+
+    expect((await post({ meaning: "income", amount: 2_000_000, account_id: "tk-tiet-kiem", note: "bố mẹ cho" })).status).toBe(201);
+    r = await reserve();
+    expect(savingGroup(r).interest).toBe(3_000_000);
+    expect(held(r)).toEqual([60_000_000, 30_000_000, 14_000_000]);
+  });
+
+  it("UC-1209 AC-19: từ lãi 500.000 → 2.500.000; 4.000.000 → 400 invalid_interest không ghi; 2.500.000 → 0; lãi mới 1.000.000 → 1.000.000; rút sạch → 0; nạp 2.000.000 → vẫn 0, chia cho mục tiêu; sang con mới từ lãi, từ phao, khoản thu, kèm goal_id → 400 invalid_interest", async () => {
+    await mature();
+    expect((await spend("tk-tiet-kiem", 500_000, { from_interest: true })).status).toBe(201);
+    expect(savingGroup(await reserve()).interest).toBe(2_500_000);
+    const before = txCount();
+    expect(err(await out(4_000_000, { from_interest: true }))).toEqual([400, "invalid_interest"]);
+    expect(txCount()).toBe(before);
+    expect((await out(2_500_000, { from_interest: true })).status).toBe(201);
+    expect(savingGroup(await reserve()).interest).toBe(0);
+    expect((await post({ meaning: "income", amount: 1_000_000, account_id: "tk-tiet-kiem", is_interest: true })).status).toBe(201);
+    expect(savingGroup(await reserve()).interest).toBe(1_000_000);
+
+    const all = savingGroup(await reserve()).balance;
+    expect(all).toBe(106_000_000);
+    expect((await out(all)).status).toBe(201);
+    expect(savingGroup(await reserve()).interest).toBe(0);
+    expect((await post({ meaning: "transfer", amount: 2_000_000, account_id: "tk-chi-tieu-chong", to_account_id: "tk-tiet-kiem" })).status).toBe(201);
+    let r = await reserve();
+    expect(savingGroup(r)).toMatchObject({ balance: 2_000_000, interest: 0 });
+    expect(held(r)).toEqual([2_000_000, 0, 0]);
+
+    raw.exec("INSERT INTO accounts (id, name, kind, bank, opening_balance, pocket, pocket_confirmed, parent_account_id) VALUES ('gui-moi', 'Gửi 3 tháng', 'bank', 'MBBank', 0, 'reserve', 1, 'tk-tiet-kiem')");
+    const n = txCount();
+    for (const bad of [
+      await post({ meaning: "transfer", amount: 1_000_000, account_id: "tk-tiet-kiem", to_account_id: "gui-moi", from_interest: true }),
+      await post({ meaning: "transfer", amount: 100_000, account_id: "phao", to_account_id: "tk-chi-tieu-chong", from_interest: true }),
+      await post({ meaning: "income", amount: 100_000, account_id: "tk-tiet-kiem", from_interest: true }),
+      await out(100_000, { from_interest: true, goal_id: "hoc-tap" }),
+    ]) {
+      expect(err(bad)).toEqual([400, "invalid_interest"]);
+    }
+    expect(txCount()).toBe(n);
+  });
+
+  it("UC-101 AC-31: POST /v1/transactions nhận is_interest / from_interest — GET /v1/transactions/:id trả is_interest, from_interest; is_interest ở khoản chi hay vào tài khoản ngoài nhóm có mục tiêu → 400 invalid_input; khoản từ lãi không tự gắn mục tiêu duy nhất của tài khoản", async () => {
+    const income = await post({ meaning: "income", amount: 3_000_000, account_id: "gui-6-thang", is_interest: true });
+    const view = (await call<Record<string, unknown>>("GET", `/v1/transactions/${income.json.data.tx.id}`)).json.data;
+    expect([view.is_interest, view.from_interest]).toEqual([true, false]);
+    const moved = await out(1_000_000, { from_interest: true });
+    const movedView = (await call<Record<string, unknown>>("GET", `/v1/transactions/${moved.json.data.tx.id}`)).json.data;
+    expect([movedView.is_interest, movedView.from_interest]).toEqual([false, true]);
+    expect(savingGroup(await reserve()).interest).toBe(2_000_000);
+    const n = txCount();
+    expect(err(await post({ meaning: "income", amount: 100_000, account_id: "phao", is_interest: true }))).toEqual([400, "invalid_input"]);
+    expect(err(await spend("tk-tiet-kiem", 100_000, { is_interest: true }))).toEqual([400, "invalid_input"]);
+    expect(txCount()).toBe(n);
+
+    // Tài khoản còn một mục tiêu: khoản thường tự gắn, khoản "từ lãi" không bao giờ tự gắn (trigger chặn goal_id + from_interest).
+    raw.exec("UPDATE reserve_goals SET active = 0 WHERE id IN ('hoc-tap', 'tap-luyen')");
+    expect((await spend("tk-tiet-kiem", 100_000)).json.data.tx.goal_id).toBe("nha-o");
+    const plain = await spend("tk-tiet-kiem", 100_000, { from_interest: true });
+    expect(plain.status).toBe(201);
+    expect(plain.json.data.tx.goal_id).toBeNull();
+  });
+
+  it("UC-102 AC-29: chi 500.000 từ lãi (I 2.500.000) → sửa thành 3.500.000 giữ from_interest → 400 invalid_interest (trần 3.000.000), khoản cũ giữ; sửa thành 2.000.000 → lưu, I 1.000.000", async () => {
+    await mature();
+    const first = await spend("tk-tiet-kiem", 500_000, { from_interest: true });
+    expect(savingGroup(await reserve()).interest).toBe(2_500_000);
+    const id = first.json.data.tx.id;
+    const body = (amount: number) => ({ meaning: "spend", amount, category_id: "housing", account_id: "tk-tiet-kiem", from_interest: true });
+    expect(err(await call("POST", `/v1/transactions/${id}/replace`, body(3_500_000)))).toEqual([400, "invalid_interest"]);
+    expect(raw.prepare("SELECT status, from_interest FROM transactions WHERE id = ?").get(id)).toEqual({ status: "active", from_interest: 1 });
+    const edited = await call<{ tx: Tx & { from_interest: boolean } }>("POST", `/v1/transactions/${id}/replace`, body(2_000_000));
+    expect(edited.status).toBe(201);
+    expect(edited.json.data.tx.from_interest).toBe(true);
+    expect(savingGroup(await reserve()).interest).toBe(1_000_000);
+  });
+});
+
+// Mục tiêu trả thẳng từ tiền chi tiêu (ADR-141): goal_id từ mọi tài khoản Vận hành, không tự gắn.
+describe("chi gắn mục tiêu trả từ tiền chi tiêu (UC-1209 AC-18)", () => {
+  beforeEach(() => {
+    vi.setSystemTime(PARENT_NOW);
+    raw = householdParent({ operatingGoals: true });
+    env = { DB: asD1(raw), API_TOKEN: "tok" } as Env;
+  });
+  const remaining = async () => (await call<{ pockets: { operating: { remaining: number } } }>("GET", "/v1/snapshot")).json.data.pockets.operating.remaining;
+
+  it("UC-1209 AC-18: remaining 4.500.000 → 3.500.000 (Điện nước từ tk-chi-tieu-vo) → 3.200.000 (Thuốc từ tiền mặt); chi không goal_id lưu null, không tự gắn; goal_id từ tk-tiet-kiem → 400 invalid_goal; kỳ mới → 4.500.000", async () => {
+    expect(await remaining()).toBe(4_500_000);
+    expect((await spend("tk-chi-tieu-vo", 1_000_000, { goal_id: "dien-nuoc" })).json.data.tx.goal_id).toBe("dien-nuoc");
+    expect(await remaining()).toBe(3_500_000);
+    expect((await spend("cash-husband", 300_000, { goal_id: "thuoc" })).status).toBe(201);
+    expect(await remaining()).toBe(3_200_000);
+    expect((await spend("tk-chi-tieu-chong", 200_000)).json.data.tx.goal_id).toBeNull();
+    expect(await remaining()).toBe(3_200_000);
+    expect(err(await spend("tk-tiet-kiem", 100_000, { goal_id: "thuoc" }))).toEqual([400, "invalid_goal"]);
+
+    vi.setSystemTime(new Date(vnAt("2026-12-10 09:00")));
+    const salary = await call("POST", "/v1/transactions", { meaning: "income", amount: 20_000_000, account_id: "tk-chi-tieu-chong", income_stream_id: "salary-husband", at: vnAt("2026-12-10 08:00") });
+    expect(salary.status).toBe(201);
+    expect(await remaining()).toBe(4_500_000);
   });
 });

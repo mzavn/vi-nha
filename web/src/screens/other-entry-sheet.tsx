@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { errorText } from "../lib/api";
 import { defaultAccountFor, defaultBankFor, manualAccounts } from "../lib/categories";
-import { goalChoices, goalField } from "../lib/goal-choices";
+import { goalChoices, goalField, goalValueOf, incomeInterest } from "../lib/goal-choices";
 import { formatTypedVnd } from "../lib/money";
 import { incomeBody, opensCycleDefault, queuedBody, queuedMissing, type QueuedKind } from "../lib/other-entry";
 import { atForDay, dayKey } from "../lib/period";
@@ -15,9 +15,9 @@ import { draftFromTx, editedAt, MEANING_LABEL, withChosen, type TxDraft } from "
 import type { Bootstrap, Rental, SettingsData, TxRow } from "../lib/types";
 import { useResource } from "../state/resource";
 import { replaceEntry, saveEntry, useApp } from "../state/store";
-import { AccountSelect, AmountInput, CategorySelect, GoalChips, newClientId } from "../ui/fields";
+import { AccountSelect, AmountInput, CategorySelect, newClientId } from "../ui/fields";
 import { NeedsNetwork, Seg, Sheet } from "../ui/parts";
-import { LinkSourcePicker, ReceivablePicker } from "./ref-pickers";
+import { GoalRowField, InterestCheck, LinkSourcePicker, ReceivablePicker } from "./ref-pickers";
 
 export type OtherKind = "income" | QueuedKind;
 
@@ -77,7 +77,7 @@ type Editing = { tx: TxRow; draft: TxDraft };
 
 /** "Ghi thu nhập" (UC-705): số, tài khoản nhận, nguồn, người thuê, chịu thuế, công tắc "Lương — mở kỳ lương" — ghi một lần, không chia. */
 function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; initialAmount: number; edit?: Editing; onDone: () => void }) {
-  const { online, member } = useApp();
+  const { online, member, snap } = useApp();
   const d = edit?.draft;
   const [amount, setAmount] = useState(initialAmount);
   const [accountId, setAccountId] = useState(() => d?.account_id ?? defaultBankFor(manualAccounts(boot.accounts, "in"), member?.id ?? null));
@@ -88,6 +88,10 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
   const [tenantId, setTenantId] = useState(d?.tenant_id ?? "");
   // null = theo nguồn đang chọn; người bấm công tắc thì giữ lựa chọn đó.
   const [opensCycle, setOpensCycle] = useState<boolean | null>(null);
+  // "Đây là tiền lãi" (QĐ2, UC-705 AC-38): null = theo tài khoản nhận (bật sẵn khi là khoản gửi); sửa khoản giữ cờ cũ.
+  const [isInterest, setIsInterest] = useState<boolean | null>(d ? d.is_interest : null);
+  const interestOffer = incomeInterest(accountId, snap?.pockets);
+  const interestOn = interestOffer !== null && (isInterest ?? interestOffer.preset);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [clientId] = useState(newClientId);
@@ -120,6 +124,7 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
       tenantId,
       note,
       opensCycle: cycleOn,
+      isInterest: interestOn,
     });
     setBusy(true);
     setError(null);
@@ -146,8 +151,17 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
       </div>
       <div class="field">
         <label for="i-acct">Vào tài khoản</label>
-        <AccountSelect id="i-acct" accounts={manualAccounts(boot.accounts, "in", day)} value={accountId} onChange={setAccountId} />
+        <AccountSelect
+          id="i-acct"
+          accounts={manualAccounts(boot.accounts, "in", day)}
+          value={accountId}
+          onChange={(id) => {
+            setAccountId(id);
+            if (!edit) setIsInterest(null);
+          }}
+        />
       </div>
+      <InterestCheck shown={interestOffer !== null} checked={interestOn} onChange={setIsInterest} />
       {tenants.length > 0 && (
         <div class="field">
           <label for="i-tenant">Người thuê trả</label>
@@ -261,13 +275,17 @@ function QueuedForm({
           : defaultAccountFor(boot, memberId, kind === "refund" || kind === "collect" ? "in" : "out"),
   );
   const [toAccountId, setToAccountId] = useState<string | null>(() => (d ? d.to_account_id : defaultAccountFor(boot, memberId, "in")));
-  // "Cho mục tiêu" của chi / chuyển ra từ tài khoản chung (pwa UC-705 AC-37, UC-715 AC-17): đổi tài khoản tiền ra là bỏ chọn.
-  const [goalId, setGoalId] = useState<string | null>(d?.goal_id ?? null);
+  // "Cho mục tiêu" / "Cho khoản phải trả" / "Từ tiền lãi" của chi / chuyển ra (pwa UC-705 AC-37, AC-38, UC-715 AC-17): đổi tài
+  // khoản tiền ra là bỏ chọn; sửa khoản giữ lựa chọn đang gắn.
+  const [goalId, setGoalId] = useState<string | null>(d ? goalValueOf(d) : null);
   const pickAccount = (id: string | null) => {
     setAccountId(id);
     setGoalId(null);
   };
-  const goals = kind === "spend" || kind === "transfer" ? goalChoices(accountId, snap?.pockets) : [];
+  const goals =
+    kind === "spend" || kind === "transfer"
+      ? goalChoices(accountId, snap?.pockets, { toAccountId: kind === "transfer" ? toAccountId : null, keepInterest: !!d?.from_interest && accountId === d.account_id })
+      : null;
   const [categoryId, setCategoryId] = useState<string | null>(() => (d ? d.category_id : null));
   const [assetKind, setAssetKind] = useState<(typeof ASSET_KINDS)[number]["value"]>(
     () => ASSET_KINDS.find((a) => a.value === d?.asset_kind)?.value ?? "fund",
@@ -307,6 +325,7 @@ function QueuedForm({
     setBusy(true);
     setError(null);
     const memo = (kind === "lend" || kind === "collect") && receivable ? receivable : null;
+    const goalPick = goalField(goalId, goals);
     const body = queuedBody({
       kind,
       amount,
@@ -319,7 +338,8 @@ function QueuedForm({
       receivableId: memo?.id ?? null,
       assetKind,
       note,
-      goalId: goalField(goalId, goals).goal_id ?? null,
+      goalId: goalPick.goal_id ?? null,
+      fromInterest: goalPick.from_interest === true,
     });
     if (edit) {
       // Sửa ghi thẳng lên server (thay khoản cũ trong một lần), không qua hàng đợi.
@@ -354,7 +374,7 @@ function QueuedForm({
             <label for="o-acct">Tiền ra từ</label>
             <AccountSelect id="o-acct" accounts={manualAccounts(boot.accounts, "out", day)} value={accountId} onChange={pickAccount} />
           </div>
-          <GoalChips choices={goals} value={goalId} onChange={setGoalId} />
+          <GoalRowField id="o-goal" row={goals} value={goalId} onChange={setGoalId} />
         </>
       )}
 
@@ -444,7 +464,7 @@ function QueuedForm({
             <label for="o-from">Từ</label>
             <AccountSelect id="o-from" accounts={manualAccounts(boot.accounts, "out", day)} value={accountId} onChange={pickAccount} />
           </div>
-          <GoalChips choices={goals} value={goalId} onChange={setGoalId} />
+          <GoalRowField id="o-goal" row={goals} value={goalId} onChange={setGoalId} />
           <div class="field">
             <label for="o-to">Vào</label>
             <AccountSelect id="o-to" accounts={manualAccounts(boot.accounts, "in", day)} value={toAccountId} onChange={setToAccountId} />

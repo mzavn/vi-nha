@@ -45,6 +45,7 @@ export const AUDIT_ACTIONS = [
   "pay_cycle_task.done",
   "pay_cycle_task.reopen",
   "pay_cycle_task.skip",
+  "pay_cycle_task.void",
   "pockets.confirm",
   "push.add",
   "push.remove",

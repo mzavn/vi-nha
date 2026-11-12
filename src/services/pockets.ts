@@ -5,8 +5,23 @@
 // 0038, 0042); đọc trước chỉ để báo lỗi rõ ràng.
 
 import { dayKey } from "../domain/period";
-import { checkGoal, goalGroups, goalOrder, goalNeed, MONEY_MAX, type FilledGoal, type GoalDraft, type GoalGroup, type Pocket, type PocketGoalInput } from "../domain/pockets";
+import {
+  checkGoal,
+  goalGroups,
+  goalOrder,
+  goalNeed,
+  MONEY_MAX,
+  operatingGoals,
+  type FilledGoal,
+  type GoalDraft,
+  type GoalGroup,
+  type GoalPaysFrom,
+  type OperatingGoal,
+  type Pocket,
+  type PocketGoalInput,
+} from "../domain/pockets";
 import { DomainError } from "../domain/types";
+import { groupInterestFrom, groupInterestStatements } from "./goal-groups";
 import { loadCycles } from "./ledger";
 import { accountBatch, accountIdOf, accountInsert, assertNoGoal, pocketValue, readAccount, slug } from "./settings";
 
@@ -50,38 +65,73 @@ function boolOf(b: Input, k: string): boolean | undefined {
 
 /**
  * `PUT /v1/settings/pockets` (UC-1201 bước 3): xếp và xác nhận ngăn cả bảng một lần — cả lô hoặc không gì. Tài khoản đang gắn
- * mục tiêu đang dùng mà rời ngăn Dự phòng → 409 account_has_goal. Trả số tài khoản và phần đổi ngăn `{ id: { from, to } }`
- * cho nhật ký `pockets.confirm`.
+ * mục tiêu đang dùng mà rời ngăn Dự phòng → 409 account_has_goal. Dòng của tài khoản con bị bỏ qua: con theo ngăn của mẹ (trigger
+ * 0044); mẹ có con đang dùng mà sang Vận hành → 409 account_has_children. Trả số dòng gửi lên và phần đổi ngăn
+ * `{ id: { from, to, parent? } }` (con đổi theo mẹ có `parent`) cho nhật ký `pockets.confirm`.
  */
-export async function confirmPockets(db: D1Database, b: Input): Promise<{ count: number; changes: Record<string, { from: Pocket | null; to: Pocket | null }> }> {
+export async function confirmPockets(
+  db: D1Database,
+  b: Input,
+): Promise<{ count: number; changes: Record<string, { from: Pocket | null; to: Pocket | null; parent?: string }> }> {
   if (!Array.isArray(b.accounts) || b.accounts.length === 0) fail("invalid_input", "accounts là danh sách { id, pocket }.", 400, "accounts");
   const list = (b.accounts as unknown[]).map((x, i) => {
     if (!x || typeof x !== "object" || typeof (x as Input).id !== "string" || !has(x as Input, "pocket")) fail("invalid_input", "Mỗi dòng gồm id và pocket.", 400, `accounts.${i}`);
     return { id: (x as Input).id as string, pocket: pocketValue((x as Input).pocket, `accounts.${i}.pocket`) };
   });
   const ids = [...new Set(list.map((a) => a.id))];
+  type Current = { id: string; name: string; pocket: Pocket | null; parent: string | null; children: number };
   const current = new Map(
-    rows<{ id: string; pocket: Pocket | null }>(
-      await db.prepare(`SELECT id, pocket FROM accounts WHERE id IN (${ids.map(() => "?").join(", ")})`).bind(...ids).all(),
-    ).map((a) => [a.id, a.pocket]),
+    rows<Current>(
+      await db
+        .prepare(
+          `SELECT a.id, a.name, a.pocket, a.parent_account_id AS parent,
+             (SELECT COUNT(*) FROM accounts c WHERE c.parent_account_id = a.id AND c.active = 1) AS children
+           FROM accounts a WHERE a.id IN (${ids.map(() => "?").join(", ")})`,
+        )
+        .bind(...ids)
+        .all(),
+    ).map((a) => [a.id, a]),
   );
   const unknown = ids.find((id) => !current.has(id));
   if (unknown) fail("unknown_account", `Không có tài khoản "${unknown}".`, 400, "accounts");
-  const leaving = list.filter((a) => a.pocket !== "reserve").map((a) => a.id);
+  const own = list.filter((a) => current.get(a.id)!.parent === null);
+  const leaving = own.filter((a) => a.pocket !== "reserve").map((a) => a.id);
   for (const id of leaving) await assertNoGoal(db, id);
-  await accountBatch(
-    db,
-    list.map((a) => db.prepare("UPDATE accounts SET pocket = ?, pocket_confirmed = 1 WHERE id = ?").bind(a.pocket, a.id)),
-    leaving,
+  const parents = own.map((a) => a.id);
+  const children = parents.length
+    ? rows<{ id: string; pocket: Pocket | null; parent: string }>(
+        await db
+          .prepare(`SELECT id, pocket, parent_account_id AS parent FROM accounts WHERE parent_account_id IN (${parents.map(() => "?").join(", ")}) ORDER BY id`)
+          .bind(...parents)
+          .all(),
+      )
+    : [];
+  if (own.length)
+    try {
+      await accountBatch(
+        db,
+        own.map((a) => db.prepare("UPDATE accounts SET pocket = ?, pocket_confirmed = 1 WHERE id = ?").bind(a.pocket, a.id)),
+        leaving,
+      );
+    } catch (err) {
+      // Mẹ có con đang dùng không sang Vận hành (trigger trg_accounts_keep_children) — cả lô không ghi gì.
+      if (!/account_has_children/.test(String(err))) throw err;
+      const toOperating = own.filter((a) => a.pocket === "operating").map((a) => current.get(a.id)!);
+      const parent = toOperating.find((a) => Number(a.children) > 0) ?? toOperating[0];
+      fail("account_has_children", `Tất toán / tắt các khoản gửi của ${parent?.name ?? "tài khoản này"} trước.`, 409, "pocket");
+    }
+  const to = new Map(own.map((a) => [a.id, a.pocket]));
+  const changes: Record<string, { from: Pocket | null; to: Pocket | null; parent?: string }> = Object.fromEntries(
+    own.filter((a) => current.get(a.id)!.pocket !== a.pocket).map((a) => [a.id, { from: current.get(a.id)!.pocket, to: a.pocket }]),
   );
-  const changes = Object.fromEntries(list.filter((a) => current.get(a.id) !== a.pocket).map((a) => [a.id, { from: current.get(a.id) ?? null, to: a.pocket }]));
+  for (const c of children) if (c.pocket !== to.get(c.parent)) changes[c.id] = { from: c.pocket, to: to.get(c.parent)!, parent: c.parent };
   return { count: list.length, changes };
 }
 
 // ── Mục tiêu Dự phòng (UC-1209) ─────────────────────────────────────
 const GOAL_SQL = `SELECT g.id, g.name, g.account_id, g.suggested_account_id,
   (SELECT b.book_balance FROM v_account_book b WHERE b.account_id = g.account_id) AS balance,
-  g.target_amount, g.target_pct, g.monthly_amount, g.repeat_months, g.due_date, g.debt_id, g.sort, g.active FROM reserve_goals g`;
+  g.target_amount, g.target_pct, g.monthly_amount, g.repeat_months, g.due_date, g.debt_id, g.sort, g.active, g.pays_from FROM reserve_goals g`;
 
 /** Một mục tiêu như `GET /v1/settings › goals[]`. */
 export interface GoalView {
@@ -106,6 +156,10 @@ export interface GoalView {
   debt_id: string | null;
   sort: number;
   active: boolean;
+  /** Nơi để tiền (ADR-141): `account` (tài khoản để dành) | `operating` (trả thẳng từ tiền chi tiêu, `account_id` null). */
+  pays_from: GoalPaysFrom;
+  /** Còn phải trả kỳ này = max(0, mỗi tháng − đã chi từ Vận hành) — chỉ mục tiêu `operating` đang dùng; còn lại null. */
+  remaining: number | null;
 }
 /** Nhóm mục tiêu của một tài khoản như `GET /v1/settings › goal_groups[]` — cùng số `snapshot.pockets.reserve.groups`. */
 export interface GoalGroupView {
@@ -116,25 +170,34 @@ export interface GoalGroupView {
   short: number | null;
   extra: number | null;
   goal_ids: string[];
+  /** Tài khoản con đang dùng của mẹ (khoản gửi kỳ hạn); `balance` = số dư gộp mẹ + con. */
+  child_ids: string[];
+  /** Tiền lãi của nhóm: không chia cho mục tiêu (số chia = `balance − interest`). */
+  interest: number;
 }
 
 /**
- * Đã chi cho từng mục tiêu đang dùng từ `since` (pocket UC-1209 bước 11): Σ chi / chuyển ra còn hiệu lực gắn mục tiêu, tiền ra
- * từ tài khoản hiện tại của nó, `at` ≥ đầu kỳ, − hoàn tiền (`link_id` tới các khoản đó) về đúng tài khoản đó trong cùng cửa
- * sổ. Một câu, chạy trong batch của snapshot.
+ * Đã chi cho từng mục tiêu đang dùng từ `since` (pocket UC-1209 bước 11): Σ chi / chuyển ra còn hiệu lực gắn mục tiêu, `at` ≥
+ * đầu kỳ, − hoàn tiền (`link_id` tới các khoản đó) về lại nơi tiền ra trong cùng cửa sổ. Mục tiêu tài khoản: tiền ra từ tài
+ * khoản mẹ hoặc con của nó và ra khỏi nhóm (chuyển nội bộ mẹ ↔ con không tính); mục tiêu trả từ tiền chi tiêu: tiền ra từ một
+ * tài khoản ngăn Vận hành. Một câu, chạy trong batch của snapshot.
  */
-export const goalSpentStatement = (db: D1Database, since: string) =>
-  db
+export const goalSpentStatement = (db: D1Database, since: string) => {
+  const group = "SELECT id FROM accounts WHERE g.account_id IN (id, parent_account_id)";
+  const from = (x: string) => `(CASE WHEN g.pays_from = 'operating' THEN ${x} IN (SELECT id FROM accounts WHERE pocket = 'operating') ELSE ${x} IN (${group}) END)`;
+  const out = (t: string) =>
+    `${t}.goal_id = g.id AND ${t}.status = 'active' AND ${t}.at >= ?1 AND ${from(`${t}.account_id`)}
+     AND (g.pays_from = 'operating' OR ${t}.counter_account_id IS NULL OR ${t}.counter_account_id NOT IN (${group}))`;
+  return db
     .prepare(
       `SELECT g.id,
-         COALESCE((SELECT SUM(t.amount) FROM transactions t
-           WHERE t.goal_id = g.id AND t.status = 'active' AND t.account_id = g.account_id AND t.at >= ?1), 0)
+         COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE ${out("t")}), 0)
          - COALESCE((SELECT SUM(r.amount) FROM transactions r JOIN transactions s ON s.id = r.link_id
-           WHERE r.meaning = 'refund' AND r.status = 'active' AND r.at >= ?1 AND r.counter_account_id = g.account_id
-             AND s.goal_id = g.id AND s.status = 'active' AND s.account_id = g.account_id AND s.at >= ?1), 0) AS spent
-       FROM reserve_goals g WHERE g.active = 1 AND g.account_id IS NOT NULL`,
+           WHERE r.meaning = 'refund' AND r.status = 'active' AND r.at >= ?1 AND ${from("r.counter_account_id")} AND ${out("s")}), 0) AS spent
+       FROM reserve_goals g WHERE g.active = 1 AND (g.account_id IS NOT NULL OR g.pays_from = 'operating')`,
     )
     .bind(since);
+};
 
 /** `id → đã chi` từ kết quả của `goalSpentStatement`. */
 export const goalSpentMap = (r: D1Result) => new Map(rows<{ id: string; spent: number }>(r).map((g) => [g.id, Number(g.spent)]));
@@ -151,17 +214,21 @@ export interface GoalFill {
   active: Set<string>;
   groups: GoalGroup[];
   filled: Map<string, FilledGoal>;
+  /** Mục tiêu trả từ tiền chi tiêu đang dùng theo thứ tự ưu tiên (còn phải trả kỳ này). */
+  operating: OperatingGoal[];
 }
 
 /**
- * Chia số dư cho mục tiêu đang dùng với đã chi từ `since` (pocket UC-1209 bước 9, 11) — một luật cho `GET /v1/settings` và
- * việc ② (A lúc mở kỳ, A trên thẻ việc); snapshot đi cùng hàm `goalGroups` qua `pocketsView`.
+ * Chia `số dư gộp − tiền lãi` của từng nhóm mẹ + con cho mục tiêu tài khoản đang dùng với đã chi từ `since` (pocket UC-1209
+ * bước 9, 11, QĐ2) — một luật (`goalGroups`) cho `GET /v1/settings` và việc ② (A lúc mở kỳ, A trên thẻ việc); snapshot đi cùng
+ * hàm đó qua `pocketsView`. Mục tiêu trả từ tiền chi tiêu: còn phải trả = max(0, mỗi tháng − đã chi từ Vận hành).
  */
 export async function goalFill(db: D1Database, since: string): Promise<GoalFill> {
-  const [goalRows, accounts, spentRows] = await db.batch([
+  const [goalRows, accounts, spentRows, interestAccounts, interestTxs] = await db.batch([
     db.prepare(GOAL_SQL),
-    db.prepare("SELECT b.account_id AS id, b.name, b.book_balance AS balance FROM v_account_book b"),
+    db.prepare("SELECT b.account_id AS id, b.name, b.book_balance AS balance, a.parent_account_id AS parentId FROM v_account_book b JOIN accounts a ON a.id = b.account_id"),
     goalSpentStatement(db, since),
+    ...groupInterestStatements(db),
   ]);
   const spent = goalSpentMap(spentRows!);
   const all = rows(goalRows!);
@@ -177,41 +244,59 @@ export async function goalFill(db: D1Database, since: string): Promise<GoalFill>
     debtId: (r.debt_id as string | null) ?? null,
     sort: Number(r.sort),
     spent: spent.get(String(r.id)) ?? 0,
+    paysFrom: r.pays_from === "operating" ? "operating" : "account",
   }));
   const active = new Set(all.filter((r) => r.active).map((r) => String(r.id)));
+  const live = inputs.filter((g) => active.has(g.id)).sort(goalOrder);
   const { groups, filled } = goalGroups(
-    rows<{ id: string; name: string; balance: number }>(accounts!).map((a) => ({ ...a, balance: Number(a.balance) })),
-    inputs.filter((g) => active.has(g.id)).sort(goalOrder),
+    rows<{ id: string; name: string; balance: number; parentId: string | null }>(accounts!).map((a) => ({ ...a, balance: Number(a.balance) })),
+    live,
+    groupInterestFrom(interestAccounts!, interestTxs!),
   );
-  return { rows: all, inputs, active, groups, filled };
+  return { rows: all, inputs, active, groups, filled, operating: operatingGoals(live) };
 }
 
 /**
- * Mọi mục tiêu (kể cả đã tắt) theo thứ tự ưu tiên và nhóm theo tài khoản (`GET /v1/settings`, UC-505): mục tiêu đang dùng
- * chia số dư tài khoản bằng `goalGroups` với đã chi từ đầu kỳ — cùng luật, cùng mốc snapshot.
+ * Mọi mục tiêu (kể cả đã tắt) theo thứ tự ưu tiên và nhóm theo tài khoản mẹ (`GET /v1/settings`, UC-505): mục tiêu tài khoản
+ * đang dùng chia số dư gộp − tiền lãi bằng `goalGroups` với đã chi từ đầu kỳ — cùng luật, cùng mốc snapshot; mục tiêu trả từ
+ * tiền chi tiêu có `spent`, `remaining`, không `held`.
  */
 export async function listGoals(db: D1Database, now: Date): Promise<{ goals: GoalView[]; groups: GoalGroupView[] }> {
-  const { rows: all, inputs, groups, filled } = await goalFill(db, await cycleStart(db, now));
+  const { rows: all, inputs, groups, filled, operating } = await goalFill(db, await cycleStart(db, now));
   const order = new Map([...inputs].sort(goalOrder).map((g, i) => [g.id, i]));
+  const operatingOf = new Map(operating.map((o) => [o.id, o]));
   const goals = all
     .map((r, i): GoalView => {
       const f = filled.get(String(r.id));
+      const o = operatingOf.get(String(r.id));
       const g = inputs[i]!;
       const { balance: _, ...rest } = r;
       return {
         ...(rest as unknown as GoalView),
         held: f ? f.held : r.account_id === null || r.balance === null ? null : Number(r.balance),
         need: f ? goalNeed(g) : null,
-        spent: f ? f.spent : 0,
+        spent: f ? f.spent : o ? o.spent : 0,
         short: f ? f.short : null,
         sort: g.sort,
         active: Boolean(r.active),
+        pays_from: g.paysFrom!,
+        remaining: o ? o.remaining : null,
       };
     })
     .sort((a, b) => order.get(a.id)! - order.get(b.id)!);
   return {
     goals,
-    groups: groups.map((g) => ({ account_id: g.accountId, balance: g.balance, need: g.need, spent: g.spent, short: g.short, extra: g.extra, goal_ids: g.goalIds })),
+    groups: groups.map((g) => ({
+      account_id: g.accountId,
+      balance: g.balance,
+      need: g.need,
+      spent: g.spent,
+      short: g.short,
+      extra: g.extra,
+      goal_ids: g.goalIds,
+      child_ids: g.childIds,
+      interest: g.interest,
+    })),
   };
 }
 
@@ -220,17 +305,42 @@ async function readGoal(db: D1Database, id: string, now: Date): Promise<GoalView
 }
 
 const TAX_SHARED = "Thuế cần tài khoản riêng: thuế đã nộp đếm mọi khoản chi từ tài khoản này.";
+const OPERATING_MONTHLY = "Trả thẳng từ tiền chi tiêu chỉ dùng cho khoản trả mỗi tháng (lặp mỗi tháng, có số mỗi tháng).";
+/** Lý do ghi vào việc ② bị huỷ khi mục tiêu chuyển sang trả từ tiền chi tiêu (UC-1209, ADR-141). */
+export const TO_OPERATING_REASON = "Mục tiêu chuyển sang trả từ tiền chi tiêu";
 
 /**
  * Tài khoản gắn mục tiêu đang dùng (UC-1209 bước 2): có thật, đang dùng, ngăn Dự phòng (409 account_not_reserve); không phải
- * tài khoản Ví Thưởng (409 account_is_reward); nhiều mục tiêu dùng chung được, trừ mục tiêu % (409 tax_account_shared).
+ * tài khoản con (409 goal_on_child — gắn tài khoản mẹ); không phải tài khoản Ví Thưởng (409 account_is_reward); nhiều mục tiêu
+ * dùng chung được, trừ mục tiêu % (409 tax_account_shared).
  */
 async function goalAccountOk(db: D1Database, accountId: string, selfId: string | null, selfPct: boolean): Promise<void> {
-  const a = await db.prepare("SELECT name, active, pocket FROM accounts WHERE id = ?").bind(accountId).first<{ name: string; active: number; pocket: Pocket | null }>();
+  const a = await db
+    .prepare("SELECT a.name, a.active, a.pocket, p.name AS parent FROM accounts a LEFT JOIN accounts p ON p.id = a.parent_account_id WHERE a.id = ?")
+    .bind(accountId)
+    .first<{ name: string; active: number; pocket: Pocket | null; parent: string | null }>();
   if (!a || !a.active || a.pocket !== "reserve") fail("account_not_reserve", "Tài khoản của mục tiêu phải đang dùng và thuộc ngăn Dự phòng.", 409, "account_id");
+  if (a!.parent !== null) fail("goal_on_child", `Chọn ${a!.parent}: khoản gửi đã tính chung với ${a!.parent}.`, 409, "account_id");
   const reward = await db.prepare("SELECT 1 FROM config WHERE k = 'surplus_reward_account' AND v = ?").bind(accountId).first();
   if (reward) fail("account_is_reward", `${a!.name} là tài khoản Ví Thưởng: chọn tài khoản Dự phòng khác cho mục tiêu.`, 409, "account_id");
   await taxAccountOk(db, accountId, selfId, selfPct);
+}
+
+/** `pays_from` trong input: `account` | `operating`; không gửi → undefined. */
+function paysFromOf(b: Input): GoalPaysFrom | undefined {
+  if (!has(b, "pays_from")) return undefined;
+  if (b.pays_from !== "account" && b.pays_from !== "operating") fail("invalid_input", "pays_from là account hoặc operating.", 400, "pays_from");
+  return b.pays_from as GoalPaysFrom;
+}
+
+/**
+ * Mục tiêu trả thẳng từ tiền chi tiêu (ADR-141): không theo % (409 tax_account_shared — Thuế cần tài khoản riêng), không gắn
+ * tài khoản (gửi `account_id` khác null → 400 invalid_input), chỉ lặp mỗi tháng (400 operating_goal_monthly).
+ */
+function operatingOk(draft: GoalDraft, accountIdSent: string | null | undefined): void {
+  if (draft.target_pct !== null) fail("tax_account_shared", TAX_SHARED, 409, "pays_from");
+  if (accountIdSent) fail("invalid_input", "Mục tiêu trả thẳng từ tiền chi tiêu không gắn tài khoản: bỏ account_id.", 400, "account_id");
+  if (draft.repeat_months !== 1 || draft.monthly_amount === null) fail("operating_goal_monthly", OPERATING_MONTHLY, 400, "repeat_months");
 }
 
 /** Mục tiêu % giữ tài khoản riêng (QĐ1-A): tài khoản có mục tiêu đang dùng khác và một bên là mục tiêu % → 409. */
@@ -260,6 +370,9 @@ async function goalWrite(write: () => Promise<unknown>): Promise<void> {
     if (/account_is_reward/.test(msg)) fail("account_is_reward", "Tài khoản này là tài khoản Ví Thưởng: chọn tài khoản Dự phòng khác cho mục tiêu.", 409, "account_id");
     // Trigger 0042 (QĐ1-A): máy khác vừa gắn mục tiêu khác / mục tiêu % vào tài khoản này.
     if (/tax_account_shared/.test(msg)) fail("tax_account_shared", TAX_SHARED, 409, "account_id");
+    // Trigger 0044: máy khác vừa biến tài khoản này thành tài khoản con / đổi mục tiêu.
+    if (/goal_on_child/.test(msg)) fail("goal_on_child", "Chọn tài khoản mẹ: khoản gửi đã tính chung với tài khoản mẹ.", 409, "account_id");
+    if (/operating_goal_monthly/.test(msg)) fail("operating_goal_monthly", OPERATING_MONTHLY, 400, "pays_from");
     if (/idx_reserve_goals_debt|reserve_goals\.debt_id/.test(msg)) fail("debt_has_goal", "Khoản nợ này đã có mục tiêu đang dùng.", 409, "debt_id");
     if (/UNIQUE|PRIMARY/.test(msg)) fail("duplicate", "Đã có mục tiêu với tên này.", 409, "name");
     throw err;
@@ -290,14 +403,16 @@ async function activeOrder(db: D1Database): Promise<{ id: string; dueDate: strin
 const renumber = (db: D1Database, ids: string[]) => ids.map((gid, i) => db.prepare("UPDATE reserve_goals SET sort = ? WHERE id = ? AND active = 1").bind(10 * (i + 1), gid));
 
 /**
- * `POST /v1/settings/goals` (UC-1209): mã = slug của tên, trùng → 409 duplicate; `account_id` không gửi = chưa gắn. Không gửi
- * `sort` → chen trước mục tiêu đang dùng đầu tiên có hạn muộn hơn hoặc không có hạn (không hạn → cuối), rồi đánh số lại mọi
- * mục tiêu đang dùng 10, 20, … trong cùng batch (bước 10, QĐ5-A).
+ * `POST /v1/settings/goals` (UC-1209): mã = slug của tên, trùng → 409 duplicate; `account_id` không gửi = chưa gắn;
+ * `pays_from: "operating"` = trả thẳng từ tiền chi tiêu (`operatingOk`). Không gửi `sort` → chen trước mục tiêu đang dùng đầu
+ * tiên có hạn muộn hơn hoặc không có hạn (không hạn → cuối), rồi đánh số lại mọi mục tiêu đang dùng 10, 20, … trong cùng batch
+ * (bước 10, QĐ5-A).
  */
 export async function createGoal(db: D1Database, b: Input, now: Date): Promise<GoalView> {
   const { name, id } = nameOf(b);
   if (await db.prepare("SELECT 1 FROM reserve_goals WHERE id = ?").bind(id).first()) fail("duplicate", "Đã có mục tiêu với tên này.", 409, "name");
   const n = goalInput(b);
+  const paysFrom = paysFromOf(b) ?? "account";
   const draft = checkGoal({
     target_amount: n.target_amount ?? null,
     target_pct: n.target_pct ?? null,
@@ -307,15 +422,16 @@ export async function createGoal(db: D1Database, b: Input, now: Date): Promise<G
     debt_id: n.debt_id ?? null,
   });
   const accountId = strOrNull(b, "account_id") ?? null;
-  if (accountId) await goalAccountOk(db, accountId, null, draft.target_pct !== null);
+  if (paysFrom === "operating") operatingOk(draft, accountId);
+  else if (accountId) await goalAccountOk(db, accountId, null, draft.target_pct !== null);
   if (draft.debt_id) await debtOk(db, draft.debt_id, null);
   const sort = intOrNull(b, "sort");
   const insert = db
     .prepare(
-      `INSERT INTO reserve_goals (id, name, account_id, target_amount, target_pct, monthly_amount, repeat_months, due_date, debt_id, sort)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO reserve_goals (id, name, account_id, target_amount, target_pct, monthly_amount, repeat_months, due_date, debt_id, sort, pays_from)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .bind(id, name, accountId, draft.target_amount, draft.target_pct, draft.monthly_amount, draft.repeat_months, draft.due_date, draft.debt_id, sort ?? 0);
+    .bind(id, name, accountId, draft.target_amount, draft.target_pct, draft.monthly_amount, draft.repeat_months, draft.due_date, draft.debt_id, sort ?? 0, paysFrom);
   if (sort !== undefined && sort !== null) {
     await goalWrite(() => insert.run());
   } else {
@@ -331,13 +447,21 @@ export async function createGoal(db: D1Database, b: Input, now: Date): Promise<G
 
 /**
  * `PATCH /v1/settings/goals/:id` (UC-1209 bước 2–3): gắn / đổi / bỏ gắn tài khoản (`account_id`), tắt / bật lại (`active`; tắt
- * lúc nào cũng được — tiền vẫn ở tài khoản). Đổi số mỗi tháng / số tháng mà không gửi số cần thì B tính lại. Đổi hạn không đổi
- * thứ tự. Trả `changes` có `account_id: { from, to }` khi đổi tài khoản.
+ * lúc nào cũng được — tiền vẫn ở tài khoản), đổi nơi để tiền (`pays_from`). Đổi số mỗi tháng / số tháng mà không gửi số cần
+ * thì B tính lại. Đổi hạn không đổi thứ tự. Đổi sang `operating`: tự đặt `account_id = NULL` và huỷ các việc ② còn mở của mục
+ * tiêu trong kỳ hiện tại (lý do `TO_OPERATING_REASON`) cùng batch — trả `voided` cho nhật ký `pay_cycle_task.void`. Trả
+ * `changes` có `account_id` / `pays_from: { from, to }` khi đổi.
  */
-export async function updateGoal(db: D1Database, id: string, b: Input, now: Date): Promise<{ goal: GoalView; changes: Record<string, { from: unknown; to: unknown }> }> {
+export async function updateGoal(
+  db: D1Database,
+  id: string,
+  b: Input,
+  now: Date,
+): Promise<{ goal: GoalView; changes: Record<string, { from: unknown; to: unknown }>; voided: { id: number; reason: string }[] }> {
   const current = await readGoal(db, id, now);
   const name = has(b, "name") ? nameOf(b).name : undefined;
   const n = goalInput(b);
+  const paysFrom = paysFromOf(b) ?? current.pays_from;
   const pick = <K extends keyof GoalDraft>(k: K, v: GoalDraft[K] | undefined): GoalDraft[K] => (v === undefined ? current[k] : v);
   const recompute = (n.monthly_amount !== undefined || n.repeat_months !== undefined) && n.target_amount === undefined;
   const draft = checkGoal({
@@ -348,27 +472,48 @@ export async function updateGoal(db: D1Database, id: string, b: Input, now: Date
     due_date: pick("due_date", n.due_date),
     debt_id: pick("debt_id", n.debt_id),
   });
-  const accountId = has(b, "account_id") ? (strOrNull(b, "account_id") ?? null) : current.account_id;
+  const operating = paysFrom === "operating";
+  if (operating) operatingOk(draft, has(b, "account_id") ? strOrNull(b, "account_id") : undefined);
+  const accountId = operating ? null : has(b, "account_id") ? (strOrNull(b, "account_id") ?? null) : current.account_id;
   const active = boolOf(b, "active") ?? current.active;
   const pct = draft.target_pct !== null;
   if (active && accountId && (accountId !== current.account_id || !current.active)) await goalAccountOk(db, accountId, id, pct);
   else if (active && accountId && pct && current.target_pct === null) await taxAccountOk(db, accountId, id, pct);
   if (draft.debt_id && active && (draft.debt_id !== current.debt_id || !current.active)) await debtOk(db, draft.debt_id, id);
   const sort = intOrNull(b, "sort");
-  await goalWrite(() =>
-    db
-      .prepare(
-        `UPDATE reserve_goals SET name = ?, account_id = ?, target_amount = ?, target_pct = ?, monthly_amount = ?, repeat_months = ?,
-           due_date = ?, debt_id = ?, sort = ?, active = ? WHERE id = ?`,
-      )
-      .bind(
-        name ?? current.name, accountId, draft.target_amount, draft.target_pct, draft.monthly_amount, draft.repeat_months,
-        draft.due_date, draft.debt_id, sort ?? current.sort, active ? 1 : 0, id,
-      )
-      .run(),
-  );
-  const changes: Record<string, { from: unknown; to: unknown }> = accountId !== current.account_id ? { account_id: { from: current.account_id, to: accountId } } : {};
-  return { goal: await readGoal(db, id, now), changes };
+  // ② còn mở (chưa nhận đủ) của mục tiêu trong kỳ hiện tại — tiền giờ nằm ở Vận hành, không phải chuyển nữa.
+  const voidIds =
+    operating && current.pays_from !== "operating"
+      ? rows<{ id: number }>(
+          await db
+            .prepare(
+              `SELECT k.id FROM pay_cycle_tasks k
+               WHERE k.kind = 'goal' AND k.goal_id = ? AND k.status = 'open'
+                 AND k.cycle_id = (SELECT id FROM pay_cycles WHERE status = 'active' ORDER BY payday DESC LIMIT 1)
+                 AND k.amount > COALESCE((SELECT SUM(x.amount) FROM pay_cycle_task_tx x JOIN transactions t ON t.id = x.tx_id AND t.status = 'active' WHERE x.task_id = k.id), 0)
+               ORDER BY k.id`,
+            )
+            .bind(id)
+            .all(),
+        ).map((t) => Number(t.id))
+      : [];
+  const update = db
+    .prepare(
+      `UPDATE reserve_goals SET name = ?, account_id = ?, target_amount = ?, target_pct = ?, monthly_amount = ?, repeat_months = ?,
+         due_date = ?, debt_id = ?, sort = ?, active = ?, pays_from = ? WHERE id = ?`,
+    )
+    .bind(
+      name ?? current.name, accountId, draft.target_amount, draft.target_pct, draft.monthly_amount, draft.repeat_months,
+      draft.due_date, draft.debt_id, sort ?? current.sort, active ? 1 : 0, paysFrom, id,
+    );
+  const voids = voidIds.length
+    ? [db.prepare(`UPDATE pay_cycle_tasks SET status = 'void', reason = ? WHERE status = 'open' AND id IN (${voidIds.map(() => "?").join(", ")})`).bind(TO_OPERATING_REASON, ...voidIds)]
+    : [];
+  await goalWrite(() => db.batch([update, ...voids]));
+  const changes: Record<string, { from: unknown; to: unknown }> = {};
+  if (accountId !== current.account_id) changes.account_id = { from: current.account_id, to: accountId };
+  if (paysFrom !== current.pays_from) changes.pays_from = { from: current.pays_from, to: paysFrom };
+  return { goal: await readGoal(db, id, now), changes, voided: voidIds.map((v) => ({ id: v, reason: TO_OPERATING_REASON })) };
 }
 
 /**

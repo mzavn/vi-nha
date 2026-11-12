@@ -109,6 +109,7 @@ export async function daily(env: Env, now: Date): Promise<void> {
 
   const message = dailyMessage({
     nearSpend: snapshot.nearSpend,
+    topUp: snapshot.topUp,
     limitNudges: nudges,
     unassignedCount: snapshot.attention.pendingLogs,
     reserveGoals: snapshot.pockets.reserve.goals,

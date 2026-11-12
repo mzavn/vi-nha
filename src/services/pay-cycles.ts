@@ -90,9 +90,9 @@ export async function cycleConfig(db: D1Database): Promise<CycleConfig> {
 }
 
 /**
- * Mục tiêu Dự phòng đang dùng ĐÃ GẮN tài khoản (đang dùng), theo thứ tự ưu tiên (`goalOrder`), A = phần của mục tiêu khi
- * chia số dư tài khoản (`fillGoals`) = đã có + đã chi từ `since` (đầu kỳ) — khoản đã chi cho mục tiêu trong kỳ đã dùng phần
- * của nó, không cần nạp lại (UC-1206 bước 3, AC-14). Mục tiêu chưa gắn không sinh việc.
+ * Mục tiêu tài khoản đang dùng ĐÃ GẮN tài khoản (đang dùng), theo thứ tự ưu tiên (`goalOrder`), A = phần của mục tiêu khi
+ * chia số dư gộp − tiền lãi của nhóm mẹ + con (`goalGroups`) = đã có + đã chi từ `since` (đầu kỳ) — khoản đã chi cho mục tiêu
+ * trong kỳ đã dùng phần của nó, không cần nạp lại (UC-1206 bước 3, AC-14). Mục tiêu chưa gắn / trả từ tiền chi tiêu không sinh việc.
  */
 async function activeGoals(db: D1Database, since: string): Promise<GoalInput[]> {
   const { inputs, active, filled } = await goalFill(db, since);
@@ -273,6 +273,8 @@ interface GoalRow {
   accountId: string | null;
   /** Số dư sổ của tài khoản đó; null khi không có tài khoản. */
   held: number | null;
+  /** Mục tiêu trả từ tiền chi tiêu (ADR-141): ② cũ của nó không vào phần chưa làm. */
+  operating: boolean;
 }
 
 /** Mọi mục tiêu (cả đã tắt — việc cũ vẫn trỏ tới), kèm tài khoản đích và A hiện tại (đã chia, đã chi từ `since`). */
@@ -283,7 +285,7 @@ async function goalRows(db: D1Database, since: string): Promise<Map<string, Goal
     inputs.map((g) => {
       const f = filled.get(g.id);
       const linked = active.has(g.id) && g.accountId !== null && balanceOf.get(g.id) !== null;
-      return [g.id, { id: g.id, name: g.name, target: g.target, accountId: linked ? g.accountId : null, held: f ? f.held : null }];
+      return [g.id, { id: g.id, name: g.name, target: g.target, accountId: linked ? g.accountId : null, held: f ? f.held : null, operating: g.paysFrom === "operating" }];
     }),
   );
 }
@@ -331,10 +333,12 @@ export async function afterWrite(db: D1Database): Promise<{ tasksDone: { id: num
       return { id: t.id, toPocket: t.kind === "goal" || t.to_account_id ? null : t.to_pocket, toAccountId, missing: s.missing };
     });
   if (open.length === 0) return { tasksDone: [] };
-  const transfers = rows<{ id: number; amount: number; used: number; fromId: string; fromPocket: Pocket | null; toId: string; toPocket: Pocket | null }>(
+  type TransferRow = { id: number; amount: number; used: number; fromId: string; fromPocket: Pocket | null; fromParent: string | null; toId: string; toPocket: Pocket | null; toParent: string | null };
+  const transfers = rows<TransferRow>(
     await db
       .prepare(
-        `SELECT t.id, t.amount, ${USED_SQL("t.id")} AS used, fa.id AS fromId, fa.pocket AS fromPocket, ta.id AS toId, ta.pocket AS toPocket
+        `SELECT t.id, t.amount, ${USED_SQL("t.id")} AS used, fa.id AS fromId, fa.pocket AS fromPocket, fa.parent_account_id AS fromParent,
+                ta.id AS toId, ta.pocket AS toPocket, ta.parent_account_id AS toParent
          FROM transactions t JOIN accounts fa ON fa.id = t.account_id JOIN accounts ta ON ta.id = t.counter_account_id
          WHERE t.status = 'active' AND t.meaning = 'transfer' AND t.at >= ? ORDER BY t.at, t.id`,
       )
@@ -344,8 +348,8 @@ export async function afterWrite(db: D1Database): Promise<{ tasksDone: { id: num
   const statements: D1PreparedStatement[] = [];
   for (const tr of transfers) {
     const links = allocateTransfer(open, {
-      from: { id: tr.fromId, pocket: tr.fromPocket },
-      to: { id: tr.toId, pocket: tr.toPocket },
+      from: { id: tr.fromId, pocket: tr.fromPocket, parentId: tr.fromParent },
+      to: { id: tr.toId, pocket: tr.toPocket, parentId: tr.toParent },
       available: Number(tr.amount) - Number(tr.used),
     });
     for (const l of links) {
@@ -402,6 +406,7 @@ export async function payCycleView(
     linked: t.linked,
     sourceAmount: t.source_tx_id ? Number(sourceOf.get(t.source_tx_id)?.amount ?? 0) : null,
     toPocket: t.to_pocket,
+    operatingGoal: t.kind === "goal" && t.goal_id !== null && goals.get(t.goal_id)?.operating === true,
   }));
   const view: PayCycleTask[] = tasks.map((t) => {
     const s = taskState(t, t.linked);
@@ -533,6 +538,15 @@ export async function setTaskAmount(db: D1Database, id: number, b: Record<string
   const amount = amountOf(b.amount);
   const reason = reasonOf(b.reason);
   if (t.kind === "savings" && amount === 0 && !reason) fail("reason_required", "Không trích kỳ này cần ghi lý do.", 400, "reason");
-  await db.prepare("UPDATE pay_cycle_tasks SET amount = ?, reason = COALESCE(?, reason), by_member_id = ? WHERE id = ?").bind(amount, reason, memberId, id).run();
+  // ①: ghi lại % đã chọn = ⌊số × 100 ÷ khoản lương⌋, kẹp ≤ 100 theo CHECK của cột (UC-1206 bước 8, ADR-142).
+  await db
+    .prepare(
+      `UPDATE pay_cycle_tasks SET amount = ?1, reason = COALESCE(?2, reason), by_member_id = ?3,
+         pct = CASE WHEN kind = 'savings' AND (SELECT amount FROM transactions WHERE id = source_tx_id) > 0
+                    THEN MIN(100, CAST(?1 * 100 / (SELECT amount FROM transactions WHERE id = source_tx_id) AS INTEGER)) ELSE pct END
+       WHERE id = ?4`,
+    )
+    .bind(amount, reason, memberId, id)
+    .run();
   return { view: await viewAfter(db, now, memberId), audit: { action: "pay_cycle_task.amount", detail: { from: t.amount, to: amount, reason } } };
 }

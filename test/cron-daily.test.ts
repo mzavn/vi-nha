@@ -10,6 +10,7 @@ import { asD1, openDb } from "./helpers/d1-sqlite";
 import { B_NOW, householdB } from "./helpers/household-b";
 import { AT, householdC } from "./helpers/household-c";
 import { householdD, spend } from "./helpers/household-d";
+import { householdTopUp } from "./helpers/household-parent";
 
 let env: Env;
 let raw: ReturnType<typeof openDb>;
@@ -62,14 +63,15 @@ describe("cron 07:00 VN: gửi tin & chống gửi trùng", () => {
     const envB = { DB: asD1(b), TG_BOT_TOKEN: "test-token" } as Env;
     await daily(envB, B_NOW);
     const lines = sentMessages()[0]!.text.split("\n");
-    expect(lines[0]).toBe("💰 Vận hành 4.100.000 ₫ · chi khoảng 141.000 ₫/ngày tới kỳ lương 10/12 (còn 29 ngày)");
+    // Chi vận hành ~9.782.608 / tháng → ăn tiêu 29 ngày vượt 4.100.000: nhắc chuyển thêm (ADR-141), Ví Thưởng trống → phần an tâm.
+    expect(lines[0]).toBe("💰 Vận hành 4.100.000 ₫ · chi khoảng 141.000 ₫/ngày tới kỳ lương 10/12 (còn 29 ngày) · cần chuyển thêm 5.400.000 ₫ vào tiền chi tiêu (từ tài khoản tiết kiệm)");
     expect(lines).toContain("🎯 Trả nợ Vay người thân 100% · Học phí 66% · Bảo dưỡng xe 20% · Phần an tâm đủ 3,2/6 tháng");
     expect(lines).toContain("💳 Nợ ngắn hạn còn 8.000.000 ₫ (2 khoản) · đã có 1.000.000 ₫ trong tài khoản Trả nợ · tất cả khoản nợ còn 58.000.000 ₫ (3 khoản)");
 
     b.exec("DELETE FROM notifications WHERE kind = 'daily'; UPDATE accounts SET pocket = 'savings' WHERE id = 'vcb-wife'");
     fetchMock.mockClear();
     await daily(envB, B_NOW);
-    expect(sentMessages()[0]!.text.split("\n")[0]).toBe("💰 Vận hành 2.700.000 ₫ · chi khoảng 93.000 ₫/ngày tới kỳ lương 10/12 (còn 29 ngày)");
+    expect(sentMessages()[0]!.text.split("\n")[0]).toBe("💰 Vận hành 2.700.000 ₫ · chi khoảng 93.000 ₫/ngày tới kỳ lương 10/12 (còn 29 ngày) · cần chuyển thêm 6.800.000 ₫ vào tiền chi tiêu (từ tài khoản tiết kiệm)");
   });
 
   it("thành viên không có tg_chat_id thì không nhận tin", async () => {
@@ -363,5 +365,19 @@ describe("tin sáng: dòng 🔎 Nhìn lại kỳ này (261112-ba-ngan-nhin-lai)"
     text = await textOn("2026-11-22T07:00:00");
     expect(nudgeLine(text)).toBe("🔎 Nhìn lại kỳ này: Mua sắm 90%");
     expect(text.split("\n").filter((l) => /Mua sắm|500\.000 ₫|400\.000 ₫/.test(l))).toEqual(["🔎 Nhìn lại kỳ này: Mua sắm 90%"]);
+  });
+});
+
+describe("tin sáng có nhắc chuyển thêm vào tiền chi tiêu (notify UC-402, ADR-141)", () => {
+  it("UC-402 AC-42: ca UC-103 AC-25 → dòng 💰 \"… · cần chuyển thêm 5.500.000 ₫ vào tiền chi tiêu (từ BIDV)\"; 🎯 không có Điện nước (mục tiêu trả từ tiền chi tiêu)", async () => {
+    raw = householdTopUp({ history: true });
+    raw.prepare("UPDATE members SET tg_chat_id = '111' WHERE id = 'husband'").run();
+    env = { DB: asD1(raw), TG_BOT_TOKEN: "test-token" } as Env;
+    await daily(env, new Date("2026-11-20T00:00:00Z")); // 07:00 VN 20/11, còn 20 ngày
+    const lines = sentMessages()[0]!.text.split("\n");
+    expect(lines[0]).toBe("💰 Vận hành còn 4.000.000 ₫ tới kỳ lương 10/12 (còn 20 ngày) · cần chuyển thêm 5.500.000 ₫ vào tiền chi tiêu (từ BIDV)");
+    const goalsLine = lines.find((l) => l.startsWith("🎯"))!;
+    expect(goalsLine).toContain("Nhà ở");
+    expect(goalsLine).not.toMatch(/Điện nước|Thuốc|Thiện phước|Về quê/);
   });
 });

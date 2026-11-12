@@ -1,7 +1,6 @@
-// Ô nhập dùng chung cho các sheet: số tiền, chọn tài khoản, chọn danh mục, chip "Cho mục tiêu".
+// Ô nhập dùng chung cho các sheet: số tiền, chọn tài khoản, chọn danh mục.
 
 import { useState } from "preact/hooks";
-import { GOAL_CHOICE_LABEL, NO_GOAL, NO_GOAL_LABEL, type GoalChoice } from "../lib/goal-choices";
 import { amountText, evalAmount, formatTypedVnd, groupExpr, isAmountExpr, nextAmount } from "../lib/money";
 import type { AccountRef, CategoryRef } from "../lib/types";
 
@@ -108,26 +107,6 @@ export function CategorySelect(props: { id: string; categories: CategoryRef[]; v
         </option>
       ))}
     </select>
-  );
-}
-
-/**
- * Hàng chip "Cho mục tiêu" (pocket UC-1209 bước 11, pwa UC-703 AC-17): các mục tiêu của tài khoản tiền ra theo thứ tự ưu tiên +
- * "Không cho mục tiêu nào"; không chọn sẵn, chạm lại chip đang chọn là bỏ chọn. Tài khoản dưới hai mục tiêu → không có hàng.
- */
-export function GoalChips(props: { choices: GoalChoice[]; value: string | null; onChange: (id: string | null) => void }) {
-  if (props.choices.length === 0) return null;
-  return (
-    <div class="field goal-chips">
-      <span class="k">{GOAL_CHOICE_LABEL}</span>
-      <div class="goal-chip-row" role="group" aria-label={GOAL_CHOICE_LABEL}>
-        {[...props.choices, { id: NO_GOAL, name: NO_GOAL_LABEL }].map((c) => (
-          <button type="button" key={c.id} class="goal-chip" aria-pressed={props.value === c.id} onClick={() => props.onChange(props.value === c.id ? null : c.id)}>
-            {c.name}
-          </button>
-        ))}
-      </div>
-    </div>
   );
 }
 

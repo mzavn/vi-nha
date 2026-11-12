@@ -40,4 +40,16 @@ describe("Loại khác không ví (pwa UC-705)", () => {
     expect(queuedBody({ ...base, kind: "refund", goalId: "hoc-tap" })).not.toHaveProperty("goal_id");
     expect(queuedBody({ ...t, goalId: null })).not.toHaveProperty("goal_id");
   });
+
+  it("UC-705 AC-38: thu nhập vào khoản gửi với ô 'Đây là tiền lãi' → thân có is_interest: true; tắt ô → không gửi; chuyển ra chọn 'Từ tiền lãi' → from_interest: true, không goal_id; chỉ chi / chuyển mang", () => {
+    const income = { amount: 3_000_000, at: AT, clientId: "c4", accountId: "gui-6t", taxable: false, streamId: "", tenantId: "", note: "", opensCycle: false };
+    expect(incomeBody({ ...income, isInterest: true })).toMatchObject({ meaning: "income", account_id: "gui-6t", is_interest: true });
+    expect(incomeBody({ ...income, isInterest: false })).not.toHaveProperty("is_interest");
+    expect(incomeBody(income)).not.toHaveProperty("is_interest");
+    const t = { ...base, kind: "transfer" as const, accountId: "tk-tiet-kiem", toAccountId: "main", categoryId: null, goalId: "nha-o", fromInterest: true };
+    expect(queuedBody(t)).toEqual({ meaning: "transfer", amount: 6_000_000, at: AT, client_id: "c3", account_id: "tk-tiet-kiem", to_account_id: "main", from_interest: true });
+    expect(queuedBody({ ...base, accountId: "tk-tiet-kiem", fromInterest: true })).toMatchObject({ meaning: "spend", from_interest: true });
+    expect(queuedBody({ ...base, kind: "refund", fromInterest: true })).not.toHaveProperty("from_interest");
+    expect(queuedBody({ ...t, fromInterest: false })).not.toHaveProperty("from_interest");
+  });
 });

@@ -29,7 +29,13 @@ import {
   stepConflict,
   stepNumber,
   type GoalChoice,
+  canPayFromOperating,
+  GOALS_STEP_TITLE,
+  OPERATING_CHOICE_LABEL,
+  savingsPctStep,
+  USE_DEFAULT_PCT,
 } from "./convert";
+import { SAVINGS_SCALE_TEXT } from "./savings-scale";
 import { setAmountsHidden } from "./money";
 import { accountPayload, accountToForm } from "./settings";
 import type { ReserveGoal, SettingsAccount } from "./types";
@@ -386,5 +392,57 @@ describe("bước 4 và 5", () => {
     });
     expect(savingsPctLines(null)).toBeNull();
     expect(CONVERT_DONE_TOAST).toBe("Xong. Từ giờ Hôm nay là tiền thật của ba ngăn.");
+  });
+});
+
+describe("v2.3: nơi để tiền của từng khoản, thang Tích luỹ ở bước 5", () => {
+  it("UC-1208 AC-13: bước 2 tiêu đề 'Chọn nơi để tiền cho từng khoản'; mục tiêu mỗi tháng có 'Trả từ tiền chi tiêu' → Tiếp gửi PATCH { pays_from: 'operating' }; 3 tháng một lần / một lần / % không có; khoản gửi kỳ hạn không là lựa chọn, dòng nhóm chia số dư gộp − tiền lãi", () => {
+    expect(GOALS_STEP_TITLE).toBe("Chọn nơi để tiền cho từng khoản");
+    expect(OPERATING_CHOICE_LABEL).toBe("Trả từ tiền chi tiêu");
+    const dien = goal("dien-nuoc", "Điện nước");
+    expect(canPayFromOperating(dien)).toBe(true);
+    expect(canPayFromOperating(goal("hoc-phi", "Học phí", { repeat_months: 3, target_amount: 6_000_000 }))).toBe(false);
+    expect(canPayFromOperating(goal("xe", "Xe", { monthly_amount: null, repeat_months: null, target_amount: 4_800_000 }))).toBe(false);
+    expect(canPayFromOperating(goals[2]!)).toBe(false);
+    const none = { current: null, next: null };
+    expect(goalStepRequests([dien], { "dien-nuoc": { kind: "operating" } }, none)).toEqual([{ method: "PATCH", path: "/v1/settings/goals/dien-nuoc", body: { pays_from: "operating" } }]);
+    expect(goalsReady([dien], { "dien-nuoc": { kind: "operating" } })).toBe(true);
+    // Đang gắn tài khoản rồi chọn trả từ tiền chi tiêu: một PATCH (server tự bỏ tài khoản), gửi trước khi dòng khác gắn tài khoản đó.
+    const attached = { ...dien, account_id: "phao" };
+    expect(goalStepRequests([goal("hd", "Hoá đơn"), attached], { hd: { kind: "account", accountId: "phao" }, "dien-nuoc": { kind: "operating" } }, none)).toEqual([
+      { method: "PATCH", path: "/v1/settings/goals/dien-nuoc", body: { pays_from: "operating" } },
+      { method: "PATCH", path: "/v1/settings/goals/hd", body: { account_id: "phao" } },
+    ]);
+    // Đã trả từ tiền chi tiêu: chọn sẵn, không gửi lại; đổi về tài khoản → pays_from account kèm tài khoản; Để sau → pays_from account.
+    const saved = { ...dien, pays_from: "operating" as const };
+    expect(initialGoalChoices([saved], accounts, null)).toEqual({ "dien-nuoc": { kind: "operating" } });
+    expect(goalStepRequests([saved], { "dien-nuoc": { kind: "operating" } }, none)).toEqual([]);
+    expect(goalStepRequests([saved], { "dien-nuoc": { kind: "account", accountId: "phao" } }, none)).toEqual([{ method: "PATCH", path: "/v1/settings/goals/dien-nuoc", body: { pays_from: "account", account_id: "phao" } }]);
+    expect(goalStepRequests([saved], { "dien-nuoc": { kind: "later" } }, none)).toEqual([{ method: "PATCH", path: "/v1/settings/goals/dien-nuoc", body: { pays_from: "account" } }]);
+    // Khoản gửi kỳ hạn: không là lựa chọn; dòng nhóm dùng số dư gộp, chia trên số dư gộp − tiền lãi.
+    const house = [
+      account("tk-tiet-kiem", "MB tiết kiệm", { book_balance: 8_000_000 }),
+      account("gui-6-thang", "Gửi 6 tháng", { book_balance: 100_000_000, parent_account_id: "tk-tiet-kiem" }),
+    ];
+    const list = [
+      goal("nha-o", "Nhà ở", { target_amount: 60_000_000, monthly_amount: null, repeat_months: null, sort: 10 }),
+      goal("hoc-tap", "Học tập", { target_amount: 30_000_000, monthly_amount: null, repeat_months: null, sort: 20 }),
+      goal("tap-luyen", "Tập luyện", { target_amount: 10_000_000, monthly_amount: null, repeat_months: null, sort: 30 }),
+    ];
+    const choices: Record<string, GoalChoice | null> = Object.fromEntries(list.map((g) => [g.id, { kind: "account", accountId: "tk-tiet-kiem" }]));
+    expect(goalRowAccounts("nha-o", list, house, choices, null).map((a) => a.id)).toEqual(["tk-tiet-kiem"]);
+    expect(goalGroupLines(list, house, choices, [{ account_id: "tk-tiet-kiem", interest: 3_000_000 }])).toEqual([
+      { accountId: "tk-tiet-kiem", text: `MB tiết kiệm 108.000.000${NBSP}₫ cho Nhà ở, Học tập, Tập luyện · dư 5.000.000${NBSP}₫` },
+    ]);
+    expect(goalGroupLines(list, house, choices)[0]!.text).toMatch(/· dư 8\.000\.000/);
+  });
+
+  it("UC-1208 AC-14: 0038 điền savings_pct 30 → thấy 30% với 'Số này lấy từ cách chia ví cũ' và câu thang; bấm 'Dùng 10% (mặc định)' → 10, câu ví cũ hết; Tiếp gửi savings_pct 10", () => {
+    expect(savingsPctStep(30)).toEqual({ pct: 30, legacy: "Số này lấy từ cách chia ví cũ", scale: SAVINGS_SCALE_TEXT });
+    expect(savingsPctStep(15).legacy).toBe("Số này lấy từ cách chia ví cũ");
+    expect(USE_DEFAULT_PCT).toEqual({ label: "Dùng 10% (mặc định)", pct: 10 });
+    expect(savingsPctStep(USE_DEFAULT_PCT.pct)).toEqual({ pct: 10, legacy: null, scale: SAVINGS_SCALE_TEXT });
+    expect(savingsPctStep(undefined)).toEqual({ pct: 10, legacy: null, scale: SAVINGS_SCALE_TEXT });
+    expect(savingsPctLines(savingsPctStep(USE_DEFAULT_PCT.pct).pct)!.line).toContain("trích 10% sang Tích luỹ");
   });
 });

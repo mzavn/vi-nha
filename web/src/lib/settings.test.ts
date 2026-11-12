@@ -51,7 +51,28 @@ import {
   streamToForm,
   syncRangeError,
   vnDateTimeInput,
+  accountParentField,
+  accountParentHint,
+  accountParentOptions,
+  canAddDeposit,
+  depositPreset,
+  DEPOSITS_NOTE,
+  GOAL_PLACE_LABEL,
+  GOAL_SECTION_LABEL,
+  goalPlace,
+  OPERATING_HINT,
+  OPERATING_MONTHLY_ONLY,
+  operatingChoice,
+  operatingGoalLines,
+  PARENT_REWARD,
+  PARENT_SEPAY,
+  parentPocketText,
+  PLACE_LABEL,
+  pocketSheetGroups,
+  POCKETS_SHEET_HEAD,
+  sliderPct,
 } from "./settings";
+import { SAVINGS_MARKS, SAVINGS_SCALE_TEXT } from "./savings-scale";
 import { groupAccountsByPocket, groupPayload, groupSummary, nextDueDate, pocketsPayload, unconfirmedChip } from "./pockets";
 import { setAmountsHidden } from "./money";
 import type { AuditEntry, CategoryGroup, Debt, NotifySchedule, ReserveGoal, SepayConnection, SettingsAccount, SettingsData } from "./types";
@@ -858,5 +879,184 @@ describe("Ba ngăn (UC-709 AC-35…39)", () => {
     expect(s[1]!.prefill.due_date).toBe("");
     const body = goalPayload(s[0]!.prefill, null);
     expect(body).toMatchObject({ ok: true, value: { name: "Trả nợ Mẹ", account_id: null, monthly_amount: 1_000_000, repeat_months: 1, target_amount: 1_000_000, due_date: "2026-12-05", debt_id: "vay-me" } });
+  });
+});
+
+describe("tài khoản con, mục tiêu trả từ tiền chi tiêu, thang Tích luỹ (v2.3)", () => {
+  const account = (id: string, name: string, over: Partial<SettingsAccount> = {}): SettingsAccount => ({
+    id, name, kind: "bank", bank: "MBBank", account_no: "1", sub_account: null, sepay_enabled: false, sepay_out: false, sepay_connection_id: null,
+    owner_member_id: null, opening_balance: 0, opened_at: null, feed_from: null, sepay_out_from: null, first_log_at: null, active: true, deactivated_at: null,
+    book_balance: 0, pocket: "reserve", pocket_confirmed: true, parent_account_id: null, ...over,
+  });
+  const goal = (id: string, name: string, over: Partial<ReserveGoal> = {}): ReserveGoal => ({
+    id, name, account_id: null, pays_from: "account", remaining: null, suggested_account_id: null, held: null, need: null, spent: 0, short: null,
+    target_amount: null, target_pct: null, monthly_amount: null, repeat_months: null, due_date: null, debt_id: null, sort: 100, active: true, ...over,
+  });
+  // Hộ mẫu của pocket UC-1209 AC-16: MB tiết kiệm (Dự phòng) có con "Gửi 6 tháng"; tài khoản chi tiêu ở Vận hành; BIDV là Ví Thưởng.
+  const house = [
+    account("tk-tiet-kiem", "MB tiết kiệm", { book_balance: 5_000_000 }),
+    account("tk-chi-tieu-chong", "MB chi tiêu chồng", { pocket: "operating" }),
+    account("gui-6-thang", "Gửi 6 tháng", { book_balance: 100_000_000, parent_account_id: "tk-tiet-kiem" }),
+    account("tk-bidv", "BIDV", { book_balance: 2_000_000 }),
+    account("tich-luy", "TCB tích luỹ", { pocket: "savings" }),
+    account("phao", "Phao", { sepay_enabled: true }),
+    account("tien-mat", "Tiền mặt", { kind: "cash", bank: null, pocket: null }),
+    account("acb-cu", "ACB cũ", { active: false, pocket: null }),
+  ];
+  const byId = (id: string) => house.find((a) => a.id === id)!;
+  const accountGoalsOf = [goal("nha-o", "Nhà ở", { account_id: "tk-tiet-kiem" }), goal("hoc-phi", "Học phí", { account_id: "tk-hoc-phi" })];
+
+  it("UC-709 AC-51: sheet tài khoản có ô Thuộc tài khoản — chỉ tài khoản ngân hàng đang dùng ở Dự phòng / Tích luỹ / ngoài ngăn, không con, không Ví Thưởng; mẹ không có ô; chọn mẹ → Ngăn 'theo {mẹ}', SePay ẩn, gửi parent_account_id, không gửi pocket", () => {
+    // Thêm tài khoản: danh sách mẹ (ô còn có "Không").
+    expect(accountParentOptions(house, null, "tk-bidv").map((a) => a.id)).toEqual(["tk-tiet-kiem", "tich-luy", "phao"]);
+    expect(accountParentField(null, house, accountGoalsOf, "tk-bidv")).toEqual({ show: true, disabled: null });
+    // Sửa tk-tiet-kiem sau khi nó có con → không có ô.
+    expect(accountParentField(byId("tk-tiet-kiem"), house, accountGoalsOf, "tk-bidv").show).toBe(false);
+    // Sửa con: có ô, đổi / bỏ mẹ được; danh sách không có chính nó.
+    expect(accountParentField(byId("gui-6-thang"), house, accountGoalsOf, "tk-bidv")).toEqual({ show: true, disabled: null });
+    expect(accountParentOptions(house, byId("phao"), "tk-bidv").map((a) => a.id)).toEqual(["tk-tiet-kiem", "tich-luy"]);
+    // Tài khoản đang nối SePay / gắn mục tiêu / là Ví Thưởng → ô tắt kèm lý do.
+    expect(accountParentField(byId("phao"), house, accountGoalsOf, "tk-bidv").disabled).toBe(PARENT_SEPAY);
+    expect(accountParentField(account("tk-hoc-phi", "TK học phí"), [...house, account("tk-hoc-phi", "TK học phí")], accountGoalsOf, "tk-bidv").disabled).toBe("Tài khoản của mục tiêu Học phí: bỏ gắn mục tiêu trước.");
+    expect(accountParentField(byId("tk-bidv"), house, accountGoalsOf, "tk-bidv").disabled).toBe(PARENT_REWARD);
+    expect(accountParentHint("MB tiết kiệm")).toBe("Khoản gửi kỳ hạn mở từ tài khoản này. Tiền vẫn tính là của MB tiết kiệm; mục tiêu gắn MB tiết kiệm thấy cả khoản này.");
+    expect(parentPocketText("MB tiết kiệm")).toBe("theo MB tiết kiệm");
+    // Chọn mẹ: thân có parent_account_id, không pocket, không SePay.
+    const f = { ...accountToForm(null), name: "Gửi 6 tháng", bank: "MBBank", parent_account_id: "tk-tiet-kiem", pocket: "savings" as const, pocket_touched: true, sepay_enabled: true, sepay_out: true };
+    const r = accountPayload(f, null);
+    expect(r.ok && r.value).toMatchObject({ parent_account_id: "tk-tiet-kiem", sepay_enabled: false, sepay_out: false });
+    // Con theo mẹ: không gửi pocket, private, owner_member_id (server 400 pocket_follows_parent nếu lệch).
+    for (const k of ["pocket", "private", "owner_member_id"]) expect(r.ok && k in r.value, k).toBe(false);
+    // Không chọn mẹ: không gửi parent_account_id (như cũ).
+    const none = accountPayload({ ...accountToForm(null), name: "MB (vợ)", bank: "MBBank" }, null);
+    expect(none.ok && "parent_account_id" in none.value).toBe(false);
+    // Khoản gửi là tài khoản ngân hàng.
+    expect(accountPayload({ ...f, kind: "cash" }, null)).toMatchObject({ ok: false, errors: { parent_account_id: "Khoản gửi kỳ hạn là tài khoản ngân hàng." } });
+    // Sửa con: không gửi pocket; bỏ mẹ → parent_account_id null (tài khoản giữ ngăn đang có).
+    const child = byId("gui-6-thang");
+    expect(accountToForm(child).parent_account_id).toBe("tk-tiet-kiem");
+    const rename = accountPayload({ ...accountToForm(child), name: "Gửi 6 tháng MB" }, child);
+    expect(rename.ok && "pocket" in rename.value).toBe(false);
+    expect(rename.ok && "parent_account_id" in rename.value).toBe(false);
+    const unlink = accountPayload({ ...accountToForm(child), parent_account_id: "" }, child);
+    expect(unlink.ok && unlink.value).toMatchObject({ parent_account_id: null });
+    expect(unlink.ok && "pocket" in unlink.value).toBe(false);
+    // Biến tài khoản có sẵn thành con (PATCH): gửi mẹ, bỏ pocket.
+    const tcb = byId("tich-luy");
+    const link = accountPayload({ ...accountToForm(tcb), parent_account_id: "tk-tiet-kiem" }, tcb);
+    expect(link.ok && link.value).toMatchObject({ parent_account_id: "tk-tiet-kiem" });
+    expect(link.ok && "pocket" in link.value).toBe(false);
+    // "+ Thêm khoản gửi kỳ hạn" ở sheet của mẹ: mở sheet thêm, có sẵn mẹ.
+    expect(canAddDeposit(byId("tk-tiet-kiem"), house, "tk-bidv")).toBe(true);
+    expect(canAddDeposit(byId("tk-chi-tieu-chong"), house, "tk-bidv")).toBe(false);
+    expect(canAddDeposit(byId("gui-6-thang"), house, "tk-bidv")).toBe(false);
+    expect(depositPreset(byId("tk-tiet-kiem"))).toEqual({ parent_account_id: "tk-tiet-kiem", bank: "MBBank" });
+    // Ba ngăn › xếp tài khoản: con không có ô ngăn, nằm dưới mẹ "theo {mẹ}"; câu đầu sheet.
+    const groups = pocketSheetGroups(house, Object.fromEntries(house.filter((a) => a.active).map((a) => [a.id, a.pocket ?? null])));
+    const reserve = groups.find((g) => g.key === "reserve")!;
+    expect(reserve.rows.map((r) => [r.account.id, r.children.map((c) => c.id)])).toEqual([
+      ["tk-tiet-kiem", ["gui-6-thang"]],
+      ["tk-bidv", []],
+      ["phao", []],
+    ]);
+    expect(groups.flatMap((g) => g.rows.map((r) => r.account.id))).not.toContain("gui-6-thang");
+    expect(POCKETS_SHEET_HEAD).toBe("Tiền chi tiêu hằng ngày để ở Vận hành; tiền để dành cho khoản sắp trả ở Dự phòng; tiền không đụng ở Tích luỹ.");
+  });
+
+  it("UC-709 AC-52: sheet mục tiêu 'Tiền để ở đâu' — 'Trả thẳng từ tiền chi tiêu' gửi pays_from operating, không account_id; một lần / 3 tháng một lần thì tắt 'Chỉ khoản trả mỗi tháng'; Thuế không có lựa chọn đó; danh sách tài khoản chỉ có mẹ, MB tiết kiệm ghi 'gồm khoản gửi kỳ hạn'", () => {
+    expect(GOAL_PLACE_LABEL).toBe("Tiền để ở đâu");
+    expect(PLACE_LABEL).toEqual({ account: "Một tài khoản để dành", operating: "Trả thẳng từ tiền chi tiêu" });
+    expect(OPERATING_HINT).toBe("Không phải chuyển tiền. App chừa số này khỏi 'Chi khoảng …/ngày' tới khi trả.");
+    const thuoc = { ...goalToForm(null), name: "Thuốc", monthly_amount: 500_000, repeat_months: "1", pays_from: "operating" as const };
+    expect(goalToForm(null).pays_from).toBe("account");
+    expect(operatingChoice(thuoc)).toEqual({ show: true, disabled: null });
+    expect(goalPayload(thuoc, null)).toEqual({
+      ok: true,
+      value: { name: "Thuốc", pays_from: "operating", target_amount: 500_000, monthly_amount: 500_000, repeat_months: 1, target_pct: null, due_date: null, debt_id: null },
+    });
+    // "Một lần" / "3 tháng một lần": lựa chọn tắt; nếu đang chọn thì về "Một tài khoản để dành".
+    const once = { ...thuoc, mode: "once" as const, target_amount: 500_000 };
+    expect(operatingChoice(once)).toEqual({ show: true, disabled: "Chỉ khoản trả mỗi tháng" });
+    expect(operatingChoice({ ...thuoc, repeat_months: "3" })).toEqual({ show: true, disabled: OPERATING_MONTHLY_ONLY });
+    expect(goalPlace({ ...thuoc, repeat_months: "3" })).toBe("account");
+    const onceBody = goalPayload(once, null);
+    expect(onceBody.ok && onceBody.value).toMatchObject({ account_id: null, target_amount: 500_000 });
+    expect(onceBody.ok && "pays_from" in onceBody.value).toBe(false);
+    // Thuế: chỉ lựa chọn đầu.
+    expect(operatingChoice({ mode: "pct", repeat_months: "1" })).toEqual({ show: false, disabled: null });
+    // Sửa mục tiêu trả từ tiền chi tiêu: form giữ lựa chọn; đổi về tài khoản thì gửi pays_from account + account_id.
+    const saved = goal("thuoc", "Thuốc", { pays_from: "operating", monthly_amount: 500_000, repeat_months: 1, target_amount: 500_000, remaining: 500_000 });
+    expect(goalToForm(saved).pays_from).toBe("operating");
+    const back = goalPayload({ ...goalToForm(saved), pays_from: "account", account_id: "tk-tiet-kiem" }, saved);
+    expect(back.ok && back.value).toMatchObject({ pays_from: "account", account_id: "tk-tiet-kiem" });
+    // Danh sách tài khoản: chỉ tài khoản mẹ ở Dự phòng (không con, không Ví Thưởng); có con → "gồm khoản gửi kỳ hạn".
+    const options = goalAccountOptions(house, [], "tk-bidv", null, false);
+    expect(options.map((a) => [a.id, a.deposits])).toEqual([
+      ["tk-tiet-kiem", "gồm khoản gửi kỳ hạn"],
+      ["phao", null],
+    ]);
+    expect(DEPOSITS_NOTE).toBe("gồm khoản gửi kỳ hạn");
+  });
+
+  // GET /v1/settings của UC-1209 AC-16 (trước / sau đáo hạn) + bốn mục tiêu trả từ tiền chi tiêu.
+  function deposits(after = false): SettingsData {
+    const account3 = [
+      goal("nha-o", "Nhà ở", { account_id: "tk-tiet-kiem", held: 60_000_000, need: 60_000_000, short: 0, target_amount: 60_000_000, sort: 10 }),
+      goal("hoc-tap", "Học tập", { account_id: "tk-tiet-kiem", held: 30_000_000, need: 30_000_000, short: 0, target_amount: 30_000_000, sort: 20 }),
+      goal("tap-luyen", "Tập luyện", { account_id: "tk-tiet-kiem", held: 15_000_000, need: 10_000_000, short: 0, target_amount: 10_000_000, sort: 30 }),
+    ];
+    const monthly = (id: string, name: string, amount: number, spent = 0) =>
+      goal(id, name, { pays_from: "operating", monthly_amount: amount, repeat_months: 1, target_amount: amount, spent, remaining: amount - spent, sort: 40 });
+    return {
+      accounts: after ? house.map((a) => (a.id === "tk-tiet-kiem" ? { ...a, book_balance: 108_000_000 } : a.id === "gui-6-thang" ? { ...a, active: false, book_balance: null } : a)) : house,
+      goals: [...account3, monthly("dien-nuoc", "Điện nước", 2_000_000, 1_000_000), monthly("thuoc", "Thuốc", 500_000), monthly("thien-phuoc", "Thiện phước", 1_000_000), monthly("ve-que", "Về quê", 1_000_000)],
+      goal_groups: [
+        after
+          ? { account_id: "tk-tiet-kiem", balance: 108_000_000, need: 100_000_000, spent: 0, short: 0, extra: 5_000_000, goal_ids: ["nha-o", "hoc-tap", "tap-luyen"], child_ids: [], interest: 3_000_000 }
+          : { account_id: "tk-tiet-kiem", balance: 105_000_000, need: 100_000_000, spent: 0, short: 0, extra: 5_000_000, goal_ids: ["nha-o", "hoc-tap", "tap-luyen"], child_ids: ["gui-6-thang"], interest: 0 },
+      ],
+      config: { surplus_reward_account: "tk-bidv" },
+    } as unknown as SettingsData;
+  }
+
+  it("UC-709 AC-53: danh sách mục tiêu hai phần — 'Để dành ở tài khoản' nhóm 'MB tiết kiệm · 105.000.000 ₫' (Đổi thứ tự cùng dòng tiêu đề, không lặp 'trong MB tiết kiệm'), 'Trả từ tiền chi tiêu mỗi tháng' bốn dòng '{tên} · {số}/tháng · còn … kỳ này'; xem trước thứ tự chia số dư gộp − tiền lãi", () => {
+    const d = deposits();
+    expect(GOAL_SECTION_LABEL).toEqual({ account: "Để dành ở tài khoản", operating: "Trả từ tiền chi tiêu mỗi tháng" });
+    const groups = goalListGroups(d);
+    expect(groups.map((g) => [g.title, g.reorder, g.goals.map((x) => x.id)])).toEqual([[`MB tiết kiệm · 105.000.000${NBSP}₫ · 3 mục tiêu · dư 5.000.000${NBSP}₫`, true, ["nha-o", "hoc-tap", "tap-luyen"]]]);
+    for (const g of groups[0]!.goals) expect(goalLineText(g, d.accounts, groups[0]!.shared)).not.toContain("trong MB tiết kiệm");
+    expect(operatingGoalLines(d.goals).map((l) => l.text)).toEqual([
+      "Điện nước · 2.000.000/tháng · còn 1.000.000 kỳ này",
+      "Thuốc · 500.000/tháng · còn 500.000 kỳ này",
+      "Thiện phước · 1.000.000/tháng · còn 1.000.000 kỳ này",
+      "Về quê · 1.000.000/tháng · còn 1.000.000 kỳ này",
+    ]);
+    // Mục tiêu trả từ tiền chi tiêu đã tắt nằm cuối như mọi mục tiêu ngừng dùng, không ở phần mỗi tháng.
+    const off = { ...d, goals: d.goals.map((g) => (g.id === "ve-que" ? { ...g, active: false } : g)) };
+    expect(operatingGoalLines(off.goals).map((l) => l.goal.id)).toEqual(["dien-nuoc", "thuoc", "thien-phuoc"]);
+    expect(goalListGroups(off).at(-1)!.goals.map((g) => g.id)).toEqual(["ve-que"]);
+    // Sau đáo hạn: số dư gộp 108.000.000, tiền lãi 3.000.000 → Tập luyện vẫn 15.000.000; nhóm ghi tiền lãi.
+    const after = deposits(true);
+    expect(goalOrderPreview(after, "tk-tiet-kiem", ["nha-o", "hoc-tap", "tap-luyen"]).map((r) => r.text)).toEqual([
+      "đã có 60.000.000 / 60.000.000 · đủ",
+      "đã có 30.000.000 / 30.000.000 · đủ",
+      "đã có 15.000.000 / 10.000.000 · đủ",
+    ]);
+    expect(goalListGroups(after)[0]!.note).toBe(`Tiền lãi 3.000.000${NBSP}₫ (không tính vào mục tiêu)`);
+    expect(goalListGroups(d)[0]!.note).toBeNull();
+  });
+
+  it("UC-709 AC-37 (MODIFIED): % Tích luỹ ở Tham số dùng thanh 1–100% vạch 1 · 10 · 30 và câu thang; ô gõ sai thì thanh đứng ở 10; vẫn gửi số nguyên 1–100", () => {
+    expect(SAVINGS_MARKS.map((m) => [m.pct, m.label])).toEqual([
+      [1, "tối thiểu"],
+      [10, "thường"],
+      [30, "hướng tới"],
+    ]);
+    expect(SAVINGS_SCALE_TEXT).toBe("Thang của nhà: tối thiểu 1% · thường 10% · hướng tới 30%. Kỳ nào không trích được thì bỏ qua việc trích ở Hôm nay và ghi lý do.");
+    expect(sliderPct("30")).toBe(30);
+    expect(sliderPct("abc")).toBe(10);
+    expect(sliderPct("0")).toBe(10);
+    const config = { salary_min_amount: 0, interest_max_amount: 10_000, safety_fund_months: "6", payday_day: "10" };
+    expect(configPayload({ ...config, savings_pct: String(sliderPct("30")) })).toMatchObject({ ok: true, value: { savings_pct: 30 } });
   });
 });

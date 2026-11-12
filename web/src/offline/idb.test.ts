@@ -58,7 +58,7 @@ describe("bản lưu của phiên bản dữ liệu trước (pwa UC-710 AC-11)"
     vi.stubGlobal("localStorage", ls);
     const { cacheGet, cacheSet, queueStore } = await import("./idb");
     expect(await cacheGet("husband:snapshot")).toBeNull();
-    expect(ls.getItem("vi-nha:cache-version")).toBe("4");
+    expect(ls.getItem("vi-nha:cache-version")).toBe("5");
     expect((await queueStore.list()).map((i) => i.clientId)).toEqual(["c-00000001"]);
     // Bản lưu mới ghi sau đó thì đọc lại được, không bị bỏ thêm lần nữa.
     await cacheSet("husband:snapshot", { ok: 1 }, "2026-10-07T01:00:00.000Z");
@@ -66,7 +66,7 @@ describe("bản lưu của phiên bản dữ liệu trước (pwa UC-710 AC-11)"
   });
 
   it("đã đúng phiên bản: bản lưu giữ nguyên", async () => {
-    vi.stubGlobal("localStorage", fakeLocalStorage({ seed: { "vi-nha:cache-version": "4", "vi-nha:cache:husband:snapshot": JSON.stringify(old) } }));
+    vi.stubGlobal("localStorage", fakeLocalStorage({ seed: { "vi-nha:cache-version": "5", "vi-nha:cache:husband:snapshot": JSON.stringify(old) } }));
     const { cacheGet } = await import("./idb");
     expect((await cacheGet("husband:snapshot"))?.at).toBe(old.at);
   });
@@ -88,7 +88,7 @@ describe("đổi dạng dữ liệu lưu trên máy (pwa UC-710 AC-13)", () => {
     const { cacheGet, queueStore } = await import("./idb");
     expect(await cacheGet("husband:snapshot")).toBeNull();
     expect(await cacheGet("husband:bootstrap")).toBeNull();
-    expect(ls.getItem("vi-nha:cache-version")).toBe("4");
+    expect(ls.getItem("vi-nha:cache-version")).toBe("5");
     expect((await queueStore.list()).map((i) => i.clientId)).toEqual(["c-00000001"]);
   });
 
@@ -104,7 +104,26 @@ describe("đổi dạng dữ liệu lưu trên máy (pwa UC-710 AC-13)", () => {
     vi.stubGlobal("localStorage", ls);
     const { cacheGet, queueStore } = await import("./idb");
     expect(await cacheGet("husband:snapshot")).toBeNull();
-    expect(ls.getItem("vi-nha:cache-version")).toBe("4");
+    expect(ls.getItem("vi-nha:cache-version")).toBe("5");
     expect((await queueStore.list()).map((i) => i.clientId)).toEqual(["c-00000001"]);
+  });
+
+  it("UC-704: máy đã mở 2.2 (bản lưu phiên bản 4: chưa có operating.goals, topUp, childIds) → bản lưu cũ bị bỏ; hàng đợi còn nguyên, kể cả khoản mang is_interest / from_interest", async () => {
+    const v22 = { key: "husband:snapshot", data: { pockets: { operating: { total: 1, accounts: [] } } }, at: "2026-11-10T01:00:00.000Z" };
+    const interest = { ...item, clientId: "c-00000002", body: { meaning: "spend", amount: 500_000, client_id: "c-00000002", category_id: "food", account_id: "tk-tiet-kiem", from_interest: true } } as QueuedEntry;
+    const ls = fakeLocalStorage({
+      seed: {
+        "vi-nha:cache-version": "4",
+        "vi-nha:cache:husband:snapshot": JSON.stringify(v22),
+        "vi-nha:queue": JSON.stringify({ [item.clientId]: item, [interest.clientId]: interest }),
+      },
+    });
+    vi.stubGlobal("localStorage", ls);
+    const { cacheGet, queueStore } = await import("./idb");
+    expect(await cacheGet("husband:snapshot")).toBeNull();
+    expect(ls.getItem("vi-nha:cache-version")).toBe("5");
+    const queued = await queueStore.list();
+    expect(queued.map((i) => i.clientId)).toEqual(["c-00000001", "c-00000002"]);
+    expect(queued[1]!.body).toMatchObject({ from_interest: true });
   });
 });

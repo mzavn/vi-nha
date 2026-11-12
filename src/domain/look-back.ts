@@ -2,6 +2,8 @@
 // hình hiện tại, so hạn mức mềm hiện tại (không âm, không bù), luật dòng 🔎 của tin sáng, số mỗi ngày của tin tuần. Server
 // dùng cho `GET /v1/spend-by-category`, MCP, cron; PWA dùng lại kiểu và chữ "còn / vượt".
 
+import type { SavingsLevel } from "./pay-cycle";
+
 /** Ngưỡng "gần chạm" hạn mức (%), dùng chung dòng 🔎 tin sáng và tin tuần bản ngắn. */
 export const NEAR_LIMIT_PCT = 80;
 
@@ -53,6 +55,18 @@ export interface LookBackCycle {
 
 export type CycleRef = Pick<LookBackCycle, "payday" | "start" | "end" | "stored">;
 
+/**
+ * Tích luỹ của một kỳ lưu (ledger UC-108, ADR-142): tính như `savingsDone` trên các việc ① của chính kỳ đó — `amount` đã trích
+ * (chuyển khoản thật đã ghép), `base` = Σ khoản lương có ①, `level` như `savingsLevel`; `reason` = lý do bỏ qua / sửa về 0
+ * khi `level` là `zero`, còn lại null.
+ */
+export interface LookBackSavings {
+  amount: number;
+  base: number;
+  level: SavingsLevel;
+  reason: string | null;
+}
+
 interface LookBackBody {
   total: number;
   previousTotal: number;
@@ -65,7 +79,7 @@ interface LookBackBody {
 
 /** Kết quả `GET /v1/spend-by-category` (ledger UC-108 bước 5–6). */
 export type LookBack =
-  | ({ kind: "cycle"; cycle: LookBackCycle; previous: CycleRef | null; next: CycleRef | null } & LookBackBody)
+  | ({ kind: "cycle"; cycle: LookBackCycle; previous: CycleRef | null; next: CycleRef | null; savings?: LookBackSavings | null } & LookBackBody)
   | ({ kind: "month"; month: string; previous: string } & LookBackBody);
 
 /**

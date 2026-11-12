@@ -1,18 +1,20 @@
-// Hôm nay — mở app là thấy câu trả lời: thẻ Vận hành (tổng và chi khoảng bao nhiêu mỗi ngày tới kỳ lương), thẻ Việc ngày lương,
-// rồi thẻ Tích luỹ và thẻ Dự phòng — ba ngăn đọc `snapshot.pockets` (ADR-122). Banner chỉ hiện khi có việc phải làm.
+// Hôm nay — mở app là thấy câu trả lời: thẻ Vận hành (tổng và chi khoảng bao nhiêu mỗi ngày tới kỳ lương, phần đã chừa cho khoản
+// phải trả, nhắc chuyển thêm), thẻ Việc ngày lương, rồi thẻ Tích luỹ và thẻ Dự phòng — ba ngăn đọc `snapshot.pockets` (ADR-122).
+// Banner chỉ hiện khi có việc phải làm.
 
 import { useState } from "preact/hooks";
 import { conversionBanner } from "../lib/convert";
 import { DRIFT_LABEL, driftOf } from "../lib/drift";
 import { nearSpendCard } from "../lib/near-spend";
+import { topUpQr } from "../lib/pay-cycle";
 import { dayHeading, dayKey, shortDate, timeHM, weekLabel } from "../lib/period";
 import { NO_SAVINGS_ACCOUNT, reserveCard, savingsCard } from "../lib/pocket-cards";
 import type { Snapshot } from "../lib/types";
 import { go, refresh, syncNow, useApp, viewSnapshot } from "../state/store";
 import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
-import { Banner, Bar, Card, FirstLoadFailed, PageHeader, Skeleton, TierRow } from "../ui/parts";
-import { PayCycleCard } from "./pay-cycle-card";
+import { Banner, Bar, Card, FirstLoadFailed, PageHeader, Sheet, Skeleton, TierRow } from "../ui/parts";
+import { PayCycleCard, QrSheet } from "./pay-cycle-card";
 import { OtherEntrySheet } from "./other-entry-sheet";
 
 const toPockets = () => go("settings", { settingsFocus: "pockets" });
@@ -136,12 +138,17 @@ function TodayBody({ snap }: { snap: Snapshot }) {
 }
 
 /**
- * Thẻ Vận hành (ADR-122): tổng ngăn Vận hành và chi khoảng bao nhiêu mỗi ngày tới kỳ lương — hai số to cùng cỡ — rồi bữa ăn /
- * lần đi chợ, nợ ngắn hạn cần trả (chỉ nhắc) hay lời chúc. Snapshot cũ trong cache chưa có `nearSpend` thì không hiện.
+ * Thẻ Vận hành (ADR-122, ADR-141): tổng ngăn Vận hành và chi khoảng bao nhiêu mỗi ngày tới kỳ lương — hai số to cùng cỡ — rồi phần
+ * đã chừa cho khoản phải trả kỳ này (chạm → danh sách), khối vàng nhắc chuyển thêm (Mở QR từng nguồn), bữa ăn / lần đi chợ, nợ ngắn
+ * hạn cần trả (chỉ nhắc) hay lời chúc. Snapshot cũ trong cache chưa có `nearSpend` thì không hiện.
  */
 export function NearSpendCard({ snap }: { snap: Snapshot }) {
+  const [list, setList] = useState(false);
+  const [qrFrom, setQrFrom] = useState<string | null>(null);
   if (!snap.nearSpend) return null;
-  const v = nearSpendCard(snap.nearSpend, dayKey(new Date()), snap.pockets);
+  const today = dayKey(new Date());
+  const topUp = snap.topUp ?? null;
+  const v = nearSpendCard(snap.nearSpend, today, snap.pockets, topUp);
   return (
     <section class="hero near" aria-labelledby="near-lab">
       <div class="lab" id="near-lab">
@@ -158,6 +165,31 @@ export function NearSpendCard({ snap }: { snap: Snapshot }) {
             <div class="near-say">{v.big}</div>
           )}
           {v.sub && <div class="meta">{v.sub}</div>}
+          {v.reserved &&
+            (v.reserved.done ? (
+              <p class="near-reserved">{v.reserved.line}</p>
+            ) : (
+              <button type="button" class="near-reserved link" onClick={() => setList(true)}>
+                {v.reserved.line}
+              </button>
+            ))}
+          {v.topUp && (
+            <div class="near-topup" role="status">
+              <strong>{v.topUp.title}</strong>
+              {v.topUp.sources.map((s) => (
+                <div class="near-topup-row" key={s.accountId}>
+                  <span class="min-w-0">{s.text}</span>
+                  {s.qr && (
+                    <button type="button" class="btn" onClick={() => setQrFrom(s.accountId)}>
+                      Mở QR
+                    </button>
+                  )}
+                </div>
+              ))}
+              {v.topUp.missing && <p>{v.topUp.missing}</p>}
+              {v.topUp.hint && <p>{v.topUp.hint}</p>}
+            </div>
+          )}
           {v.meals.map((line) => (
             <p key={line} class="near-meals">
               {line}
@@ -191,6 +223,17 @@ export function NearSpendCard({ snap }: { snap: Snapshot }) {
       )}
       {v.late && <p class="near-note">{v.late}</p>}
       {v.pending && <p class="near-note">{v.pending}</p>}
+      {list && v.reserved && (
+        <Sheet open title="Khoản phải trả kỳ này" onClose={() => setList(false)}>
+          {v.reserved.items.map((g) => (
+            <div class="srow" style={{ display: "block" }} key={g.id}>
+              <div>{g.title}</div>
+              <div class="sub-line">{g.spent}</div>
+            </div>
+          ))}
+        </Sheet>
+      )}
+      {qrFrom && topUp && <QrSheet qrOf={() => topUpQr(topUp, qrFrom, today)} onClose={() => setQrFrom(null)} />}
     </section>
   );
 }
@@ -227,7 +270,7 @@ export function SavingsCard({ snap }: { snap: Snapshot }) {
             <p>{v.change}</p>
             <p>{v.prev}</p>
             <p>{v.pct}</p>
-            {v.done && <p>{v.done}</p>}
+            {v.done && <p class={v.doneWarn ? "pocket-warn" : undefined}>{v.done}</p>}
           </div>
         </>
       )}
@@ -288,6 +331,7 @@ export function ReserveCard({ snap }: { snap: Snapshot }) {
                   )}
                 </div>
               ))}
+              {grp.interest && <p class="goal-group-note">{grp.interest}</p>}
               {grp.note && <p class="goal-group-note">{grp.note}</p>}
             </div>
           ))}

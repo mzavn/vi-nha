@@ -52,10 +52,11 @@ function parseSplit(raw: unknown, index: number): Split {
     link_id: typeof s.link_id === "number" ? s.link_id : null,
     taxable: s.taxable === true,
     asset_kind: typeof s.asset_kind === "string" ? s.asset_kind : null,
-    interest: s.interest === true,
+    interest: s.interest === true || s.is_interest === true,
     ...(typeof s.opens_cycle === "boolean" ? { opens_cycle: s.opens_cycle } : {}),
     note: typeof s.note === "string" ? s.note : null,
     goal_id: typeof s.goal_id === "string" ? s.goal_id : null,
+    from_interest: s.from_interest === true,
   };
 }
 

@@ -1,7 +1,7 @@
 // Tách một log ngân hàng thành nhiều dòng: tổng các dòng phải bằng đúng số tiền log (phase 04, lớp 2).
 // Hình dạng `Split` khớp src/services/ingest.ts — không import trực tiếp vì file đó kéo theo kiểu D1. Không ví (Đợt C).
 
-import { goalField, type GoalChoice } from "./goal-choices";
+import { goalField, type GoalRow } from "./goal-choices";
 import { formatVnd } from "./money";
 import { effectsToast } from "./pay-cycle";
 import { entryToast } from "./pending";
@@ -36,6 +36,10 @@ export interface Split {
   interest?: boolean;
   /** spend / transfer của log tiền ra: mục tiêu Dự phòng của tài khoản (chip "Cho mục tiêu", pocket UC-1209 bước 11). */
   goal_id?: string | null;
+  /** income vào mẹ có mục tiêu / con của nó: ô "Đây là tiền lãi" (QĐ2) — server ghi phân loại `passive_income`. */
+  is_interest?: boolean;
+  /** spend / transfer ra khỏi nhóm mẹ + con: chip "Từ tiền lãi" (QĐ2); không đi cùng `goal_id`. */
+  from_interest?: boolean;
 }
 
 /** Một dòng trên form Gán: `tenantMode` / `interestMode` là lựa chọn trên màn hình, gửi lên thành income kèm tenant_id / interest. */
@@ -116,27 +120,35 @@ export function validateSplits(total: number, splits: Split[]): SplitCheck {
 
 /**
  * Thân POST /v1/logs/:id/assign (UC-305, UC-706): mỗi dòng chỉ mang trường đúng loại — không trường ví, không
- * `transfer_order_id`, không `earmark_id`. Thu nhập mang `opens_cycle` (trừ tiền người thuê và lãi). Chi / chuyển ra mang
- * `goal_id` khi chip đã chọn thuộc `choices` (mục tiêu của tài khoản log tiền ra — UC-706 AC-39).
+ * `transfer_order_id`, không `earmark_id`. Thu nhập mang `opens_cycle` (trừ tiền người thuê và lãi), `is_interest` khi ô
+ * "Đây là tiền lãi" có (`interest`) và được bật. Chi / chuyển ra mang `goal_id` / `from_interest` theo hàng "Cho mục tiêu"
+ * của tài khoản log tiền ra (`goals(tài khoản nhận)` — UC-706 AC-39, QĐ2).
  */
-export function assignBody(rows: AssignRow[], createRule: boolean, choices: GoalChoice[] = []): { splits: Split[]; create_rule: boolean } {
+export function assignBody(
+  rows: AssignRow[],
+  createRule: boolean,
+  o: { goals?: (toAccountId: string | null) => GoalRow | null; interest?: boolean } = {},
+): { splits: Split[]; create_rule: boolean } {
   const interest = rows.find((r) => r.interestMode);
   if (interest) return { splits: [{ meaning: "income", amount: interest.amount, interest: true, ...(interest.note ? { note: interest.note } : {}) }], create_rule: createRule };
-  const splits = rows.map(({ key: _k, tenantMode, interestMode: _i, tenant_id, income_stream_id, opens_cycle, debt_id, interest_debt_id, receivable_id, link_id, other_account_id, category_id, taxable, asset_kind, goal_id, ...s }): Split => ({
-    ...s,
-    ...(s.meaning === "spend" || s.meaning === "refund" ? { category_id: category_id ?? null } : {}),
-    ...(s.meaning === "transfer" ? { other_account_id } : {}),
-    ...(s.meaning === "income" ? { taxable: taxable === true } : {}),
-    ...(s.meaning === "buy_asset" ? { asset_kind } : {}),
-    ...(s.meaning === "income" && tenant_id ? { tenant_id } : {}),
-    ...(s.meaning === "income" && income_stream_id ? { income_stream_id } : {}),
-    ...(s.meaning === "income" && !tenantMode && opens_cycle !== undefined ? { opens_cycle } : {}),
-    ...(s.meaning === "spend" && debt_id ? { debt_id } : {}),
-    ...(s.meaning === "spend" && interest_debt_id ? { interest_debt_id } : {}),
-    ...((s.meaning === "lend" || s.meaning === "collect") && receivable_id ? { receivable_id } : {}),
-    ...((s.meaning === "refund" || s.meaning === "collect") && link_id ? { link_id } : {}),
-    ...(s.meaning === "spend" || s.meaning === "transfer" ? goalField(goal_id, choices) : {}),
-  }));
+  const splits = rows.map(
+    ({ key: _k, tenantMode, interestMode: _i, tenant_id, income_stream_id, opens_cycle, debt_id, interest_debt_id, receivable_id, link_id, other_account_id, category_id, taxable, asset_kind, goal_id, is_interest, from_interest: _f, ...s }): Split => ({
+      ...s,
+      ...(s.meaning === "spend" || s.meaning === "refund" ? { category_id: category_id ?? null } : {}),
+      ...(s.meaning === "transfer" ? { other_account_id } : {}),
+      ...(s.meaning === "income" ? { taxable: taxable === true } : {}),
+      ...(s.meaning === "buy_asset" ? { asset_kind } : {}),
+      ...(s.meaning === "income" && tenant_id ? { tenant_id } : {}),
+      ...(s.meaning === "income" && income_stream_id ? { income_stream_id } : {}),
+      ...(s.meaning === "income" && !tenantMode && opens_cycle !== undefined ? { opens_cycle } : {}),
+      ...(s.meaning === "income" && !tenantMode && o.interest && is_interest ? { is_interest: true } : {}),
+      ...(s.meaning === "spend" && debt_id ? { debt_id } : {}),
+      ...(s.meaning === "spend" && interest_debt_id ? { interest_debt_id } : {}),
+      ...((s.meaning === "lend" || s.meaning === "collect") && receivable_id ? { receivable_id } : {}),
+      ...((s.meaning === "refund" || s.meaning === "collect") && link_id ? { link_id } : {}),
+      ...(s.meaning === "spend" || s.meaning === "transfer" ? goalField(goal_id, o.goals?.(s.meaning === "transfer" ? (other_account_id ?? null) : null)) : {}),
+    }),
+  );
   return { splits, create_rule: createRule };
 }
 

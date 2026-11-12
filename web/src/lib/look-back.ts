@@ -3,8 +3,10 @@
 // không số âm, không nút gì để "lấy thêm" — chỉ "còn" hoặc "vượt".
 
 import type { CycleRef, LookBack, LookBackCycle, LookBackGroup } from "../../../src/domain/look-back";
+import type { SavingsLevel } from "../../../src/domain/pay-cycle";
 import { formatVnd } from "./money";
 import { dayKey, previousDay, shortDate } from "./period";
+import { levelText } from "./savings-scale";
 
 export const LOOK_BACK_NOTE = "Hạn mức mềm chỉ để nhìn lại — không giữ tiền, không âm, không bù.";
 export const LOOK_BACK_EMPTY = "Chưa có khoản chi nào trong kỳ này và kỳ trước.";
@@ -77,4 +79,16 @@ export const queueNote = (n: number): string | null => (n > 0 ? `${n} khoản ch
 export function isEmptyLookBack(d: LookBack): boolean {
   const none = (x: { spent: number; previousSpent: number }) => x.spent === 0 && x.previousSpent === 0;
   return d.groups.every(none) && none(d.ungrouped) && d.ungrouped.categories.length === 0 && none(d.interest) && d.excluded.debtPrincipal === 0;
+}
+
+/**
+ * Dòng Tích luỹ của kỳ (ledger UC-108, ADR-142): "Tích luỹ kỳ này: 3.000.000 ₫ (10% lương) · mức 10–30%"; mọi ① bỏ qua → "… 0 ₫ ·
+ * 0% — {lý do}"; chưa có mức → bỏ phần "· mức …". Kỳ danh nghĩa (`savings` null) hay không có lương (base 0) → null.
+ */
+export function savingsLine(s: { amount: number; base: number; level: SavingsLevel; reason: string | null } | null | undefined): string | null {
+  if (!s || s.base <= 0) return null;
+  const head = `Tích luỹ kỳ này: ${formatVnd(s.amount)}`;
+  if (s.level === "zero") return `${head} · ${levelText(s.level, s.reason)}`;
+  const level = levelText(s.level)?.replace(/^đạt /, "");
+  return `${head} (${Math.floor((s.amount * 100) / s.base)}% lương)${level ? ` · ${level}` : ""}`;
 }

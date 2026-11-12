@@ -245,22 +245,30 @@ export interface MatchTask {
   missing: number;
 }
 
+/** Một đầu của chuyển khoản: `parentId` = tài khoản mẹ khi là tài khoản con (ADR-140). */
+export interface TransferEnd {
+  id: string;
+  pocket: Pocket | null;
+  parentId?: string | null;
+}
+
 /**
  * Chuyển khoản S → D (S ≠ D) ghép vào các việc đang mở theo thứ tự việc; mỗi việc nhận min(phần còn lại, phần còn thiếu):
- * việc có tài khoản đích khớp khi D đúng là tài khoản đó (không xét ngăn); việc có ngăn đích khớp khi D thuộc ngăn đó và S
- * khác ngăn với D (S ngoài ngăn cũng được).
+ * việc có tài khoản đích khớp khi D là tài khoản đó hoặc một con của nó (không xét ngăn), trừ khi S cũng thuộc nhóm đó (chuyển
+ * nội bộ mẹ ↔ con); việc có ngăn đích khớp khi D thuộc ngăn đó và S khác ngăn với D (S ngoài ngăn cũng được).
  */
-export function allocateTransfer(
-  tasks: MatchTask[],
-  transfer: { from: { id: string; pocket: Pocket | null }; to: { id: string; pocket: Pocket | null }; available: number },
-): { taskId: number; amount: number }[] {
+export function allocateTransfer(tasks: MatchTask[], transfer: { from: TransferEnd; to: TransferEnd; available: number }): { taskId: number; amount: number }[] {
   const { from, to } = transfer;
   if (from.id === to.id || transfer.available <= 0) return [];
+  const inGroup = (end: TransferEnd, root: string) => end.id === root || end.parentId === root;
   let left = transfer.available;
   const out: { taskId: number; amount: number }[] = [];
   for (const t of tasks) {
     if (left <= 0) break;
-    const hit = t.toAccountId !== null ? t.toAccountId === to.id : t.toPocket !== null && to.pocket === t.toPocket && from.pocket !== to.pocket;
+    const hit =
+      t.toAccountId !== null
+        ? inGroup(to, t.toAccountId) && !inGroup(from, t.toAccountId)
+        : t.toPocket !== null && to.pocket === t.toPocket && from.pocket !== to.pocket;
     if (!hit || t.missing <= 0) continue;
     const take = Math.min(left, t.missing);
     out.push({ taskId: t.id, amount: take });
@@ -285,28 +293,47 @@ export interface TaskFigures {
   /** Số tiền khoản thu sinh việc (① của khoản lương). */
   sourceAmount: number | null;
   toPocket: Pocket | null;
+  /** ② của mục tiêu trả từ tiền chi tiêu (ADR-141): không tính vào phần chưa làm. */
+  operatingGoal?: boolean;
+}
+
+/** Mức đạt Tích luỹ của kỳ (ADR-142): dưới 1% · 1–10% · 10–30% · từ 30% · 0% có lý do; null = chưa có mức. */
+export type SavingsLevel = "below1" | "1to10" | "10to30" | "from30" | "zero" | null;
+
+/**
+ * Mức đạt (pocket UC-1206, ADR-142) từ phần đã trích (chuyển khoản thật) so với Σ khoản lương có ①: mọi ① bỏ qua / sửa về 0
+ * và chưa trích gì → `zero`; base 0, hoặc chưa trích gì mà còn ① đang mở chưa ghép khoản nào → null.
+ */
+export function savingsLevel(savings: TaskFigures[], amount: number, base: number): SavingsLevel {
+  if (base <= 0) return null;
+  if (amount === 0 && savings.every((t) => t.status === "skipped" || t.amount === 0)) return "zero";
+  if (amount === 0 && savings.some((t) => t.status === "open" && t.linked === 0 && t.amount > 0)) return null;
+  if (amount * 100 < base) return "below1";
+  if (amount * 100 < 10 * base) return "1to10";
+  if (amount * 100 < 30 * base) return "10to30";
+  return "from30";
 }
 
 /**
  * "Kỳ này đã trích" (UC-1206 bước 9): Σ phần đã ghép của ① (chuyển khoản thật tới tài khoản ngăn Tích luỹ), trên Σ khoản
- * lương có ①. Tick tay không cộng.
+ * lương có ①, kèm mức đạt. Tick tay không cộng.
  */
-export function savingsDone(tasks: TaskFigures[]): { amount: number; base: number; pct: number | null } {
+export function savingsDone(tasks: TaskFigures[]): { amount: number; base: number; pct: number | null; level: SavingsLevel } {
   const savings = tasks.filter((t) => t.kind === "savings" && t.status !== "void");
   const amount = savings.reduce((s, t) => s + Math.min(t.linked, t.amount), 0);
   const base = savings.reduce((s, t) => s + (t.sourceAmount ?? 0), 0);
-  return { amount, base, pct: base > 0 ? Math.floor((amount * 100) / base) : null };
+  return { amount, base, pct: base > 0 ? Math.floor((amount * 100) / base) : null, level: savingsLevel(savings, amount, base) };
 }
 
 /**
  * Phần chưa làm (ledger UC-103): Σ phần còn thiếu của ① và ④ đang mở, cộng ② đang mở trừ khi khoản lương mở kỳ về
- * tài khoản ngăn Dự phòng / Tích luỹ; ③ không tính.
+ * tài khoản ngăn Dự phòng / Tích luỹ; ③ và ② của mục tiêu trả từ tiền chi tiêu không tính.
  */
 export function pendingTasks(tasks: TaskFigures[], salaryPocket: Pocket | null): number {
   const goalsOutside = salaryPocket === "reserve" || salaryPocket === "savings";
   return tasks.reduce((s, t) => {
     const { state, missing } = taskState(t, t.linked);
-    if (state !== "open" || t.kind === "move" || (t.kind === "goal" && goalsOutside)) return s;
+    if (state !== "open" || t.kind === "move" || (t.kind === "goal" && (goalsOutside || t.operatingGoal))) return s;
     return s + missing;
   }, 0);
 }
@@ -362,5 +389,5 @@ export interface PayCycleView {
   prevOperating: number;
   tasks: PayCycleTask[];
   openCount: number;
-  savingsDone: { amount: number; base: number; pct: number | null };
+  savingsDone: { amount: number; base: number; pct: number | null; level: SavingsLevel };
 }

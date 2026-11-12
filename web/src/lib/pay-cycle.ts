@@ -3,10 +3,12 @@
 // Mọi số tiền qua `moneyDigits` / `formatVnd` (che số, UC-718); % và ngày không che.
 
 import { lacksSavingsAccount } from "../../../src/domain/pay-cycle";
+import type { TopUp } from "../../../src/domain/snapshot";
 import { transferQr } from "../../../src/domain/vietqr";
 import { formatVnd, moneyDigits } from "./money";
 import { shortDate } from "./period";
 import { POCKET_LABEL } from "./pockets";
+import { amountOfPct, belowMinText, levelText, pctOfAmount } from "./savings-scale";
 import type { PayCycleTask, PayCycleView, QrTarget, Snapshot } from "./types";
 
 export const SKIP_REASON_REQUIRED = "Không trích kỳ này cần ghi lý do";
@@ -178,16 +180,67 @@ export function noCycleStreamLine(s: { paySetup?: { hasCycleStream: boolean } })
 }
 
 /**
- * "Kỳ này đã trích" ở thẻ Tích luỹ (UC-702 AC-32): chỉ khi kỳ có khoản lương sinh ①. Số cần = Σ số các ① không bỏ qua; % là
- * `savings_pct` đã cài (không phải đã ghép ÷ lương).
+ * "Kỳ này đã trích" ở thẻ Tích luỹ (UC-702 AC-32, AC-36): chỉ khi kỳ có khoản lương sinh ①. Số cần = Σ số các ① không bỏ qua; % là
+ * `savings_pct` đã cài (không phải đã ghép ÷ lương); có mức đạt thì thêm "· đạt mức …"; mọi ① bỏ qua / về 0 → "0% — {lý do}".
  */
 export function savingsDoneLine(c: PayCycleView | null | undefined, savingsPct: number): string | null {
   if (!c || c.savingsDone.base <= 0) return null;
-  const { amount } = c.savingsDone;
-  const need = c.tasks.filter((t) => t.kind === "savings" && t.status !== "skipped").reduce((s, t) => s + t.amount, 0);
+  const { amount, level = null } = c.savingsDone;
+  const savings = c.tasks.filter((t) => t.kind === "savings");
+  if (level === "zero") {
+    const reason = savings.find((t) => (t.status === "skipped" || t.amount === 0) && t.reason)?.reason ?? null;
+    return `Kỳ này đã trích ${formatVnd(0)} · ${levelText(level, reason)}`;
+  }
+  const need = savings.filter((t) => t.status !== "skipped").reduce((s, t) => s + t.amount, 0);
   if (amount <= 0) return `Kỳ này chưa trích (${savingsPct}% = ${formatVnd(need)})`;
-  if (amount >= need) return `Kỳ này đã trích ✓ ${formatVnd(amount)} (${savingsPct}%)`;
-  return `Kỳ này đã trích ${moneyDigits(amount)} / ${formatVnd(need)} (${savingsPct}%)`;
+  const reached = levelText(level);
+  const tail = reached ? ` · ${reached}` : "";
+  if (amount >= need) return `Kỳ này đã trích ✓ ${formatVnd(amount)} (${savingsPct}%)${tail}`;
+  return `Kỳ này đã trích ${moneyDigits(amount)} / ${formatVnd(need)} (${savingsPct}%)${tail}`;
+}
+
+/** Mức "dưới 1%": dòng "Kỳ này đã trích" tô vàng (UC-702 AC-36). */
+export const savingsDoneWarn = (c: PayCycleView | null | undefined): boolean => c?.savingsDone.level === "below1";
+
+// ── Sheet "Trích Tích luỹ" (UC-702 AC-35, ADR-142) ─────────────────
+
+/** Trạng thái sheet: `income` = khoản lương của ① (null khi bị giấu — thanh khoá), `amount` null = số gõ chưa hợp lệ. */
+export interface SavingsSheet {
+  income: number | null;
+  pct: number;
+  amount: number | null;
+  reason: string;
+}
+
+export function savingsSheetOpen(t: PayCycleTask): SavingsSheet {
+  const income = visibleSource(t)?.amount ?? null;
+  const pct = t.pct !== null && t.pct > 0 ? t.pct : income ? pctOfAmount(t.amount, income) : 1;
+  return { income, pct, amount: t.amount, reason: "" };
+}
+
+/** Kéo thanh (hay chạm vạch): số = lương × % ÷ 100 làm tròn lên 1.000. Không biết lương → không đổi. */
+export function savingsSheetDrag(s: SavingsSheet, pct: number): SavingsSheet {
+  return s.income === null ? s : { ...s, pct, amount: amountOfPct(s.income, pct) };
+}
+
+/** Gõ số: thanh nhảy tới ⌊số × 100 ÷ lương⌋ (kẹp 1…100); số 0 / chưa hợp lệ giữ thanh. */
+export function savingsSheetType(s: SavingsSheet, amount: number | null): SavingsSheet {
+  return { ...s, amount, pct: s.income !== null && amount !== null && amount > 0 ? pctOfAmount(amount, s.income) : s.pct };
+}
+
+export function savingsSheetView(s: SavingsSheet): { warn: string | null; needsReason: boolean; problem: string | null; canSave: boolean } {
+  const problem = amountProblem({ kind: "savings" }, s.amount, s.reason);
+  return {
+    warn: s.income !== null && s.amount !== null ? belowMinText(s.amount, s.income) : null,
+    needsReason: s.amount === 0,
+    problem,
+    canSave: problem === null,
+  };
+}
+
+/** Lưu: `PATCH { amount, reason? }` — lý do chỉ gửi khi số 0. */
+export function savingsSheetAction(s: SavingsSheet): TaskAction {
+  return { kind: "amount", amount: s.amount ?? 0, reason: s.amount === 0 ? s.reason : "" };
 }
 
 // ── Mã QR (UC-1206 bước 10, ADR-116) ───────────────────────────────
@@ -242,6 +295,13 @@ export function goalGroupQr(c: Pick<PayCycleView, "payday" | "tasks">, accountId
   const first = tasks[0];
   if (!first) return { hint: null };
   return qrFor(first.targets, first.targetName, tasks.reduce((s, t) => s + t.missing, 0), `Du phong${memoTail(c)}`, accountId);
+}
+
+/** QR nhắc chuyển thêm (UC-702 AC-33, ADR-116): tới đích của `topUp`, số = phần của nguồn đó, "Bu chi tieu {d-m}" của hôm nay. */
+export function topUpQr(t: TopUp, sourceAccountId: string, today: string): TaskQr {
+  const amount = t.sources.find((x) => x.accountId === sourceAccountId)?.amount ?? 0;
+  if (!t.target) return { hint: "Chuyển vào tiền chi tiêu" };
+  return qrFor([t.target], t.target.name, amount, `Bu chi tieu ${Number(today.slice(8, 10))}-${Number(today.slice(5, 7))}`);
 }
 
 // ── Kiểm và thân yêu cầu ───────────────────────────────────────────

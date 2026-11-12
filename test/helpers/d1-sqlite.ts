@@ -32,6 +32,18 @@ export function migratedDb(until = "9999"): DatabaseSync {
   return db;
 }
 
+/**
+ * Thêm các cột mà code hiện tại đọc (0044: tài khoản con, nơi để tiền của mục tiêu, rút từ tiền lãi) vào DB còn ở schema cũ —
+ * để test migration cũ đo số bằng service hiện tại trước / sau migration của nó. Không thêm trigger, không đổi schema_version.
+ */
+export function addCurrentColumns(db: DatabaseSync): void {
+  db.exec(`
+    ALTER TABLE accounts ADD COLUMN parent_account_id TEXT REFERENCES accounts(id);
+    ALTER TABLE reserve_goals ADD COLUMN pays_from TEXT NOT NULL DEFAULT 'account';
+    ALTER TABLE transactions ADD COLUMN from_interest INTEGER NOT NULL DEFAULT 0;
+  `);
+}
+
 /** Hình dạng schema: cột từng bảng, tên index, tên view — không phụ thuộc thứ tự ALTER. */
 export function schemaShape(db: DatabaseSync) {
   const objects = db.prepare("SELECT type, name, tbl_name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name").all() as {

@@ -3,12 +3,13 @@
 // thứ tự yêu cầu khi Tiếp ở bước 2, xử lý 409 theo `next`. Mọi số tiền qua bộ định dạng có che số (UC-718); "Bước 3/5",
 // "15%" không phải số tiền nên không che.
 
-import { fillGoals, goalOrder } from "../../../src/domain/pockets";
+import { DEFAULT_SAVINGS_PCT, goalGroups, goalOrder } from "../../../src/domain/pockets";
 import { ApiError } from "./api";
 import { formatVnd, moneyDigits } from "./money";
 import { dueText } from "./pockets";
-import { goalAccountOptions, rewardAccountOptions, type GoalAccountOption } from "./settings";
-import type { IncomeStream, ReserveGoal, SettingsAccount } from "./types";
+import { SAVINGS_SCALE_TEXT } from "./savings-scale";
+import { goalAccountOptions, pocketGoal, rewardAccountOptions, type GoalAccountOption } from "./settings";
+import type { IncomeStream, ReserveGoal, SettingsAccount, SettingsGoalGroup } from "./types";
 
 /** Năm bước theo thứ tự server (`conversion_claims`). */
 export const CONVERSION_STEPS = ["pockets", "goals", "savings_gap", "pay_cycle", "savings_pct"] as const;
@@ -95,10 +96,19 @@ export function stepConflict(sent: ConversionStep, err: unknown): { next: Conver
   return { next, silent: stepNumber(next) > stepNumber(sent) };
 }
 
-// ── Bước 2: mỗi mục tiêu một tài khoản thật (nhiều mục tiêu dùng chung được một tài khoản) ──
+// ── Bước 2: chọn nơi để tiền cho từng khoản (tài khoản thật, nhiều mục tiêu dùng chung được; hoặc trả từ tiền chi tiêu) ──
 
-/** Lựa chọn của một dòng mục tiêu: gắn tài khoản · không dùng (tắt) · để sau. "Tạo tài khoản mới" lưu xong thành gắn tài khoản. */
-export type GoalChoice = { kind: "account"; accountId: string } | { kind: "off" } | { kind: "later" };
+export const GOALS_STEP_TITLE = "Chọn nơi để tiền cho từng khoản";
+export const OPERATING_CHOICE_LABEL = "Trả từ tiền chi tiêu";
+
+/**
+ * Lựa chọn của một dòng mục tiêu: gắn tài khoản · trả từ tiền chi tiêu (ADR-141) · không dùng (tắt) · để sau. "Tạo tài khoản
+ * mới" lưu xong thành gắn tài khoản.
+ */
+export type GoalChoice = { kind: "account"; accountId: string } | { kind: "operating" } | { kind: "off" } | { kind: "later" };
+
+/** "Trả từ tiền chi tiêu" chỉ cho mục tiêu mỗi tháng (lặp, 1 tháng một lần, không %) — server 400 `operating_goal_monthly`. */
+export const canPayFromOperating = (g: ReserveGoal): boolean => g.target_pct === null && g.monthly_amount !== null && g.repeat_months === 1;
 
 /** Dòng phụ của một mục tiêu ở bước 2: cách đặt số và hạn — "2.000.000/tháng, 3 tháng một lần · hạn 15/01/2027", "10% thu chịu thuế", "cần 4.800.000". */
 export function goalTerms(g: ReserveGoal): string {
@@ -118,9 +128,12 @@ export function goalTerms(g: ReserveGoal): string {
 export function initialGoalChoices(goals: ReserveGoal[], accounts: SettingsAccount[], rewardAccountId: string | null | undefined): Record<string, GoalChoice | null> {
   const active = goals.filter((g) => g.active);
   const out: Record<string, GoalChoice | null> = {};
-  for (const g of active) if (g.account_id) out[g.id] = { kind: "account", accountId: g.account_id };
   for (const g of active) {
-    if (g.account_id) continue;
+    if (g.pays_from === "operating") out[g.id] = { kind: "operating" };
+    else if (g.account_id) out[g.id] = { kind: "account", accountId: g.account_id };
+  }
+  for (const g of active) {
+    if (g.id in out) continue;
     const taken = new Set(Object.values(out).flatMap((c) => (c?.kind === "account" ? [c.accountId] : [])));
     const ok = goalAccountOptions(accounts, goals, rewardAccountId, g.id, g.target_pct !== null).some((a) => a.id === g.suggested_account_id && !a.shared && !a.blocked && !taken.has(a.id));
     out[g.id] = ok ? { kind: "account", accountId: g.suggested_account_id! } : null;
@@ -128,11 +141,11 @@ export function initialGoalChoices(goals: ReserveGoal[], accounts: SettingsAccou
   return out;
 }
 
-/** Mục tiêu sau khi áp các lựa chọn đang chọn (chưa gửi): gắn tài khoản đã chọn, tắt / để sau thì chưa gắn. */
+/** Mục tiêu sau khi áp các lựa chọn đang chọn (chưa gửi): gắn tài khoản đã chọn, trả từ tiền chi tiêu / tắt / để sau thì chưa gắn. */
 function pendingGoals(goals: ReserveGoal[], choices: Record<string, GoalChoice | null>): ReserveGoal[] {
   return goals.map((g) => {
     const c = choices[g.id];
-    return !c ? g : { ...g, account_id: c.kind === "account" ? c.accountId : null };
+    return !c ? g : { ...g, account_id: c.kind === "account" ? c.accountId : null, pays_from: c.kind === "operating" ? "operating" : "account" };
   });
 }
 
@@ -160,30 +173,38 @@ export function rewardRowAccounts(accounts: SettingsAccount[], goals: ReserveGoa
 export const GOAL_ORDER_NOTE = "Thứ tự ưu tiên đổi ở Cài đặt › Ba ngăn";
 
 /**
- * Dòng nhóm dưới mỗi tài khoản được từ hai dòng chọn (UC-1208 AC-11): "{tài khoản} {số dư} cho {tên}, {tên} · thiếu X / đủ /
- * dư X", chia bằng `fillGoals` theo thứ tự mặc định (`goalOrder`) và số dư sổ hiện tại.
+ * Dòng nhóm dưới mỗi tài khoản được từ hai dòng chọn (UC-1208 AC-11): "{tài khoản} {số dư gộp} cho {tên}, {tên} · thiếu X /
+ * đủ / dư X" — luật chia chung `goalGroups` theo thứ tự mặc định (`goalOrder`): số dư gộp mẹ + khoản gửi kỳ hạn đang dùng,
+ * chia trên số dư gộp − tiền lãi của nhóm (`groups` = `goal_groups` của cài đặt, QĐ2).
  */
-export function goalGroupLines(goals: ReserveGoal[], accounts: SettingsAccount[], choices: Record<string, GoalChoice | null>): { accountId: string; text: string }[] {
+export function goalGroupLines(
+  goals: ReserveGoal[],
+  accounts: SettingsAccount[],
+  choices: Record<string, GoalChoice | null>,
+  groups: Pick<SettingsGoalGroup, "account_id" | "interest">[] = [],
+): { accountId: string; text: string }[] {
   const ordered = goals
     .filter((g) => g.active)
     .map((g) => ({ g, key: { id: g.id, sort: g.sort, dueDate: g.due_date, name: g.name } }))
     .sort((a, b) => goalOrder(a.key, b.key))
     .map((x) => x.g);
-  const byAccount = new Map<string, ReserveGoal[]>();
-  for (const g of ordered) {
+  const chosen = ordered.flatMap((g) => {
     const c = choices[g.id];
-    if (c?.kind === "account") byAccount.set(c.accountId, [...(byAccount.get(c.accountId) ?? []), g]);
-  }
-  return [...byAccount].flatMap(([accountId, list]) => {
-    const account = accounts.find((a) => a.id === accountId);
-    if (list.length < 2 || !account || list.some((g) => g.target_pct !== null)) return [];
-    const balance = account.book_balance ?? 0;
-    const fill = fillGoals(
-      balance,
-      list.map((g) => ({ id: g.id, need: g.target_amount ?? 0, spent: g.spent })),
-    );
-    const state = fill.short ? `thiếu ${formatVnd(fill.short)}` : fill.extra ? `dư ${formatVnd(fill.extra)}` : "đủ";
-    return [{ accountId, text: `${account.name} ${formatVnd(balance)} cho ${list.map((g) => g.name).join(", ")} · ${state}` }];
+    return c?.kind === "account" ? [{ ...pocketGoal({ ...g, need: g.target_amount }, c.accountId), paysFrom: "account" as const }] : [];
+  });
+  const live = accounts.filter((a) => a.active).map((a) => ({ id: a.id, name: a.name, balance: a.book_balance ?? 0, parentId: a.parent_account_id ?? null }));
+  const interest = Object.fromEntries(groups.map((g) => [g.account_id, g.interest ?? 0]));
+  // Dòng nhóm chỉ khi từ hai dòng cùng tài khoản; nhóm có mục tiêu % (Thuế) không dùng chung được (luật Thuế báo ở ô chọn).
+  const sameAccount = (id: string | null) => chosen.filter((g) => g.accountId === id);
+  const { groups: out } = goalGroups(
+    live,
+    chosen.filter((g) => sameAccount(g.accountId).length >= 2 && sameAccount(g.accountId).every((x) => x.targetPct === null)),
+    interest,
+  );
+  return out.map((grp) => {
+    const names = grp.goalIds.map((id) => ordered.find((g) => g.id === id)!.name);
+    const state = grp.short ? `thiếu ${formatVnd(grp.short)}` : grp.extra ? `dư ${formatVnd(grp.extra)}` : "đủ";
+    return { accountId: grp.accountId, text: `${grp.name} ${formatVnd(grp.balance)} cho ${names.join(", ")} · ${state}` };
   });
 }
 
@@ -199,9 +220,10 @@ export interface StepRequest {
 }
 
 /**
- * Các yêu cầu khi bấm Tiếp ở bước 2, đúng thứ tự để server không báo trùng: (1) tắt / bỏ gắn trước cho tài khoản rảnh ra,
- * (2) đổi Ví Thưởng, (3) gắn tài khoản, mục tiêu % gắn sau cùng (không gặp 409 `tax_account_shared` khi Thuế nhận tài khoản
- * mà dòng khác vừa rời). Dòng không đổi gì thì không gửi.
+ * Các yêu cầu khi bấm Tiếp ở bước 2, đúng thứ tự để server không báo trùng: (1) tắt / bỏ gắn / chuyển sang trả từ tiền chi
+ * tiêu trước cho tài khoản rảnh ra (server tự bỏ tài khoản khi `pays_from: "operating"`), (2) đổi Ví Thưởng, (3) gắn tài
+ * khoản, mục tiêu % gắn sau cùng (không gặp 409 `tax_account_shared` khi Thuế nhận tài khoản mà dòng khác vừa rời). Dòng
+ * không đổi gì thì không gửi. Mục tiêu đang trả từ tiền chi tiêu mà chọn tài khoản / để sau → `pays_from: "account"`.
  */
 export function goalStepRequests(goals: ReserveGoal[], choices: Record<string, GoalChoice | null>, reward: { current: string | null; next: string | null }): StepRequest[] {
   const path = (id: string) => `/v1/settings/goals/${encodeURIComponent(id)}`;
@@ -211,12 +233,16 @@ export function goalStepRequests(goals: ReserveGoal[], choices: Record<string, G
   for (const g of goals.filter((x) => x.active)) {
     const c = choices[g.id];
     if (!c) continue;
+    const operating = g.pays_from === "operating";
     if (c.kind === "off") free.push({ method: "PATCH", path: path(g.id), body: { active: false } });
+    else if (c.kind === "operating") {
+      if (!operating) free.push({ method: "PATCH", path: path(g.id), body: { pays_from: "operating" } });
+    } else if (c.kind === "later" && operating) free.push({ method: "PATCH", path: path(g.id), body: { pays_from: "account" } });
     else if (c.kind === "later" && g.account_id) free.push({ method: "PATCH", path: path(g.id), body: { account_id: null } });
     else if (c.kind === "account" && c.accountId !== g.account_id) {
       // Đổi từ tài khoản này sang tài khoản khác: bỏ gắn trước để tài khoản cũ rảnh cho dòng khác.
       if (g.account_id) free.push({ method: "PATCH", path: path(g.id), body: { account_id: null } });
-      (g.target_pct !== null ? attachPct : attach).push({ method: "PATCH", path: path(g.id), body: { account_id: c.accountId } });
+      (g.target_pct !== null ? attachPct : attach).push({ method: "PATCH", path: path(g.id), body: { ...(operating ? { pays_from: "account" } : {}), account_id: c.accountId } });
     }
   }
   const rewardReq: StepRequest[] = reward.next === reward.current ? [] : [{ method: "PUT", path: "/v1/settings/config", body: { surplus_reward_account: reward.next } }];
@@ -294,6 +320,18 @@ export function savingsPctLines(pct: number | null): { line: string; example: st
     line: `Lương về, việc đầu tiên là trích ${pct}% sang Tích luỹ. Kỳ nào không trích được thì bỏ qua và ghi lý do.`,
     example: `Lương ${moneyDigits(EXAMPLE_SALARY)} → trích ${moneyDigits(Math.round((EXAMPLE_SALARY * pct) / 100))}`,
   };
+}
+
+/** Nút về số mặc định của thang ở bước 5 (ADR-142). */
+export const USE_DEFAULT_PCT = { label: `Dùng ${DEFAULT_SAVINGS_PCT}% (mặc định)`, pct: DEFAULT_SAVINGS_PCT } as const;
+
+/**
+ * Bước 5 (UC-1208 AC-14): số 0038 đã điền (`savings_pct`; chưa có → 10) trên thanh thang 1 · 10 · 30 kèm câu thang. Số khác
+ * mặc định 10 là số 0038 tính từ luật nạp cũ của ví Tích sản → câu "Số này lấy từ cách chia ví cũ".
+ */
+export function savingsPctStep(saved: number | undefined): { pct: number; legacy: string | null; scale: string } {
+  const pct = saved ?? DEFAULT_SAVINGS_PCT;
+  return { pct, legacy: pct === DEFAULT_SAVINGS_PCT ? null : "Số này lấy từ cách chia ví cũ", scale: SAVINGS_SCALE_TEXT };
 }
 
 export const CONVERT_DONE_TOAST = "Xong. Từ giờ Hôm nay là tiền thật của ba ngăn.";

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import type { TopUp } from "../../../src/domain/snapshot";
 import { setAmountsHidden } from "./money";
 import {
   amountProblem,
@@ -7,10 +8,18 @@ import {
   noCycleStreamLine,
   payCycleCard,
   savingsDoneLine,
+  savingsDoneWarn,
+  savingsSheetAction,
+  savingsSheetDrag,
+  savingsSheetOpen,
+  savingsSheetType,
+  savingsSheetView,
+  SKIP_REASON_REQUIRED,
   skipProblem,
   taskMemo,
   taskQr,
   taskRequest,
+  topUpQr,
 } from "./pay-cycle";
 import type { PayCycleTask, PayCycleView, QrTarget } from "./types";
 
@@ -64,7 +73,7 @@ function cycleC(over: Partial<PayCycleView> = {}, tasks?: PayCycleTask[]): PayCy
     prevOperating: 1_200_000,
     tasks: list,
     openCount: list.filter((t) => t.status === "open").length,
-    savingsDone: { amount: 0, base: 20_000_000, pct: 0 },
+    savingsDone: { amount: 0, base: 20_000_000, pct: 0, level: null },
     ...over,
   };
 }
@@ -210,8 +219,8 @@ describe("thẻ Việc ngày lương (pwa UC-702)", () => {
 
   it("UC-702 AC-23: thẻ Tích luỹ → 'Kỳ này chưa trích (10% = 2.000.000 ₫)', sau chuyển → 'Kỳ này đã trích ✓ 2.000.000 ₫ (10%)'; chưa có kỳ → không dòng", () => {
     expect(savingsDoneLine(cycleC(), 10)).toBe(`Kỳ này chưa trích (10% = ${vnd("2.000.000")})`);
-    expect(savingsDoneLine(cycleC({ savingsDone: { amount: 2_000_000, base: 20_000_000, pct: 10 } }), 10)).toBe(`Kỳ này đã trích ✓ ${vnd("2.000.000")} (10%)`);
-    expect(savingsDoneLine(cycleC({ savingsDone: { amount: 0, base: 0, pct: null } }), 10)).toBeNull();
+    expect(savingsDoneLine(cycleC({ savingsDone: { amount: 2_000_000, base: 20_000_000, pct: 10, level: "10to30" } }), 10)).toBe(`Kỳ này đã trích ✓ ${vnd("2.000.000")} (10%) · đạt mức 10–30%`);
+    expect(savingsDoneLine(cycleC({ savingsDone: { amount: 0, base: 0, pct: null, level: null } }), 10)).toBeNull();
     expect(savingsDoneLine(null, 10)).toBeNull();
   });
 
@@ -220,14 +229,64 @@ describe("thẻ Việc ngày lương (pwa UC-702)", () => {
       task({ id: 31, kind: "savings", amount: 3_000_000, pct: 15, toPocket: "savings", source: salary, targets: [SAVINGS_ACC] }),
       task({ id: 32, kind: "savings", amount: 1_500_000, pct: 15, toPocket: "savings", source: { ...salary, txId: 2, amount: 10_000_000 }, targets: [SAVINGS_ACC] }),
     ];
-    const at = (amount: number) => cycleC({ savingsDone: { amount, base: 30_000_000, pct: Math.floor((amount * 100) / 30_000_000) } }, tasks);
-    expect(savingsDoneLine(at(3_000_000), 15)).toBe(`Kỳ này đã trích 3.000.000 / ${vnd("4.500.000")} (15%)`);
-    expect(savingsDoneLine(at(4_500_000), 15)).toBe(`Kỳ này đã trích ✓ ${vnd("4.500.000")} (15%)`);
+    const at = (amount: number) => cycleC({ savingsDone: { amount, base: 30_000_000, pct: Math.floor((amount * 100) / 30_000_000), level: amount === 0 ? null : "10to30" } }, tasks);
+    expect(savingsDoneLine(at(3_000_000), 15)).toBe(`Kỳ này đã trích 3.000.000 / ${vnd("4.500.000")} (15%) · đạt mức 10–30%`);
+    expect(savingsDoneLine(at(4_500_000), 15)).toBe(`Kỳ này đã trích ✓ ${vnd("4.500.000")} (15%) · đạt mức 10–30%`);
     expect(savingsDoneLine(at(0), 15)).toBe(`Kỳ này chưa trích (15% = ${vnd("4.500.000")})`);
-    const skipped = cycleC({ savingsDone: { amount: 3_000_000, base: 30_000_000, pct: 10 } }, [tasks[0]!, { ...tasks[1]!, status: "skipped" }]);
-    expect(savingsDoneLine(skipped, 15)).toBe(`Kỳ này đã trích ✓ ${vnd("3.000.000")} (15%)`);
+    const skipped = cycleC({ savingsDone: { amount: 3_000_000, base: 30_000_000, pct: 10, level: "10to30" } }, [tasks[0]!, { ...tasks[1]!, status: "skipped" }]);
+    expect(savingsDoneLine(skipped, 15)).toBe(`Kỳ này đã trích ✓ ${vnd("3.000.000")} (15%) · đạt mức 10–30%`);
     setAmountsHidden(true);
-    expect(savingsDoneLine(at(3_000_000), 15)).toBe(`Kỳ này đã trích •••• / ${vnd("••••")} (15%)`);
+    expect(savingsDoneLine(at(3_000_000), 15)).toBe(`Kỳ này đã trích •••• / ${vnd("••••")} (15%) · đạt mức 10–30%`);
+  });
+
+  it("UC-702 AC-36: hai khoản lương 20.000.000 + 10.000.000 → đã trích 200.000 'đạt mức dưới 1%' (vàng); 1.500.000 '1–10%'; 3.000.000 '10–30%'; 9.000.000 'từ 30%'; bỏ qua cả hai ① → '0% — Tháng này trả viện phí'; vừa có lương (① còn mở) → 'Kỳ này chưa trích (10% = 3.000.000 ₫)'", () => {
+    const tasks = [
+      task({ id: 51, kind: "savings", amount: 2_000_000, pct: 10, toPocket: "savings", source: salary, targets: [SAVINGS_ACC] }),
+      task({ id: 52, kind: "savings", amount: 1_000_000, pct: 10, toPocket: "savings", source: { ...salary, txId: 2, amount: 10_000_000 }, targets: [SAVINGS_ACC] }),
+    ];
+    const at = (amount: number, level: PayCycleView["savingsDone"]["level"], list = tasks) => cycleC({ savingsDone: { amount, base: 30_000_000, pct: Math.floor((amount * 100) / 30_000_000), level } }, list);
+    expect(savingsDoneLine(at(200_000, "below1"), 10)).toBe(`Kỳ này đã trích 200.000 / ${vnd("3.000.000")} (10%) · đạt mức dưới 1%`);
+    expect(savingsDoneWarn(at(200_000, "below1"))).toBe(true);
+    expect(savingsDoneLine(at(1_500_000, "1to10"), 10)).toBe(`Kỳ này đã trích 1.500.000 / ${vnd("3.000.000")} (10%) · đạt mức 1–10%`);
+    expect(savingsDoneWarn(at(1_500_000, "1to10"))).toBe(false);
+    expect(savingsDoneLine(at(3_000_000, "10to30"), 10)).toBe(`Kỳ này đã trích ✓ ${vnd("3.000.000")} (10%) · đạt mức 10–30%`);
+    expect(savingsDoneLine(at(9_000_000, "from30"), 10)).toBe(`Kỳ này đã trích ✓ ${vnd("9.000.000")} (10%) · đạt mức từ 30%`);
+    const skippedBoth = tasks.map((t) => ({ ...t, status: "skipped" as const, reason: "Tháng này trả viện phí" }));
+    expect(savingsDoneLine(at(0, "zero", skippedBoth), 10)).toBe(`Kỳ này đã trích ${vnd("0")} · 0% — Tháng này trả viện phí`);
+    // Sửa số ① về 0 kèm lý do (việc vẫn mở, số 0) cũng là 0% có lý do.
+    const zeroed = tasks.map((t) => ({ ...t, amount: 0, missing: 0, reason: "Tháng này trả viện phí" }));
+    expect(savingsDoneLine(at(0, "zero", zeroed), 10)).toBe(`Kỳ này đã trích ${vnd("0")} · 0% — Tháng này trả viện phí`);
+    expect(savingsDoneLine(at(0, null), 10)).toBe(`Kỳ này chưa trích (10% = ${vnd("3.000.000")})`);
+    // Bản lưu cũ thiếu level: chữ như v2.1.
+    const old = cycleC({ savingsDone: { amount: 3_000_000, base: 30_000_000, pct: 10 } as PayCycleView["savingsDone"] }, tasks);
+    expect(savingsDoneLine(old, 10)).toBe(`Kỳ này đã trích ✓ ${vnd("3.000.000")} (10%)`);
+    expect(savingsDoneWarn(null)).toBe(false);
+  });
+
+  it("UC-702 AC-35: sheet 'Trích Tích luỹ' — ① lương 30.000.000, 10% → thanh 10, số 3.000.000; kéo tới 30 → 9.000.000; gõ 150.000 → thanh 1 và 'Dưới mức tối thiểu 1% (300.000 ₫)'; gõ 0 → ô Lý do, Lưu tắt tới khi có lý do; Lưu gửi { amount: 0, reason }", () => {
+    const t = task({ id: 61, kind: "savings", amount: 3_000_000, pct: 10, toPocket: "savings", source: { ...salary, amount: 30_000_000 }, targets: [SAVINGS_ACC] });
+    const s0 = savingsSheetOpen(t);
+    expect(s0).toMatchObject({ income: 30_000_000, pct: 10, amount: 3_000_000, reason: "" });
+    expect(savingsSheetView(s0)).toEqual({ warn: null, needsReason: false, problem: null, canSave: true });
+    const s30 = savingsSheetDrag(s0, 30);
+    expect(s30).toMatchObject({ pct: 30, amount: 9_000_000 });
+    const low = savingsSheetType(s30, 150_000);
+    expect(low).toMatchObject({ pct: 1, amount: 150_000 });
+    expect(savingsSheetView(low)).toMatchObject({ warn: `Dưới mức tối thiểu 1% (${vnd("300.000")})`, needsReason: false, canSave: true });
+    const zero = savingsSheetType(low, 0);
+    expect(zero.amount).toBe(0);
+    expect(savingsSheetView(zero)).toEqual({ warn: null, needsReason: true, problem: SKIP_REASON_REQUIRED, canSave: false });
+    const reasoned = { ...zero, reason: "Tháng này trả viện phí" };
+    expect(savingsSheetView(reasoned)).toMatchObject({ needsReason: true, problem: null, canSave: true });
+    expect(taskRequest(t.id, savingsSheetAction(reasoned))).toEqual({ method: "PATCH", path: "/v1/pay-cycle-tasks/61", body: { amount: 0, reason: "Tháng này trả viện phí" } });
+    // Lý do chỉ gửi khi số 0; số không hợp lệ → không lưu.
+    expect(taskRequest(t.id, savingsSheetAction(savingsSheetType(reasoned, 4_000_000)))).toEqual({ method: "PATCH", path: "/v1/pay-cycle-tasks/61", body: { amount: 4_000_000 } });
+    expect(savingsSheetView(savingsSheetType(s0, null)).canSave).toBe(false);
+    // Khoản lương bị giấu (riêng tư của người khác): không biết lương → thanh khoá, chỉ sửa số.
+    const hidden = savingsSheetOpen({ ...t, source: { hidden: true } });
+    expect(hidden).toMatchObject({ income: null, amount: 3_000_000, pct: 10 });
+    expect(savingsSheetDrag(hidden, 30)).toBe(hidden);
+    expect(savingsSheetView(savingsSheetType(hidden, 150_000)).warn).toBeNull();
   });
 
   it("UC-702 AC-30: hai việc ② cùng MB tiết kiệm → liền nhau dưới dòng 'Chuyển 3.500.000 ₫ vào MB tiết kiệm · 2 mục tiêu' có QR gộp; việc ② tài khoản khác chen giữa bị dời ra sau nhóm; một việc ② một tài khoản không có dòng gộp; che số", () => {
@@ -271,6 +330,16 @@ describe("mã QR của việc ngày lương (pocket UC-1206 bước 10)", () => 
     expect("payload" in qr && qr.payload).toContain("Du phong ky 10-11");
     expect(goalGroupQr(sharedCycle({ 41: 1_500_000, 43: 1_000_000 }), "tk-tiet-kiem")).toMatchObject({ amount: 1_000_000 });
     expect(taskQr(c, c.tasks[1]!)).toMatchObject({ target: SAVING_ACC, amount: 1_500_000, memo: "Nha o ky 10-11" });
+  });
+
+  it("UC-702 AC-33: Mở QR ở dòng BIDV của nhắc chuyển thêm → QR 2.000.000 tới tài khoản chi tiêu, nội dung 'Bu chi tieu 20-11'; không đích → câu 'Chuyển vào tiền chi tiêu'", () => {
+    const target: QrTarget = { accountId: "tk-chi-tieu-chong", name: "MB chi tiêu chồng", bank: "MBBank", accountNo: "0123456789", subAccount: null };
+    const topUp: TopUp = { amount: 5_500_000, sources: [{ accountId: "tk-bidv", name: "BIDV", amount: 2_000_000 }, { accountId: "phao", name: "Phao", amount: 3_500_000 }], toAccountId: target.accountId, target };
+    const qr = topUpQr(topUp, "tk-bidv", "2026-11-20");
+    expect(qr).toMatchObject({ target, amount: 2_000_000, memo: "Bu chi tieu 20-11" });
+    expect("payload" in qr && qr.payload).toContain("Bu chi tieu 20-11");
+    expect(topUpQr(topUp, "phao", "2026-11-20")).toMatchObject({ amount: 3_500_000 });
+    expect(topUpQr({ ...topUp, toAccountId: null, target: null }, "tk-bidv", "2026-11-20")).toEqual({ hint: "Chuyển vào tiền chi tiêu" });
   });
 });
 

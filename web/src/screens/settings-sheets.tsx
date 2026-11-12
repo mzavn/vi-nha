@@ -7,10 +7,24 @@ import { BANKS, bankByCode } from "../../../src/domain/banks";
 import { DEFAULT_PAYDAY_DAY } from "../../../src/domain/snapshot";
 import { api, errorText } from "../lib/api";
 import { goalAccountRequest, goalCreateRequest, type GoalAccountResult } from "../lib/convert";
-import { groupAccountsByPocket, groupPayload, groupToForm, OUTSIDE_LABEL, POCKET_LABEL, POCKET_ORDER, type PocketChoice, pocketsPayload } from "../lib/pockets";
+import { groupPayload, groupToForm, OUTSIDE_LABEL, POCKET_LABEL, POCKET_ORDER, type PocketChoice, pocketsPayload } from "../lib/pockets";
 import {
   ACCOUNT_KIND_LABEL,
   accountGoals,
+  accountParentField,
+  accountParentHint,
+  accountParentOptions,
+  canAddDeposit,
+  TAX_OWN_ACCOUNT,
+  GOAL_PLACE_LABEL,
+  goalPlace,
+  OPERATING_HINT,
+  operatingChoice,
+  parentPocketText,
+  PLACE_LABEL,
+  pocketSheetGroups,
+  POCKETS_SHEET_HEAD,
+  sliderPct,
   type AccountForm,
   accountPayload,
   accountSubmitError,
@@ -92,6 +106,8 @@ import { AmountInput } from "../ui/fields";
 import { Icon } from "../ui/icons";
 import { NeedsNetwork, Seg, Sheet } from "../ui/parts";
 import { useResource } from "../state/resource";
+import { SavingsSlider } from "../ui/savings-slider";
+import { SAVINGS_SCALE_TEXT } from "../lib/savings-scale";
 
 type Saved = (toastText: string) => Promise<void>;
 
@@ -217,9 +233,10 @@ const FEED_HINT: Record<FeedMode, string> = {
 };
 
 /**
- * Thêm / sửa tài khoản. `preset`: điền sẵn khi thêm (vd "Tạo tài khoản mới" cho mục tiêu: tên mục tiêu, ngăn Dự phòng);
- * `create`: thêm theo đường khác thay POST /v1/settings/accounts — "Tạo tài khoản mới" cho mục tiêu gửi một yêu cầu tạo và
- * gắn (pocket UC-1208 bước 2.2, UC-1209 bước 8), hoặc giữ thân để sheet mục tiêu gửi sau; `toast` dựng câu báo theo tên.
+ * Thêm / sửa tài khoản. `preset`: điền sẵn khi thêm (vd "Tạo tài khoản mới" cho mục tiêu: tên mục tiêu, ngăn Dự phòng; "+ Thêm
+ * khoản gửi kỳ hạn": mẹ); `create`: thêm theo đường khác thay POST /v1/settings/accounts — "Tạo tài khoản mới" cho mục tiêu gửi
+ * một yêu cầu tạo và gắn (pocket UC-1208 bước 2.2, UC-1209 bước 8), hoặc giữ thân để sheet mục tiêu gửi sau; `toast` dựng câu
+ * báo theo tên. `onAddDeposit`: nút "+ Thêm khoản gửi kỳ hạn" khi tài khoản đang sửa làm mẹ được (ADR-140, UC-709 AC-51).
  * Lỗi thì sheet giữ nguyên các ô, Lưu lại gửi lại đúng thân đó (cùng tên → cùng mã, không sinh tài khoản thứ hai).
  */
 export function AccountSheet({
@@ -227,6 +244,7 @@ export function AccountSheet({
   item,
   preset,
   create,
+  onAddDeposit,
   onClose,
   onSaved,
 }: {
@@ -234,6 +252,7 @@ export function AccountSheet({
   item: SettingsAccount | null;
   preset?: Partial<AccountForm>;
   create?: { send: (body: Record<string, unknown>) => Promise<void>; toast: (name: string) => string };
+  onAddDeposit?: (parent: SettingsAccount) => void;
   onClose: () => void;
   onSaved: Saved;
 }) {
@@ -250,7 +269,11 @@ export function AccountSheet({
   // Tài khoản của mục tiêu đang dùng: ngăn khoá ở Dự phòng (UC-1209 bước 3, server 409 `account_has_goal`).
   const goalNames = item ? accountGoals(item.id, d.goals).map((g) => g.name).join(", ") : "";
   const goal = goalNames ? { name: goalNames } : undefined;
-
+  // Khoản gửi kỳ hạn (ADR-140): ô "Thuộc tài khoản" chỉ với tài khoản ngân hàng; tài khoản đang là mẹ không có ô.
+  const reward = d.config.surplus_reward_account;
+  const parentField = f.kind === "bank" ? accountParentField(item, d.accounts, d.goals, reward) : { show: false, disabled: null };
+  const parentOptions = accountParentOptions(d.accounts, item, reward);
+  const parent = f.parent_account_id ? (d.accounts.find((a) => a.id === f.parent_account_id) ?? { id: f.parent_account_id, name: f.parent_account_id }) : null;
   function submit() {
     const name = f.name.trim();
     const tail = !f.sepay_enabled
@@ -295,7 +318,7 @@ export function AccountSheet({
           onChange={(kind) =>
             set({
               kind,
-              ...(kind !== "bank" ? { sepay_enabled: false, sepay_out: false } : {}),
+              ...(kind !== "bank" ? { sepay_enabled: false, sepay_out: false, parent_account_id: "" } : {}),
               // Ngân hàng/thẻ chọn trong danh mục, ví điện tử gõ tên: đổi qua lại thì bỏ giá trị cũ.
               ...((kind === "ewallet") !== (f.kind === "ewallet") ? { bank: "" } : {}),
             })
@@ -303,19 +326,45 @@ export function AccountSheet({
           options={(Object.keys(ACCOUNT_KIND_LABEL) as SettingsAccount["kind"][]).map((k) => ({ value: k, label: ACCOUNT_KIND_LABEL[k] }))}
         />
       </Field>
+      {parentField.show && (
+        <>
+          <Field {...e("parent_account_id")} label="Thuộc tài khoản">
+            <select
+              id="a-parent_account_id"
+              class="ctl"
+              value={f.parent_account_id}
+              disabled={parentField.disabled !== null}
+              onChange={(ev) => set({ parent_account_id: ev.currentTarget.value, ...(ev.currentTarget.value ? { sepay_enabled: false, sepay_out: false } : {}) })}
+            >
+              <option value="">Không</option>
+              {parent && !parentOptions.some((a) => a.id === parent.id) && <option value={parent.id}>{parent.name} (không còn chọn được)</option>}
+              {parentOptions.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Hint>{parentField.disabled ?? accountParentHint(parent?.name ?? "tài khoản mẹ")}</Hint>
+        </>
+      )}
       {goal && <Hint>Tài khoản của mục tiêu {goal.name}</Hint>}
       <Field id="a-pocket" label="Ngăn">
-        {goal ? (
+        {parent ? (
+          <span id="a-pocket">{parentPocketText(parent.name)}</span>
+        ) : goal ? (
           <span id="a-pocket">{POCKET_LABEL.reserve}</span>
         ) : (
           <PocketSelect id="a-pocket" value={f.pocket} onChange={(p) => set({ pocket: p, pocket_touched: true })} />
         )}
       </Field>
-      <Hint>
-        {goal
-          ? `${GOAL_POCKET_LOCK}.`
-          : `Tiền về tài khoản nào là tiền của ngăn đó. Thẻ tín dụng để ở Vận hành.${item && item.pocket_confirmed === false ? " Ngăn này app mới đề xuất — lưu là xác nhận." : ""}`}
-      </Hint>
+      {!parent && (
+        <Hint>
+          {goal
+            ? `${GOAL_POCKET_LOCK}.`
+            : `Tiền về tài khoản nào là tiền của ngăn đó. Thẻ tín dụng để ở Vận hành.${item && item.pocket_confirmed === false ? " Ngăn này app mới đề xuất — lưu là xác nhận." : ""}`}
+        </Hint>
+      )}
       {f.kind !== "cash" && (
         <>
           <Field {...e("bank")} label={f.kind === "ewallet" ? "Nhà cung cấp" : "Ngân hàng"}>
@@ -344,7 +393,7 @@ export function AccountSheet({
           </Field>
         </>
       )}
-      {f.kind === "bank" && (
+      {f.kind === "bank" && !parent && (
         <>
           <Check
             id="a-sepay"
@@ -422,7 +471,9 @@ export function AccountSheet({
         </>
       )}
       <Field id="a-owner" label="Chủ tài khoản">
-        {ownerLocked ? (
+        {parent ? (
+          <span id="a-owner">{parentPocketText(parent.name)}</span>
+        ) : ownerLocked ? (
           <span id="a-owner">{d.members.find((m) => m.id === f.owner_member_id)?.name ?? f.owner_member_id}</span>
         ) : (
           <select id="a-owner" class="ctl" value={f.owner_member_id} onChange={(ev) => set({ owner_member_id: ev.currentTarget.value })}>
@@ -435,8 +486,9 @@ export function AccountSheet({
           </select>
         )}
       </Field>
-      {ownerLocked && <Hint>Tài khoản riêng tư: chỉ chủ tài khoản đổi được chủ.</Hint>}
-      {showPrivate && (
+      {parent && <Hint>Khoản gửi kỳ hạn theo {parent.name}: cùng ngăn, cùng chủ, cùng riêng tư.</Hint>}
+      {!parent && ownerLocked && <Hint>Tài khoản riêng tư: chỉ chủ tài khoản đổi được chủ.</Hint>}
+      {!parent && showPrivate && (
         <>
           <Check id="a-private" label="Riêng tư — người khác chỉ thấy tổng" checked={f.private} onChange={(v) => set({ private: v })} />
           <Hint>Người khác vẫn thấy số dư, không thấy từng khoản chi.</Hint>
@@ -456,6 +508,14 @@ export function AccountSheet({
           Ngừng dùng thì tài khoản không còn hiện ở chỗ chọn; lịch sử vẫn giữ nguyên.
           {item.deactivated_at ? ` Đã tắt từ ${dateText(item.deactivated_at)} — bảng cân đối vẫn tính nó ở các tháng trước ngày đó.` : " Bảng cân đối vẫn tính nó ở các tháng trước ngày tắt."}
         </Hint>
+      )}
+      {item && onAddDeposit && item.active && canAddDeposit(item, d.accounts, reward) && (
+        <div class="pad">
+          <button type="button" class="btn" onClick={() => onAddDeposit(item)}>
+            <Icon name="plus" size={16} />
+            Thêm khoản gửi kỳ hạn
+          </button>
+        </div>
       )}
       <Footer busy={busy} error={error} label={isNew && create && error ? "Lưu lại" : isNew ? "Thêm tài khoản" : "Lưu tài khoản"} onSubmit={submit} />
     </Sheet>
@@ -1118,7 +1178,8 @@ export function ConfigSheet({ d, onClose, onSaved }: { d: SettingsData; onClose:
               {...invalid(errors, "savings_pct", "c-savings-pct")}
             />
           </Field>
-          <Hint>Số gợi ý trích sang Tích luỹ khi lương về.</Hint>
+          <SavingsSlider pct={sliderPct(savingsPct)} onPct={(p) => setSavingsPct(String(p))} />
+          <Hint>{SAVINGS_SCALE_TEXT}</Hint>
         </>
       )}
       {surplusPct !== undefined && (
@@ -1404,25 +1465,28 @@ function PocketSelect(props: { id: string; value: Pocket | null; label?: string;
 }
 
 /** Câu của sheet xếp ngăn — cũng là bước 1 của màn chuyển đổi (pocket UC-1208). */
-export const POCKETS_SHEET_NOTE = "Tiền về tài khoản nào là tiền của ngăn đó. Thẻ tín dụng để ở Vận hành. Mỗi mục tiêu Dự phòng gắn một tài khoản ở ngăn Dự phòng; nhiều mục tiêu dùng chung được một tài khoản.";
+export const POCKETS_SHEET_NOTE = `${POCKETS_SHEET_HEAD} Thẻ tín dụng để ở Vận hành. Khoản gửi kỳ hạn theo ngăn của tài khoản mẹ. Mỗi khoản phải trả để dành ở một tài khoản Dự phòng; nhiều khoản dùng chung được một tài khoản.`;
 
 /**
  * Xếp tài khoản vào ngăn (UC-709 AC-35): đổi ngăn từng dòng, Xác nhận gửi một lô PUT /v1/settings/pockets. Tài khoản của mục
- * tiêu đang dùng khoá ở Dự phòng. Màn chuyển đổi dùng lại sheet này ở bước 1 (`onSaved` gửi tiếp "bước này xong").
+ * tiêu đang dùng khoá ở Dự phòng; khoản gửi kỳ hạn không có ô, nằm dưới mẹ "theo {mẹ}" (server bỏ qua dòng của con).
+ * Màn chuyển đổi dùng lại sheet này ở bước 1 (`onSaved` gửi tiếp "bước này xong").
  */
 export function PocketsSheet({ d, onClose, onSaved }: { d: SettingsData; onClose: () => void; onSaved: Saved }) {
   const [choice, setChoice] = useState<PocketChoice>(() => Object.fromEntries(d.accounts.filter((a) => a.active).map((a) => [a.id, a.pocket ?? null])));
   const { busy, error, run } = useSubmit(onSaved, onClose);
-  const groups = groupAccountsByPocket(d.accounts, choice);
+  const groups = pocketSheetGroups(d.accounts, choice);
   const count = d.accounts.filter((a) => a.active).length;
+  // Dòng của con gửi đúng ngăn mẹ đang chọn: con luôn theo mẹ.
+  const sent = { ...choice, ...Object.fromEntries(groups.flatMap((g) => g.rows.flatMap((r) => r.children.map((c) => [c.id, choice[r.account.id] ?? null])))) };
   return (
     <Sheet open title="Xếp tài khoản vào ngăn" onClose={onClose}>
       <Hint>{POCKETS_SHEET_NOTE}</Hint>
       {groups.map((g) => (
         <div key={g.key}>
           <div class="set-sub">{g.label}</div>
-          {g.accounts.length === 0 && <Hint>Chưa có tài khoản nào.</Hint>}
-          {g.accounts.map((a) => {
+          {g.rows.length === 0 && <Hint>Chưa có tài khoản nào.</Hint>}
+          {g.rows.map(({ account: a, children }) => {
             const names = accountGoals(a.id, d.goals).map((g) => g.name).join(", ");
             const goal = names ? { name: names } : undefined;
             return (
@@ -1439,6 +1503,12 @@ export function PocketsSheet({ d, onClose, onSaved }: { d: SettingsData; onClose
                     Tài khoản của mục tiêu {goal.name}. {GOAL_POCKET_LOCK}.
                   </Hint>
                 )}
+                {children.map((c) => (
+                  <div key={c.id} class="field child-row">
+                    <span class="k">↳ {c.name}</span>
+                    <span class="sub-line">{parentPocketText(a.name)}</span>
+                  </div>
+                ))}
               </div>
             );
           })}
@@ -1448,7 +1518,7 @@ export function PocketsSheet({ d, onClose, onSaved }: { d: SettingsData; onClose
         busy={busy}
         error={error}
         label="Xác nhận"
-        onSubmit={() => void run({ ok: true, value: pocketsPayload(d.accounts, choice) }, (body) => api.put("/v1/settings/pockets", body), `Đã xác nhận ngăn của ${count} tài khoản.`)}
+        onSubmit={() => void run({ ok: true, value: pocketsPayload(d.accounts, sent) }, (body) => api.put("/v1/settings/pockets", body), `Đã xác nhận ngăn của ${count} tài khoản.`)}
       />
     </Sheet>
   );
@@ -1484,7 +1554,11 @@ export function GoalSheet({ d, item, prefill, onClose, onSaved }: { d: SettingsD
   const e = (k: string) => ({ id: `g-${k}`, error: errors[k] });
   const accounts = created && !d.accounts.some((a) => a.id === created.id) ? [...d.accounts, created] : d.accounts;
   const options = goalAccountOptions(accounts, d.goals, d.config.surplus_reward_account, goal?.id ?? null, f.mode === "pct");
-  const chosenShared = options.find((a) => a.id === f.account_id)?.shared ?? null;
+  const chosen = options.find((a) => a.id === f.account_id);
+  const chosenNote = [chosen?.deposits, chosen?.shared].filter(Boolean).join(" · ") || null;
+  // "Tiền để ở đâu" (ADR-141): trả thẳng từ tiền chi tiêu chỉ cho khoản mỗi tháng; Thuế chỉ có tài khoản.
+  const opChoice = operatingChoice(f);
+  const place = goalPlace(f);
   const note = f.account_id ? goalAccountNote(d, f.account_id, { id: goal?.id ?? null, due_date: f.due_date }) : null;
   // Tài khoản đã gắn mà nay không chọn được vẫn hiện để biết.
   const stale = f.account_id && !options.some((a) => a.id === f.account_id) ? (accounts.find((a) => a.id === f.account_id) ?? { id: f.account_id, name: f.account_id }) : null;
@@ -1502,12 +1576,14 @@ export function GoalSheet({ d, item, prefill, onClose, onSaved }: { d: SettingsD
   function submit() {
     const name = f.name.trim();
     const pendingName = String(pendingAccount?.name ?? "");
-    if (pendingAccount && createdGoal) {
+    // Trả thẳng từ tiền chi tiêu: không có tài khoản, bỏ qua tài khoản mới đang chờ.
+    const waiting = place === "account" ? pendingAccount : null;
+    if (waiting && createdGoal) {
       // Lưu lại sau khi bước hai lỗi: chỉ gửi lại bước hai, đúng thân cũ.
-      return void run({ ok: true, value: pendingAccount }, (body) => createGoalAccount(createdGoal.id, body), `Đã tạo ${pendingName} và gắn vào ${createdGoal.name}`);
+      return void run({ ok: true, value: waiting }, (body) => createGoalAccount(createdGoal.id, body), `Đã tạo ${pendingName} và gắn vào ${createdGoal.name}`);
     }
-    if (pendingAccount && !goal) {
-      const account = pendingAccount;
+    if (waiting && !goal) {
+      const account = waiting;
       return void run(
         goalPayload(f, null),
         async (body) => {
@@ -1531,38 +1607,61 @@ export function GoalSheet({ d, item, prefill, onClose, onSaved }: { d: SettingsD
       <Field {...e("name")} label="Tên" first>
         <input id="g-name" class="ctl" value={f.name} maxLength={60} placeholder="Học phí" onInput={(ev) => set({ name: ev.currentTarget.value })} {...invalid(errors, "name", "g-name")} />
       </Field>
-      <Field {...e("account_id")} label="Tài khoản">
-        <select
-          id="g-account_id"
-          class="ctl"
-          value={pendingAccount ? PENDING_ACCOUNT : f.account_id}
-          onChange={(ev) => {
-            const v = ev.currentTarget.value;
-            if (v === NEW_ACCOUNT) {
-              // Ô chọn giữ giá trị cũ cho tới khi tài khoản mới lưu xong.
-              ev.currentTarget.value = pendingAccount ? PENDING_ACCOUNT : f.account_id;
-              setCreating(true);
-            } else if (v !== PENDING_ACCOUNT) {
-              setPendingAccount(null);
-              set({ account_id: v });
-            }
-          }}
-        >
-          <option value="">Chưa có</option>
-          {stale && <option value={stale.id}>{stale.name} (không còn chọn được)</option>}
-          {options.map((a) => (
-            <option key={a.id} value={a.id} disabled={a.blocked !== null && a.id !== f.account_id}>
-              {`${a.name}${a.shared ? ` — ${a.shared}` : ""}${a.blocked ? ` (${a.blocked})` : ""}`}
-            </option>
-          ))}
-          {pendingAccount && <option value={PENDING_ACCOUNT}>Tài khoản mới: {String(pendingAccount.name ?? "")}</option>}
-          <option value={NEW_ACCOUNT}>Tạo tài khoản mới</option>
-        </select>
-        {/* Ô chọn cắt chữ ở 390px: "dùng chung với …" của tài khoản đang chọn hiện đủ ở dòng dưới (như UC-1208 AC-12). */}
-        {chosenShared && <span class="sub-line">{chosenShared}</span>}
+      <Field id="g-place" label={GOAL_PLACE_LABEL} wrap>
+        {opChoice.show ? (
+          <Seg
+            label={GOAL_PLACE_LABEL}
+            value={place}
+            onChange={(pays_from) => set({ pays_from })}
+            options={[
+              { value: "account" as const, label: PLACE_LABEL.account },
+              { value: "operating" as const, label: PLACE_LABEL.operating, disabled: opChoice.disabled !== null },
+            ]}
+          />
+        ) : (
+          <span id="g-place">{PLACE_LABEL.account}</span>
+        )}
       </Field>
-      {note && <Hint>{note}</Hint>}
-      <Hint>Mục tiêu gắn một tài khoản thật ở ngăn Dự phòng; nhiều mục tiêu dùng chung được một tài khoản — số dư chia theo thứ tự ưu tiên (đổi ở danh sách mục tiêu). Chưa có tài khoản thì mục tiêu chưa có việc nạp ở ngày lương.</Hint>
+      {!opChoice.show && <Hint>{TAX_OWN_ACCOUNT}</Hint>}
+      {opChoice.show && opChoice.disabled && <Hint>{PLACE_LABEL.operating}: {opChoice.disabled}</Hint>}
+      {place === "operating" ? (
+        <Hint>{OPERATING_HINT}</Hint>
+      ) : (
+        <>
+          <Field {...e("account_id")} label="Tài khoản">
+            <select
+              id="g-account_id"
+              class="ctl"
+              value={pendingAccount ? PENDING_ACCOUNT : f.account_id}
+              onChange={(ev) => {
+                const v = ev.currentTarget.value;
+                if (v === NEW_ACCOUNT) {
+                  // Ô chọn giữ giá trị cũ cho tới khi tài khoản mới lưu xong.
+                  ev.currentTarget.value = pendingAccount ? PENDING_ACCOUNT : f.account_id;
+                  setCreating(true);
+                } else if (v !== PENDING_ACCOUNT) {
+                  setPendingAccount(null);
+                  set({ account_id: v });
+                }
+              }}
+            >
+              <option value="">Chưa có</option>
+              {stale && <option value={stale.id}>{stale.name} (không còn chọn được)</option>}
+              {options.map((a) => (
+                <option key={a.id} value={a.id} disabled={a.blocked !== null && a.id !== f.account_id}>
+                  {`${a.name}${a.deposits ? ` (${a.deposits})` : ""}${a.shared ? ` — ${a.shared}` : ""}${a.blocked ? ` (${a.blocked})` : ""}`}
+                </option>
+              ))}
+              {pendingAccount && <option value={PENDING_ACCOUNT}>Tài khoản mới: {String(pendingAccount.name ?? "")}</option>}
+              <option value={NEW_ACCOUNT}>Tạo tài khoản mới</option>
+            </select>
+            {/* Ô chọn cắt chữ ở 390px: "gồm khoản gửi kỳ hạn" / "dùng chung với …" của tài khoản đang chọn hiện đủ ở dòng dưới. */}
+            {chosenNote && <span class="sub-line">{chosenNote}</span>}
+          </Field>
+          {note && <Hint>{note}</Hint>}
+          <Hint>Để dành ở một tài khoản Dự phòng; nhiều khoản dùng chung được một tài khoản — số dư (gồm cả khoản gửi kỳ hạn của tài khoản đó) chia theo thứ tự ưu tiên (đổi ở danh sách mục tiêu). Chưa có tài khoản thì chưa có việc nạp ở ngày lương.</Hint>
+        </>
+      )}
       <Field id="g-mode" label="Cách đặt số" wrap>
         <Seg label="Cách đặt số" value={f.mode} onChange={(mode) => set({ mode })} options={(["repeat", "once", "pct"] as const).map((m) => ({ value: m, label: GOAL_MODE_LABEL[m] }))} />
       </Field>

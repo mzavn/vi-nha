@@ -6,6 +6,32 @@ bản cài cũ vẫn lên được bình thường (kể cả nâng database t�
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
 trước (xem README › Cập nhật bản mới).
 
+## v2.3.0 — 12/11/2026
+
+Có nâng cấp database: `0044` (tài khoản con cho khoản gửi kỳ hạn, mục tiêu trả thẳng từ tiền chi tiêu). Database tự nâng khi
+cập nhật; chỉ thêm cột, không đổi số dư, mục tiêu hay giao dịch nào.
+
+- **Khoản gửi kỳ hạn là tài khoản con.** Trong sheet tài khoản chọn **Thuộc tài khoản** (vd khoản gửi 6 tháng mở từ tài
+  khoản tiết kiệm): khoản gửi theo ngăn, riêng tư, chủ của tài khoản mẹ; mục tiêu gắn tài khoản mẹ thấy cả tiền trong khoản
+  gửi. Danh sách tài khoản lồng khoản gửi dưới tài khoản mẹ. Tài khoản tiền gửi riêng đang có đổi thành tài khoản con được.
+- **Tiền lãi không tính vào mục tiêu.** Khoản thu ghi **Đây là tiền lãi** (bật sẵn khi tiền về khoản gửi) thành tiền lãi của
+  nhóm tài khoản; thẻ Dự phòng hiện "Tiền lãi … (không tính vào mục tiêu)". Muốn tiêu tiền lãi thì chọn **Từ tiền lãi** khi
+  chi / chuyển ra. Lãi máy đã tự ghi từ trước vào tài khoản có mục tiêu thành tiền lãi ngay sau khi cập nhật, nên tiền của
+  mục tiêu có thể giảm một lần.
+- **Mục tiêu trả thẳng từ tiền chi tiêu.** Khoản trả mỗi tháng (điện nước, thuốc, về quê…) chọn **Trả thẳng từ tiền chi
+  tiêu**: không phải chuyển tiền, app chừa phần còn phải trả khỏi "Chi khoảng …/ngày" ("Đã chừa … cho … khoản phải trả kỳ
+  này"). Khi chi chọn **Cho khoản phải trả**. Tháng nào không dùng hết thì phần đó vào dư kỳ trước như mọi tháng.
+- **Nhắc chuyển thêm vào tiền chi tiêu.** Tiền chi tiêu không đủ cho khoản phải trả và ăn tiêu tới ngày lương thì thẻ Vận hành
+  và tin sáng nhắc "cần chuyển thêm …", gợi ý lấy từ Ví Thưởng trước rồi tới tiền an tâm, kèm mã QR.
+- **Thang Tích luỹ 1 · 10 · 30%.** Chạm số tiền việc trích Tích luỹ để kéo thanh có vạch tối thiểu · thường · hướng tới; thẻ
+  Tích luỹ và Nhìn lại cho biết kỳ này đạt mức nào. Không trích kỳ này vẫn được, chỉ cần ghi lý do.
+- Phần an tâm không còn tính khoản gửi của tài khoản có mục tiêu hay của Ví Thưởng.
+- Màn chuyển đổi bước 2 đổi tên "Chọn nơi để tiền cho từng khoản", ô chọn không còn cắt chữ.
+- API: `parent_account_id`, `pays_from`, `is_interest`, `from_interest`; snapshot có `topUp`, `operating.goals`,
+  `nearSpend.goalRemaining`; `GET /v1/goals` có cả mục tiêu trả từ tiền chi tiêu.
+- Màn bản tính người thuê: trên máy tính chân trang (tổng + **Chốt & gửi**) nằm sát đáy, không còn che ô **Tài khoản nhận**; trên điện thoại nút **＋** không còn che dòng tổng và nút **Chốt & gửi**.
+- Cài đặt trên điện thoại: hàng nhảy mục tô đúng phần đang xem (vd **Cho thuê**).
+
 ## v2.2.0 — 11/11/2026
 
 Có nâng cấp database: `0043` (bản tính tháng cho người thuê).

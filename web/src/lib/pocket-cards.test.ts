@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { pocketsView } from "../../../src/domain/pockets";
-import { pocketsB, pocketsShared } from "./household-b.fixture";
+import { pocketsB, pocketsShared, pocketsV23 } from "./household-b.fixture";
 import { setAmountsHidden } from "./money";
 import { NO_SAVINGS_ACCOUNT, reserveCard, savingsCard, SHARED_GROUP_NOTE, type ReserveCardView } from "./pocket-cards";
 import type { PayCycleView } from "./types";
@@ -42,6 +42,7 @@ describe("thẻ Tích luỹ (ADR-122)", () => {
       prev: `Kỳ trước: ${vnd("+700.000")}`,
       pct: "Trích 10% mỗi kỳ lương",
       done: null,
+      doneWarn: false,
     });
     expect(JSON.stringify(savingsCard(pocketsB()))).not.toMatch(/giữ riêng|để riêng/i);
   });
@@ -71,11 +72,12 @@ describe("thẻ Tích luỹ (ADR-122)", () => {
     const p = pocketsB();
     const withIso = { ...p, savings: { ...p.savings, change: { ...p.savings.change, since: "2026-11-10T01:00:00.000Z" } } };
     const cycle = {
-      savingsDone: { amount: 0, base: 20_000_000, pct: 0 },
+      savingsDone: { amount: 0, base: 20_000_000, pct: 0, level: null },
       tasks: [{ kind: "savings", status: "open", amount: 2_000_000 }],
     } as unknown as PayCycleView;
     expect(savingsCard(withIso, cycle)).toMatchObject({ change: `Kỳ này (từ 10/11): ${vnd("+800.000")}`, done: `Kỳ này chưa trích (10% = ${vnd("2.000.000")})` });
-    expect(savingsCard(p, { ...cycle, savingsDone: { amount: 2_000_000, base: 20_000_000, pct: 10 } })!.done).toBe(`Kỳ này đã trích ✓ ${vnd("2.000.000")} (10%)`);
+    expect(savingsCard(p, { ...cycle, savingsDone: { amount: 2_000_000, base: 20_000_000, pct: 10, level: "10to30" } })!.done).toBe(`Kỳ này đã trích ✓ ${vnd("2.000.000")} (10%) · đạt mức 10–30%`);
+    expect(savingsCard(p, { ...cycle, savingsDone: { amount: 100_000, base: 20_000_000, pct: 0, level: "below1" } })!.doneWarn).toBe(true);
     expect(savingsCard(p, null)!.done).toBeNull();
   });
 });
@@ -215,5 +217,31 @@ describe("thẻ Dự phòng (ADR-122, ADR-132)", () => {
     const hidden = reserveCard(pocketsShared({ saving: 0, spent: { "hoc-tap": 6_000_000 } }))!;
     expect(hidden.groups[1]!.goals[1]).toMatchObject({ amount: `chi vượt phần ${vnd("••••")}`, spent: `đã chi ${vnd("••••")} kỳ này` });
     expect(JSON.stringify(hidden)).not.toMatch(/\d\.\d{3}/);
+  });
+
+  it("UC-702 AC-34: MB tiết kiệm có khoản gửi → nhóm 'MB tiết kiệm · 105.000.000 ₫ (gồm 100.000.000 ₫ gửi kỳ hạn) cho 3 mục tiêu', ba mục tiêu như AC-16; sau đáo hạn 'Tiền lãi 3.000.000 ₫ (không tính vào mục tiêu)', Tập luyện vẫn 15.000.000; không mục tiêu trả từ tiền chi tiêu; che số", () => {
+    const rows = (v: ReserveCardView) => rowsOf(v).map((r) => `${r.name} · ${r.amount}`);
+    const before = reserveCard(pocketsV23())!;
+    const group = before.groups.find((g) => g.key === "tk-tiet-kiem")!;
+    expect(group.head!.title).toBe(`MB tiết kiệm · ${vnd("105.000.000")} (gồm ${vnd("100.000.000")} gửi kỳ hạn) cho 3 mục tiêu`);
+    expect(group.interest).toBeNull();
+    expect(rows(before)).toEqual([
+      `Nhà ở · đã có ${vnd("60.000.000")} / ${vnd("60.000.000")}`,
+      `Học tập · đã có ${vnd("30.000.000")} / ${vnd("30.000.000")}`,
+      `Tập luyện · đã có ${vnd("15.000.000")} / ${vnd("10.000.000")}`,
+    ]);
+    const after = reserveCard(pocketsV23({ matured: true }))!;
+    const matured = after.groups.find((g) => g.key === "tk-tiet-kiem")!;
+    expect(matured.head!.title).toBe(`MB tiết kiệm · ${vnd("108.000.000")} cho 3 mục tiêu`);
+    expect(matured.interest).toBe(`Tiền lãi ${vnd("3.000.000")} (không tính vào mục tiêu)`);
+    expect(rows(after)[2]).toBe(`Tập luyện · đã có ${vnd("15.000.000")} / ${vnd("10.000.000")}`);
+    expect(JSON.stringify([before, after])).not.toMatch(/Điện nước|Thuốc|Thiện phước|Về quê/);
+    // Một mục tiêu ở tài khoản có khoản gửi vẫn có dòng nhóm (số dư gộp).
+    const one = reserveCard({ ...pocketsV23(), reserve: { ...pocketsV23().reserve, goals: pocketsV23().reserve.goals.slice(0, 1), groups: pocketsV23().reserve.groups.map((g) => ({ ...g, goalIds: ["nha-o"] })) } })!;
+    expect(one.groups[0]!.head!.title).toBe(`MB tiết kiệm · ${vnd("105.000.000")} (gồm ${vnd("100.000.000")} gửi kỳ hạn)`);
+    setAmountsHidden(true);
+    const hidden = reserveCard(pocketsV23({ matured: true }))!;
+    expect(hidden.groups.find((g) => g.key === "tk-tiet-kiem")!.interest).toBe(`Tiền lãi ${vnd("••••")} (không tính vào mục tiêu)`);
+    expect(JSON.stringify(reserveCard(pocketsV23()))).not.toMatch(/\d\.\d{3}/);
   });
 });

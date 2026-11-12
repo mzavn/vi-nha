@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, SW_CACHED_AT } from "./api";
 import { evalAmount, isAmountExpr, nextAmount } from "./money";
-import { emptySetup, goalAccountChoices, newGoal, removeAccount, removeMember, SETUP_STEPS, setupNeeded, setupPayload, setupServerError, setupSummary, stepErrors, stepOfField, type SetupForm } from "./setup";
+import { emptySetup, goalAccountChoices, newGoal, removeAccount, removeMember, savingsStep, SETUP_STEPS, setupNeeded, setupPayload, setupServerError, setupSummary, stepErrors, stepOfField, type SetupForm } from "./setup";
+import { SAVINGS_MARKS, SAVINGS_SCALE_TEXT } from "./savings-scale";
 
 const valid = (patch: Partial<SetupForm> = {}): SetupForm => ({
   ...emptySetup(),
@@ -56,6 +57,17 @@ describe("UC-701 AC-8: form Thiết lập — bắt đầu", () => {
 
   it("UC-510 AC-12: bước 4 tên “Ba ngăn”", () => {
     expect(SETUP_STEPS[3]).toBe("Ba ngăn");
+  });
+
+  it("UC-510 AC-16: bước % Tích luỹ chọn sẵn 10 trên thanh vạch 1 · 10 · 30 kèm câu thang; không đổi gì rồi hoàn tất → savings_pct 10; kéo tới vạch 30 → 30", () => {
+    const f = emptySetup();
+    expect(savingsStep(f)).toEqual({ pct: 10, text: SAVINGS_SCALE_TEXT });
+    expect(SAVINGS_MARKS.map((m) => m.pct)).toEqual([1, 10, 30]);
+    expect(setupPayload(valid()).ok && (setupPayload(valid()) as { value: { savings_pct: number } }).value.savings_pct).toBe(10);
+    expect(savingsStep({ ...f, savingsPct: "30" }).pct).toBe(30);
+    // Ô gõ đang sai (xoá trắng): thanh đứng ở 10, nút Tiếp vẫn báo lỗi ô.
+    expect(savingsStep({ ...f, savingsPct: "" }).pct).toBe(10);
+    expect(stepErrors(valid({ savingsPct: "" }), 3).savings_pct).toBeDefined();
   });
 });
 

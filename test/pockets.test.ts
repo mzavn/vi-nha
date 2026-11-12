@@ -1,8 +1,12 @@
 // Ba ngăn (pocket UC-1203, UC-1209, ADR-119, ADR-132): tổng ngăn = Σ sổ tài khoản theo ngăn, mục tiêu Dự phòng = tài khoản
 // thật (A = số dư), phần an tâm, Ví Thưởng, nợ ngắn hạn, Tích luỹ theo kỳ, tháng vận hành — hàm thuần.
+import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { blessingFor, fillGoals, goalOrder, peaceMonthsView, pocketsView, type PocketAccount, type PocketDebt, type PocketGoalInput, type PocketsInput, type PocketsView } from "../src/domain/pockets";
+import { blessingFor, fillGoals, goalOrder, groupInterest, peaceMonthsView, pocketsView, type PocketAccount, type PocketDebt, type PocketGoalInput, type PocketsInput, type PocketsView } from "../src/domain/pockets";
 import { cycleRanges } from "../src/domain/pay-cycle";
+import type { Env } from "../src/env";
+import { app } from "../src/index";
+import { asD1, openDb } from "./helpers/d1-sqlite";
 
 const acct = (id: string, pocket: PocketAccount["pocket"], balance: number, confirmed = true): PocketAccount => ({ id, name: id, pocket, balance, confirmed });
 const goal = (id: string, accountId: string | null, o: Partial<PocketGoalInput> = {}): PocketGoalInput => ({
@@ -39,8 +43,8 @@ describe("pocketsView", () => {
     const v = view({ accounts, goals, debts: [], savingsPct: 20 });
     expect([v.savings.total, v.reserve.total, v.operating.total, v.outside.total]).toEqual([6_500_000, 10_000_000, 2_200_000, 200_000]);
     expect(total(v)).toBe(18_900_000);
-    expect(v.reserve.accounts).toEqual([{ id: "saving", name: "saving", balance: 10_000_000, goalIds: ["tuition"] }]);
-    expect(v.operating.accounts.find((a) => a.id === "card")).toEqual({ id: "card", name: "card", balance: -800_000, goalIds: [] });
+    expect(v.reserve.accounts).toEqual([{ id: "saving", name: "saving", balance: 10_000_000, goalIds: ["tuition"], parentId: null }]);
+    expect(v.operating.accounts.find((a) => a.id === "card")).toEqual({ id: "card", name: "card", balance: -800_000, goalIds: [], parentId: null });
     expect(v.reserve.goals).toEqual([
       { id: "tuition", name: "tuition", accountId: "saving", held: 10_000_000, need: 6_000_000, spent: 0, short: 0, target: 6_000_000, targetPct: null, monthly: 2_000_000, repeatMonths: 3, dueDate: "2027-01-15", debtId: null },
       { id: "car", name: "car", accountId: null, held: null, need: null, spent: 0, short: null, target: 4_800_000, targetPct: null, monthly: null, repeatMonths: null, dueDate: "2027-03-31", debtId: null },
@@ -181,9 +185,9 @@ describe("pocketsView", () => {
     expect(v.reserve.total).toBe(27_500_000);
     expect(heldOf(v)).toEqual({ "hoa-don": 2_000_000, "nha-o": 7_500_000, "hoc-tap": 4_500_000, "bao-duong-xe": 4_800_000, "hieu-hi": 2_200_000, thue: 1_500_000 });
     expect(v.reserve.groups).toEqual([
-      { accountId: "tk-chung", name: "tk-chung", balance: 9_000_000, need: 9_800_000, spent: 0, short: 800_000, extra: 0, goalIds: ["hoa-don", "bao-duong-xe", "hieu-hi"] },
-      { accountId: "tk-tiet-kiem", name: "tk-tiet-kiem", balance: 12_000_000, need: 13_500_000, spent: 0, short: 1_500_000, extra: 0, goalIds: ["nha-o", "hoc-tap"] },
-      { accountId: "tk-thue", name: "tk-thue", balance: 1_500_000, need: null, spent: 0, short: null, extra: null, goalIds: ["thue"] },
+      { accountId: "tk-chung", name: "tk-chung", balance: 9_000_000, need: 9_800_000, spent: 0, short: 800_000, extra: 0, goalIds: ["hoa-don", "bao-duong-xe", "hieu-hi"], childIds: [], interest: 0 },
+      { accountId: "tk-tiet-kiem", name: "tk-tiet-kiem", balance: 12_000_000, need: 13_500_000, spent: 0, short: 1_500_000, extra: 0, goalIds: ["nha-o", "hoc-tap"], childIds: [], interest: 0 },
+      { accountId: "tk-thue", name: "tk-thue", balance: 1_500_000, need: null, spent: 0, short: null, extra: null, goalIds: ["thue"], childIds: [], interest: 0 },
     ]);
     for (const g of v.reserve.groups) expect(sumHeld(v, g.accountId)).toBe(g.balance);
     expect(v.reserve.peace).toBe(5_000_000);
@@ -257,6 +261,61 @@ describe("pocketsView", () => {
     expect([single.savings.total, single.savings.accounts, single.reserve.total, single.reserve.peace, single.operating.total, total(single)]).toEqual([0, [], 0, 0, 12_000_000, 12_000_000]);
     expect(single.reserve.goals.map((g) => [g.id, g.held])).toEqual([["tuition", null]]);
   });
+
+  it("UC-1203 AC-14: phần an tâm và tài khoản con — phao + con 25.000.000; con của tài khoản có mục tiêu và của Ví Thưởng không vào; reward.balance gộp 12.000.000; tổng Dự phòng gồm mọi con", () => {
+    const accounts = [
+      acct("tk-tiet-kiem", "reserve", 5_000_000),
+      { ...acct("gui-6-thang", "reserve", 100_000_000), parentId: "tk-tiet-kiem" },
+      acct("phao", "reserve", 5_000_000),
+      { ...acct("gui-3-thang", "reserve", 20_000_000), parentId: "phao" },
+      acct("tk-bidv", "reserve", 2_000_000),
+      { ...acct("gui-bidv", "reserve", 10_000_000), parentId: "tk-bidv" },
+    ];
+    const v = view({ accounts, goals: [goal("hoc-tap", "tk-tiet-kiem", { target: 30_000_000 })], rewardAccountId: "tk-bidv", debts: [], savingsPct: 10 });
+    expect(v.reserve.peace).toBe(25_000_000);
+    expect(v.reserve.reward).toEqual({ accountId: "tk-bidv", balance: 12_000_000 });
+    expect(v.reserve.total).toBe(142_000_000);
+    expect(v.reserve.accounts.find((a) => a.id === "gui-6-thang")).toEqual({ id: "gui-6-thang", name: "gui-6-thang", balance: 100_000_000, goalIds: [], parentId: "tk-tiet-kiem" });
+  });
+
+  it("UC-1209 AC-16: mục tiêu ở mẹ thấy tiền trong khoản gửi, lãi không tính — gộp 105.000.000 → 60 / 30 / 15 triệu; gộp 108.000.000, lãi 3.000.000 → Tập luyện vẫn 15.000.000; nhóm có childIds, interest", () => {
+    const goals = [
+      goal("nha-o", "tk-tiet-kiem", { target: 60_000_000, sort: 10 }),
+      goal("hoc-tap", "tk-tiet-kiem", { target: 30_000_000, sort: 20 }),
+      goal("tap-luyen", "tk-tiet-kiem", { target: 10_000_000, sort: 30 }),
+    ];
+    const before = view({ accounts: [acct("tk-tiet-kiem", "reserve", 5_000_000), { ...acct("gui-6-thang", "reserve", 100_000_000), parentId: "tk-tiet-kiem" }], goals, debts: [], savingsPct: 10 });
+    expect(before.reserve.goals.map((g) => g.held)).toEqual([60_000_000, 30_000_000, 15_000_000]);
+    expect(before.reserve.groups).toEqual([
+      { accountId: "tk-tiet-kiem", name: "tk-tiet-kiem", balance: 105_000_000, need: 100_000_000, spent: 0, short: 0, extra: 5_000_000, goalIds: ["nha-o", "hoc-tap", "tap-luyen"], childIds: ["gui-6-thang"], interest: 0 },
+    ]);
+    expect(before.reserve.peace).toBe(0);
+    // Đáo hạn: con đã tắt (không còn trong danh sách tài khoản đang dùng), lãi 3.000.000 vẫn là tiền lãi của nhóm.
+    const after = view({ accounts: [acct("tk-tiet-kiem", "reserve", 108_000_000)], goals, interest: { "tk-tiet-kiem": 3_000_000 }, debts: [], savingsPct: 10 });
+    expect(after.reserve.goals.map((g) => g.held)).toEqual([60_000_000, 30_000_000, 15_000_000]);
+    expect(after.reserve.groups[0]).toMatchObject({ balance: 108_000_000, interest: 3_000_000, childIds: [] });
+    expect(after.reserve.total).toBe(108_000_000);
+  });
+
+  it("UC-1209 AC-18: mục tiêu trả từ tiền chi tiêu — operating.goals theo thứ tự ưu tiên, remaining = max(0, mỗi tháng − đã chi); không ở reserve.goals / groups, không đổi phần an tâm / tổng Dự phòng", () => {
+    const goals = [
+      goal("dien-nuoc", null, { paysFrom: "operating", target: 2_000_000, monthly: 2_000_000, repeatMonths: 1, sort: 10, spent: 1_000_000 }),
+      goal("thuoc", null, { paysFrom: "operating", target: 500_000, monthly: 500_000, repeatMonths: 1, sort: 20, spent: 300_000 }),
+      goal("thien-phuoc", null, { paysFrom: "operating", target: 1_000_000, monthly: 1_000_000, repeatMonths: 1, sort: 30 }),
+      goal("ve-que", null, { paysFrom: "operating", target: 1_000_000, monthly: 1_000_000, repeatMonths: 1, sort: 40, spent: 1_500_000 }),
+      goal("hoc-tap", "tk-tiet-kiem", { target: 30_000_000, sort: 5 }),
+    ];
+    const v = view({ accounts: [acct("tk-chi-tieu-chong", "operating", 15_000_000), acct("tk-tiet-kiem", "reserve", 5_000_000), acct("phao", "reserve", 1_000_000)], goals, debts: [], savingsPct: 10 });
+    expect(v.operating.goals).toEqual([
+      { id: "dien-nuoc", name: "dien-nuoc", monthly: 2_000_000, spent: 1_000_000, remaining: 1_000_000 },
+      { id: "thuoc", name: "thuoc", monthly: 500_000, spent: 300_000, remaining: 200_000 },
+      { id: "thien-phuoc", name: "thien-phuoc", monthly: 1_000_000, spent: 0, remaining: 1_000_000 },
+      { id: "ve-que", name: "ve-que", monthly: 1_000_000, spent: 1_500_000, remaining: 0 },
+    ]);
+    expect(v.operating.remaining).toBe(2_200_000);
+    expect(v.reserve.goals.map((g) => g.id)).toEqual(["hoc-tap"]);
+    expect([v.reserve.total, v.reserve.peace, v.operating.total]).toEqual([6_000_000, 1_000_000, 15_000_000]);
+  });
 });
 
 describe("fillGoals / goalOrder (pocket UC-1209 bước 9, bước 10)", () => {
@@ -285,6 +344,29 @@ describe("fillGoals / goalOrder (pocket UC-1209 bước 9, bước 10)", () => {
   });
 });
 
+describe("tiền lãi của nhóm (groupInterest, pocket UC-1209 bước 9)", () => {
+  // Mỗi bước: số dư gộp đổi bao nhiêu, lãi vào, rút "từ tiền lãi". Chuyển nội bộ mẹ ↔ con: delta 0.
+  const step = (delta: number, interest = 0, fromInterest = 0) => ({ delta, interest, fromInterest });
+  it("UC-1209 AC-16: đáo hạn — lãi 3.000.000 vào con; chuyển về mẹ (nội bộ) → 3.000.000; rút từ lãi → 0; rút không chọn → vẫn 3.000.000; tiền cho không thành lãi", () => {
+    const matured = [step(3_000_000, 3_000_000), step(0)];
+    expect(groupInterest(105_000_000, matured)).toBe(3_000_000);
+    expect(groupInterest(105_000_000, [...matured, step(-3_000_000, 0, 3_000_000)])).toBe(0);
+    expect(groupInterest(105_000_000, [...matured, step(-3_000_000)])).toBe(3_000_000);
+    expect(groupInterest(105_000_000, [...matured, step(2_000_000)])).toBe(3_000_000);
+  });
+
+  it("UC-1209 AC-19: cộng dồn, kẹp từng bước — 3.000.000 → rút 500.000 → 2.500.000 → rút 2.500.000 → 0 → lãi mới 1.000.000 → 1.000.000; rút sạch → 0; nạp 2.000.000 → vẫn 0", () => {
+    const s = [step(3_000_000, 3_000_000), step(-500_000, 0, 500_000)];
+    expect(groupInterest(105_000_000, s)).toBe(2_500_000);
+    const t = [...s, step(-2_500_000, 0, 2_500_000), step(1_000_000, 1_000_000)];
+    expect(groupInterest(105_000_000, t)).toBe(1_000_000);
+    const u = [...t, step(-106_000_000)];
+    expect(groupInterest(105_000_000, u)).toBe(0);
+    expect(groupInterest(105_000_000, [...u, step(2_000_000)])).toBe(0);
+    expect(groupInterest(0, [])).toBe(0);
+  });
+});
+
 describe("đầu kỳ lương khi chưa có kỳ lưu (cycleRanges)", () => {
   const starts = (today: string, paydayDay: number, since: string) =>
     cycleRanges([], paydayDay, new Date(`${today}T10:00:00+07:00`), new Date(`${since}T00:00:00+07:00`).toISOString()).map((r) => r.payday).reverse();
@@ -305,5 +387,50 @@ describe("lời chúc khi hết nợ ngắn hạn (blessingFor)", () => {
       "Hết nợ ngắn hạn — tháng này nhẹ hẳn",
       "Không còn nợ ngắn hạn 🎉 — tiền vận hành là của mình trọn vẹn",
     ]);
+  });
+});
+
+describe("xếp ngăn khi có tài khoản con (UC-1201, service)", () => {
+  const put = async (raw: DatabaseSync, accounts: { id: string; pocket: string | null }[]) => {
+    const res = await app.request(
+      "https://app.example.com/v1/settings/pockets",
+      { method: "PUT", headers: { Authorization: "Bearer tok", "X-Member-Id": "husband", "Content-Type": "application/json" }, body: JSON.stringify({ accounts }) },
+      { DB: asD1(raw), API_TOKEN: "tok" } as Env,
+    );
+    return { status: res.status, json: (await res.json()) as { error?: { code: string; message: string } } };
+  };
+
+  it("UC-1201 AC-6: đổi mẹ sang Tích luỹ và con sang Vận hành → cả hai Tích luỹ, nhật ký pockets.confirm ghi con đổi theo mẹ; dòng chỉ của con bị bỏ qua; đổi mẹ sang Vận hành → 409 account_has_children, không đổi gì", async () => {
+    const raw = openDb();
+    raw.exec(`
+      INSERT INTO accounts (id, name, kind, bank, opening_balance, pocket, pocket_confirmed) VALUES ('tk-tiet-kiem', 'MB tiết kiệm', 'bank', 'MBBank', 20000000, 'reserve', 1);
+      INSERT INTO accounts (id, name, kind, bank, opening_balance, pocket, pocket_confirmed, parent_account_id) VALUES ('gui-6-thang', 'Gửi 6 tháng', 'bank', 'MBBank', 0, 'reserve', 1, 'tk-tiet-kiem');
+    `);
+    const pockets = () => raw.prepare("SELECT id, pocket, pocket_confirmed FROM accounts WHERE id IN ('tk-tiet-kiem', 'gui-6-thang') ORDER BY id").all();
+    const audits = () => (raw.prepare("SELECT detail FROM audit_log WHERE action = 'pockets.confirm' ORDER BY id").all() as { detail: string }[]).map((r) => JSON.parse(r.detail));
+
+    expect((await put(raw, [{ id: "tk-tiet-kiem", pocket: "savings" }, { id: "gui-6-thang", pocket: "operating" }])).status).toBe(200);
+    expect(pockets()).toEqual([
+      { id: "gui-6-thang", pocket: "savings", pocket_confirmed: 1 },
+      { id: "tk-tiet-kiem", pocket: "savings", pocket_confirmed: 1 },
+    ]);
+    expect(audits()).toEqual([
+      { accounts: 2, changes: { "tk-tiet-kiem": { from: "reserve", to: "savings" }, "gui-6-thang": { from: "reserve", to: "savings", parent: "tk-tiet-kiem" } } },
+    ]);
+
+    expect((await put(raw, [{ id: "gui-6-thang", pocket: "operating" }])).status).toBe(200);
+    expect(pockets()).toEqual([
+      { id: "gui-6-thang", pocket: "savings", pocket_confirmed: 1 },
+      { id: "tk-tiet-kiem", pocket: "savings", pocket_confirmed: 1 },
+    ]);
+    expect(audits().at(-1)).toEqual({ accounts: 1, changes: {} });
+
+    const blocked = await put(raw, [{ id: "tk-tiet-kiem", pocket: "operating" }]);
+    expect([blocked.status, blocked.json.error?.code, blocked.json.error?.message]).toEqual([409, "account_has_children", "Tất toán / tắt các khoản gửi của MB tiết kiệm trước."]);
+    expect(pockets()).toEqual([
+      { id: "gui-6-thang", pocket: "savings", pocket_confirmed: 1 },
+      { id: "tk-tiet-kiem", pocket: "savings", pocket_confirmed: 1 },
+    ]);
+    expect(audits()).toHaveLength(2);
   });
 });

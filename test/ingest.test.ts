@@ -4,8 +4,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { Env } from "../src/env";
 import { assignLog, createRule, ignoreLog, ingestLog, listPendingLogs, pairLogs, unassignTransaction, type ParsedBankLog, type Split } from "../src/services/ingest";
 import { createEntry } from "../src/services/ledger";
+import { groupInterests } from "../src/services/goal-groups";
 import { payCycleView } from "../src/services/pay-cycles";
 import { asD1, openDb } from "./helpers/d1-sqlite";
+import { householdParent, PARENT_NOW } from "./helpers/household-parent";
 
 let env: Env;
 let raw: ReturnType<typeof openDb>;
@@ -805,5 +807,19 @@ describe("lãi tiền gửi: khoản thu Thu nhập thụ động ở ngăn củ
     const withWallet = { ...lai(37), wallet_id: "nice-to-have" } as unknown as Split;
     await expect(assignLog(env.DB, "n1", [withWallet], null, now())).rejects.toMatchObject({ code: "model_changed" });
     expect(count("SELECT COUNT(*) n FROM transactions")).toBe(0);
+  });
+});
+
+describe("gán khoản lãi vào khoản gửi (ingest UC-305 AC-37, ADR-140)", () => {
+  it("UC-305 AC-37: log in 3.000.000 của tài khoản con, gán thu nhập is_interest: true → khoản có phân loại passive_income, không mở kỳ, tiền lãi của nhóm +3.000.000", async () => {
+    raw = householdParent();
+    env = { DB: asD1(raw) } as Env;
+    expect((await groupInterests(env.DB))["tk-tiet-kiem"]).toBe(0);
+    raw.exec("INSERT INTO bank_logs (id, at, amount, direction, account_id, content, source, status) VALUES ('L1', '2026-11-20T02:00:00.000Z', 3000000, 'in', 'gui-6-thang', 'TAT TOAN', 'webhook', 'pending')");
+    const r = await assignLog(env.DB, "L1", [{ meaning: "income", amount: 3_000_000, is_interest: true }], "husband", PARENT_NOW);
+    const id = r.transactions[0]!.id as number;
+    expect(raw.prepare("SELECT report_class FROM transaction_report_classes WHERE transaction_id = ?").get(id)).toEqual({ report_class: "passive_income" });
+    expect(r.effects.cycle).toBeNull();
+    expect((await groupInterests(env.DB))["tk-tiet-kiem"]).toBe(3_000_000);
   });
 });

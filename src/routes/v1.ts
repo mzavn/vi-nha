@@ -195,6 +195,9 @@ function entryInput(b: Record<string, unknown>): EntryInput {
     // Kiểu kiểm ở resolveOpensCycle (invalid_input), giá trị không hợp lệ cũng báo ở đó.
     opens_cycle: b.opens_cycle as boolean | undefined,
     goal_id: str(b.goal_id, "goal_id"),
+    // `is_interest: false` khi sửa = bỏ "Đây là tiền lãi" (không chép phân loại lãi của khoản cũ); không gửi = giữ như cũ.
+    is_interest: b.is_interest === undefined || b.is_interest === null ? undefined : b.is_interest === true,
+    from_interest: b.from_interest === true,
   };
   if (input.client_id && !/^[A-Za-z0-9_-]{8,64}$/.test(input.client_id)) bad("client_id phải là chuỗi 8–64 ký tự chữ, số, gạch.");
   return input;

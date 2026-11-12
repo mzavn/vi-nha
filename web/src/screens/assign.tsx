@@ -8,7 +8,7 @@ import { defaultAccountFor } from "../lib/categories";
 import { payableDebts } from "../lib/debts";
 import { assignDebtRows, hasInterest } from "../lib/interest";
 import { bookRefLabel } from "../lib/memo-books";
-import { goalChoices } from "../lib/goal-choices";
+import { goalChoices, incomeInterest } from "../lib/goal-choices";
 import { formatVnd, moneyDigits } from "../lib/money";
 import { opensCycleDefault } from "../lib/other-entry";
 import { localNearSpend } from "../lib/pending";
@@ -35,12 +35,12 @@ import { MEANING_LABEL } from "../lib/transactions";
 import type { BankLog, Bootstrap, EntryEffects, Rental, SettingsData } from "../lib/types";
 import { useResource } from "../state/resource";
 import { getState, refresh, setState, toast, useApp, viewSnapshot } from "../state/store";
-import { AccountSelect, AmountInput, CategorySelect, GoalChips } from "../ui/fields";
+import { AccountSelect, AmountInput, CategorySelect } from "../ui/fields";
 import { Icon } from "../ui/icons";
 import { Banner, Card, Empty, NeedsNetwork, PageHeader, Seg, Sheet, Skeleton } from "../ui/parts";
 import { useWide } from "../ui/shell";
 import { ASSET_KINDS } from "./other-entry-sheet";
-import { LinkSourcePicker, ReceivablePicker } from "./ref-pickers";
+import { GoalRowField, InterestCheck, LinkSourcePicker, ReceivablePicker } from "./ref-pickers";
 
 export function Assign() {
   const app = useApp();
@@ -172,9 +172,13 @@ function initialRows(log: BankLog, boot: Bootstrap): Row[] {
 /** Form gán một log. Điện thoại: trong sheet. Máy tính: panel bên phải danh sách (không có sheet). */
 function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot: Bootstrap; onClose: () => void; onDone: () => void; wide?: boolean }) {
   const { online, snap } = useApp();
-  // "Cho mục tiêu" (pwa UC-706 AC-39): chỉ log tiền ra — tài khoản của log là tài khoản tiền ra của chi / chuyển.
-  const goals = log.direction === "out" ? goalChoices(log.account_id, snap?.pockets) : [];
+  // "Cho mục tiêu" / "Cho khoản phải trả" / "Từ tiền lãi" (pwa UC-706 AC-39, QĐ2): chỉ log tiền ra — tài khoản của log là tài
+  // khoản tiền ra của chi / chuyển; chuyển sang tài khoản cùng nhóm mẹ + con thì không có chip "Từ tiền lãi".
+  const goalsTo = (toAccountId: string | null) => (log.direction === "out" ? goalChoices(log.account_id, snap?.pockets, { toAccountId }) : null);
   const isIn = log.direction === "in";
+  // "Đây là tiền lãi" (QĐ2): log tiền vào của mẹ có mục tiêu / con của nó; bật sẵn khi là khoản gửi.
+  const interestOffer = isIn ? incomeInterest(log.account_id, snap?.pockets) : null;
+  const interestOf = (r: Row) => r.is_interest ?? interestOffer?.preset ?? false;
   const rental = useResource<Rental>(isIn ? "/v1/rental" : null).data;
   const streams = (useResource<SettingsData>(isIn ? "/v1/settings" : null).data?.incomeStreams ?? []).filter((s) => s.active);
   const tenants = (rental?.tenants ?? []).filter((t) => t.active);
@@ -233,7 +237,11 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
     try {
       const res = await api.post<{ log: unknown; transactions: { id: number; meaning: string }[]; attached?: boolean; effects?: EntryEffects }>(
         `/v1/logs/${encodeURIComponent(log.id)}/assign`,
-        assignBody(rows, makeRule && ruleAllowed, goals),
+        assignBody(
+          rows.map((r) => ({ ...r, is_interest: interestOf(r) })),
+          makeRule && ruleAllowed,
+          { goals: goalsTo, interest: interestOffer !== null },
+        ),
       );
       await refresh();
       if (res.attached) toast(`Đã khớp vào chuyển nội bộ đã ghi ${formatVnd(log.amount)} — không ghi thêm.`);
@@ -459,7 +467,14 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
               <AccountSelect id={`s-o-${r.key}`} accounts={counterpartAccounts(boot.accounts, log.account_id)} value={r.other_account_id ?? null} onChange={(id) => update(r.key, { other_account_id: id })} />
             </div>
           )}
-          {(r.meaning === "spend" || r.meaning === "transfer") && <GoalChips choices={goals} value={r.goal_id ?? null} onChange={(id) => update(r.key, { goal_id: id })} />}
+          {(r.meaning === "spend" || r.meaning === "transfer") && (
+            <GoalRowField
+              id={`s-g-${r.key}`}
+              row={goalsTo(r.meaning === "transfer" ? (r.other_account_id ?? null) : null)}
+              value={r.goal_id ?? null}
+              onChange={(id) => update(r.key, { goal_id: id })}
+            />
+          )}
           {r.tenantMode && (
             <div class="field">
               <label for={`s-t-${r.key}`}>Người thuê</label>
@@ -477,6 +492,7 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
           )}
           {r.meaning === "income" && !r.tenantMode && !r.interestMode && (
             <>
+              <InterestCheck shown={interestOffer !== null} checked={interestOf(r)} onChange={(on) => update(r.key, { is_interest: on })} />
               {streams.length > 0 && (
                 <div class="field">
                   <label for={`s-st-${r.key}`}>Nguồn thu</label>

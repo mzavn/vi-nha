@@ -8,8 +8,8 @@ import { loadAllAssetBuys } from "../lib/asset-buys";
 import { DRIFT_LABEL, driftOf } from "../lib/drift";
 import { formatVnd, maskAmounts } from "../lib/money";
 import { interestLineText } from "../lib/interest";
-import { accountsTotal } from "../lib/accounts-total";
-import { barPct, compareText, cycleHeading, excludedText, isEmptyLookBack, limitText, LOOK_BACK_EMPTY, LOOK_BACK_NOTE, lookBackPath, queueNote, stepCycle } from "../lib/look-back";
+import { accountsTotal, nestAccounts, type NestedAccount } from "../lib/accounts-total";
+import { barPct, compareText, cycleHeading, excludedText, isEmptyLookBack, limitText, LOOK_BACK_EMPTY, LOOK_BACK_NOTE, lookBackPath, queueNote, savingsLine, stepCycle } from "../lib/look-back";
 import { monthKey, monthLabel, shortDate } from "../lib/period";
 import { NO_SAVINGS_ACCOUNT, savingsCard } from "../lib/pocket-cards";
 import { cycleFilter } from "../lib/tx-filter";
@@ -128,6 +128,11 @@ function LookBackBody({ d, queued }: { d: CycleLookBack; queued: string | null }
       {queued && (
         <p class="status-row" style={{ padding: "10px 14px 0" }}>
           {queued}
+        </p>
+      )}
+      {savingsLine(d.savings) && (
+        <p class="status-row" style={{ padding: "10px 14px 0" }}>
+          {savingsLine(d.savings)}
         </p>
       )}
       {isEmptyLookBack(d) ? (
@@ -482,6 +487,11 @@ function AccountsTab() {
   const { boot, snap } = useApp();
   const hasExcluded = (snap?.nearSpend?.excluded.length ?? 0) > 0;
   const res = useResource<AccountRow[]>("/v1/accounts");
+  // Khoản gửi kỳ hạn lồng dưới mẹ (ADR-140, UC-707 AC-39): quan hệ mẹ con lấy từ snapshot (`pockets.*.accounts[].parentId`).
+  const parentOf = new Map(
+    snap?.pockets ? [snap.pockets.savings, snap.pockets.reserve, snap.pockets.operating, snap.pockets.outside].flatMap((p) => p.accounts.map((a) => [a.id, a.parentId ?? null] as const)) : [],
+  );
+  const nest = (rows: AccountRow[]) => nestAccounts(rows, (r) => ({ id: r.accountId, name: r.name, balance: r.bookBalance, parentId: parentOf.get(r.accountId) ?? null }));
   const [counting, setCounting] = useState<string | null>(null);
   const wide = useWide();
   return (
@@ -495,7 +505,7 @@ function AccountsTab() {
           {(rows) => {
             const sum = accountsTotal(rows);
             const note = accountsTotalNote(sum.hasCredit, hasExcluded);
-            return wide ? <AccountsWide rows={rows} onCount={setCounting} total={rows.length > 0 ? { value: sum.total, note } : null} /> : (
+            return wide ? <AccountsWide rows={nest(rows)} onCount={setCounting} total={rows.length > 0 ? { value: sum.total, note } : null} /> : (
             // Điện thoại: mỗi tài khoản một hàng, số sổ to bên phải; dòng "lệch" chỉ có nghĩa với tài khoản SePay
             // nên chỉ hiện ở đó — không còn bảng bốn cột đầy "—" (audit 261001 F21).
             <div class="blist">
@@ -512,13 +522,13 @@ function AccountsTab() {
                   )}
                 </div>
               )}
-              {rows.map((r) => {
+              {nest(rows).map(({ row: r, child, sub }) => {
                 const feed = boot?.accounts.find((a) => a.id === r.accountId)?.sepayEnabled ?? false;
                 const drift = driftOf(r);
                 return (
-                  <div class="tier" key={r.accountId}>
+                  <div class={child ? "tier acct-child" : "tier"} key={r.accountId}>
                     <div class="nm">
-                      {r.name}
+                      {child ? `↳ ${r.name}` : r.name}
                       {drift !== null && <span class="chip bad">lệch</span>}
                     </div>
                     <div class="amt">
@@ -528,6 +538,11 @@ function AccountsTab() {
                       <span>{feed ? "SePay tự cập nhật" : "nhập tay"}</span>
                       <span>số trong sổ</span>
                     </div>
+                    {sub && (
+                      <div class="tsub">
+                        <span>{sub}</span>
+                      </div>
+                    )}
                     {drift !== null && (
                       <div class="tsub">
                         <span>{DRIFT_LABEL}</span>
@@ -565,8 +580,8 @@ function AccountsTab() {
 
 const ACCOUNT_KIND: Record<string, string> = { bank: "Ngân hàng", cash: "Tiền mặt", ewallet: "Ví điện tử", credit: "Thẻ tín dụng" };
 
-/** Máy tính: mọi cột của /v1/accounts cùng lúc — sổ, feed, lệch, chưa gán, lần cuối. */
-function AccountsWide({ rows, onCount, total }: { rows: AccountRow[]; onCount: (id: string) => void; total: { value: number; note: string | null } | null }) {
+/** Máy tính: mọi cột của /v1/accounts cùng lúc — sổ, feed, lệch, chưa gán, lần cuối; khoản gửi kỳ hạn lồng dưới mẹ. */
+function AccountsWide({ rows, onCount, total }: { rows: NestedAccount<AccountRow>[]; onCount: (id: string) => void; total: { value: number; note: string | null } | null }) {
   const { boot } = useApp();
   const money = (v: number | null) => (v === null ? "—" : <Money value={v} unit={false} mono />);
   return (
@@ -586,16 +601,17 @@ function AccountsWide({ rows, onCount, total }: { rows: AccountRow[]; onCount: (
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => {
+          {rows.map(({ row: r, child, sub }) => {
             const feed = boot?.accounts.find((a) => a.id === r.accountId)?.sepayEnabled ?? false;
             const drift = driftOf(r);
             return (
-              <tr key={r.accountId}>
+              <tr key={r.accountId} class={child ? "acct-child" : undefined}>
                 <td>
-                  {r.name}
+                  {child ? `↳ ${r.name}` : r.name}
                   <div class="sub-line">
                     {ACCOUNT_KIND[r.kind] ?? r.kind} · {feed ? "SePay tự cập nhật" : "nhập tay"}
                   </div>
+                  {sub && <div class="sub-line">{sub}</div>}
                 </td>
                 <td class="num">{money(r.bookBalance)}</td>
                 <td class="num">{money(r.feedBalance)}</td>

@@ -28,8 +28,10 @@ export interface AccountRef {
   pocket: "savings" | "reserve" | "operating" | null;
   /** Tài khoản riêng tư (access UC-504): người khác chỉ thấy tổng. */
   private: boolean;
-  /** Mục tiêu Dự phòng đang dùng gắn tài khoản này, theo thứ tự ưu tiên (pocket UC-1209). `loadRefs` luôn điền. */
+  /** Mục tiêu tài khoản đang dùng gắn tài khoản này, theo thứ tự ưu tiên (pocket UC-1209). `loadRefs` luôn điền. */
   goalIds?: string[];
+  /** Tài khoản mẹ khi đây là khoản gửi kỳ hạn (ADR-140); null = không phải tài khoản con. `loadRefs` luôn điền. */
+  parentId?: string | null;
 }
 
 export interface MemberRef {
@@ -74,6 +76,8 @@ export interface Refs {
   receivables: BookRef[];
   /** Nguồn thu mặc định cho tiền người thuê trả (config `rental_income_stream_id`). */
   rentalIncomeStreamId: string | null;
+  /** Mục tiêu trả thẳng từ tiền chi tiêu đang dùng, theo thứ tự ưu tiên (ADR-141). `loadRefs` luôn điền. */
+  operatingGoalIds?: string[];
 }
 
 export class DomainError extends Error {

@@ -86,10 +86,12 @@ settingsRoutes.post("/accounts", async (c) => {
 });
 
 /**
- * Trường tài khoản đụng tới số tiền / phạm vi đối soát / ngăn / ai thấy từng khoản: nhật ký ghi cũ → mới khi đổi (ADR-90,
- * ADR-113, pocket UC-1201, access UC-504 — mọi lần đổi chủ).
+ * Trường tài khoản đụng tới số tiền / phạm vi đối soát / ngăn / ai thấy từng khoản / tài khoản mẹ: nhật ký ghi cũ → mới khi
+ * đổi (ADR-90, ADR-113, ADR-140, pocket UC-1201, access UC-504 — mọi lần đổi chủ, UC-506).
  */
-const ACCOUNT_TRACKED = ["feed_from", "sepay_out_from", "opened_at", "opening_balance", "pocket", "private", "owner_member_id"] as const;
+const ACCOUNT_TRACKED = ["feed_from", "sepay_out_from", "opened_at", "opening_balance", "pocket", "private", "owner_member_id", "parent_account_id"] as const;
+/** Cột tài khoản con luôn theo mẹ (trg_accounts_children_follow): đổi một trong số này ở mẹ thì nhật ký mẹ kèm `changes.children`. */
+const CHILD_FOLLOWS = ["pocket", "pocket_confirmed", "private", "owner_member_id"] as const;
 
 /** Mốc theo dõi SePay để người đọc: "22:25:00 15/10/2026" giờ VN; null = từ ngày số dư đầu. */
 function feedFromLabel(iso: unknown): string {
@@ -101,13 +103,17 @@ function feedFromLabel(iso: unknown): string {
 
 settingsRoutes.patch("/accounts/:id", async (c) => {
   const b = await body(c);
+  const id = c.req.param("id");
   // Đọc theo tên cột như API trả (snake_case); toAccount không khai báo từng cột.
-  const before: Record<string, unknown> | null = await settings.readAccount(c.env.DB, c.req.param("id"));
-  const account = await settings.updateAccount(c.env.DB, c.req.param("id"), b, new Date(), c.get("memberId") ?? null);
+  const before: Record<string, unknown> | null = await settings.readAccount(c.env.DB, id);
+  const children = await settings.childAccountIds(c.env.DB, id);
+  const account = await settings.updateAccount(c.env.DB, id, b, new Date(), c.get("memberId") ?? null);
   const after: Record<string, unknown> = account;
-  const changes = Object.fromEntries(
+  const changes: Record<string, unknown> = Object.fromEntries(
     ACCOUNT_TRACKED.filter((k) => before && before[k] !== after[k]).map((k) => [k, { from: before![k] ?? null, to: after[k] ?? null }]),
   );
+  // Con theo mẹ trong cùng câu ghi: nhật ký mẹ ghi những tài khoản con đã đổi theo.
+  if (children.length && CHILD_FOLLOWS.some((k) => before && before[k] !== after[k])) changes.children = children;
   // Dời mốc là đổi phần nào của ngân hàng được tính vào đối soát: báo cả nhà như gỡ kết nối Claude.
   const alert: Alert | undefined = changes.feed_from
     ? { what: `đổi mốc theo dõi SePay của ${String(after.name)}: ${feedFromLabel(before?.feed_from)} → ${feedFromLabel(after.feed_from)}` }
@@ -161,8 +167,9 @@ settingsRoutes.put("/goals/order", async (c) => {
 });
 settingsRoutes.patch("/goals/:id", async (c) => {
   const b = await body(c);
-  const { goal, changes } = await pockets.updateGoal(c.env.DB, c.req.param("id"), b, new Date());
+  const { goal, changes, voided } = await pockets.updateGoal(c.env.DB, c.req.param("id"), b, new Date());
   await recordChange(c, "goal.update", `goal:${goal.id}`, { fields: fieldNames(b), ...(Object.keys(changes).length ? { changes } : {}) });
+  for (const v of voided) await recordChange(c, "pay_cycle_task.void", `pay_cycle_task:${v.id}`, { reason: v.reason, goal_id: goal.id });
   return ok(c, { goal });
 });
 /**

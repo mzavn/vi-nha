@@ -5,7 +5,7 @@
 
 import { peaceMonthsView, type PocketsView } from "../../../src/domain/pockets";
 import { formatSigned, formatVnd } from "./money";
-import { savingsDoneLine } from "./pay-cycle";
+import { savingsDoneLine, savingsDoneWarn } from "./pay-cycle";
 import { shortDate } from "./period";
 import { dueText } from "./pockets";
 import type { PayCycleView } from "./types";
@@ -23,8 +23,10 @@ export interface SavingsCardView {
   change: string;
   prev: string;
   pct: string;
-  /** "Kỳ này đã trích ✓ …" / "Kỳ này chưa trích (…)" (UC-702); null khi chưa có kỳ có khoản lương sinh ①. */
+  /** "Kỳ này đã trích ✓ … · đạt mức …" / "Kỳ này chưa trích (…)" (UC-702); null khi chưa có kỳ có khoản lương sinh ①. */
   done: string | null;
+  /** Mức "dưới 1%" (ADR-142): dòng `done` tô vàng. */
+  doneWarn: boolean;
 }
 
 export function savingsCard(p: PocketsView | undefined, cycle?: PayCycleView | null): SavingsCardView | null {
@@ -39,6 +41,7 @@ export function savingsCard(p: PocketsView | undefined, cycle?: PayCycleView | n
     prev: `Kỳ trước: ${signedVnd(s.change.prevAmount)}`,
     pct: `Trích ${p.savingsPct}% mỗi kỳ lương`,
     done: savingsDoneLine(cycle, p.savingsPct),
+    doneWarn: savingsDoneWarn(cycle),
   };
 }
 
@@ -70,10 +73,15 @@ export interface ReserveGoalRow {
 /** Một nhóm hàng của thẻ: tài khoản chung (có dòng nhóm + câu chân) hoặc một mục tiêu một mình (`head` / `note` null). */
 export interface ReserveGroupView {
   key: string;
-  /** "{tài khoản} · {số dư} cho {n} mục tiêu" + chip "thiếu X" (vàng) / "đủ" / "dư X". */
+  /**
+   * "{tài khoản} · {số dư gộp} (gồm {Σ con} gửi kỳ hạn) cho {n} mục tiêu" + chip "thiếu X" (vàng) / "đủ" / "dư X"; một mục tiêu ở
+   * tài khoản có khoản gửi cũng có dòng nhóm (không "cho 1 mục tiêu").
+   */
   head: { title: string; chip: string; tone: "warn" | "ok" } | null;
   goals: ReserveGoalRow[];
   note: string | null;
+  /** "Tiền lãi {I} (không tính vào mục tiêu)" khi tiền lãi của nhóm > 0 (QĐ2). */
+  interest: string | null;
 }
 
 export interface ReserveCardView {
@@ -118,22 +126,27 @@ function reserveGroups(r: PocketsView["reserve"]): ReserveGroupView[] {
   for (const g of r.goals) {
     const grp = byGoal.get(g.id);
     if (!grp) {
-      out.push({ key: g.id, head: null, goals: [goalRow(g, null)], note: null });
+      out.push({ key: g.id, head: null, goals: [goalRow(g, null)], note: null, interest: null });
       continue;
     }
     if (seen.has(grp.accountId)) continue;
     seen.add(grp.accountId);
     const members = grp.goalIds.flatMap((id) => goalById.get(id) ?? []);
-    if (members.length < 2) {
-      out.push({ key: grp.accountId, head: null, goals: members.map((m) => goalRow(m, grp.name)), note: null });
+    const childIds = new Set(grp.childIds ?? []);
+    const deposits = r.accounts.filter((a) => childIds.has(a.id)).reduce((s, a) => s + a.balance, 0);
+    const interest = grp.interest ? `Tiền lãi ${formatVnd(grp.interest)} (không tính vào mục tiêu)` : null;
+    if (members.length < 2 && childIds.size === 0) {
+      out.push({ key: grp.accountId, head: null, goals: members.map((m) => goalRow(m, grp.name)), note: null, interest });
       continue;
     }
     const chip = grp.short ? { chip: `thiếu ${formatVnd(grp.short)}`, tone: "warn" as const } : grp.extra ? { chip: `dư ${formatVnd(grp.extra)}`, tone: "ok" as const } : { chip: "đủ", tone: "ok" as const };
+    const gross = `${grp.name} · ${formatVnd(grp.balance)}${childIds.size > 0 ? ` (gồm ${formatVnd(deposits)} gửi kỳ hạn)` : ""}`;
     out.push({
       key: grp.accountId,
-      head: { title: `${grp.name} · ${formatVnd(grp.balance)} cho ${members.length} mục tiêu`, ...chip },
+      head: { title: members.length < 2 ? gross : `${gross} cho ${members.length} mục tiêu`, ...chip },
       goals: members.map((m) => goalRow(m, null)),
-      note: SHARED_GROUP_NOTE,
+      note: members.length < 2 ? null : SHARED_GROUP_NOTE,
+      interest,
     });
   }
   return out;

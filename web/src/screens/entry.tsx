@@ -5,19 +5,20 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { errorText } from "../lib/api";
 import { defaultAccountFor, manualAccounts, topCategories } from "../lib/categories";
-import { goalChoices, goalField } from "../lib/goal-choices";
+import { goalChoices, goalField, goalValueOf } from "../lib/goal-choices";
 import { addAmount, formatTypedVnd, formatVnd, moneyDigits, timesThousand } from "../lib/money";
 import { atForDay, dayKey, shortDate, timeHM } from "../lib/period";
 import { draftFromTx, editedAt } from "../lib/transactions";
 import type { Bootstrap, CategoryRef, EntryBody } from "../lib/types";
 import { confirmDuplicateEntry, discardEntry, getState, go, refresh, replaceEntry, retryEntry, saveEntry, setState, syncNow, toast, useApp, viewSnapshot, type AppState } from "../state/store";
-import { AccountSelect, amountExprHint, GoalChips, newClientId, useAmountField } from "../ui/fields";
+import { AccountSelect, amountExprHint, newClientId, useAmountField } from "../ui/fields";
 import { CategoryIcon, Icon } from "../ui/icons";
 import { Money } from "../ui/money";
 import { Card, FirstLoadFailed, NeedsNetwork, PageHeader, Sheet, Skeleton } from "../ui/parts";
 import { useWide } from "../ui/shell";
 import { CountSheet } from "./count-sheet";
 import { OtherEntrySheet, type OtherKind } from "./other-entry-sheet";
+import { GoalRowField } from "./ref-pickers";
 import { RecentTransactions } from "./today-desktop";
 
 const QUICK = [50_000, 100_000, 200_000];
@@ -51,8 +52,9 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
   const [amount, setAmount] = useState(d?.amount ?? 0);
   const [category, setCategory] = useState<CategoryRef | null>(() => boot.categories.find((c) => c.id === d?.category_id) ?? null);
   const [accountId, setAccountId] = useState<string | null>(() => d?.account_id ?? defaultAccountFor(boot, memberId, "out"));
-  // "Cho mục tiêu": không chọn sẵn; đổi tài khoản là bỏ chọn (pwa UC-703 AC-17, sửa khoản UC-715 AC-17 giữ chip đang gắn).
-  const [goalId, setGoalId] = useState<string | null>(d?.goal_id ?? null);
+  // "Cho mục tiêu" / "Cho khoản phải trả" / "Từ tiền lãi": không chọn sẵn; đổi tài khoản là bỏ chọn (pwa UC-703 AC-17, AC-18;
+  // sửa khoản UC-715 AC-17 giữ lựa chọn đang gắn, kể cả "Từ tiền lãi").
+  const [goalId, setGoalId] = useState<string | null>(d ? goalValueOf(d) : null);
   const pickAccount = (id: string | null) => {
     setAccountId(id);
     setGoalId(null);
@@ -81,7 +83,7 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
   const tiles = category && !top.some((c) => c.id === category.id) ? [category, ...top.slice(0, 5)] : top;
   const view = viewSnapshot(app);
   const ns = view?.nearSpend ?? null;
-  const goals = goalChoices(accountId, app.snap?.pockets);
+  const goals = goalChoices(accountId, app.snap?.pockets, { keepInterest: !!d?.from_interest && accountId === d.account_id });
   const today = dayKey(new Date());
 
   // Danh mục / tài khoản bị xoá khỏi cấu hình sau khi tải lại: bỏ chọn thay vì gửi một mã không còn.
@@ -271,7 +273,7 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
           <label for="f-acct">Trả bằng</label>
           <AccountSelect id="f-acct" accounts={manualAccounts(boot.accounts, "out", day)} value={accountId} onChange={pickAccount} />
         </div>
-        <GoalChips choices={goals} value={goalId} onChange={setGoalId} />
+        <GoalRowField id="f-goal" row={goals} value={goalId} onChange={setGoalId} />
         {edit?.tx.debt_id && (
           // Khoản trả nợ giữ nguyên chỗ gắn ở sổ nợ khi sửa.
           <div class="field">

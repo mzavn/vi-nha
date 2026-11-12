@@ -12,6 +12,7 @@ import {
   LOOK_BACK_NOTE,
   lookBackPath,
   queueNote,
+  savingsLine,
   stepCycle,
 } from "./look-back";
 import { setAmountsHidden } from "./money";
@@ -154,5 +155,19 @@ describe("Ví & quỹ › Nhìn lại: câu chữ (pwa UC-707)", () => {
     expect(filterChips(f, boot).map((c) => c.label)).toEqual(["Kỳ từ 10/11", "Ăn ngoài"]);
     expect(filterChips(cycleFilter(OCT.cycle, "eating-out", now), boot).map((c) => c.label)).toEqual(["Kỳ 10/10 – 9/11", "Ăn ngoài"]);
     expect(bookPath(cycleFilter(OCT.previous!, null, now))).toBe("/v1/transactions?cycle=2026-09-10&limit=51");
+  });
+
+  it("UC-108 AC-7: kỳ 10/10 (lương 30.000.000, đã trích 3.000.000) → 'Tích luỹ kỳ này: 3.000.000 ₫ (10% lương) · mức 10–30%'; kỳ 10/11 bỏ qua ① có lý do → 'Tích luỹ kỳ này: 0 ₫ · 0% — Tháng này trả viện phí'; kỳ danh nghĩa / không lương → không dòng; che số giữ %", () => {
+    expect(savingsLine({ amount: 3_000_000, base: 30_000_000, level: "10to30", reason: null })).toBe(vnd("Tích luỹ kỳ này: 3.000.000 ₫ (10% lương) · mức 10–30%"));
+    expect(savingsLine({ amount: 0, base: 30_000_000, level: "zero", reason: "Tháng này trả viện phí" })).toBe(vnd("Tích luỹ kỳ này: 0 ₫ · 0% — Tháng này trả viện phí"));
+    expect(savingsLine({ amount: 200_000, base: 30_000_000, level: "below1", reason: null })).toBe(vnd("Tích luỹ kỳ này: 200.000 ₫ (0% lương) · mức dưới 1%"));
+    expect(savingsLine({ amount: 9_500_000, base: 30_000_000, level: "from30", reason: null })).toBe(vnd("Tích luỹ kỳ này: 9.500.000 ₫ (31% lương) · mức từ 30%"));
+    // Vừa có lương, ① còn mở chưa ghép: chưa có mức.
+    expect(savingsLine({ amount: 0, base: 30_000_000, level: null, reason: null })).toBe(vnd("Tích luỹ kỳ này: 0 ₫ (0% lương)"));
+    expect(savingsLine({ amount: 0, base: 0, level: null, reason: null })).toBeNull();
+    expect(savingsLine(null)).toBeNull();
+    expect(savingsLine(undefined)).toBeNull();
+    setAmountsHidden(true);
+    expect(savingsLine({ amount: 3_000_000, base: 30_000_000, level: "10to30", reason: null })).toBe(vnd("Tích luỹ kỳ này: •••• ₫ (10% lương) · mức 10–30%"));
   });
 });

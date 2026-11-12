@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState } from "preact/hooks";
 import { api, errorText } from "../lib/api";
 import {
+  canPayFromOperating,
   CONVERT_DONE_TOAST,
   convertTitle,
   type ConversionStatus,
@@ -17,32 +18,38 @@ import {
   GOAL_ORDER_NOTE,
   goalGroupLines,
   goalRowAccounts,
+  GOALS_STEP_TITLE,
   goalStepRequests,
   goalsReady,
   goalTerms,
   initialGoalChoices,
   isConversionStep,
   NO_RESERVE_ACCOUNT,
+  OPERATING_CHOICE_LABEL,
   payCycleReady,
   rewardRowAccounts,
   SAVINGS_GAP_EXPLAIN,
   savingsGapLines,
   savingsPctLines,
+  savingsPctStep,
   stepConflict,
+  USE_DEFAULT_PCT,
 } from "../lib/convert";
 import { formatVnd } from "../lib/money";
 import { groupAccountsByPocket, unconfirmedChip } from "../lib/pockets";
-import { OPENS_CYCLE_HINT, parseInteger } from "../lib/settings";
+import { OPENS_CYCLE_HINT, OPERATING_HINT, parseInteger, sliderPct } from "../lib/settings";
 import type { Rental, SettingsData } from "../lib/types";
 import { useResource } from "../state/resource";
 import { go, refresh, toast, useApp, viewSnapshot } from "../state/store";
 import { Icon } from "../ui/icons";
 import { Card, PageHeader, Skeleton } from "../ui/parts";
+import { SavingsSlider } from "../ui/savings-slider";
 import { AccountSheet, Check, GoalSheet, Hint, NEW_ACCOUNT, PocketsSheet, POCKETS_SHEET_NOTE } from "./settings-sheets";
 
 /** Lựa chọn trong ô của một dòng mục tiêu ngoài mã tài khoản (mã tài khoản là slug, không có dấu +). */
 const OFF = "+off";
 const LATER = "+later";
+const OPERATING = "+operating";
 
 export function Convert() {
   const app = useApp();
@@ -237,7 +244,7 @@ function GoalsStep({ data, offline, postStep, reloadSettings }: StepProps) {
   // Lựa chọn sẵn tính lại theo cài đặt mới nhất (mục tiêu mới, tài khoản vừa tạo), lựa chọn người đã chọn đè lên.
   const choices = { ...initialGoalChoices(goals, data.accounts, savedReward), ...picked };
   const hasReserve = data.accounts.some((a) => a.active && a.pocket === "reserve");
-  const groupLines = goalGroupLines(goals, data.accounts, choices);
+  const groupLines = goalGroupLines(goals, data.accounts, choices, data.goal_groups);
   const peace = viewSnapshot(app)?.pockets?.reserve.peace;
   const creating = goals.find((g) => g.id === creatingFor);
   const saved = async () => {
@@ -246,7 +253,8 @@ function GoalsStep({ data, offline, postStep, reloadSettings }: StepProps) {
   };
 
   function choose(goalId: string, value: string) {
-    const choice: GoalChoice | null = value === OFF ? { kind: "off" } : value === LATER ? { kind: "later" } : value ? { kind: "account", accountId: value } : null;
+    const choice: GoalChoice | null =
+      value === OFF ? { kind: "off" } : value === LATER ? { kind: "later" } : value === OPERATING ? { kind: "operating" } : value ? { kind: "account", accountId: value } : null;
     setPicked((x) => ({ ...x, [goalId]: choice }));
   }
 
@@ -262,12 +270,12 @@ function GoalsStep({ data, offline, postStep, reloadSettings }: StepProps) {
 
   return (
     <>
-      <Card title="Mỗi mục tiêu một tài khoản thật" flush note="Mỗi mục tiêu Dự phòng gắn một tài khoản thật ở ngăn Dự phòng; nhiều mục tiêu dùng chung được một tài khoản — số dư lấp lần lượt theo thứ tự ưu tiên">
+      <Card title={GOALS_STEP_TITLE} flush note="Mỗi khoản để dành ở một tài khoản thật ở ngăn Dự phòng (nhiều khoản dùng chung được một tài khoản, số dư lấp lần lượt theo thứ tự ưu tiên); khoản trả mỗi tháng có thể trả thẳng từ tiền chi tiêu">
         {!hasReserve && <p class="note">{NO_RESERVE_ACCOUNT}</p>}
         {goals.length === 0 && <p class="empty">Chưa có mục tiêu nào.</p>}
         {goals.map((g) => {
           const c = choices[g.id];
-          const value = !c ? "" : c.kind === "account" ? c.accountId : c.kind === "off" ? OFF : LATER;
+          const value = !c ? "" : c.kind === "account" ? c.accountId : c.kind === "operating" ? OPERATING : c.kind === "off" ? OFF : LATER;
           const options = goalRowAccounts(g.id, data.goals, data.accounts, choices, reward);
           const chosen = c?.kind === "account" ? options.find((a) => a.id === c.accountId) : undefined;
           const id = `cv-goal-${g.id}`;
@@ -294,19 +302,21 @@ function GoalsStep({ data, offline, postStep, reloadSettings }: StepProps) {
                 </option>
                 {options.map((a) => (
                   <option key={a.id} value={a.id} disabled={a.blocked !== null && a.id !== value}>
-                    {`${a.name} · đã có ${formatVnd(a.book_balance ?? 0)}${a.shared ? ` — ${a.shared}` : ""}${a.blocked ? ` (${a.blocked})` : ""}`}
+                    {`${a.name} · đã có ${formatVnd(a.book_balance ?? 0)}${a.deposits ? ` (${a.deposits})` : ""}${a.shared ? ` — ${a.shared}` : ""}${a.blocked ? ` (${a.blocked})` : ""}`}
                   </option>
                 ))}
                 <option value={NEW_ACCOUNT}>Tạo tài khoản mới</option>
+                {canPayFromOperating(g) && <option value={OPERATING}>{OPERATING_CHOICE_LABEL}</option>}
                 <option value={OFF}>Không dùng mục tiêu này</option>
                 <option value={LATER}>Để sau</option>
               </select>
-              {/* Ô chọn bị cắt chữ ở 390px: tên tài khoản đã chọn và "dùng chung với …" hiện đủ ở dòng dưới (UC-1208 AC-12). */}
+              {/* Tên tài khoản đã chọn và "dùng chung với …" hiện đủ ở dòng dưới, xuống dòng — ô chọn chiếm cả dòng ở 390px. */}
               {chosen?.shared && (
                 <span class="sub-line cv-goal-shared">
                   {chosen.name} — {chosen.shared}
                 </span>
               )}
+              {c?.kind === "operating" && <span class="sub-line cv-goal-shared">{OPERATING_HINT}</span>}
             </div>
           );
         })}
@@ -469,7 +479,9 @@ function PayCycleStep({ data, offline, postStep, reloadSettings }: StepProps) {
 
 function SavingsPctStep({ data, offline, postStep }: StepProps) {
   const { busy, error, send } = useSend();
-  const [text, setText] = useState(String(data.config.savings_pct ?? 10));
+  // Số 0038 đã điền (thang 1 · 10 · 30, ADR-142); khác 10 thì nói rõ số lấy từ cách chia ví cũ cho tới khi người đổi.
+  const prefilled = savingsPctStep(data.config.savings_pct);
+  const [text, setText] = useState(String(prefilled.pct));
   const pct = parseInteger(text, 1, 100);
   const lines = savingsPctLines(pct);
   return (
@@ -490,6 +502,16 @@ function SavingsPctStep({ data, offline, postStep }: StepProps) {
           {...(pct === null ? { "aria-invalid": "true" as const } : {})}
         />
       </div>
+      <SavingsSlider pct={sliderPct(text)} onPct={(p) => setText(String(p))} />
+      {prefilled.legacy && pct === prefilled.pct && <Hint>{prefilled.legacy}</Hint>}
+      <Hint>{prefilled.scale}</Hint>
+      {pct !== USE_DEFAULT_PCT.pct && (
+        <div class="pad">
+          <button type="button" class="btn" onClick={() => setText(String(USE_DEFAULT_PCT.pct))}>
+            {USE_DEFAULT_PCT.label}
+          </button>
+        </div>
+      )}
       {lines ? (
         <>
           <Hint>{lines.line}</Hint>

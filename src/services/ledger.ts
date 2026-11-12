@@ -1,9 +1,9 @@
 // Tầng dịch vụ: đọc/ghi D1 rồi gọi các hàm thuần trong src/domain.
 // REST (/v1), MCP và cron đều đi qua đây — không route nào tự viết SQL nghiệp vụ.
 
-import { buildEntry, INVALID_GOAL, MANUAL_MEANINGS, type EntryInput, type TxRow } from "../domain/entry";
-import { groupSpend, type CategoryGroupRef, type CycleRef, type LookBack, type LookBackCategory, type LookBackCycle, type LookBackInterestLine } from "../domain/look-back";
-import { cycleDays, cycleRanges, vnMidnight, type CycleRange, type TaskKind } from "../domain/pay-cycle";
+import { buildEntry, INVALID_GOAL, INVALID_INTEREST, MANUAL_MEANINGS, type EntryInput, type TxRow } from "../domain/entry";
+import { groupSpend, type CategoryGroupRef, type CycleRef, type LookBack, type LookBackCategory, type LookBackCycle, type LookBackInterestLine, type LookBackSavings } from "../domain/look-back";
+import { cycleDays, cycleRanges, savingsDone, vnMidnight, type CycleRange, type QrTarget, type TaskFigures, type TaskKind } from "../domain/pay-cycle";
 import { dayKey, monthKey, weekKey } from "../domain/period";
 import { normalizeContent } from "../domain/rules";
 import { buildSnapshot, DEFAULT_PAYDAY_DAY, type Snapshot } from "../domain/snapshot";
@@ -11,6 +11,7 @@ import { INTEREST_MAX_AMOUNT_DEFAULT, INTEREST_MAX_AMOUNT_LIMIT } from "../domai
 import { DomainError, type AccountRef, type Refs } from "../domain/types";
 import { DEFAULT_SAVINGS_PCT, goalOrder, pocketsView, type Pocket, type PocketDebt, type PocketGoalInput } from "../domain/pockets";
 import { goalSpentMap, goalSpentStatement } from "./pockets";
+import { groupInterestFrom, groupInterests, groupInterestStatements } from "./goal-groups";
 import { formatMoney } from "../notify/format";
 import { itemsTotal } from "./balance";
 import { debtInterest } from "./debts";
@@ -30,7 +31,7 @@ export async function loadRefs(db: D1Database): Promise<Refs> {
     db.prepare(`SELECT id, name, icon, sort, group_id AS groupId FROM categories WHERE active = 1 ORDER BY sort, name`),
     db.prepare(
       `SELECT id, name, kind, owner_member_id AS ownerMemberId, sepay_enabled AS sepayEnabled, sepay_out AS sepayOut, opened_at AS openedAt,
-              feed_from AS feedFrom, sepay_out_from AS sepayOutFrom, pocket, private
+              feed_from AS feedFrom, sepay_out_from AS sepayOutFrom, pocket, private, parent_account_id AS parentId
        FROM accounts WHERE active = 1 ORDER BY kind, name`,
     ),
     db.prepare(`SELECT id, name, role FROM members WHERE active = 1 ORDER BY role = 'owner' DESC, name`),
@@ -39,11 +40,13 @@ export async function loadRefs(db: D1Database): Promise<Refs> {
     db.prepare(`SELECT v FROM config WHERE k = 'rental_income_stream_id'`),
     db.prepare(`SELECT debt_id AS id, name, active, balance FROM v_debt_balance ORDER BY balance DESC, name`),
     db.prepare(`SELECT receivable_id AS id, name, active, balance FROM v_receivable_balance ORDER BY balance DESC, name`),
-    db.prepare(`SELECT id, name, account_id AS accountId, sort, due_date AS dueDate FROM reserve_goals WHERE active = 1 AND account_id IS NOT NULL`),
+    db.prepare(`SELECT id, name, account_id AS accountId, sort, due_date AS dueDate, pays_from AS paysFrom FROM reserve_goals WHERE active = 1 AND (account_id IS NOT NULL OR pays_from = 'operating')`),
   ]);
   const goalIdsOf = new Map<string, string[]>();
-  for (const g of rows<{ id: string; name: string; accountId: string; sort: number; dueDate: string | null }>(goals!).sort(goalOrder)) {
-    goalIdsOf.set(g.accountId, [...(goalIdsOf.get(g.accountId) ?? []), g.id]);
+  const operatingGoalIds: string[] = [];
+  for (const g of rows<{ id: string; name: string; accountId: string | null; sort: number; dueDate: string | null; paysFrom: string }>(goals!).sort(goalOrder)) {
+    if (g.paysFrom === "operating") operatingGoalIds.push(g.id);
+    else if (g.accountId !== null) goalIdsOf.set(g.accountId, [...(goalIdsOf.get(g.accountId) ?? []), g.id]);
   }
   const books = (res: D1Result) =>
     rows<{ id: string; name: string; active: number; balance: number }>(res).map((b) => ({ ...b, active: Boolean(b.active), balance: Number(b.balance) }));
@@ -66,6 +69,7 @@ export async function loadRefs(db: D1Database): Promise<Refs> {
     debts: books(debts!),
     receivables: books(receivables!),
     rentalIncomeStreamId: rows<{ v: string }>(rental!)[0]?.v || null,
+    operatingGoalIds,
   };
 }
 
@@ -83,23 +87,53 @@ export interface TxLogs {
 const NO_LOGS: TxLogs = { log_id: null, log_id_2: null };
 
 /**
- * `goal_id` ghi vào dòng mới (pocket UC-1209 bước 11): gửi thì giữ (đã kiểm ở `buildEntry`, trigger 0042 là chốt cuối); không
- * gửi mà khoản là chi / chuyển ra từ tài khoản có đúng một mục tiêu đang dùng → tự gắn mục tiêu đó, lúc ghi — một luật cho
- * mọi đường ghi (nhập tay, sửa, Gán, rule, ghép cặp, MCP).
+ * `goal_id` ghi vào dòng mới (pocket UC-1209 bước 11): gửi thì giữ (đã kiểm ở `buildEntry`, trigger 0044 là chốt cuối); không
+ * gửi mà khoản là chi / chuyển ra khỏi tài khoản có đúng một mục tiêu tài khoản đang dùng, không rút từ tiền lãi, không chuyển
+ * sang khoản gửi của chính nó → tự gắn mục tiêu đó, lúc ghi — một luật cho mọi đường ghi (nhập tay, sửa, Gán, rule, ghép cặp,
+ * MCP). Mục tiêu trả từ tiền chi tiêu không bao giờ tự gắn (ADR-141).
  */
-const GOAL_VALUE = "COALESCE(?, (SELECT MIN(g.id) FROM reserve_goals g WHERE g.account_id = ? AND g.active = 1 AND ? IN ('spend', 'transfer') HAVING COUNT(*) = 1))";
-const goalBinds = (row: TxRow) => [row.goal_id ?? null, row.account_id, row.meaning];
+const GOAL_VALUE = `COALESCE(?, (SELECT MIN(g.id) FROM reserve_goals g WHERE g.account_id = ? AND g.active = 1 AND g.pays_from = 'account'
+  AND ? IN ('spend', 'transfer') AND ? = 0
+  AND COALESCE((SELECT COALESCE(c.parent_account_id, c.id) FROM accounts c WHERE c.id = ?), '') <> g.account_id HAVING COUNT(*) = 1))`;
+const goalBinds = (row: TxRow) => [row.goal_id ?? null, row.account_id, row.meaning, row.from_interest ?? 0, row.counter_account_id, row.from_interest ?? 0];
+const TX_INSERT_COLUMNS = `log_id, log_id_2, ${TX_COLUMNS.join(", ")}, goal_id, from_interest`;
+const TX_INSERT_VALUES = `?, ?, ${TX_COLUMNS.map(() => "?").join(", ")}, ${GOAL_VALUE}, ?`;
 
 export function insertTx(db: D1Database, row: TxRow, logs: TxLogs = NO_LOGS): D1PreparedStatement {
   return db
-    .prepare(`INSERT INTO transactions (log_id, log_id_2, ${TX_COLUMNS.join(", ")}, goal_id) VALUES (?, ?, ${TX_COLUMNS.map(() => "?").join(", ")}, ${GOAL_VALUE})`)
+    .prepare(`INSERT INTO transactions (${TX_INSERT_COLUMNS}) VALUES (${TX_INSERT_VALUES})`)
     .bind(logs.log_id, logs.log_id_2, ...TX_COLUMNS.map((c) => row[c] ?? null), ...goalBinds(row));
 }
 
-/** Trigger 0042 huỷ câu ghi có `goal_id` sai (máy khác vừa đổi tài khoản / tắt mục tiêu) → 400 như bước kiểm ở code. */
-export function rethrowInvalidGoal(err: unknown): void {
+/** Trigger 0044 huỷ câu ghi có `goal_id` / `from_interest` sai (máy khác vừa đổi tài khoản / tắt mục tiêu) → 400 như bước kiểm ở code. */
+export function rethrowEntryTrigger(err: unknown): void {
   if (/invalid_goal/.test(String(err))) throw new DomainError("invalid_goal", INVALID_GOAL);
+  if (/invalid_interest/.test(String(err))) throw new DomainError("invalid_interest", INVALID_INTEREST);
 }
+
+/**
+ * Trần "Từ tiền lãi" (pocket UC-1209 bước 9, AC-19; ledger UC-102 AC-29): số rút không vượt tiền lãi hiện có của nhóm mẹ + con,
+ * tính tới lúc ghi và không gồm khoản đang được thay (`excludeTxId`). Luật loại khoản / nhóm đã kiểm ở `buildEntry`.
+ */
+export async function assertInterestCap(db: D1Database, refs: Refs, row: TxRow, excludeTxId: number | null = null): Promise<void> {
+  if (row.from_interest !== 1) return;
+  const from = refs.accounts.find((a) => a.id === row.account_id);
+  const rootId = from?.parentId ?? row.account_id!;
+  const available = (await groupInterests(db, excludeTxId))[rootId] ?? 0;
+  if (row.amount > available) {
+    const name = refs.accounts.find((a) => a.id === rootId)?.name ?? rootId;
+    throw new DomainError("invalid_interest", `Tiền lãi của ${name} chỉ còn ${formatMoney(available)} — không rút ${formatMoney(row.amount)} từ tiền lãi được.`);
+  }
+}
+
+/** Dòng phân loại `passive_income` cho khoản lãi (`is_interest`) — đứng ngay sau câu ghi khoản đó (last_insert_rowid). */
+const passiveIncomeClass = (db: D1Database, memberId: string | null, guardTxId: number | null = null) =>
+  db
+    .prepare(
+      `INSERT INTO transaction_report_classes (transaction_id, report_class, by_member_id) SELECT last_insert_rowid(), 'passive_income', ?1
+       WHERE ?2 IS NULL OR EXISTS (SELECT 1 FROM transactions WHERE id = ?2 AND status = 'active')`,
+    )
+    .bind(memberId, guardTxId);
 
 const linkedIds = (logs: TxLogs) => [logs.log_id, logs.log_id_2].filter((x): x is string => x !== null);
 
@@ -215,15 +249,23 @@ export async function createEntry(db: D1Database, input: EntryInput, memberId: s
     throw new DomainError("fed_account", `${fed.name} đã nối ngân hàng: khoản này sẽ tự về, gán nó ở màn Gán thay vì nhập tay.`);
   }
   await resolveLink(db, row, undefined, hidden);
-  const opensCycle = resolveOpensCycle(refs, row, input.opens_cycle);
+  await assertInterestCap(db, refs, row);
+  // Khoản lãi (`is_interest`, ADR-140): không mở kỳ, không việc; phân loại `passive_income` ngay sau câu ghi.
+  const interest = input.is_interest === true;
+  const opensCycle = interest ? false : resolveOpensCycle(refs, row, input.opens_cycle);
   const logs = await bankLogsFor(db, refs, row, input.confirm_duplicate === true);
   const linked = linkedIds(logs);
   // Khoản thu + kỳ + việc: cùng một batch (pocket UC-1205 bước 5).
-  const income = await incomeStatements(db, refs, row, { opensCycle, memberId });
+  const income = await incomeStatements(db, refs, row, { opensCycle, interest, memberId });
 
   let id: number;
   try {
-    const [res] = await db.batch([insertTx(db, row, logs), ...income.statements, ...(linked.length ? [markLinked(db, linked)] : [])]);
+    const [res] = await db.batch([
+      insertTx(db, row, logs),
+      ...(interest ? [passiveIncomeClass(db, memberId)] : []),
+      ...income.statements,
+      ...(linked.length ? [markLinked(db, linked)] : []),
+    ]);
     id = Number(res!.meta.last_row_id);
   } catch (err) {
     // Hai lần gửi cùng client_id chạy song song: lần thua đọc lại bản đã ghi.
@@ -231,7 +273,7 @@ export async function createEntry(db: D1Database, input: EntryInput, memberId: s
     if (raced) return duplicate(raced);
     // Log định gắn vừa được gán ở request khác: khoản này giờ đã có trong sổ.
     if (/log_not_pending/.test(String(err))) throw new DomainError("bank_log_exists", BANK_LOG_EXISTS, 409);
-    rethrowInvalidGoal(err);
+    rethrowEntryTrigger(err);
     throw err;
   }
   const { tasksDone } = await afterWrite(db);
@@ -332,19 +374,18 @@ export async function replaceTransaction(db: D1Database, id: number, input: Entr
   if (returns.length > 0 && (row.meaning !== old.meaning || otherPerson)) {
     throw new DomainError("invalid_link", "Khoản này đang có khoản trả lại trỏ về — gỡ liên kết trước.");
   }
-  const opensCycle = resolveOpensCycle(refs, row, input.opens_cycle);
+  await assertInterestCap(db, refs, row, id);
+  const interest = input.is_interest === true;
+  const opensCycle = interest ? false : resolveOpensCycle(refs, row, input.opens_cycle);
   const logs = await bankLogsFor(db, refs, row, input.confirm_duplicate === true);
   const linked = linkedIds(logs);
   const cycle = await cycleOpenedBy(db, id);
   // Huỷ kèm theo của khoản cũ đứng TRƯỚC: kỳ nó mở phải void trước khi khoản mới mở lại kỳ cùng ngày lương.
   const undo = await voidTxStatements(db, [id]);
-  const income = await incomeStatements(db, refs, row, { opensCycle, memberId: author, excludeTxId: id, guardTxId: id });
+  const income = await incomeStatements(db, refs, row, { opensCycle, interest, memberId: author, excludeTxId: id, guardTxId: id });
   // Khoản mới chỉ được ghi khi khoản cũ còn hiệu lực ngay trong batch: huỷ chen ở request khác thì không ghi gì mới.
   const insert = db
-    .prepare(
-      `INSERT INTO transactions (log_id, log_id_2, ${TX_COLUMNS.join(", ")}, goal_id) SELECT ?, ?, ${TX_COLUMNS.map(() => "?").join(", ")}, ${GOAL_VALUE}
-       WHERE EXISTS (SELECT 1 FROM transactions WHERE id = ? AND status = 'active')`,
-    )
+    .prepare(`INSERT INTO transactions (${TX_INSERT_COLUMNS}) SELECT ${TX_INSERT_VALUES} WHERE EXISTS (SELECT 1 FROM transactions WHERE id = ? AND status = 'active')`)
     .bind(logs.log_id, logs.log_id_2, ...TX_COLUMNS.map((c) => row[c] ?? null), ...goalBinds(row), id);
   // Ngay sau INSERT cùng điều kiện: last_insert_rowid() là khoản mới; khoản cũ đã huỷ chen thì không ghi, không trỏ.
   const relink = db
@@ -354,27 +395,30 @@ export async function replaceTransaction(db: D1Database, id: number, input: Entr
     )
     .bind(id, id);
   // Phân loại lại cho báo cáo (BR-15) đi theo khoản mới — khi khoản mới vẫn xếp được: đúng một phía tài khoản, Thu nhập thụ
-  // động chỉ cho khoản thu. Đặt ngay sau relink: last_insert_rowid() vẫn là khoản mới (UPDATE không đổi nó).
+  // động chỉ cho khoản thu, và không khi người sửa bỏ "Đây là tiền lãi" (`is_interest: false`). `is_interest: true` → đúng
+  // một dòng `passive_income`. Đặt ngay sau relink: last_insert_rowid() vẫn là khoản mới (UPDATE không đổi nó).
   const singleSide = (row.account_id === null) !== (row.counter_account_id === null);
-  const copyClass = singleSide
-    ? [
-        db
-          .prepare(
-            `INSERT INTO transaction_report_classes (transaction_id, report_class, by_member_id)
-             SELECT last_insert_rowid(), report_class, by_member_id FROM transaction_report_classes
-             WHERE transaction_id = ?1 AND (report_class <> 'passive_income' OR ?2 = 'income')
-               AND EXISTS (SELECT 1 FROM transactions WHERE id = ?1 AND status = 'active')`,
-          )
-          .bind(id, row.meaning),
-      ]
-    : [];
+  const classes = interest
+    ? [passiveIncomeClass(db, memberId, id)]
+    : singleSide
+      ? [
+          db
+            .prepare(
+              `INSERT INTO transaction_report_classes (transaction_id, report_class, by_member_id)
+               SELECT last_insert_rowid(), report_class, by_member_id FROM transaction_report_classes
+               WHERE transaction_id = ?1 AND (report_class <> 'passive_income' OR (?2 = 'income' AND ?3 = 1))
+                 AND EXISTS (SELECT 1 FROM transactions WHERE id = ?1 AND status = 'active')`,
+            )
+            .bind(id, row.meaning, input.is_interest === false ? 0 : 1),
+        ]
+      : [];
   let results: D1Result[];
   try {
     results = await db.batch([
       ...undo,
       insert,
       relink,
-      ...copyClass,
+      ...classes,
       ...income.statements,
       ...(linked.length ? [markLinked(db, linked)] : []),
       db.prepare("UPDATE transactions SET status = 'void' WHERE id = ? AND status = 'active'").bind(id),
@@ -384,7 +428,7 @@ export async function replaceTransaction(db: D1Database, id: number, input: Entr
     const raced = await existing();
     if (raced) return duplicate(raced);
     if (/log_not_pending/.test(String(err))) throw new DomainError("bank_log_exists", BANK_LOG_EXISTS, 409);
-    rethrowInvalidGoal(err);
+    rethrowEntryTrigger(err);
     throw err;
   }
   const written = results[undo.length]!.meta;
@@ -428,15 +472,19 @@ const TX_FROM = `FROM transactions t
   LEFT JOIN debts d ON d.id = t.debt_id
   LEFT JOIN receivables r ON r.id = t.receivable_id
   LEFT JOIN tenants tn ON tn.id = t.tenant_id`;
-/** `legacy`: khoản cũ trước v2 (`id` ≤ `config.legacy_max_tx_id`, ADR-131); không có khoá → không khoản nào cũ. */
+/**
+ * `legacy`: khoản cũ trước v2 (`id` ≤ `config.legacy_max_tx_id`, ADR-131); không có khoá → không khoản nào cũ. `is_interest`:
+ * khoản thu có phân loại `passive_income` tường minh (khoản lãi, ADR-140).
+ */
 const TX_VIEW = `SELECT t.*, c.name AS category_name,
          d.name AS debt_name, r.name AS receivable_name, tn.name AS tenant_name,
          EXISTS (SELECT 1 FROM allocation_runs ar WHERE ar.income_tx_id = t.id) AS allocated,
          (SELECT ar.wealth_note FROM allocation_runs ar WHERE ar.income_tx_id = t.id) AS wealth_note,
-         t.id <= COALESCE((SELECT CAST(v AS INTEGER) FROM config WHERE k = 'legacy_max_tx_id'), 0) AS legacy
+         t.id <= COALESCE((SELECT CAST(v AS INTEGER) FROM config WHERE k = 'legacy_max_tx_id'), 0) AS legacy,
+         t.meaning = 'income' AND EXISTS (SELECT 1 FROM transaction_report_classes rc WHERE rc.transaction_id = t.id AND rc.report_class = 'passive_income') AS is_interest
   ${TX_FROM}`;
-/** Dòng `TX_VIEW` trả ra API: `legacy` là boolean (ledger UC-111). */
-const txOut = (r: Row): Row => ({ ...r, legacy: Boolean(r.legacy) });
+/** Dòng `TX_VIEW` trả ra API: `legacy`, `is_interest`, `from_interest` là boolean (ledger UC-111, UC-101). */
+const txOut = (r: Row): Row => ({ ...r, legacy: Boolean(r.legacy), is_interest: Boolean(r.is_interest), from_interest: Boolean(r.from_interest) });
 
 /** Các loại xem được trong sổ (mọi loại trừ `fund` — bút toán nạp ví của lần chia không hiện, ledger UC-111). */
 export const BOOK_MEANINGS = ["spend", "income", "refund", "transfer", "lend", "collect", "buy_asset", "adjust"] as const;
@@ -757,17 +805,18 @@ export async function getSnapshot(db: D1Database, viewerId: string | null, now: 
   const hi = done.at(-1)?.end ?? t0;
   const hidden = await hiddenAccountIds(db, viewerId);
   const OPERATING = "SELECT id FROM accounts WHERE pocket = 'operating'";
-  const [config, pending, drift, accounts, goals, debts, accountsAt, flowsSince, opSpend, dataStart, hiddenLogs, claims, goalSpent] = await db.batch([
+  const [interestAccounts, interestTxs] = groupInterestStatements(db);
+  const [config, pending, drift, accounts, goals, debts, accountsAt, flowsSince, opSpend, dataStart, hiddenLogs, claims, goalSpent, groupAccounts, groupTxs, topUpTarget] = await db.batch([
     db.prepare("SELECT k, v FROM config WHERE k IN ('safety_fund_months', 'savings_pct', 'surplus_reward_account', 'conversion_state')"),
     db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(CASE direction WHEN 'in' THEN amount ELSE -amount END), 0) AS net FROM bank_logs WHERE status = 'pending'"),
     db.prepare("SELECT account_id AS accountId, name, book_drift AS bookDrift FROM v_reconcile"),
     db.prepare(
-      `SELECT b.account_id AS id, b.name, b.book_balance AS balance, a.pocket, a.pocket_confirmed AS confirmed
+      `SELECT b.account_id AS id, b.name, b.book_balance AS balance, a.pocket, a.pocket_confirmed AS confirmed, a.parent_account_id AS parentId
        FROM v_account_book b JOIN accounts a ON a.id = b.account_id ORDER BY a.kind, a.name`,
     ),
     db.prepare(
       `SELECT id, name, account_id AS accountId, target_amount AS target, target_pct AS targetPct, monthly_amount AS monthly,
-              repeat_months AS repeatMonths, due_date AS dueDate, debt_id AS debtId, sort
+              repeat_months AS repeatMonths, due_date AS dueDate, debt_id AS debtId, sort, pays_from AS paysFrom
        FROM reserve_goals WHERE active = 1`,
     ),
     db.prepare(
@@ -807,17 +856,25 @@ export async function getSnapshot(db: D1Database, viewerId: string | null, now: 
     db.prepare("SELECT step FROM conversion_claims"),
     // Đã chi cho từng mục tiêu từ đầu kỳ lương hiện tại (pocket UC-1209 bước 11): mốc `started_at` / ngày lương danh nghĩa.
     goalSpentStatement(db, t0),
+    // Tiền lãi của các nhóm mẹ + con có mục tiêu (QĐ2, ADR-140).
+    interestAccounts,
+    interestTxs,
+    // Đích nhắc chuyển thêm (ADR-141): tài khoản ngân hàng ngăn Vận hành có số tài khoản đầu tiên — cùng luật QR của UC-1206 bước 10.
+    db.prepare(
+      `SELECT id AS accountId, name, bank, account_no AS accountNo, sub_account AS subAccount FROM accounts
+       WHERE active = 1 AND kind = 'bank' AND pocket = 'operating' AND account_no IS NOT NULL AND account_no <> '' ORDER BY kind, name LIMIT 1`,
+    ),
   ]);
   const first = <T>(r: D1Result) => rows<T>(r)[0] ?? null;
   const cfg = new Map(rows<{ k: string; v: string }>(config!).map((r) => [r.k, r.v]));
-  const accountRows = rows<{ id: string; name: string; balance: number; pocket: Pocket | null; confirmed: number }>(accounts!);
+  const accountRows = rows<{ id: string; name: string; balance: number; pocket: Pocket | null; confirmed: number; parentId: string | null }>(accounts!);
   const savings = Number(cfg.get("savings_pct"));
   const flows = new Map(rows<{ acc: string; fromPrev: number; fromSince: number }>(flowsSince!).map((f) => [f.acc, f]));
   const cycleSpend = new Map(rows<{ cycle: number; amount: number }>(opSpend!).map((c) => [Number(c.cycle), Number(c.amount)]));
   const firstAt = first<{ at: string }>(dataStart!)?.at;
   const spentOf = goalSpentMap(goalSpent!);
   const pockets = pocketsView({
-    accounts: accountRows.map((a) => ({ id: a.id, name: a.name, pocket: a.pocket, confirmed: a.confirmed === 1, balance: Number(a.balance) })),
+    accounts: accountRows.map((a) => ({ id: a.id, name: a.name, pocket: a.pocket, confirmed: a.confirmed === 1, balance: Number(a.balance), parentId: a.parentId })),
     goals: rows<Omit<PocketGoalInput, "spent">>(goals!).map((g) => ({ ...g, sort: Number(g.sort), spent: spentOf.get(g.id) ?? 0 })),
     rewardAccountId: cfg.get("surplus_reward_account") || null,
     debts: rows<Omit<PocketDebt, "active"> & { active: number }>(debts!).map((d) => ({ ...d, active: d.active === 1, balance: Number(d.balance) })),
@@ -841,6 +898,7 @@ export async function getSnapshot(db: D1Database, viewerId: string | null, now: 
       dataStart: firstAt ? dayKey(firstAt) : null,
     },
     peaceTarget: Number(cfg.get("safety_fund_months") ?? 6),
+    interest: groupInterestFrom(groupAccounts!, groupTxs!),
   });
   return buildSnapshot({
     now,
@@ -852,6 +910,7 @@ export async function getSnapshot(db: D1Database, viewerId: string | null, now: 
     paydayDay,
     payCycle: cycle.view,
     pendingTasks: cycle.pendingTasks,
+    topUpTo: first<QrTarget>(topUpTarget!),
     hasCycleStream: cycle.hasCycleStream,
     conversion: conversionProgress(cfg.get("conversion_state") ?? null, rows<{ step: string }>(claims!).map((r) => r.step)),
   });
@@ -962,7 +1021,9 @@ export async function spendByCategory(db: D1Database, q: { cycle?: string | null
   if (cycle && period) throw new DomainError("invalid_input", "Chỉ gửi một trong cycle hoặc period.");
   if (period !== null && !MONTH_REGEX.test(period)) throw new DomainError("invalid_period", "Tháng phải có dạng 2026-09.");
 
-  let head: { kind: "cycle"; cycle: LookBackCycle; previous: CycleRef | null; next: CycleRef | null } | { kind: "month"; month: string; previous: string };
+  let head:
+    | { kind: "cycle"; cycle: LookBackCycle; previous: CycleRef | null; next: CycleRef | null; savings: LookBackSavings | null }
+    | { kind: "month"; month: string; previous: string };
   let sumSql: D1PreparedStatement;
   let interestMonth: string;
   const select = (p: string) => `SELECT ${p} AS p, ${SPEND_KIND} AS k, COALESCE(interest_debt_id, category_id) AS id, ${SPEND_SUM} AS s FROM transactions`;
@@ -982,7 +1043,13 @@ export async function spendByCategory(db: D1Database, q: { cycle?: string | null
     const before = ctx.ranges[at - 1];
     const previous = before && ctx.earliestAt !== null && before.end! > ctx.earliestAt ? before : null;
     const next = ctx.ranges[at + 1] ?? null;
-    head = { kind: "cycle", cycle: { ...cycleRef(range), ...cycleDays(range, ctx.paydayDay, today) }, previous: previous && cycleRef(previous), next: next && cycleRef(next) };
+    head = {
+      kind: "cycle",
+      cycle: { ...cycleRef(range), ...cycleDays(range, ctx.paydayDay, today) },
+      previous: previous && cycleRef(previous),
+      next: next && cycleRef(next),
+      savings: range.stored ? await cycleSavings(db, range.payday) : null,
+    };
     interestMonth = range.payday.slice(0, 7);
     sumSql = db
       .prepare(`${select("CASE WHEN at >= ?2 THEN 0 ELSE 1 END")} WHERE status = 'active' AND meaning IN ('spend', 'refund') AND at >= ?1 AND at < ?3 GROUP BY p, k, id`)
@@ -1036,6 +1103,36 @@ export async function spendByCategory(db: D1Database, q: { cycle?: string | null
   } as LookBack;
 }
 
+/**
+ * Tích luỹ của kỳ lưu có ngày lương `payday` (ledger UC-108, ADR-142): `savingsDone` trên các việc ① chưa void của chính kỳ đó
+ * (liên kết chuyển khoản còn hiệu lực, khoản lương sinh việc); `reason` = lý do của ① bỏ qua / sửa về 0 khi mức là `zero`.
+ */
+async function cycleSavings(db: D1Database, payday: string): Promise<LookBackSavings> {
+  const tasks = rows<{ status: TaskFigures["status"]; amount: number; linked: number; sourceAmount: number | null; reason: string | null }>(
+    await db
+      .prepare(
+        `SELECT k.status, k.amount, k.reason, (SELECT s.amount FROM transactions s WHERE s.id = k.source_tx_id) AS sourceAmount,
+                COALESCE((SELECT SUM(x.amount) FROM pay_cycle_task_tx x JOIN transactions t ON t.id = x.tx_id AND t.status = 'active' WHERE x.task_id = k.id), 0) AS linked
+         FROM pay_cycle_tasks k JOIN pay_cycles c ON c.id = k.cycle_id
+         WHERE c.status = 'active' AND c.payday = ? AND k.kind = 'savings' AND k.status <> 'void' ORDER BY k.id`,
+      )
+      .bind(payday)
+      .all(),
+  );
+  const done = savingsDone(
+    tasks.map((t) => ({
+      kind: "savings" as const,
+      status: t.status,
+      amount: Number(t.amount),
+      linked: Number(t.linked),
+      sourceAmount: t.sourceAmount === null ? null : Number(t.sourceAmount),
+      toPocket: "savings" as const,
+    })),
+  );
+  const reason = done.level === "zero" ? (tasks.find((t) => (t.status === "skipped" || Number(t.amount) === 0) && t.reason)?.reason ?? null) : null;
+  return { amount: done.amount, base: done.base, level: done.level, reason };
+}
+
 /** Chi trong tuần `week` cho tin tuần (notify UC-406 bước 3): tổng mọi tài khoản, chi từ Vận hành, chi ròng theo danh mục. */
 export async function spendInWeek(db: D1Database, week: string) {
   const OPERATING = "SELECT id FROM accounts WHERE pocket = 'operating'";
@@ -1074,12 +1171,13 @@ export async function reconcile(db: D1Database) {
 
 /**
  * Tích luỹ và Dự phòng (ledger UC-107, MCP `get_goals`): cùng số `snapshot.pockets` (BR-05) — tổng và thay đổi Tích luỹ theo
- * kỳ, % trích, kỳ này đã trích; mục tiêu Dự phòng (đã có sau khi chia số dư tài khoản chung, đã chi trong kỳ), nhóm theo tài
- * khoản, phần an tâm; nợ ngắn hạn. Không đọc view theo ví.
+ * kỳ, % trích, kỳ này đã trích; mục tiêu tài khoản (đã có sau khi chia số dư gộp − tiền lãi của nhóm, đã chi trong kỳ), nhóm
+ * theo tài khoản mẹ (kèm `interest`, `childIds`), phần an tâm; mục tiêu trả từ tiền chi tiêu (`operating`: mỗi tháng, đã chi,
+ * còn phải trả kỳ này, ADR-141); nợ ngắn hạn. Không đọc view theo ví.
  */
 export async function goals(db: D1Database, viewerId: string | null, now: Date) {
   const s = await getSnapshot(db, viewerId, now);
-  const { savings, reserve, savingsPct, shortDebt } = s.pockets;
+  const { savings, reserve, operating, savingsPct, shortDebt } = s.pockets;
   return {
     savings: { total: savings.total, change: savings.change, pct: savingsPct, savingsDone: s.payCycle?.savingsDone ?? null },
     reserve: {
@@ -1103,6 +1201,7 @@ export async function goals(db: D1Database, viewerId: string | null, now: Date) 
       peace: reserve.peace,
       peaceMonths: reserve.peaceMonths,
     },
+    operating: { goals: operating.goals, remaining: operating.remaining },
     shortDebt,
   };
 }
