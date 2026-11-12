@@ -723,10 +723,12 @@ export interface GoalForm {
   /** "" = không gắn khoản nợ. */
   debt_id: string;
   active: boolean;
+  /** Danh mục tự tính là đã trả (chỉ khi trả thẳng từ tiền chi tiêu, ADR-143). */
+  category_ids: string[];
 }
 
 export function goalToForm(g: ReserveGoal | null): GoalForm {
-  if (!g) return { name: "", account_id: "", pays_from: "account", mode: "repeat", monthly_amount: 0, repeat_months: "1", target_amount: 0, due_date: "", target_pct: "", debt_id: "", active: true };
+  if (!g) return { name: "", account_id: "", pays_from: "account", mode: "repeat", monthly_amount: 0, repeat_months: "1", target_amount: 0, due_date: "", target_pct: "", debt_id: "", active: true, category_ids: [] };
   return {
     name: g.name,
     account_id: g.account_id ?? "",
@@ -739,6 +741,7 @@ export function goalToForm(g: ReserveGoal | null): GoalForm {
     target_pct: g.target_pct === null ? "" : String(g.target_pct),
     debt_id: g.debt_id ?? "",
     active: g.active,
+    category_ids: g.category_ids ?? [],
   };
 }
 
@@ -748,6 +751,8 @@ export const GOAL_PLACE_LABEL = "Tiền để ở đâu";
 export const PLACE_LABEL = { account: "Một tài khoản để dành", operating: "Trả thẳng từ tiền chi tiêu" } as const;
 export const OPERATING_MONTHLY_ONLY = "Chỉ khoản trả mỗi tháng";
 export const OPERATING_HINT = "Không phải chuyển tiền. App chừa số này khỏi 'Chi khoảng …/ngày' tới khi trả.";
+export const GOAL_CATEGORIES_LABEL = "Danh mục tự tính là đã trả";
+export const GOAL_CATEGORIES_HINT = "Khoản chi từ tiền chi tiêu thuộc các danh mục này, không chọn khoản phải trả nào, tự tính là đã trả cho khoản này.";
 
 /**
  * Lựa chọn "Trả thẳng từ tiền chi tiêu": mục tiêu % (Thuế) không có (Thuế cần tài khoản riêng); "một lần" hoặc số tháng ≠ 1
@@ -770,8 +775,9 @@ const MAX_TARGET = 1_000_000_000_000;
 /**
  * Thân POST (existing = null) / PATCH mục tiêu, kiểm như server (UC-1209). Lặp: số mỗi tháng + số tháng, kèm B = tích
  * (server kiểm khớp); một lần: B; thuế: %; cột của cách khác về null để không sót số cũ. Tài khoản "" → null (Chưa có).
- * Trả thẳng từ tiền chi tiêu: `pays_from: "operating"`, không `account_id` (server tự bỏ tài khoản); đổi về tài khoản gửi
- * `pays_from: "account"`; mục tiêu tài khoản không đổi nơi để tiền thì không gửi `pays_from`.
+ * Trả thẳng từ tiền chi tiêu: `pays_from: "operating"`, không `account_id` (server tự bỏ tài khoản), `category_ids` khi khác danh
+ * mục đang lưu; đổi về tài khoản gửi `pays_from: "account"` (server bỏ danh mục); mục tiêu tài khoản không đổi nơi để tiền thì
+ * không gửi `pays_from`.
  */
 export function goalPayload(f: GoalForm, existing: ReserveGoal | null): Result<Record<string, unknown>> {
   const errors: Errors = {};
@@ -802,9 +808,12 @@ export function goalPayload(f: GoalForm, existing: ReserveGoal | null): Result<R
   }
   const place = goalPlace(f);
   const wasOperating = existing?.pays_from === "operating";
+  const saved = existing?.category_ids ?? [];
+  const categoriesChanged = f.category_ids.length !== saved.length || f.category_ids.some((c) => !saved.includes(c));
   return done(errors, () => ({
     name,
     ...(place === "operating" ? (wasOperating ? {} : { pays_from: "operating" }) : { ...(wasOperating ? { pays_from: "account" } : {}), account_id: f.account_id || null }),
+    ...(place === "operating" && categoriesChanged ? { category_ids: f.category_ids } : {}),
     ...amounts,
     due_date: f.due_date || null,
     debt_id: f.debt_id || null,
@@ -1085,6 +1094,7 @@ export const AUDIT_ACTION: Record<AuditAction | "income.allocate" | "month.close
   "category_group.update": "Sửa nhóm danh mục",
   "pockets.confirm": "Xác nhận ngăn tài khoản",
   "goal.order": "Đổi thứ tự mục tiêu",
+  "goal.cycle_amount": "Đặt số kỳ này cho khoản phải trả",
   "config.update": "Sửa tham số",
   "member.create": "Thêm thành viên",
   "member.activate": "Bật lại thành viên",

@@ -90,7 +90,7 @@ export async function registerTools(
         "account; accounts[].parentId = the parent account of a term deposit (child account, same pocket); peace-of-mind amount " +
         "(reserve accounts without a goal) and months of operating spend it covers (reserve.peace, reserve.peaceMonths), reward account " +
         "(reserve.reward), short-term debts (shortDebt, reminder only — not subtracted). operating.goals = goals paid straight from spending " +
-        "money each month ({ id, name, monthly, spent, remaining }), operating.remaining = what is still to pay for them this pay cycle. " +
+        "money each month ({ id, name, monthly, cycleAmount (own amount for this pay cycle, null = monthly), note, categoryIds (spending in these categories counts as paid), spent, remaining }), operating.remaining = what is still to pay for them this pay cycle. " +
         "nearSpend: the operating pocket counted until the next payday, per day / per meal / per market trip, minus payday tasks not done yet " +
         "(pendingTasks) and minus what goals paid from spending money still need this cycle (goalRemaining). topUp: spending money will not " +
         "last until payday — { amount, sources: [{ accountId, name, amount }] (reward account first, then peace-of-mind accounts), toAccountId, " +
@@ -118,7 +118,7 @@ export async function registerTools(
         "account; held = what the goal has after splitting the account balance by priority, counting spent this pay cycle; null = no account yet), " +
         "groups per account (balance incl. term deposits, interest kept out of the goals, childIds, need, spent, short / extra), peace-of-mind " +
         "amount (reserve accounts without a goal) and months, short-term debts, and operating.goals = goals paid straight from spending money " +
-        "each month ({ id, name, monthly, spent, remaining }) with operating.remaining. Same numbers as get_snapshot pockets. No parameters.",
+        "each month ({ id, name, monthly, cycleAmount (own amount for this pay cycle, null = monthly), note, categoryIds (spending in these categories counts as paid), spent, remaining }) with operating.remaining. Same numbers as get_snapshot pockets. No parameters.",
     },
     async () => {
       try {

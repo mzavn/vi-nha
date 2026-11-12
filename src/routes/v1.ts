@@ -10,6 +10,7 @@ import { debtInterest } from "../services/debts";
 import * as conversion from "../services/conversion";
 import * as ledger from "../services/ledger";
 import * as payCycles from "../services/pay-cycles";
+import { setGoalCycleAmount } from "../services/pockets";
 
 export const v1 = new Hono<AppEnv>();
 
@@ -253,6 +254,13 @@ v1.post("/pay-cycle-tasks/:id/done", taskRoute(payCycles.markTaskDone));
 v1.post("/pay-cycle-tasks/:id/skip", taskRoute(payCycles.skipTask));
 v1.post("/pay-cycle-tasks/:id/reopen", taskRoute((db, id, _b, memberId, at) => payCycles.reopenTask(db, id, memberId, at)));
 v1.patch("/pay-cycle-tasks/:id", taskRoute(payCycles.setTaskAmount));
+
+// Số kỳ này của khoản trả thẳng từ tiền chi tiêu (pocket UC-1209 bước 12, ADR-143): chỉ kỳ lương hiện tại.
+v1.put("/pay-cycle/goal-amounts/:goalId", async (c) => {
+  const { goal, cycle, amount } = await setGoalCycleAmount(c.env.DB, c.req.param("goalId"), await body(c), now());
+  await recordChange(c, "goal.cycle_amount", `goal:${goal.id}`, { cycle, amount });
+  return ok(c, { goal });
+});
 
 // ── Đường của mô hình ví cũ (ADR-123): chia tiền, chốt tháng, lệnh chuyển đã bỏ → 410 ─────────
 const gone = (c: Context<AppEnv>) =>

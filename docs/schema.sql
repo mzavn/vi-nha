@@ -1213,5 +1213,22 @@ BEGIN
   SELECT RAISE(ABORT, 'conversion_append_only');
 END;
 
+-- KHOẢN PHẢI TRẢ KỲ NÀY (v1.45, pocket UC-1209 bước 12, ADR-143) — số riêng cho một kỳ của mục tiêu trả từ tiền chi tiêu
+--  (0 = kỳ này không trả; `cycle_key` = pay_cycles.id dạng chữ, chưa có kỳ lưu thì ngày lương danh nghĩa đầu kỳ) và danh mục
+--  của khoản (chi từ Vận hành không gắn mục tiêu, thuộc danh mục đó, tính là đã trả; một danh mục một mục tiêu).
+CREATE TABLE goal_cycle_amounts (
+  goal_id    TEXT NOT NULL REFERENCES reserve_goals(id),
+  cycle_key  TEXT NOT NULL,
+  amount     INTEGER NOT NULL CHECK (amount BETWEEN 0 AND 1000000000000),
+  note       TEXT CHECK (note IS NULL OR length(note) <= 80),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (goal_id, cycle_key)
+);
+CREATE TABLE reserve_goal_categories (
+  category_id TEXT PRIMARY KEY REFERENCES categories(id),
+  goal_id     TEXT NOT NULL REFERENCES reserve_goals(id)
+);
+CREATE INDEX idx_reserve_goal_categories_goal ON reserve_goal_categories(goal_id);
+
 -- Phiên bản schema — /v1/health đọc từ đây
-INSERT INTO config (k,v) VALUES ('schema_version','1.44');
+INSERT INTO config (k,v) VALUES ('schema_version','1.45');

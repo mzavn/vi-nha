@@ -831,7 +831,7 @@ describe("tài khoản riêng tư ở MCP (UC-504, ADR-133) — hộ mẫu P", (
     env.DB = asD1(raw);
     token = (await connectClaude(env, { memberId: "husband", password: "mat-khau-chung" })).access;
     const snap = toolData((await mcp(call("get_snapshot"))).json!);
-    expect(snap.topUp).toMatchObject({ sources: [{ accountId: "phao", name: "Phao", amount: 4_000_000 }], toAccountId: null, target: null });
+    expect(snap.topUp).toMatchObject({ sources: [{ accountId: "phao", name: "Phao", amount: 2_500_000 }], toAccountId: null, target: null });
     expect(snap.topUp).toEqual((await client(raw)("GET", "/v1/snapshot")).json.data.topUp);
   });
 });

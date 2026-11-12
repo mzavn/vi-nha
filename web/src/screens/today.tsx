@@ -3,14 +3,17 @@
 // Banner chỉ hiện khi có việc phải làm.
 
 import { useState } from "preact/hooks";
+import type { OperatingGoal } from "../../../src/domain/pockets";
+import { api, errorText } from "../lib/api";
 import { conversionBanner } from "../lib/convert";
 import { DRIFT_LABEL, driftOf } from "../lib/drift";
-import { nearSpendCard } from "../lib/near-spend";
+import { cycleAmountBody, nearSpendCard } from "../lib/near-spend";
 import { topUpQr } from "../lib/pay-cycle";
 import { dayHeading, dayKey, shortDate, timeHM, weekLabel } from "../lib/period";
 import { NO_SAVINGS_ACCOUNT, reserveCard, savingsCard } from "../lib/pocket-cards";
 import type { Snapshot } from "../lib/types";
-import { go, refresh, syncNow, useApp, viewSnapshot } from "../state/store";
+import { go, refresh, syncNow, toast, useApp, viewSnapshot } from "../state/store";
+import { AmountInput } from "../ui/fields";
 import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
 import { Banner, Bar, Card, FirstLoadFailed, PageHeader, Sheet, Skeleton, TierRow } from "../ui/parts";
@@ -144,6 +147,7 @@ function TodayBody({ snap }: { snap: Snapshot }) {
  */
 export function NearSpendCard({ snap }: { snap: Snapshot }) {
   const [list, setList] = useState(false);
+  const [edit, setEdit] = useState<OperatingGoal | null>(null);
   const [qrFrom, setQrFrom] = useState<string | null>(null);
   if (!snap.nearSpend) return null;
   const today = dayKey(new Date());
@@ -165,14 +169,11 @@ export function NearSpendCard({ snap }: { snap: Snapshot }) {
             <div class="near-say">{v.big}</div>
           )}
           {v.sub && <div class="meta">{v.sub}</div>}
-          {v.reserved &&
-            (v.reserved.done ? (
-              <p class="near-reserved">{v.reserved.line}</p>
-            ) : (
-              <button type="button" class="near-reserved link" onClick={() => setList(true)}>
-                {v.reserved.line}
-              </button>
-            ))}
+          {v.reserved && (
+            <button type="button" class="near-reserved link" onClick={() => setList(true)}>
+              {v.reserved.line}
+            </button>
+          )}
           {v.topUp && (
             <div class="near-topup" role="status">
               <strong>{v.topUp.title}</strong>
@@ -223,18 +224,75 @@ export function NearSpendCard({ snap }: { snap: Snapshot }) {
       )}
       {v.late && <p class="near-note">{v.late}</p>}
       {v.pending && <p class="near-note">{v.pending}</p>}
-      {list && v.reserved && (
+      {list && v.reserved && !edit && (
         <Sheet open title="Khoản phải trả kỳ này" onClose={() => setList(false)}>
           {v.reserved.items.map((g) => (
-            <div class="srow" style={{ display: "block" }} key={g.id}>
-              <div>{g.title}</div>
+            <button
+              type="button"
+              class="srow"
+              style={{ display: "block", width: "100%", textAlign: "left" }}
+              key={g.id}
+              onClick={() => setEdit(snap.pockets.operating.goals?.find((o) => o.id === g.id) ?? null)}
+            >
+              <div>{g.title} ›</div>
+              {g.cycle && <div class="sub-line">{g.cycle}</div>}
               <div class="sub-line">{g.spent}</div>
-            </div>
+            </button>
           ))}
+          <p class="fhint pad">Chạm một khoản để đặt số cho riêng kỳ này; kỳ sau về số mỗi tháng.</p>
         </Sheet>
       )}
+      {edit && <CycleAmountSheet goal={edit} onClose={() => setEdit(null)} />}
       {qrFrom && topUp && <QrSheet qrOf={() => topUpQr(topUp, qrFrom, today)} onClose={() => setQrFrom(null)} />}
     </section>
+  );
+}
+
+/**
+ * Số kỳ này của một khoản phải trả (UC-702 AC-37, ADR-143): điền sẵn số kỳ này, lý do ≤ 80 ký tự, 0 được; "Về số mỗi tháng" khi
+ * đang có số riêng. Lưu xong tải lại snapshot.
+ */
+function CycleAmountSheet({ goal, onClose }: { goal: OperatingGoal; onClose: () => void }) {
+  const custom = (goal.cycleAmount ?? null) !== null;
+  const [amount, setAmount] = useState<number | null>(goal.cycleAmount ?? goal.monthly);
+  const [note, setNote] = useState(goal.note ?? "");
+  const [busy, setBusy] = useState(false);
+  async function save(value: number | null) {
+    setBusy(true);
+    try {
+      await api.put(`/v1/pay-cycle/goal-amounts/${encodeURIComponent(goal.id)}`, cycleAmountBody(value, note));
+      await refresh(true);
+      onClose();
+    } catch (err) {
+      toast(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Sheet open title={`${goal.name} · kỳ này`} onClose={onClose}>
+      <div class="field">
+        <label for="cycle-amount">Số kỳ này</label>
+        <AmountInput id="cycle-amount" value={amount ?? 0} onChange={(n, valid) => setAmount(valid || n === 0 ? n : null)} />
+      </div>
+      <div class="field">
+        <label for="cycle-note">Lý do</label>
+        <input id="cycle-note" class="ctl" maxLength={80} value={note} placeholder="Không bắt buộc" onInput={(e) => setNote(e.currentTarget.value)} />
+      </div>
+      <p class="fhint">
+        Mỗi tháng <Money value={goal.monthly} />. Chỉ đổi kỳ này, 0 = kỳ này không trả.
+      </p>
+      <div class="pad">
+        <button type="button" class="btn btn-primary btn-wide" disabled={busy || amount === null} onClick={() => void save(amount)}>
+          Lưu
+        </button>
+        {custom && (
+          <button type="button" class="btn btn-wide" style={{ marginTop: "8px" }} disabled={busy} onClick={() => void save(null)}>
+            Về số mỗi tháng
+          </button>
+        )}
+      </div>
+    </Sheet>
   );
 }
 

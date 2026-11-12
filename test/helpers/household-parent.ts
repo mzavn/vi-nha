@@ -68,13 +68,13 @@ export function householdParent({ operating = 15_000_000, operatingGoals = false
 }
 
 /**
- * Ca nhắc chuyển thêm (ledger UC-103 AC-25): Vận hành 4.000.000 sau khi chi 1.000.000 cho Điện nước (R 3.500.000); BIDV (Ví
+ * Ca nhắc chuyển thêm (ledger UC-103 AC-25): Vận hành 1.000.000 sau khi chi 1.000.000 cho Điện nước (R 3.500.000); BIDV (Ví
  * Thưởng) 2.000.000; Phao 4.000.000 có con "Gửi 3 tháng" 20.000.000; TCB tích luỹ 50.000.000; ④ → Ví Thưởng 600.000 đang mở.
  * `history`: kỳ trọn 10/10–9/11 (31 ngày) chi Vận hành 13.950.000 → 13.500.000 / tháng (dữ liệu Vận hành có từ 25/9);
- * không có → chưa đủ một kỳ dữ liệu.
+ * không có → chưa đủ một kỳ dữ liệu (nhắc chuyển thêm không đọc chi trung bình — hai ca cùng kết quả).
  */
 export function householdTopUp({ history }: { history: boolean }): DatabaseSync {
-  const raw = householdParent({ operating: 5_000_000, operatingGoals: true });
+  const raw = householdParent({ operating: 2_000_000, operatingGoals: true });
   raw.exec(`
     UPDATE accounts SET opening_balance = 2000000 WHERE id = 'tk-bidv';
     UPDATE accounts SET opening_balance = 4000000 WHERE id = 'phao';

@@ -226,17 +226,17 @@ describe("dailyMessage", () => {
     expect(push.body).toBe("Ăn <uống> & chơi 90%");
   });
 
-  it("UC-402 AC-42: có topUp (UC-103 AC-25) → dòng 💰 thêm \"· cần chuyển thêm 5.500.000 ₫ vào tiền chi tiêu (từ BIDV)\"; có số mỗi ngày thì câu nối sau số đó; topUp null hay không nguồn → không / không \"(từ …)\"", () => {
+  it("UC-402 AC-42: có topUp (UC-103 AC-25) → dòng 💰 thêm \"· cần chuyển thêm 2.500.000 ₫ vào tiền chi tiêu (từ BIDV)\"; có số mỗi ngày thì câu nối sau số đó; topUp null hay không nguồn → không / không \"(từ …)\"", () => {
     const topUp = {
-      amount: 5_500_000,
+      amount: 2_500_000,
       sources: [
         { accountId: "tk-bidv", name: "BIDV", amount: 2_000_000 },
-        { accountId: "phao", name: "Phao", amount: 3_500_000 },
+        { accountId: "phao", name: "Phao", amount: 500_000 },
       ],
     };
-    const ac25 = dailyMessage({ ...base, nearSpend: { amount: 4_000_000, payday: "2026-12-10", daysLeft: 20, perDay: null }, topUp });
-    expect(ac25.full.split("\n")[0]).toBe("💰 Vận hành còn 4.000.000 ₫ tới kỳ lương 10/12 (còn 20 ngày) · cần chuyển thêm 5.500.000 ₫ vào tiền chi tiêu (từ BIDV)");
-    expect(dailyMessage({ ...base, topUp }).full.split("\n")[0]).toBe(`${FIRST} · cần chuyển thêm 5.500.000 ₫ vào tiền chi tiêu (từ BIDV)`);
+    const ac25 = dailyMessage({ ...base, nearSpend: { amount: 1_000_000, payday: "2026-12-10", daysLeft: 20, perDay: null }, topUp });
+    expect(ac25.full.split("\n")[0]).toBe("💰 Vận hành còn 1.000.000 ₫ tới kỳ lương 10/12 (còn 20 ngày) · cần chuyển thêm 2.500.000 ₫ vào tiền chi tiêu (từ BIDV)");
+    expect(dailyMessage({ ...base, topUp }).full.split("\n")[0]).toBe(`${FIRST} · cần chuyển thêm 2.500.000 ₫ vào tiền chi tiêu (từ BIDV)`);
     expect(dailyMessage({ ...base, topUp: { amount: 300_000, sources: [] } }).full.split("\n")[0]).toBe(`${FIRST} · cần chuyển thêm 300.000 ₫ vào tiền chi tiêu`);
     expect(dailyMessage({ ...base, topUp: null }).full.split("\n")[0]).toBe(FIRST);
   });

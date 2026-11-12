@@ -165,7 +165,6 @@ export interface TopUpInput {
   /** Kỳ hiện tại: phần còn thiếu của ④ → Ví Thưởng đang mở bị bỏ khỏi `need`. */
   payCycle: Pick<PayCycleView, "tasks"> | null;
   goalRemaining: number;
-  daysLeft: number;
   pockets: PocketsView;
   target: QrTarget | null;
   /** Tài khoản riêng tư bị giấu với người xem (access UC-504, ADR-133): không bao giờ là nguồn. */
@@ -175,16 +174,13 @@ export interface TopUpInput {
 const ceilTo = (n: number, step: number) => Math.ceil(n / step) * step;
 
 /**
- * Nhắc chuyển thêm (ADR-141, QĐ3): need = (phần chưa làm − ④ → Ví Thưởng đang mở) + R + ăn tiêu ước tính, ăn tiêu = ⌈max(0,
- * chi vận hành một tháng − Σ mỗi tháng của mục tiêu trả từ tiền chi tiêu) × số ngày ÷ 30⌉ (chưa đo được → 0); Y = need −
- * tiền chi tiêu làm tròn lên 100.000; Y ≤ 0 → null. Một hàm cho server và PWA (trừ tạm hàng đợi).
+ * Nhắc chuyển thêm (ADR-141, QĐ3; chủ nhà 12/11 — chỉ nhắc khi quỹ không đủ trả các khoản chắc chắn): need = (phần chưa làm − ④ →
+ * Ví Thưởng đang mở) + R (khoản phải trả còn lại theo số kỳ này); không có ăn tiêu ước tính. Y = need − tiền chi tiêu làm tròn
+ * lên 100.000; Y ≤ 0 → null. Một hàm cho server và PWA (trừ tạm hàng đợi).
  */
-export function topUpView({ amount, pendingTasks, payCycle, goalRemaining, daysLeft, pockets, target, hidden = [] }: TopUpInput): TopUp | null {
+export function topUpView({ amount, pendingTasks, payCycle, goalRemaining, pockets, target, hidden = [] }: TopUpInput): TopUp | null {
   const rewardTasks = (payCycle?.tasks ?? []).filter((t) => t.kind === "surplus" && t.toAccountId !== null && t.status === "open").reduce((s, t) => s + t.missing, 0);
-  const monthly = pockets.reserve.peaceMonths.monthly;
-  const fixed = pockets.operating.goals.reduce((s, g) => s + g.monthly, 0);
-  const living = monthly === null ? 0 : Math.ceil((Math.max(0, monthly - fixed) * daysLeft) / 30);
-  const short = pendingTasks - rewardTasks + goalRemaining + living - amount;
+  const short = pendingTasks - rewardTasks + goalRemaining - amount;
   if (short <= 0) return null;
   const y = ceilTo(short, 100_000);
   const rewardId = pockets.reserve.reward?.accountId ?? null;
@@ -243,13 +239,11 @@ export function buildSnapshot(data: SnapshotData) {
 }
 
 function snapshotTopUp(data: SnapshotData): TopUp | null {
-  const { daysLeft } = nearSpendView(data.pockets.operating.total, dayKey(data.now), data.paydayDay, { cyclePayday: data.payCycle?.payday ?? null, pendingTasks: data.pendingTasks });
   return topUpView({
     amount: data.pockets.operating.total,
     pendingTasks: data.pendingTasks,
     payCycle: data.payCycle,
     goalRemaining: data.pockets.operating.remaining,
-    daysLeft,
     pockets: data.pockets,
     target: data.topUpTo,
     hidden: data.hiddenAccountIds,

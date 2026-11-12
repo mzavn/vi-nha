@@ -307,10 +307,10 @@ describe("pocketsView", () => {
     ];
     const v = view({ accounts: [acct("tk-chi-tieu-chong", "operating", 15_000_000), acct("tk-tiet-kiem", "reserve", 5_000_000), acct("phao", "reserve", 1_000_000)], goals, debts: [], savingsPct: 10 });
     expect(v.operating.goals).toEqual([
-      { id: "dien-nuoc", name: "dien-nuoc", monthly: 2_000_000, spent: 1_000_000, remaining: 1_000_000 },
-      { id: "thuoc", name: "thuoc", monthly: 500_000, spent: 300_000, remaining: 200_000 },
-      { id: "thien-phuoc", name: "thien-phuoc", monthly: 1_000_000, spent: 0, remaining: 1_000_000 },
-      { id: "ve-que", name: "ve-que", monthly: 1_000_000, spent: 1_500_000, remaining: 0 },
+      { id: "dien-nuoc", name: "dien-nuoc", monthly: 2_000_000, cycleAmount: null, note: null, categoryIds: [], spent: 1_000_000, remaining: 1_000_000 },
+      { id: "thuoc", name: "thuoc", monthly: 500_000, cycleAmount: null, note: null, categoryIds: [], spent: 300_000, remaining: 200_000 },
+      { id: "thien-phuoc", name: "thien-phuoc", monthly: 1_000_000, cycleAmount: null, note: null, categoryIds: [], spent: 0, remaining: 1_000_000 },
+      { id: "ve-que", name: "ve-que", monthly: 1_000_000, cycleAmount: null, note: null, categoryIds: [], spent: 1_500_000, remaining: 0 },
     ]);
     expect(v.operating.remaining).toBe(2_200_000);
     expect(v.reserve.goals.map((g) => g.id)).toEqual(["hoc-tap"]);

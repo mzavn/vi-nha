@@ -91,6 +91,12 @@ export interface PocketGoalInput {
   spent: number;
   /** Thiếu = `account`. `operating`: `accountId` null, lặp mỗi tháng — không vào `reserve`, vào `operating.goals`. */
   paysFrom?: GoalPaysFrom;
+  /** Mục tiêu `operating`: số riêng cho kỳ lương hiện tại (UC-1209 bước 12, ADR-143); thiếu / null = theo số mỗi tháng. */
+  cycleAmount?: number | null;
+  /** Lý do ngắn của số kỳ này; null = không có. */
+  cycleNote?: string | null;
+  /** Mục tiêu `operating`: danh mục mà khoản chi từ Vận hành không gắn mục tiêu tính là đã trả (đã gộp vào `spent`). */
+  categoryIds?: string[];
 }
 
 /** Khoản nợ (`v_debt_balance` JOIN `debts`). */
@@ -163,11 +169,18 @@ export interface GoalGroup {
   interest: number;
 }
 
-/** Mục tiêu trả thẳng từ tiền chi tiêu (UC-1203 bước 7, ADR-141): còn phải trả kỳ này = max(0, mỗi tháng − đã chi từ Vận hành). */
+/**
+ * Mục tiêu trả thẳng từ tiền chi tiêu (UC-1203 bước 7, UC-1209 bước 12, ADR-141, ADR-143): còn phải trả kỳ này = max(0, số kỳ
+ * này − đã trả); số kỳ này = `cycleAmount` nếu có, không thì `monthly`.
+ */
 export interface OperatingGoal {
   id: string;
   name: string;
   monthly: number;
+  /** Số riêng cho kỳ này (0 = kỳ này không trả); null = theo số mỗi tháng. */
+  cycleAmount: number | null;
+  note: string | null;
+  categoryIds: string[];
   spent: number;
   remaining: number;
 }
@@ -390,12 +403,13 @@ export function groupInterest(opening: number, steps: InterestStep[]): number {
   return interest;
 }
 
-/** Mục tiêu trả từ tiền chi tiêu đang dùng (đã xếp `goalOrder`): còn phải trả kỳ này = max(0, mỗi tháng − đã chi). */
+/** Mục tiêu trả từ tiền chi tiêu đang dùng (đã xếp `goalOrder`): còn phải trả kỳ này = max(0, số kỳ này − đã trả). */
 export function operatingGoals(goals: PocketGoalInput[]): OperatingGoal[] {
   return goals.flatMap((g) => {
     if (g.paysFrom !== "operating" || g.monthly === null) return [];
     const spent = Math.max(0, g.spent);
-    return [{ id: g.id, name: g.name, monthly: g.monthly, spent, remaining: Math.max(0, g.monthly - spent) }];
+    const cycleAmount = g.cycleAmount ?? null;
+    return [{ id: g.id, name: g.name, monthly: g.monthly, cycleAmount, note: g.cycleNote ?? null, categoryIds: g.categoryIds ?? [], spent, remaining: Math.max(0, (cycleAmount ?? g.monthly) - spent) }];
   });
 }
 

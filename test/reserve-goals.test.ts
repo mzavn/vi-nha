@@ -119,7 +119,7 @@ describe("mục tiêu Dự phòng là một tài khoản thật (UC-1209)", () =
     expect(created.status).toBe(201);
     expect(created.json.data.goal).toEqual({
       id: "hoa-don", name: "Hoá đơn", account_id: null, suggested_account_id: null, held: null, need: null, spent: 0, short: null, target_amount: 1_300_000, target_pct: null,
-      monthly_amount: 1_300_000, repeat_months: 1, due_date: null, debt_id: null, sort: 40, active: true, pays_from: "account", remaining: null,
+      monthly_amount: 1_300_000, repeat_months: 1, due_date: null, debt_id: null, sort: 40, active: true, pays_from: "account", remaining: null, category_ids: [],
     });
     expect(err(await call("POST", "/v1/settings/goals", { name: "Hoá đơn", target_amount: 1_000 }))).toEqual([409, "duplicate"]);
     expect(auditOf("goal.create")).toEqual([{ target: "goal:hoa-don", detail: { fields: ["monthly_amount", "name", "repeat_months"] } }]);

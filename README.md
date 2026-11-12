@@ -1,8 +1,8 @@
 # Ví nhà — sổ tiền cả nhà theo Profit First
 
 > **English summary.** Ví nhà ("family wallet") is a self-hosted household money app built on the *Profit First* method:
-> money is grouped into three pockets (savings / reserve / operating) of real accounts; each reserve goal is a real
-> account; payday creates a checklist. The app answers one question each day — *how much is left in Operating and per day
+> money is grouped into three pockets (savings / reserve / operating) of real accounts; goals are plans whose progress is
+> read from real balances; payday creates a checklist. The app answers one question each day — *how much is left in Operating and per day
 > until payday?* It runs entirely on **your own Cloudflare account** (Workers + D1, Free plan is enough) as an installable
 > PWA, can ingest bank transactions
 > automatically through [SePay](https://sepay.vn?gcid=arqcwdek) (Vietnamese banks), sends reminders via web push / Telegram / Zalo, and exposes an MCP server
@@ -11,16 +11,17 @@
 > [`docs/cai-bang-ai.md`](docs/cai-bang-ai.md). License: AGPL-3.0, Copyright (C) 2026 MZA. Security reports: [`SECURITY.md`](SECURITY.md).
 
 Ví nhà trả lời một câu mỗi ngày: **"Vận hành còn bao nhiêu, mỗi ngày chi khoảng bao nhiêu tới kỳ lương?"**. Mỗi tài khoản
-thật của nhà thuộc một trong ba ngăn — **Tích luỹ** (trích trước, không đụng), **Dự phòng** (các khoản đã biết sẽ phải trả,
-mỗi mục tiêu là một tài khoản thật; phần còn lại là phần an tâm), **Vận hành** (tiền sống tới kỳ lương). Mọi số là tiền thật
-trong tài khoản, không có ví trên giấy. Lương về, app đưa danh sách việc: trích Tích luỹ, nạp mục tiêu. App chạy trên
+thật của nhà thuộc một trong ba ngăn — **Tích luỹ** (trích trước, không đụng), **Dự phòng** (các khoản đã biết sẽ phải trả;
+phần còn lại là phần an tâm), **Vận hành** (tiền chi tiêu tới kỳ lương). Mọi số là tiền thật trong tài khoản, không có ví
+trên giấy. Mục tiêu (học phí, thuế, điện nước…) là kế hoạch: số "đã có" đọc từ số dư thật — một tài khoản riêng hay dùng
+chung, tài khoản mẹ kèm các khoản gửi kỳ hạn, hoặc trả thẳng từ tiền chi tiêu. Lương về, app đưa danh sách việc: trích
+Tích luỹ, nạp mục tiêu, chia phần dư kỳ trước. App chạy trên
 **tài khoản Cloudflare của chính nhà bạn** (gói Free là đủ): số liệu nằm ở database của bạn, không lưu ở máy chủ nào khác.
 (Font chữ tải từ Google Fonts, nên Google thấy địa chỉ IP và loại trình duyệt khi bạn mở app; GitBook chỉ thấy khi bạn
 bấm mở Hướng dẫn — không ai thấy số liệu.)
 
 <p>
   <img src="https://2736867949-files.gitbook.io/~/files/v0/b/gitbook-x-prod.appspot.com/o/spaces%2FAkew07JyqLl5qmM1Jo26%2Fuploads%2Fgit-blob-bec8d942a542b3e9a038fd40f26db73269458726%2Fhom-nay-01-tong-quan-m.jpg?alt=media" alt="Màn Hôm nay" width="260">
-  <img src="https://2736867949-files.gitbook.io/~/files/v0/b/gitbook-x-prod.appspot.com/o/spaces%2FAkew07JyqLl5qmM1Jo26%2Fuploads%2Fgit-blob-782c2d9e8db6d0fe86191b4680f807638ae8c4e5%2Fhom-nay-02-dong-thac-m.jpg?alt=media" alt="Dòng thác tháng này" width="260">
 </p>
 
 *(Hình minh hoạ dùng dữ liệu mẫu.)*
@@ -30,17 +31,31 @@ bấm mở Hướng dẫn — không ai thấy số liệu.)
 | | |
 |---|---|
 | **Ghi khoản chi trong vài giây** | Gõ số tiền, chạm danh mục, bấm Lưu — app nói ngay Vận hành còn bao nhiêu. Mất mạng vẫn ghi được, có mạng thì tự gửi |
-| **Ba ngăn** | Tích luỹ · Dự phòng · Vận hành, mỗi ngăn là một nhóm tài khoản thật; mỗi mục tiêu Dự phòng (học phí, thuế…) là một tài khoản thật, số "đã có" là số dư của nó |
-| **Trả cho mình trước** | Lương về có danh sách việc (trích Tích luỹ, nạp mục tiêu), kèm mã QR, tự đánh dấu khi tiền tới đúng tài khoản |
+| **Ba ngăn** | Tích luỹ · Dự phòng · Vận hành, mỗi ngăn là một nhóm tài khoản thật; thẻ Vận hành cho biết còn bao nhiêu và chi khoảng bao nhiêu mỗi ngày tới kỳ lương |
+| **Mục tiêu là kế hoạch** | Số "đã có" đọc từ số dư thật: tài khoản riêng hoặc dùng chung, tài khoản mẹ + khoản gửi kỳ hạn, hoặc trả thẳng từ tiền chi tiêu. Khoản phải trả đặt được số riêng cho kỳ này (0 cũng được); chi theo danh mục gắn với khoản tự tính là đã trả |
+| **Trả cho mình trước** | Lương về có danh sách việc: trích Tích luỹ theo thang 1 · 10 · 30%, nạp mục tiêu, chia dư kỳ trước 50/50 Tích luỹ / Ví Thưởng; kèm mã QR, tự đánh dấu khi tiền tới đúng tài khoản |
 | **Nhìn lại theo kỳ lương** | Chi theo nhóm danh mục so hạn mức mềm, so kỳ trước |
 | **Tự ghi sổ ngân hàng** | Tài khoản nối [SePay](https://my.sepay.vn/register?gcid=arqcwdek) tự báo tiền vào / ra; bạn chỉ chọn "khoản này là gì", khoản lặp lại thì đặt luật tự gán |
 | **Đối soát** | Sổ so với giao dịch ngân hàng và số dư thật; lệch là báo |
 | **Nợ và phải thu** | Mình nợ ai, ai nợ mình, người thuê nhà còn phải trả bao nhiêu |
-| **Nhắc việc** | Tin sáng, tổng kết tuần, giao dịch chưa gán — qua thông báo trên máy, Telegram hoặc Zalo |
+| **Nhắc việc** | Tin sáng, tổng kết tuần, giao dịch chưa gán — qua thông báo trên máy, Telegram hoặc Zalo. Chỉ nhắc chuyển thêm vào tiền chi tiêu khi thiếu tiền cho các khoản chắc chắn |
 | **Nói chuyện với Claude** | Nối Claude (OAuth, MCP): hỏi "Vận hành còn bao nhiêu", ghi khoản chi bằng lời |
 | **Cả nhà cùng dùng** | 1–6 người, mật khẩu chung hoặc mật khẩu riêng từng người; tài khoản riêng tư: người khác chỉ thấy tổng |
 
 Hướng dẫn sử dụng đầy đủ (có hình từng màn): **https://mzavn.gitbook.io/vi-nha**
+
+## v2 khác v1 thế nào
+
+| | v1 (tới 1.8) | v2 |
+|---|---|---|
+| Tiền nằm ở đâu | Ví ảo đặt trên các tài khoản | Chỉ tài khoản thật, mỗi tài khoản thuộc một ngăn |
+| Chia tiền | Luật nạp, rót theo dòng thác vào từng ví | Ba ngăn Tích luỹ · Dự phòng · Vận hành |
+| Mục tiêu | Ví quỹ có số dư riêng trên giấy | Kế hoạch đọc từ số dư thật (tài khoản dùng chung, tài khoản mẹ + gửi kỳ hạn, hoặc trả từ tiền chi tiêu) |
+| Con số hằng ngày | Còn bao nhiêu để chi tuần này, theo từng ví | Vận hành còn bao nhiêu, chi khoảng …/ngày tới kỳ lương |
+| Nhịp | Theo tháng, chốt tháng | Theo kỳ lương, lương về có danh sách việc |
+| Trích Tích luỹ | % khi chia một khoản thu | Thang 1 · 10 · 30% trong việc ngày lương |
+| Nhìn lại | Theo ví | Theo nhóm danh mục, so hạn mức mềm và kỳ trước |
+| Giữ nguyên | Trả cho mình trước · phần dư chia 50/50 · tự ghi sổ qua SePay | như v1 |
 
 ## Cài đặt — chọn một trong ba cách
 
@@ -79,7 +94,7 @@ file `~/.vi-nha/vi-nha.txt` trên máy bạn, agent chỉ đưa đường dẫn 
 ### Sau khi cài
 
 Mở địa chỉ vừa có → màn **Thiết lập**: nhập mật khẩu chung, thêm người trong nhà, tài khoản tiền, xếp tài khoản vào ngăn,
-ngày lương, % Tích luỹ, mục tiêu Dự phòng (mỗi mục tiêu một tài khoản).
+ngày lương, % Tích luỹ, mục tiêu Dự phòng.
 Trên điện thoại: mở bằng trình duyệt → "Thêm vào màn hình chính" để dùng như app.
 
 ## Lưu ý trước khi cài

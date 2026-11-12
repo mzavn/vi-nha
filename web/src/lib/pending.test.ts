@@ -128,7 +128,7 @@ describe("trừ tạm khoản chưa đồng bộ vào số đang hiển thị", 
     const one = applyQueue(snap, [bill]);
     expect(one.nearSpend).toMatchObject({ amount: 14_000_000, perDay: 575_000, goalRemaining: 2_500_000 });
     expect(one.pockets.operating.remaining).toBe(2_500_000);
-    expect(one.pockets.operating.goals.find((g) => g.id === "dien-nuoc")).toEqual({ id: "dien-nuoc", name: "Điện nước", monthly: 2_000_000, spent: 2_000_000, remaining: 0 });
+    expect(one.pockets.operating.goals.find((g) => g.id === "dien-nuoc")).toEqual({ id: "dien-nuoc", name: "Điện nước", monthly: 2_000_000, cycleAmount: null, note: null, categoryIds: [], spent: 2_000_000, remaining: 0 });
     const two = applyQueue(snap, [bill, item({ meaning: "spend", amount: 200_000, category_id: "groceries", account_id: "tien-mat" })]);
     expect(two.nearSpend).toMatchObject({ amount: 13_800_000, perDay: 565_000, goalRemaining: 2_500_000 });
     expect(entryToast(localNearSpend(two), true)).toBe(`Đã ghi, chờ đồng bộ · Vận hành còn 13.800.000${NBSP}₫ ≈ 565.000/ngày`);
@@ -139,41 +139,41 @@ describe("trừ tạm khoản chưa đồng bộ vào số đang hiển thị", 
     expect(account.pockets.operating.remaining).toBe(3_500_000);
   });
 
-  it("UC-704 bước 7a: nhắc chuyển thêm tính lại sau trừ tạm bằng topUpView, giữ đích của server — chi thêm 1.000.000 → cần 6.500.000 (BIDV 2.000.000, Phao 4.000.000, thiếu nguồn 500.000); chuyển 2.000.000 từ BIDV và 3.500.000 từ Phao vào tài khoản chi tiêu → hết nhắc; server không nhắc mà hàng đợi làm thiếu → nhắc không đích", () => {
-    const p = pocketsV23({ operating: [{ id: "tk-chi-tieu-chong", name: "MB chi tiêu chồng", balance: 4_000_000 }] });
+  it("UC-704 bước 7a: nhắc chuyển thêm tính lại sau trừ tạm bằng topUpView, giữ đích của server — Vận hành 1.000.000, R 3.500.000 → cần 2.500.000; chi thêm 1.000.000 → cần 3.500.000 (BIDV 2.000.000, Phao 1.500.000); chuyển 2.000.000 từ BIDV và 500.000 từ Phao vào tài khoản chi tiêu → hết nhắc; server không nhắc mà hàng đợi làm thiếu → nhắc không đích", () => {
+    const p = pocketsV23({ operating: [{ id: "tk-chi-tieu-chong", name: "MB chi tiêu chồng", balance: 1_000_000 }] });
     const ns = nearSpendV23(p);
-    const server = topUpView({ amount: ns.amount, pendingTasks: 0, payCycle: null, goalRemaining: p.operating.remaining, daysLeft: ns.daysLeft, pockets: p, target: TOP_UP_TARGET });
-    expect(server).toMatchObject({ amount: 5_500_000 });
+    const server = topUpView({ amount: ns.amount, pendingTasks: 0, payCycle: null, goalRemaining: p.operating.remaining, pockets: p, target: TOP_UP_TARGET });
+    expect(server).toMatchObject({ amount: 2_500_000 });
     const snap = snapOf("2026-11-20", p, ns, null, server);
     const more = applyQueue(snap, [item({ meaning: "spend", amount: 1_000_000, category_id: "groceries", account_id: "tk-chi-tieu-chong" })]);
     expect(more.topUp).toEqual({
-      amount: 6_500_000,
+      amount: 3_500_000,
       sources: [
         { accountId: "tk-bidv", name: "BIDV", amount: 2_000_000 },
-        { accountId: "phao", name: "Phao", amount: 4_000_000 },
+        { accountId: "phao", name: "Phao", amount: 1_500_000 },
       ],
       toAccountId: "tk-chi-tieu-chong",
       target: TOP_UP_TARGET,
     });
     const moved = applyQueue(snap, [
       item({ meaning: "transfer", amount: 2_000_000, account_id: "tk-bidv", to_account_id: "tk-chi-tieu-chong" }),
-      item({ meaning: "transfer", amount: 3_500_000, account_id: "phao", to_account_id: "tk-chi-tieu-chong" }),
+      item({ meaning: "transfer", amount: 500_000, account_id: "phao", to_account_id: "tk-chi-tieu-chong" }),
     ]);
     expect(moved.topUp).toBeNull();
-    const rich = pocketsV23({ operating: [{ id: "tk-chi-tieu-chong", name: "MB chi tiêu chồng", balance: 9_500_000 }] });
+    const rich = pocketsV23({ operating: [{ id: "tk-chi-tieu-chong", name: "MB chi tiêu chồng", balance: 3_500_000 }] });
     const noNudge = snapOf("2026-11-20", rich, nearSpendV23(rich), null, null);
     expect(applyQueue(noNudge, [item({ meaning: "spend", amount: 1_000_000, category_id: "groceries", account_id: "tk-chi-tieu-chong" })]).topUp).toMatchObject({ amount: 1_000_000, toAccountId: null, target: null });
   });
 
   it("UC-504 AC-19: BIDV riêng tư của người khác (hiddenFromMe) → nhắc chuyển thêm tính lại sau trừ tạm chỉ gợi ý Phao, không BIDV; đích bị giấu → không đích, không QR", () => {
-    const p = pocketsV23({ operating: [{ id: "tk-chi-tieu-chong", name: "MB chi tiêu chồng", balance: 4_000_000 }] });
+    const p = pocketsV23({ operating: [{ id: "tk-chi-tieu-chong", name: "MB chi tiêu chồng", balance: 1_000_000 }] });
     const ns = nearSpendV23(p);
-    const server = topUpView({ amount: ns.amount, pendingTasks: 0, payCycle: null, goalRemaining: p.operating.remaining, daysLeft: ns.daysLeft, pockets: p, target: TOP_UP_TARGET, hidden: ["tk-bidv"] });
-    expect(server!.sources).toEqual([{ accountId: "phao", name: "Phao", amount: 4_000_000 }]);
+    const server = topUpView({ amount: ns.amount, pendingTasks: 0, payCycle: null, goalRemaining: p.operating.remaining, pockets: p, target: TOP_UP_TARGET, hidden: ["tk-bidv"] });
+    expect(server!.sources).toEqual([{ accountId: "phao", name: "Phao", amount: 2_500_000 }]);
     const more = applyQueue(snapOf("2026-11-20", p, ns, null, server), [item({ meaning: "spend", amount: 1_000_000, category_id: "groceries", account_id: "tk-chi-tieu-chong" })], ["tk-bidv"]);
-    expect(more.topUp).toMatchObject({ amount: 6_500_000, sources: [{ accountId: "phao", name: "Phao", amount: 4_000_000 }] });
+    expect(more.topUp).toMatchObject({ amount: 3_500_000, sources: [{ accountId: "phao", name: "Phao", amount: 3_500_000 }] });
     const hiddenTarget = applyQueue(snapOf("2026-11-20", p, ns, null, server), [item({ meaning: "spend", amount: 1_000_000, category_id: "groceries", account_id: "tk-chi-tieu-chong" })], ["tk-bidv", TOP_UP_TARGET.accountId]);
-    expect(hiddenTarget.topUp).toMatchObject({ amount: 6_500_000, toAccountId: null, target: null });
+    expect(hiddenTarget.topUp).toMatchObject({ amount: 3_500_000, toAccountId: null, target: null });
   });
 });
 

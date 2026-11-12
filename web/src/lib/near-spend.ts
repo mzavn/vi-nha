@@ -8,14 +8,17 @@ import { nearSpendView, nextPayday, type NearSpend, type NearSpendCycle, type To
 import { formatVnd, moneyDigits } from "./money";
 import { previousDay, shortDate } from "./period";
 
-/** Dòng "Đã chừa … cho … khoản phải trả kỳ này ›" và danh sách khi chạm (mục tiêu trả từ tiền chi tiêu, ADR-141). */
+/** Dòng "Đã chừa … cho … khoản phải trả kỳ này ›" và danh sách khi chạm (mục tiêu trả từ tiền chi tiêu, ADR-141, ADR-143). */
 export interface ReservedView {
   /** R > 0: "Đã chừa {R} cho {n} khoản phải trả kỳ này ›"; R = 0: "Các khoản phải trả kỳ này đã trả đủ ✓". */
   line: string;
-  /** R = 0: không mở danh sách. */
+  /** R = 0 (vẫn mở được danh sách để đặt số kỳ này). */
   done: boolean;
-  /** "{tên} · còn {R_g} / {mỗi tháng}" + "đã trả {đã chi}", theo thứ tự ưu tiên. */
-  items: { id: string; title: string; spent: string }[];
+  /**
+   * "{tên} · còn {R_g} / {số kỳ này}" + "đã trả {đã trả}", theo thứ tự ưu tiên; có số riêng kỳ này thì thêm `cycle`
+   * "kỳ này {số} · mỗi tháng {số} · {lý do}".
+   */
+  items: { id: string; title: string; spent: string; cycle?: string }[];
 }
 
 /** Khối vàng nhắc chuyển thêm vào tiền chi tiêu (`snapshot.topUp`). */
@@ -89,8 +92,19 @@ function reservedView(p: PocketsView): ReservedView | null {
   return {
     line: total > 0 ? `Đã chừa ${formatVnd(total)} cho ${open} khoản phải trả kỳ này ›` : "Các khoản phải trả kỳ này đã trả đủ ✓",
     done: total === 0,
-    items: goals.map((g) => ({ id: g.id, title: `${g.name} · còn ${moneyDigits(g.remaining)} / ${formatVnd(g.monthly)}`, spent: `đã trả ${formatVnd(g.spent)}` })),
+    items: goals.map((g) => {
+      // Bản lưu cũ chưa có `cycleAmount`: theo số mỗi tháng.
+      const cycleAmount = g.cycleAmount ?? null;
+      const item = { id: g.id, title: `${g.name} · còn ${moneyDigits(g.remaining)} / ${formatVnd(cycleAmount ?? g.monthly)}`, spent: `đã trả ${formatVnd(g.spent)}` };
+      if (cycleAmount === null) return item;
+      return { ...item, cycle: [`kỳ này ${formatVnd(cycleAmount)}`, `mỗi tháng ${formatVnd(g.monthly)}`, ...(g.note ? [g.note] : [])].join(" · ") };
+    }),
   };
+}
+
+/** Thân `PUT /v1/pay-cycle/goal-amounts/:goalId` (UC-702 AC-37): lý do bỏ dấu cách hai đầu, rỗng → null; `amount` null = về số mỗi tháng. */
+export function cycleAmountBody(amount: number | null, note: string): { amount: number | null; note: string | null } {
+  return { amount, note: amount === null ? null : note.trim() || null };
 }
 
 function topUpCard(t: TopUp, p: PocketsView): TopUpCardView {

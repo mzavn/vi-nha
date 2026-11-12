@@ -8,8 +8,8 @@ describe("migrations", () => {
     const fromDocs = openDb();
     const migrated = migratedDb();
     expect(schemaShape(migrated)).toEqual(schemaShape(fromDocs));
-    expect(migrated.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.44" });
-    expect(fromDocs.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.44" });
+    expect(migrated.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.45" });
+    expect(fromDocs.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.45" });
   });
 
   it("dựng được DB và mọi view chạy sạch", () => {
@@ -17,7 +17,7 @@ describe("migrations", () => {
     const views = db.prepare("SELECT name FROM sqlite_master WHERE type='view'").all() as { name: string }[];
     expect(views.length).toBeGreaterThan(0);
     for (const v of views) db.prepare(`SELECT * FROM ${v.name} LIMIT 1`).all();
-    expect(db.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.44" });
+    expect(db.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.45" });
   });
 
   it("đã bỏ hai view ngân sách mù kỳ", () => {

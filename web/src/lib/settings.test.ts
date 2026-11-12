@@ -57,6 +57,7 @@ import {
   canAddDeposit,
   depositPreset,
   DEPOSITS_NOTE,
+  GOAL_CATEGORIES_LABEL,
   GOAL_PLACE_LABEL,
   GOAL_SECTION_LABEL,
   goalPlace,
@@ -997,6 +998,22 @@ describe("tài khoản con, mục tiêu trả từ tiền chi tiêu, thang Tích
       ["phao", null],
     ]);
     expect(DEPOSITS_NOTE).toBe("gồm khoản gửi kỳ hạn");
+  });
+
+  it("UC-709 AC-54: sheet mục tiêu trả từ tiền chi tiêu có hàng 'Danh mục tự tính là đã trả' — chọn Điện nước mạng → gửi category_ids ['utilities']; không đổi thì không gửi; đổi về tài khoản → không gửi category_ids", () => {
+    expect(GOAL_CATEGORIES_LABEL).toBe("Danh mục tự tính là đã trả");
+    const saved = goal("dien-nuoc", "Điện nước", { pays_from: "operating", monthly_amount: 2_000_000, repeat_months: 1, target_amount: 2_000_000, remaining: 2_000_000, category_ids: [] });
+    const form = goalToForm(saved);
+    expect(form.category_ids).toEqual([]);
+    const picked = goalPayload({ ...form, category_ids: ["utilities"] }, saved);
+    expect(picked.ok && picked.value).toMatchObject({ category_ids: ["utilities"] });
+    const same = goalPayload(form, saved);
+    expect(same.ok && "category_ids" in same.value).toBe(false);
+    const linked = { ...saved, category_ids: ["utilities"] };
+    expect(goalToForm(linked).category_ids).toEqual(["utilities"]);
+    const back = goalPayload({ ...goalToForm(linked), pays_from: "account", account_id: "tk-tiet-kiem" }, linked);
+    expect(back.ok && back.value).toMatchObject({ pays_from: "account", account_id: "tk-tiet-kiem" });
+    expect(back.ok && "category_ids" in back.value).toBe(false);
   });
 
   // GET /v1/settings của UC-1209 AC-16 (trước / sau đáo hạn) + bốn mục tiêu trả từ tiền chi tiêu.

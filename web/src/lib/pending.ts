@@ -67,14 +67,22 @@ function refillGoals(r: PocketsView["reserve"], accounts: PocketAccountLine[], i
   return { groups, goals: r.goals.map((g) => (filled.has(g.id) ? { ...g, ...filled.get(g.id)! } : g)) };
 }
 
-/** Mục tiêu trả từ tiền chi tiêu sau trừ tạm (ADR-141): khoản xếp hàng gắn mục tiêu đó từ tài khoản Vận hành cộng vào đã chi, R tính lại. */
+/**
+ * Mục tiêu trả từ tiền chi tiêu sau trừ tạm (ADR-141, ADR-143): khoản xếp hàng từ tài khoản Vận hành gắn mục tiêu đó, hoặc không
+ * gắn mục tiêu mà thuộc danh mục của nó (khoản chi), cộng vào đã trả; R tính lại theo số kỳ này.
+ */
 function shiftOperatingGoals(o: PocketsView["operating"], items: QueuedEntry[]): Pick<PocketsView["operating"], "goals" | "remaining"> {
   const ids = new Set(o.accounts.map((a) => a.id));
+  const byCategory = new Map((o.goals ?? []).flatMap((g) => (g.categoryIds ?? []).map((c) => [c, g.id] as const)));
   const paid = new Map<string, number>();
-  for (const b of outflows(items)) if (b.goal_id && ids.has(b.account_id!)) paid.set(b.goal_id, (paid.get(b.goal_id) ?? 0) + b.amount);
+  for (const b of outflows(items)) {
+    if (!ids.has(b.account_id!)) continue;
+    const goalId = b.goal_id ?? (b.meaning === "spend" && b.category_id ? byCategory.get(b.category_id) : undefined);
+    if (goalId) paid.set(goalId, (paid.get(goalId) ?? 0) + b.amount);
+  }
   const goals = (o.goals ?? []).map((g) => {
     const spent = g.spent + (paid.get(g.id) ?? 0);
-    return spent === g.spent ? g : { ...g, spent, remaining: Math.max(0, g.monthly - spent) };
+    return spent === g.spent ? g : { ...g, spent, remaining: Math.max(0, (g.cycleAmount ?? g.monthly) - spent) };
   });
   return { goals, remaining: goals.reduce((s, g) => s + g.remaining, 0) };
 }
@@ -140,7 +148,6 @@ export function applyQueue(s: Snapshot, items: QueuedEntry[], hidden: readonly s
     pendingTasks: cycle.pendingTasks,
     payCycle: s.payCycle,
     goalRemaining: operating.remaining,
-    daysLeft: view.daysLeft,
     pockets,
     // Đích của server đã bỏ tài khoản bị giấu; giữ lại phép thử phòng bản lưu cũ trên máy (access UC-504 AC-19).
     target: s.topUp?.target && !hidden.includes(s.topUp.target.accountId) ? s.topUp.target : null,

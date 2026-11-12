@@ -20,6 +20,7 @@ export const AUDIT_ACTIONS = [
   "config.update",
   "conversion.done",
   "conversion.step",
+  "goal.cycle_amount",
   "goal.create",
   "goal.order",
   "goal.update",

@@ -6,6 +6,27 @@ bản cài cũ vẫn lên được bình thường (kể cả nâng database t�
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
 trước (xem README › Cập nhật bản mới).
 
+## v2.4.0 — 12/11/2026
+
+Có nâng cấp database: `0045` (số kỳ này và danh mục của khoản phải trả). Database tự nâng khi cập nhật; chỉ thêm bảng, không
+đổi số dư, mục tiêu hay giao dịch nào.
+**Mới**
+
+- **Số kỳ này cho khoản phải trả.** Trong sheet **Khoản phải trả kỳ này** (thẻ Vận hành) chạm một khoản để đặt số cho riêng
+  kỳ lương này — 0 cũng được (kỳ này không phải trả), kèm lý do ngắn nếu muốn. "Chi khoảng …/ngày" tính theo số đó; kỳ sau tự
+  về số mỗi tháng. Dòng "đã trả đủ ✓" cũng mở được sheet.
+- **Chi theo danh mục tự tính là đã trả.** Sheet mục tiêu "Trả thẳng từ tiền chi tiêu" có hàng **Danh mục tự tính là đã trả**
+  (vd Điện nước mạng cho khoản Điện nước): khoản chi từ tiền chi tiêu thuộc danh mục đó mà không chọn khoản phải trả nào vẫn
+  tính là đã trả. Mỗi danh mục thuộc một khoản; khoản chi đã chọn khoản phải trả thì chỉ tính cho khoản đó.
+- API: `PUT /v1/pay-cycle/goal-amounts/:goalId { amount, note }`; `category_ids` ở mục tiêu; `operating.goals[]` có
+  `cycleAmount`, `note`, `categoryIds`.
+
+**Thay đổi**
+
+- **Nhắc "cần chuyển thêm vào tiền chi tiêu" chỉ khi thiếu tiền cho các khoản chắc chắn** — việc ngày lương chưa làm và các
+  khoản phải trả còn lại kỳ này (theo số kỳ này). Không còn cộng phần ăn tiêu ước tính từ chi tiêu trung bình, nên thẻ Vận
+  hành không còn vừa ghi "chi khoảng …/ngày" vừa nhắc chuyển thêm một số lớn. Áp dụng cho thẻ Vận hành, tin sáng và Claude.
+
 ## v2.3.1 — 12/11/2026
 
 **Sửa**

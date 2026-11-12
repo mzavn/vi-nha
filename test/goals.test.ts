@@ -49,10 +49,10 @@ describe("GET /v1/goals có tiền lãi của nhóm và mục tiêu trả từ t
     expect(g.reserve.groups).toEqual([expect.objectContaining({ accountId: "tk-tiet-kiem", balance: 108_000_000, interest: 3_000_000, goalIds: ["nha-o", "hoc-tap", "tap-luyen"] })]);
     expect(g.operating).toEqual({
       goals: [
-        { id: "dien-nuoc", name: "Điện nước", monthly: 2_000_000, spent: 1_000_000, remaining: 1_000_000 },
-        { id: "thuoc", name: "Thuốc", monthly: 500_000, spent: 300_000, remaining: 200_000 },
-        { id: "thien-phuoc", name: "Thiện phước", monthly: 1_000_000, spent: 0, remaining: 1_000_000 },
-        { id: "ve-que", name: "Về quê", monthly: 1_000_000, spent: 0, remaining: 1_000_000 },
+        { id: "dien-nuoc", name: "Điện nước", monthly: 2_000_000, cycleAmount: null, note: null, categoryIds: [], spent: 1_000_000, remaining: 1_000_000 },
+        { id: "thuoc", name: "Thuốc", monthly: 500_000, cycleAmount: null, note: null, categoryIds: [], spent: 300_000, remaining: 200_000 },
+        { id: "thien-phuoc", name: "Thiện phước", monthly: 1_000_000, cycleAmount: null, note: null, categoryIds: [], spent: 0, remaining: 1_000_000 },
+        { id: "ve-que", name: "Về quê", monthly: 1_000_000, cycleAmount: null, note: null, categoryIds: [], spent: 0, remaining: 1_000_000 },
       ],
       remaining: 3_200_000,
     });

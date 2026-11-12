@@ -341,8 +341,10 @@ export interface ReserveGoal {
   account_id: string | null;
   /** Nơi để tiền (ADR-141): `account` một tài khoản để dành · `operating` trả thẳng từ tiền chi tiêu. Bản lưu cũ thiếu = `account`. */
   pays_from?: "account" | "operating";
-  /** Mục tiêu `operating`: còn phải trả kỳ này = max(0, mỗi tháng − đã chi từ Vận hành); null với mục tiêu `account`. */
+  /** Mục tiêu `operating`: còn phải trả kỳ này = max(0, số kỳ này − đã trả); null với mục tiêu `account`. */
   remaining?: number | null;
+  /** Mục tiêu `operating`: danh mục tự tính là đã trả (ADR-143). Bản lưu cũ thiếu = []. */
+  category_ids?: string[];
   /** Tài khoản đề xuất của bản cập nhật (chỉ gợi ý cho màn chuyển đổi, không phải gắn); null = không có. */
   suggested_account_id: string | null;
   held: number | null;

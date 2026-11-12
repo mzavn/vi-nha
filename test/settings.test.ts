@@ -649,13 +649,13 @@ describe("ba ngăn: cấu hình (261112-ba-ngan-nen-du-lieu)", () => {
     expect(data.config.savings_pct).toBe(30);
     for (const g of data.goals) {
       expect(Object.keys(g).sort()).toEqual(
-        ["account_id", "active", "debt_id", "due_date", "held", "id", "monthly_amount", "name", "need", "pays_from", "remaining", "repeat_months", "short", "sort", "spent", "suggested_account_id", "target_amount", "target_pct"].sort(),
+        ["account_id", "active", "category_ids", "debt_id", "due_date", "held", "id", "monthly_amount", "name", "need", "pays_from", "remaining", "repeat_months", "short", "sort", "spent", "suggested_account_id", "target_amount", "target_pct"].sort(),
       );
     }
     expect(data.goals).toEqual([
-      { id: "tuition", name: "Học phí", account_id: "mb-tuition", suggested_account_id: null, held: 2_500_000, need: 6_000_000, spent: 0, short: 3_500_000, target_amount: 6_000_000, target_pct: null, monthly_amount: 2_000_000, repeat_months: 3, due_date: "2027-01-15", debt_id: null, sort: 10, active: true, pays_from: "account", remaining: null },
-      { id: "car-service", name: "Bảo dưỡng xe", account_id: null, suggested_account_id: null, held: null, need: null, spent: 0, short: null, target_amount: 4_800_000, target_pct: null, monthly_amount: null, repeat_months: null, due_date: "2027-03-31", debt_id: null, sort: 20, active: true, pays_from: "account", remaining: null },
-      { id: "income-tax", name: "Thuế thu nhập", account_id: null, suggested_account_id: null, held: null, need: null, spent: 0, short: null, target_amount: null, target_pct: 10, monthly_amount: null, repeat_months: null, due_date: null, debt_id: null, sort: 30, active: true, pays_from: "account", remaining: null },
+      { id: "tuition", name: "Học phí", account_id: "mb-tuition", suggested_account_id: null, held: 2_500_000, need: 6_000_000, spent: 0, short: 3_500_000, target_amount: 6_000_000, target_pct: null, monthly_amount: 2_000_000, repeat_months: 3, due_date: "2027-01-15", debt_id: null, sort: 10, active: true, pays_from: "account", remaining: null, category_ids: [] },
+      { id: "car-service", name: "Bảo dưỡng xe", account_id: null, suggested_account_id: null, held: null, need: null, spent: 0, short: null, target_amount: 4_800_000, target_pct: null, monthly_amount: null, repeat_months: null, due_date: "2027-03-31", debt_id: null, sort: 20, active: true, pays_from: "account", remaining: null, category_ids: [] },
+      { id: "income-tax", name: "Thuế thu nhập", account_id: null, suggested_account_id: null, held: null, need: null, spent: 0, short: null, target_amount: null, target_pct: 10, monthly_amount: null, repeat_months: null, due_date: null, debt_id: null, sort: 30, active: true, pays_from: "account", remaining: null, category_ids: [] },
     ]);
     expect(data.goal_groups).toEqual([{ account_id: "mb-tuition", balance: 2_500_000, need: 6_000_000, spent: 0, short: 3_500_000, extra: 0, goal_ids: ["tuition"], child_ids: [], interest: 0 }]);
     // Mục tiêu đã tắt vẫn có trong danh sách.

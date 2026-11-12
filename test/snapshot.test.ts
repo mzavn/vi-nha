@@ -161,29 +161,29 @@ describe("snapshot: phần còn phải trả và nhắc chuyển thêm (ledger U
     expect((await snap(low)).nearSpend).toMatchObject({ amount: 3_000_000, goalRemaining: 3_500_000, perDay: null });
   });
 
-  it("UC-103 AC-25: Vận hành 4.000.000, R 3.500.000, ăn tiêu 6.000.000 cho 20 ngày, ④ → Ví Thưởng 600.000 đang mở → topUp 5.500.000 từ BIDV 2.000.000 rồi Phao 3.500.000, đích Chi tiêu chồng (không Gửi 3 tháng, không Tích luỹ); chuyển đủ → null; chưa đủ dữ liệu → null; chỉ tiền mặt → không đích", async () => {
+  it("UC-103 AC-25: Vận hành 1.000.000, R 3.500.000, ④ → Ví Thưởng 600.000 đang mở → topUp 2.500.000 từ BIDV 2.000.000 rồi Phao 500.000, đích Chi tiêu chồng (không Gửi 3 tháng, không Tích luỹ); chuyển đủ → null; không có chi trung bình → cùng kết quả (không ăn tiêu ước tính); chỉ tiền mặt → không đích", async () => {
     const raw = householdTopUp({ history: true });
     let s = await snap(raw);
     expect(s.pockets.reserve.peaceMonths.monthly).toBe(13_500_000);
-    expect(s.nearSpend).toMatchObject({ amount: 4_000_000, goalRemaining: 3_500_000 });
+    expect(s.nearSpend).toMatchObject({ amount: 1_000_000, goalRemaining: 3_500_000 });
     expect(s.topUp).toEqual({
-      amount: 5_500_000,
+      amount: 2_500_000,
       sources: [
         { accountId: "tk-bidv", name: "BIDV", amount: 2_000_000 },
-        { accountId: "phao", name: "Phao", amount: 3_500_000 },
+        { accountId: "phao", name: "Phao", amount: 500_000 },
       ],
       toAccountId: "tk-chi-tieu-chong",
       target: { accountId: "tk-chi-tieu-chong", name: "Chi tiêu chồng", bank: "Vietcombank", accountNo: "01010000001", subAccount: null },
     });
 
     parentTx(raw, { at: "2026-11-20 09:00", meaning: "transfer", amount: 2_000_000, from: "tk-bidv", to: "tk-chi-tieu-chong" });
-    parentTx(raw, { at: "2026-11-20 09:05", meaning: "transfer", amount: 3_500_000, from: "phao", to: "tk-chi-tieu-chong" });
+    parentTx(raw, { at: "2026-11-20 09:05", meaning: "transfer", amount: 500_000, from: "phao", to: "tk-chi-tieu-chong" });
     expect((await snap(raw)).topUp).toBeNull();
 
-    expect((await snap(householdTopUp({ history: false }))).topUp).toBeNull();
+    expect((await snap(householdTopUp({ history: false }))).topUp).toEqual(s.topUp);
 
     const cashOnly = householdTopUp({ history: true });
     cashOnly.exec("UPDATE accounts SET account_no = NULL WHERE id IN ('tk-chi-tieu-chong', 'tk-chi-tieu-vo')");
-    expect((await snap(cashOnly)).topUp).toMatchObject({ amount: 5_500_000, toAccountId: null, target: null });
+    expect((await snap(cashOnly)).topUp).toMatchObject({ amount: 2_500_000, toAccountId: null, target: null });
   });
 });

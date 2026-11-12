@@ -25,30 +25,30 @@ const cycle = { tasks: [{ kind: "surplus", status: "open", toAccountId: "tk-bidv
 const target = { accountId: "tk-chi-tieu-chong", name: "MB chi tiêu chồng", bank: "MB", accountNo: "0123456789", subAccount: null };
 
 describe("nhắc chuyển thêm (topUpView)", () => {
-  it("UC-103 AC-25: thiếu 5.500.000 — nguồn tk-bidv 2.000.000 rồi phao 3.500.000, đích tài khoản chi tiêu; ④ → Ví Thưởng không vào need; không gợi ý khoản gửi, tích luỹ; chuyển xong → null; chưa đủ dữ liệu → chỉ so với R; chỉ tiền mặt → không đích", () => {
-    const p = pockets([acct("tk-chi-tieu-chong", "operating", 4_000_000)]);
+  it("UC-103 AC-25: Vận hành 1.000.000, R 3.500.000 → thiếu 2.500.000 — nguồn tk-bidv 2.000.000 rồi phao 500.000, đích tài khoản chi tiêu; ④ → Ví Thưởng không vào need; không ăn tiêu ước tính (có hay không chi trung bình cùng kết quả); không gợi ý khoản gửi, tích luỹ; Vận hành đủ R → null; chỉ tiền mặt → không đích", () => {
+    const p = pockets([acct("tk-chi-tieu-chong", "operating", 1_000_000)]);
     expect(p.operating.remaining).toBe(3_500_000);
-    const base = { amount: 4_000_000, pendingTasks: 600_000, payCycle: cycle, goalRemaining: 3_500_000, daysLeft: 20, pockets: p, target };
+    const base = { amount: 1_000_000, pendingTasks: 600_000, payCycle: cycle, goalRemaining: 3_500_000, pockets: p, target };
     expect(topUpView(base)).toEqual({
-      amount: 5_500_000,
+      amount: 2_500_000,
       sources: [
         { accountId: "tk-bidv", name: "tk-bidv", amount: 2_000_000 },
-        { accountId: "phao", name: "phao", amount: 3_500_000 },
+        { accountId: "phao", name: "phao", amount: 500_000 },
       ],
       toAccountId: "tk-chi-tieu-chong",
       target,
     });
-    const after = pockets([acct("tk-chi-tieu-chong", "operating", 9_500_000)]);
-    expect(topUpView({ ...base, amount: 9_500_000, pockets: after })).toBeNull();
-    const noData = pockets([acct("tk-chi-tieu-chong", "operating", 4_000_000)], []);
-    expect(topUpView({ ...base, pockets: noData })).toBeNull();
+    const after = pockets([acct("tk-chi-tieu-chong", "operating", 3_500_000)]);
+    expect(topUpView({ ...base, amount: 3_500_000, pockets: after })).toBeNull();
+    const noData = pockets([acct("tk-chi-tieu-chong", "operating", 1_000_000)], []);
+    expect(topUpView({ ...base, pockets: noData })).toEqual(topUpView(base));
     expect(topUpView({ ...base, target: null })).toMatchObject({ toAccountId: null, target: null });
   });
 
   it("UC-103 AC-25: làm tròn lên 100.000; nguồn không đủ → tổng nguồn nhỏ hơn số cần (phần còn lại chưa có nguồn)", () => {
     const p = pockets([acct("tk-chi-tieu-chong", "operating", 4_000_000)]);
-    const t = topUpView({ amount: 1_950_000, pendingTasks: 0, payCycle: null, goalRemaining: 3_500_000, daysLeft: 20, pockets: p, target });
-    expect(t?.amount).toBe(7_600_000);
+    const t = topUpView({ amount: 1_950_000, pendingTasks: 5_000_000, payCycle: null, goalRemaining: 3_500_000, pockets: p, target });
+    expect(t?.amount).toBe(6_600_000);
     expect(t?.sources).toEqual([
       { accountId: "tk-bidv", name: "tk-bidv", amount: 2_000_000 },
       { accountId: "phao", name: "phao", amount: 4_000_000 },

@@ -344,3 +344,69 @@ describe("chi gắn mục tiêu trả từ tiền chi tiêu (UC-1209 AC-18)", ()
     expect(await remaining()).toBe(4_500_000);
   });
 });
+
+// Số kỳ này và danh mục tự tính là đã trả cho khoản phải trả (change 261112-khoan-phai-tra-ky-nay).
+describe("số kỳ này và danh mục của khoản phải trả (UC-1209 AC-21, AC-22)", () => {
+  type OpGoal = { id: string; monthly: number; cycleAmount: number | null; spent: number; remaining: number; note: string | null; categoryIds: string[] };
+  beforeEach(() => {
+    vi.setSystemTime(PARENT_NOW);
+    raw = householdParent({ operatingGoals: true });
+    env = { DB: asD1(raw), API_TOKEN: "tok" } as Env;
+  });
+  const operating = async () => (await call<{ pockets: { operating: { goals: OpGoal[]; remaining: number } } }>("GET", "/v1/snapshot")).json.data.pockets.operating;
+  const op = async (id: string) => (await operating()).goals.find((g) => g.id === id)!;
+  const setAmount = (id: string, body: unknown) => call<{ goal: OpGoal }>("PUT", `/v1/pay-cycle/goal-amounts/${id}`, body);
+
+  it("UC-1209 AC-21: Điện nước kỳ này 500.000 'Tháng này ít', Về quê 0 → remaining 500.000 / 0, R 2.000.000, nhật ký goal.cycle_amount; null về 2.000.000; mục tiêu tài khoản 409, số âm 400; kỳ mới về số mỗi tháng", async () => {
+    const saved = await setAmount("dien-nuoc", { amount: 500_000, note: "Tháng này ít" });
+    expect(saved.status).toBe(200);
+    expect(saved.json.data.goal).toMatchObject({ id: "dien-nuoc", monthly: 2_000_000, cycleAmount: 500_000, remaining: 500_000, note: "Tháng này ít" });
+    expect((await setAmount("ve-que", { amount: 0 })).status).toBe(200);
+    let o = await operating();
+    expect(o.goals.find((g) => g.id === "dien-nuoc")).toMatchObject({ cycleAmount: 500_000, remaining: 500_000, note: "Tháng này ít" });
+    expect(o.goals.find((g) => g.id === "ve-que")).toMatchObject({ cycleAmount: 0, remaining: 0, note: null });
+    expect(o.remaining).toBe(2_000_000);
+    const logs = raw.prepare("SELECT target, detail FROM audit_log WHERE action = 'goal.cycle_amount' ORDER BY id").all() as { target: string; detail: string }[];
+    expect(logs.map((l) => [l.target, JSON.parse(l.detail)])).toEqual([
+      ["goal:dien-nuoc", { cycle: expect.any(String), amount: { from: 2_000_000, to: 500_000 } }],
+      ["goal:ve-que", { cycle: expect.any(String), amount: { from: 1_000_000, to: 0 } }],
+    ]);
+
+    expect((await setAmount("dien-nuoc", { amount: null })).json.data.goal).toMatchObject({ cycleAmount: null, remaining: 2_000_000, note: null });
+    expect(err(await setAmount("nha-o", { amount: 0 }))).toEqual([409, "not_operating_goal"]);
+    expect(err(await setAmount("dien-nuoc", { amount: -1 }))).toEqual([400, "invalid_input"]);
+    expect(err(await setAmount("dien-nuoc", { amount: 1, note: "x".repeat(81) }))).toEqual([400, "invalid_input"]);
+    expect(err(await setAmount("khong-co", { amount: 1 }))).toEqual([404, "not_found"]);
+
+    await setAmount("dien-nuoc", { amount: 500_000 });
+    vi.setSystemTime(new Date(vnAt("2026-12-10 09:00")));
+    const salary = await call("POST", "/v1/transactions", { meaning: "income", amount: 20_000_000, account_id: "tk-chi-tieu-chong", income_stream_id: "salary-husband", at: vnAt("2026-12-10 08:00") });
+    expect(salary.status).toBe(201);
+    o = await operating();
+    expect(o.goals.find((g) => g.id === "dien-nuoc")).toMatchObject({ cycleAmount: null, remaining: 2_000_000 });
+    expect(o.goals.find((g) => g.id === "ve-que")).toMatchObject({ cycleAmount: null, remaining: 1_000_000 });
+    expect(o.remaining).toBe(4_500_000);
+  });
+
+  it("UC-1209 AC-22: Điện nước gắn danh mục utilities — chi Vận hành không goal_id 800.000 + gắn Điện nước 500.000 − hoàn 200.000 → spent 1.100.000, remaining 900.000; chi từ Dự phòng và khoản gắn Thuốc không tính; danh mục trùng 409, mục tiêu tài khoản 400, danh mục lạ 400; GET /v1/settings có category_ids", async () => {
+    const patched = await call("PATCH", "/v1/settings/goals/dien-nuoc", { category_ids: ["utilities"] });
+    expect(patched.status).toBe(200);
+    const util = (account: string, amount: number, extra: Record<string, unknown> = {}) => spend(account, amount, { category_id: "utilities", ...extra });
+    const big = await util("tk-chi-tieu-vo", 800_000);
+    expect(big.json.data.tx.goal_id).toBeNull();
+    expect((await util("tk-tiet-kiem", 300_000)).status).toBe(201);
+    expect((await util("tk-chi-tieu-chong", 400_000, { goal_id: "thuoc" })).status).toBe(201);
+    expect((await util("cash-husband", 500_000, { goal_id: "dien-nuoc" })).status).toBe(201);
+    expect((await call("POST", "/v1/transactions", { meaning: "refund", amount: 200_000, account_id: "tk-chi-tieu-vo", link_id: big.json.data.tx.id })).status).toBe(201);
+    expect(await op("dien-nuoc")).toMatchObject({ spent: 1_100_000, remaining: 900_000, categoryIds: ["utilities"] });
+    expect(await op("thuoc")).toMatchObject({ spent: 400_000, remaining: 100_000, categoryIds: [] });
+
+    expect(err(await call("PATCH", "/v1/settings/goals/thuoc", { category_ids: ["utilities", "health"] }))).toEqual([409, "category_taken"]);
+    expect(err(await call("PATCH", "/v1/settings/goals/nha-o", { category_ids: ["health"] }))).toEqual([400, "invalid_input"]);
+    expect(err(await call("PATCH", "/v1/settings/goals/thuoc", { category_ids: ["khong-co"] }))).toEqual([400, "unknown_category"]);
+    const settings = await call<{ goals: { id: string; category_ids: string[] }[] }>("GET", "/v1/settings");
+    const goals = settings.json.data.goals;
+    expect(goals.find((g) => g.id === "dien-nuoc")!.category_ids).toEqual(["utilities"]);
+    expect(goals.find((g) => g.id === "thuoc")!.category_ids).toEqual([]);
+  });
+});

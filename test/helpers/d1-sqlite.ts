@@ -33,14 +33,17 @@ export function migratedDb(until = "9999"): DatabaseSync {
 }
 
 /**
- * Thêm các cột mà code hiện tại đọc (0044: tài khoản con, nơi để tiền của mục tiêu, rút từ tiền lãi) vào DB còn ở schema cũ —
- * để test migration cũ đo số bằng service hiện tại trước / sau migration của nó. Không thêm trigger, không đổi schema_version.
+ * Thêm các cột / bảng mà code hiện tại đọc (0044: tài khoản con, nơi để tiền của mục tiêu, rút từ tiền lãi; 0045: số kỳ này và
+ * danh mục của khoản phải trả) vào DB còn ở schema cũ — để test migration cũ đo số bằng service hiện tại trước / sau migration
+ * của nó. Không thêm trigger, không đổi schema_version.
  */
 export function addCurrentColumns(db: DatabaseSync): void {
   db.exec(`
     ALTER TABLE accounts ADD COLUMN parent_account_id TEXT REFERENCES accounts(id);
     ALTER TABLE reserve_goals ADD COLUMN pays_from TEXT NOT NULL DEFAULT 'account';
     ALTER TABLE transactions ADD COLUMN from_interest INTEGER NOT NULL DEFAULT 0;
+    CREATE TABLE goal_cycle_amounts (goal_id TEXT NOT NULL, cycle_key TEXT NOT NULL, amount INTEGER NOT NULL, note TEXT, PRIMARY KEY (goal_id, cycle_key));
+    CREATE TABLE reserve_goal_categories (category_id TEXT PRIMARY KEY, goal_id TEXT NOT NULL);
   `);
 }
 

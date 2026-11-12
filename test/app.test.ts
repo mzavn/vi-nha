@@ -13,13 +13,13 @@ describe("GET /v1/health", () => {
   it("trả phiên bản schema, không cần token", async () => {
     const res = await app.request("/v1/health", {}, env());
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, db: "v1.44" });
+    expect(await res.json()).toEqual({ ok: true, db: "v1.45" });
   });
 
-  it("UC-509 AC-3: D1 trống áp 0030_baseline + 0031…0044, và hộ mẫu E áp 0038…0044 → cả hai v1.44", async () => {
+  it("UC-509 AC-3: D1 trống áp 0030_baseline + 0031…0045, và hộ mẫu E áp 0038…0045 → cả hai v1.45", async () => {
     for (const DB of [upgradingD1(legacyEmptyDb()), asD1(householdE())]) {
       const res = await app.request("/v1/health", {}, env({ DB }));
-      expect(await res.json()).toEqual({ ok: true, db: "v1.44" });
+      expect(await res.json()).toEqual({ ok: true, db: "v1.45" });
     }
   });
 

@@ -287,14 +287,14 @@ describe("nhắc chuyển thêm không gợi ý tài khoản riêng tư của ng
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it("UC-504 AC-19: BIDV (Ví Thưởng) riêng tư của vợ → topUp của chồng chỉ gợi ý Phao 4.000.000, không tên / số BIDV; vợ thấy BIDV 2.000.000 rồi Phao 3.500.000; tin sáng (người xem null) nói '(từ Phao)'; vợ đã tắt → chồng thấy BIDV", async () => {
+  it("UC-504 AC-19: BIDV (Ví Thưởng) riêng tư của vợ → topUp của chồng chỉ gợi ý Phao 2.500.000, không tên / số BIDV; vợ thấy BIDV 2.000.000 rồi Phao 500.000; tin sáng (người xem null) nói '(từ Phao)'; vợ đã tắt → chồng thấy BIDV", async () => {
     const topUp = async (who: string) => (await call("GET", "/v1/snapshot", undefined, who)).json.data.topUp;
     const husband = await topUp("husband");
-    expect(husband).toMatchObject({ amount: 5_500_000, sources: [{ accountId: "phao", name: "Phao", amount: 4_000_000 }], toAccountId: "tk-chi-tieu-chong" });
+    expect(husband).toMatchObject({ amount: 2_500_000, sources: [{ accountId: "phao", name: "Phao", amount: 2_500_000 }], toAccountId: "tk-chi-tieu-chong" });
     expect(JSON.stringify(husband)).not.toMatch(/tk-bidv|BIDV/);
     expect((await topUp("wife")).sources).toEqual([
       { accountId: "tk-bidv", name: "BIDV", amount: 2_000_000 },
-      { accountId: "phao", name: "Phao", amount: 3_500_000 },
+      { accountId: "phao", name: "Phao", amount: 500_000 },
     ]);
 
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({ ok: true, status: 200 }) as Response);
@@ -302,7 +302,7 @@ describe("nhắc chuyển thêm không gợi ý tài khoản riêng tư của ng
     db.exec("UPDATE members SET tg_chat_id = '111' WHERE id = 'husband'");
     await daily({ DB: asD1(db), TG_BOT_TOKEN: "test-token" } as Env, new Date("2026-11-20T00:00:00Z"));
     const { text }: { text: string } = JSON.parse(String(fetchMock.mock.calls[0]![1].body));
-    expect(text.split("\n")[0]).toBe("💰 Vận hành còn 4.000.000 ₫ tới kỳ lương 10/12 (còn 20 ngày) · cần chuyển thêm 5.500.000 ₫ vào tiền chi tiêu (từ Phao)");
+    expect(text.split("\n")[0]).toBe("💰 Vận hành còn 1.000.000 ₫ tới kỳ lương 10/12 (còn 20 ngày) · cần chuyển thêm 2.500.000 ₫ vào tiền chi tiêu (từ Phao)");
     expect(text).not.toContain("BIDV");
 
     db.exec("UPDATE members SET active = 0 WHERE id = 'wife'");
@@ -314,7 +314,7 @@ describe("nhắc chuyển thêm không gợi ý tài khoản riêng tư của ng
     db.exec("UPDATE accounts SET owner_member_id = 'wife', private = 1 WHERE id = 'tk-chi-tieu-chong'");
     expect(await topUp("husband")).toMatchObject({ toAccountId: "tk-chi-tieu-vo", target: { accountId: "tk-chi-tieu-vo" } });
     db.exec("UPDATE accounts SET owner_member_id = 'wife', private = 1 WHERE id = 'tk-chi-tieu-vo'");
-    expect(await topUp("husband")).toMatchObject({ amount: 5_500_000, toAccountId: null, target: null });
+    expect(await topUp("husband")).toMatchObject({ amount: 2_500_000, toAccountId: null, target: null });
     expect((await getSnapshot(asD1(db), null, PARENT_NOW)).topUp).toMatchObject({ toAccountId: null, target: null });
     expect(await topUp("wife")).toMatchObject({ toAccountId: "tk-chi-tieu-chong", target: { accountId: "tk-chi-tieu-chong" } });
   });

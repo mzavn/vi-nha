@@ -17,6 +17,8 @@ import {
   canAddDeposit,
   TAX_OWN_ACCOUNT,
   GOAL_PLACE_LABEL,
+  GOAL_CATEGORIES_HINT,
+  GOAL_CATEGORIES_LABEL,
   goalPlace,
   OPERATING_HINT,
   operatingChoice,
@@ -1625,7 +1627,23 @@ export function GoalSheet({ d, item, prefill, onClose, onSaved }: { d: SettingsD
       {!opChoice.show && <Hint>{TAX_OWN_ACCOUNT}</Hint>}
       {opChoice.show && opChoice.disabled && <Hint>{PLACE_LABEL.operating}: {opChoice.disabled}</Hint>}
       {place === "operating" ? (
-        <Hint>{OPERATING_HINT}</Hint>
+        <>
+          <Hint>{OPERATING_HINT}</Hint>
+          <div class="field goal-chips">
+            <span class="k">{GOAL_CATEGORIES_LABEL}</span>
+            <div class="goal-chip-row" role="group" aria-label={GOAL_CATEGORIES_LABEL}>
+              {d.categories.map((c) => {
+                const on = f.category_ids.includes(c.id);
+                return (
+                  <button type="button" key={c.id} class="goal-chip" aria-pressed={on} onClick={() => set({ category_ids: on ? f.category_ids.filter((x) => x !== c.id) : [...f.category_ids, c.id] })}>
+                    {c.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <Hint>{GOAL_CATEGORIES_HINT}</Hint>
+        </>
       ) : (
         <>
           <Field {...e("account_id")} label="Tài khoản">

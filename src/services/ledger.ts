@@ -10,7 +10,7 @@ import { buildSnapshot, DEFAULT_PAYDAY_DAY, type Snapshot } from "../domain/snap
 import { INTEREST_MAX_AMOUNT_DEFAULT, INTEREST_MAX_AMOUNT_LIMIT } from "../domain/interest-deposit";
 import { DomainError, type AccountRef, type Refs } from "../domain/types";
 import { DEFAULT_SAVINGS_PCT, goalOrder, pocketsView, type Pocket, type PocketDebt, type PocketGoalInput } from "../domain/pockets";
-import { goalSpentMap, goalSpentStatement } from "./pockets";
+import { goalSpentMap, goalSpentStatement, operatingExtrasFrom, operatingExtrasStatements } from "./pockets";
 import { groupInterestFrom, groupInterests, groupInterestStatements } from "./goal-groups";
 import { formatMoney } from "../notify/format";
 import { itemsTotal } from "./balance";
@@ -806,7 +806,9 @@ export async function getSnapshot(db: D1Database, viewerId: string | null, now: 
   const hidden = await hiddenAccountIds(db, viewerId);
   const OPERATING = "SELECT id FROM accounts WHERE pocket = 'operating'";
   const [interestAccounts, interestTxs] = groupInterestStatements(db);
-  const [config, pending, drift, accounts, goals, debts, accountsAt, flowsSince, opSpend, dataStart, hiddenLogs, claims, goalSpent, groupAccounts, groupTxs, topUpTarget] = await db.batch([
+  // Khoá của số kỳ này (ADR-143): kỳ lưu → `pay_cycles.id`, chưa có kỳ lưu → ngày lương danh nghĩa (như `currentCycle`).
+  const cycleKey = current.stored && cycle.view ? String(cycle.view.id) : current.payday;
+  const [config, pending, drift, accounts, goals, debts, accountsAt, flowsSince, opSpend, dataStart, hiddenLogs, claims, goalSpent, groupAccounts, groupTxs, topUpTarget, cycleAmounts, goalCategories] = await db.batch([
     db.prepare("SELECT k, v FROM config WHERE k IN ('safety_fund_months', 'savings_pct', 'surplus_reward_account', 'conversion_state')"),
     db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(CASE direction WHEN 'in' THEN amount ELSE -amount END), 0) AS net FROM bank_logs WHERE status = 'pending'"),
     db.prepare("SELECT account_id AS accountId, name, book_drift AS bookDrift FROM v_reconcile"),
@@ -868,6 +870,8 @@ export async function getSnapshot(db: D1Database, viewerId: string | null, now: 
            ${hidden.length ? `AND id NOT IN (${hidden.map(() => "?").join(", ")})` : ""} ORDER BY kind, name LIMIT 1`,
       )
       .bind(...hidden),
+    // Số kỳ này và danh mục của khoản phải trả (ADR-143).
+    ...operatingExtrasStatements(db, cycleKey),
   ]);
   const first = <T>(r: D1Result) => rows<T>(r)[0] ?? null;
   const cfg = new Map(rows<{ k: string; v: string }>(config!).map((r) => [r.k, r.v]));
@@ -877,9 +881,10 @@ export async function getSnapshot(db: D1Database, viewerId: string | null, now: 
   const cycleSpend = new Map(rows<{ cycle: number; amount: number }>(opSpend!).map((c) => [Number(c.cycle), Number(c.amount)]));
   const firstAt = first<{ at: string }>(dataStart!)?.at;
   const spentOf = goalSpentMap(goalSpent!);
+  const extras = operatingExtrasFrom(cycleAmounts!, goalCategories!);
   const pockets = pocketsView({
     accounts: accountRows.map((a) => ({ id: a.id, name: a.name, pocket: a.pocket, confirmed: a.confirmed === 1, balance: Number(a.balance), parentId: a.parentId })),
-    goals: rows<Omit<PocketGoalInput, "spent">>(goals!).map((g) => ({ ...g, sort: Number(g.sort), spent: spentOf.get(g.id) ?? 0 })),
+    goals: rows<Omit<PocketGoalInput, "spent">>(goals!).map((g) => ({ ...g, sort: Number(g.sort), spent: spentOf.get(g.id) ?? 0, ...extras(g.id) })),
     rewardAccountId: cfg.get("surplus_reward_account") || null,
     debts: rows<Omit<PocketDebt, "active"> & { active: number }>(debts!).map((d) => ({ ...d, active: d.active === 1, balance: Number(d.balance) })),
     savingsPct: cfg.has("savings_pct") && Number.isInteger(savings) ? savings : DEFAULT_SAVINGS_PCT,
