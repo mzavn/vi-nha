@@ -272,7 +272,7 @@ export function AccountSheet({
   // Khoản gửi kỳ hạn (ADR-140): ô "Thuộc tài khoản" chỉ với tài khoản ngân hàng; tài khoản đang là mẹ không có ô.
   const reward = d.config.surplus_reward_account;
   const parentField = f.kind === "bank" ? accountParentField(item, d.accounts, d.goals, reward) : { show: false, disabled: null };
-  const parentOptions = accountParentOptions(d.accounts, item, reward);
+  const parentOptions = accountParentOptions(d.accounts, item);
   const parent = f.parent_account_id ? (d.accounts.find((a) => a.id === f.parent_account_id) ?? { id: f.parent_account_id, name: f.parent_account_id }) : null;
   function submit() {
     const name = f.name.trim();
@@ -509,7 +509,7 @@ export function AccountSheet({
           {item.deactivated_at ? ` Đã tắt từ ${dateText(item.deactivated_at)} — bảng cân đối vẫn tính nó ở các tháng trước ngày đó.` : " Bảng cân đối vẫn tính nó ở các tháng trước ngày tắt."}
         </Hint>
       )}
-      {item && onAddDeposit && item.active && canAddDeposit(item, d.accounts, reward) && (
+      {item && onAddDeposit && item.active && canAddDeposit(item, d.accounts) && (
         <div class="pad">
           <button type="button" class="btn" onClick={() => onAddDeposit(item)}>
             <Icon name="plus" size={16} />

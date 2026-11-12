@@ -859,11 +859,15 @@ export async function getSnapshot(db: D1Database, viewerId: string | null, now: 
     // Tiền lãi của các nhóm mẹ + con có mục tiêu (QĐ2, ADR-140).
     interestAccounts,
     interestTxs,
-    // Đích nhắc chuyển thêm (ADR-141): tài khoản ngân hàng ngăn Vận hành có số tài khoản đầu tiên — cùng luật QR của UC-1206 bước 10.
-    db.prepare(
-      `SELECT id AS accountId, name, bank, account_no AS accountNo, sub_account AS subAccount FROM accounts
-       WHERE active = 1 AND kind = 'bank' AND pocket = 'operating' AND account_no IS NOT NULL AND account_no <> '' ORDER BY kind, name LIMIT 1`,
-    ),
+    // Đích nhắc chuyển thêm (ADR-141): tài khoản ngân hàng ngăn Vận hành có số tài khoản đầu tiên — cùng luật QR của UC-1206 bước 10;
+    // bỏ tài khoản riêng tư bị giấu với người xem (access UC-504 AC-19), không còn thì không đích.
+    db
+      .prepare(
+        `SELECT id AS accountId, name, bank, account_no AS accountNo, sub_account AS subAccount FROM accounts
+         WHERE active = 1 AND kind = 'bank' AND pocket = 'operating' AND account_no IS NOT NULL AND account_no <> ''
+           ${hidden.length ? `AND id NOT IN (${hidden.map(() => "?").join(", ")})` : ""} ORDER BY kind, name LIMIT 1`,
+      )
+      .bind(...hidden),
   ]);
   const first = <T>(r: D1Result) => rows<T>(r)[0] ?? null;
   const cfg = new Map(rows<{ k: string; v: string }>(config!).map((r) => [r.k, r.v]));
@@ -905,6 +909,7 @@ export async function getSnapshot(db: D1Database, viewerId: string | null, now: 
     pending: first(pending!) ?? { count: 0, net: 0 },
     drift: rows(drift!) as Snapshot["attention"]["drift"],
     hiddenPendingLogs: Number(first<{ n: number }>(hiddenLogs!)?.n ?? 0),
+    hiddenAccountIds: hidden,
     accounts: accountRows.map((a) => ({ id: a.id, name: a.name, pocket: a.pocket })),
     pockets,
     paydayDay,

@@ -18,6 +18,8 @@ import {
   GOAL_ORDER_NOTE,
   goalGroupLines,
   goalRowAccounts,
+  goalRowChosenText,
+  goalRowOptionText,
   GOALS_STEP_TITLE,
   goalStepRequests,
   goalsReady,
@@ -302,7 +304,7 @@ function GoalsStep({ data, offline, postStep, reloadSettings }: StepProps) {
                 </option>
                 {options.map((a) => (
                   <option key={a.id} value={a.id} disabled={a.blocked !== null && a.id !== value}>
-                    {`${a.name} · đã có ${formatVnd(a.book_balance ?? 0)}${a.deposits ? ` (${a.deposits})` : ""}${a.shared ? ` — ${a.shared}` : ""}${a.blocked ? ` (${a.blocked})` : ""}`}
+                    {goalRowOptionText(a, a.id === value)}
                   </option>
                 ))}
                 <option value={NEW_ACCOUNT}>Tạo tài khoản mới</option>
@@ -310,12 +312,8 @@ function GoalsStep({ data, offline, postStep, reloadSettings }: StepProps) {
                 <option value={OFF}>Không dùng mục tiêu này</option>
                 <option value={LATER}>Để sau</option>
               </select>
-              {/* Tên tài khoản đã chọn và "dùng chung với …" hiện đủ ở dòng dưới, xuống dòng — ô chọn chiếm cả dòng ở 390px. */}
-              {chosen?.shared && (
-                <span class="sub-line cv-goal-shared">
-                  {chosen.name} — {chosen.shared}
-                </span>
-              )}
+              {/* Ô chọn khép lại chỉ còn tên tài khoản; số đã có và "dùng chung với …" hiện đủ ở dòng dưới, xuống dòng (UC-1208 AC-12). */}
+              {chosen && <span class="sub-line cv-goal-shared">{goalRowChosenText(chosen)}</span>}
               {c?.kind === "operating" && <span class="sub-line cv-goal-shared">{OPERATING_HINT}</span>}
             </div>
           );

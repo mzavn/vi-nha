@@ -10,8 +10,10 @@ const MAX = 100;
 /** Vị trí của một % trên thanh (0…100%). */
 const at = (pct: number) => `${((pct - MIN) / (MAX - MIN)) * 100}%`;
 
+/** `pct` 0 (sheet Trích Tích luỹ khi số 0): con trượt nằm ở đầu thanh, không vạch nào sáng. */
 export function SavingsSlider(props: { pct: number; onPct: (pct: number) => void; disabled?: boolean; id?: string }) {
-  const pct = Math.min(MAX, Math.max(MIN, Math.round(props.pct) || MIN));
+  const shown = Math.min(MAX, Math.max(0, Math.round(props.pct) || 0));
+  const pct = Math.max(MIN, shown);
   return (
     <div class="sv-slider">
       <div class="sv-track">
@@ -25,7 +27,7 @@ export function SavingsSlider(props: { pct: number; onPct: (pct: number) => void
           value={pct}
           disabled={props.disabled}
           aria-label="% Tích luỹ"
-          aria-valuetext={`${pct}%`}
+          aria-valuetext={`${shown}%`}
           onInput={(ev) => props.onPct(Number(ev.currentTarget.value))}
         />
         <span class="sv-ticks" aria-hidden="true">
@@ -36,7 +38,7 @@ export function SavingsSlider(props: { pct: number; onPct: (pct: number) => void
       </div>
       <div class="sv-marks" role="group" aria-label="tối thiểu · thường · hướng tới">
         {SAVINGS_MARKS.map((m) => (
-          <button key={m.pct} type="button" class={`sv-mark${pct === m.pct ? " on" : ""}`} aria-pressed={pct === m.pct} disabled={props.disabled} onClick={() => props.onPct(m.pct)}>
+          <button key={m.pct} type="button" class={`sv-mark${shown === m.pct ? " on" : ""}`} aria-pressed={shown === m.pct} disabled={props.disabled} onClick={() => props.onPct(m.pct)}>
             <b>{m.pct}%</b>
             <span>{m.label}</span>
           </button>

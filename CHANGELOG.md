@@ -6,6 +6,20 @@ bản cài cũ vẫn lên được bình thường (kể cả nâng database t�
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
 trước (xem README › Cập nhật bản mới).
 
+## v2.3.1 — 12/11/2026
+
+**Sửa**
+
+- Nhắc "cần chuyển thêm vào tiền chi tiêu" (thẻ Vận hành, tin sáng, Claude) không còn gợi ý lấy tiền từ tài khoản riêng tư
+  của người khác, cũng không hiện tên hay số dư của tài khoản đó; chỉ chủ tài khoản thấy nó trong lời gợi ý. Mã QR cũng
+  không chuyển vào tài khoản riêng tư của người khác: không còn tài khoản chi tiêu nào khác thì chỉ ghi "Chuyển vào tiền chi
+  tiêu", không có QR.
+- Sheet **Trích Tích luỹ**: trên điện thoại thanh kéo nằm dưới nhãn, rộng hết sheet (không còn bị đẩy sang phải); gõ số 0 thì
+  nhãn ghi "0% khoản lương" và không vạch nào sáng.
+- Màn chuyển đổi bước 2 trên điện thoại: ô chọn tài khoản chỉ ghi tên, không còn cắt "…"; số đã có và "dùng chung với …"
+  hiện đủ ở dòng dưới, như sheet mục tiêu ở Cài đặt.
+- Ví Thưởng làm tài khoản mẹ được: ô **Thuộc tài khoản** có Ví Thưởng, sheet Ví Thưởng có nút **+ Thêm khoản gửi kỳ hạn**.
+
 ## v2.3.0 — 12/11/2026
 
 Có nâng cấp database: `0044` (tài khoản con cho khoản gửi kỳ hạn, mục tiêu trả thẳng từ tiền chi tiêu). Database tự nâng khi

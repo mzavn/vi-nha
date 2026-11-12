@@ -906,15 +906,15 @@ describe("tài khoản con, mục tiêu trả từ tiền chi tiêu, thang Tích
   const byId = (id: string) => house.find((a) => a.id === id)!;
   const accountGoalsOf = [goal("nha-o", "Nhà ở", { account_id: "tk-tiet-kiem" }), goal("hoc-phi", "Học phí", { account_id: "tk-hoc-phi" })];
 
-  it("UC-709 AC-51: sheet tài khoản có ô Thuộc tài khoản — chỉ tài khoản ngân hàng đang dùng ở Dự phòng / Tích luỹ / ngoài ngăn, không con, không Ví Thưởng; mẹ không có ô; chọn mẹ → Ngăn 'theo {mẹ}', SePay ẩn, gửi parent_account_id, không gửi pocket", () => {
-    // Thêm tài khoản: danh sách mẹ (ô còn có "Không").
-    expect(accountParentOptions(house, null, "tk-bidv").map((a) => a.id)).toEqual(["tk-tiet-kiem", "tich-luy", "phao"]);
+  it("UC-709 AC-51: sheet tài khoản có ô Thuộc tài khoản — chỉ tài khoản ngân hàng đang dùng ở Dự phòng / Tích luỹ / ngoài ngăn, không con, có cả Ví Thưởng (làm mẹ được); mẹ không có ô; chọn mẹ → Ngăn 'theo {mẹ}', SePay ẩn, gửi parent_account_id, không gửi pocket", () => {
+    // Thêm tài khoản: danh sách mẹ (ô còn có "Không"); Ví Thưởng làm mẹ được (access UC-506 3n).
+    expect(accountParentOptions(house, null).map((a) => a.id)).toEqual(["tk-tiet-kiem", "tk-bidv", "tich-luy", "phao"]);
     expect(accountParentField(null, house, accountGoalsOf, "tk-bidv")).toEqual({ show: true, disabled: null });
     // Sửa tk-tiet-kiem sau khi nó có con → không có ô.
     expect(accountParentField(byId("tk-tiet-kiem"), house, accountGoalsOf, "tk-bidv").show).toBe(false);
     // Sửa con: có ô, đổi / bỏ mẹ được; danh sách không có chính nó.
     expect(accountParentField(byId("gui-6-thang"), house, accountGoalsOf, "tk-bidv")).toEqual({ show: true, disabled: null });
-    expect(accountParentOptions(house, byId("phao"), "tk-bidv").map((a) => a.id)).toEqual(["tk-tiet-kiem", "tich-luy"]);
+    expect(accountParentOptions(house, byId("phao")).map((a) => a.id)).toEqual(["tk-tiet-kiem", "tk-bidv", "tich-luy"]);
     // Tài khoản đang nối SePay / gắn mục tiêu / là Ví Thưởng → ô tắt kèm lý do.
     expect(accountParentField(byId("phao"), house, accountGoalsOf, "tk-bidv").disabled).toBe(PARENT_SEPAY);
     expect(accountParentField(account("tk-hoc-phi", "TK học phí"), [...house, account("tk-hoc-phi", "TK học phí")], accountGoalsOf, "tk-bidv").disabled).toBe("Tài khoản của mục tiêu Học phí: bỏ gắn mục tiêu trước.");
@@ -946,10 +946,11 @@ describe("tài khoản con, mục tiêu trả từ tiền chi tiêu, thang Tích
     const link = accountPayload({ ...accountToForm(tcb), parent_account_id: "tk-tiet-kiem" }, tcb);
     expect(link.ok && link.value).toMatchObject({ parent_account_id: "tk-tiet-kiem" });
     expect(link.ok && "pocket" in link.value).toBe(false);
-    // "+ Thêm khoản gửi kỳ hạn" ở sheet của mẹ: mở sheet thêm, có sẵn mẹ.
-    expect(canAddDeposit(byId("tk-tiet-kiem"), house, "tk-bidv")).toBe(true);
-    expect(canAddDeposit(byId("tk-chi-tieu-chong"), house, "tk-bidv")).toBe(false);
-    expect(canAddDeposit(byId("gui-6-thang"), house, "tk-bidv")).toBe(false);
+    // "+ Thêm khoản gửi kỳ hạn" ở sheet của mẹ (kể cả Ví Thưởng): mở sheet thêm, có sẵn mẹ.
+    expect(canAddDeposit(byId("tk-tiet-kiem"), house)).toBe(true);
+    expect(canAddDeposit(byId("tk-bidv"), house)).toBe(true);
+    expect(canAddDeposit(byId("tk-chi-tieu-chong"), house)).toBe(false);
+    expect(canAddDeposit(byId("gui-6-thang"), house)).toBe(false);
     expect(depositPreset(byId("tk-tiet-kiem"))).toEqual({ parent_account_id: "tk-tiet-kiem", bank: "MBBank" });
     // Ba ngăn › xếp tài khoản: con không có ô ngăn, nằm dưới mẹ "theo {mẹ}"; câu đầu sheet.
     const groups = pocketSheetGroups(house, Object.fromEntries(house.filter((a) => a.active).map((a) => [a.id, a.pocket ?? null])));

@@ -164,6 +164,17 @@ describe("trừ tạm khoản chưa đồng bộ vào số đang hiển thị", 
     const noNudge = snapOf("2026-11-20", rich, nearSpendV23(rich), null, null);
     expect(applyQueue(noNudge, [item({ meaning: "spend", amount: 1_000_000, category_id: "groceries", account_id: "tk-chi-tieu-chong" })]).topUp).toMatchObject({ amount: 1_000_000, toAccountId: null, target: null });
   });
+
+  it("UC-504 AC-19: BIDV riêng tư của người khác (hiddenFromMe) → nhắc chuyển thêm tính lại sau trừ tạm chỉ gợi ý Phao, không BIDV; đích bị giấu → không đích, không QR", () => {
+    const p = pocketsV23({ operating: [{ id: "tk-chi-tieu-chong", name: "MB chi tiêu chồng", balance: 4_000_000 }] });
+    const ns = nearSpendV23(p);
+    const server = topUpView({ amount: ns.amount, pendingTasks: 0, payCycle: null, goalRemaining: p.operating.remaining, daysLeft: ns.daysLeft, pockets: p, target: TOP_UP_TARGET, hidden: ["tk-bidv"] });
+    expect(server!.sources).toEqual([{ accountId: "phao", name: "Phao", amount: 4_000_000 }]);
+    const more = applyQueue(snapOf("2026-11-20", p, ns, null, server), [item({ meaning: "spend", amount: 1_000_000, category_id: "groceries", account_id: "tk-chi-tieu-chong" })], ["tk-bidv"]);
+    expect(more.topUp).toMatchObject({ amount: 6_500_000, sources: [{ accountId: "phao", name: "Phao", amount: 4_000_000 }] });
+    const hiddenTarget = applyQueue(snapOf("2026-11-20", p, ns, null, server), [item({ meaning: "spend", amount: 1_000_000, category_id: "groceries", account_id: "tk-chi-tieu-chong" })], ["tk-bidv", TOP_UP_TARGET.accountId]);
+    expect(hiddenTarget.topUp).toMatchObject({ amount: 6_500_000, toAccountId: null, target: null });
+  });
 });
 
 describe("toast sau khi ghi (pwa UC-703)", () => {

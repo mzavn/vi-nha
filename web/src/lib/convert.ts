@@ -164,6 +164,20 @@ export function goalRowAccounts(
   return goalAccountOptions(accounts, pendingGoals(goals, choices), reward, goalId, pct);
 }
 
+/**
+ * Chữ một lựa chọn tài khoản ở bước 2 (UC-1208 AC-12): "{tên} · đã có X (gồm khoản gửi kỳ hạn) — dùng chung với … (lý do tắt)".
+ * Tài khoản đang chọn chỉ còn tên — ô chọn khép lại không cắt "…" ở 390px; phần còn lại ở dòng dưới (`goalRowChosenText`).
+ */
+export function goalRowOptionText(a: GoalAccountOption, selected: boolean): string {
+  if (selected) return a.name;
+  return `${a.name} · đã có ${formatVnd(a.book_balance ?? 0)}${a.deposits ? ` (${a.deposits})` : ""}${a.shared ? ` — ${a.shared}` : ""}${a.blocked ? ` (${a.blocked})` : ""}`;
+}
+
+/** Dòng dưới ô chọn của tài khoản đang chọn (như sheet mục tiêu ở Cài đặt): "{tên} · đã có X · gồm khoản gửi kỳ hạn · dùng chung với … · lý do tắt". */
+export function goalRowChosenText(a: GoalAccountOption): string {
+  return [a.name, `đã có ${formatVnd(a.book_balance ?? 0)}`, a.deposits, a.shared, a.blocked].filter(Boolean).join(" · ");
+}
+
 /** Tài khoản chọn được cho Ví Thưởng ở bước 2: Dự phòng đang dùng, không thuộc mục tiêu nào theo lựa chọn đang chọn. */
 export function rewardRowAccounts(accounts: SettingsAccount[], goals: ReserveGoal[], choices: Record<string, GoalChoice | null>): SettingsAccount[] {
   return rewardAccountOptions(accounts, pendingGoals(goals, choices));

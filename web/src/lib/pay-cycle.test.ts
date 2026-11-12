@@ -263,19 +263,24 @@ describe("thẻ Việc ngày lương (pwa UC-702)", () => {
     expect(savingsDoneWarn(null)).toBe(false);
   });
 
-  it("UC-702 AC-35: sheet 'Trích Tích luỹ' — ① lương 30.000.000, 10% → thanh 10, số 3.000.000; kéo tới 30 → 9.000.000; gõ 150.000 → thanh 1 và 'Dưới mức tối thiểu 1% (300.000 ₫)'; gõ 0 → ô Lý do, Lưu tắt tới khi có lý do; Lưu gửi { amount: 0, reason }", () => {
+  it("UC-702 AC-35: sheet 'Trích Tích luỹ' — ① lương 30.000.000, 10% → thanh 10, số 3.000.000; kéo tới 30 → 9.000.000; gõ 150.000 → thanh 1 và 'Dưới mức tối thiểu 1% (300.000 ₫)'; gõ 0 → nhãn '0% khoản lương', thanh ở 0 (không vạch sáng), ô Lý do, Lưu tắt tới khi có lý do; Lưu gửi { amount: 0, reason }", () => {
     const t = task({ id: 61, kind: "savings", amount: 3_000_000, pct: 10, toPocket: "savings", source: { ...salary, amount: 30_000_000 }, targets: [SAVINGS_ACC] });
     const s0 = savingsSheetOpen(t);
     expect(s0).toMatchObject({ income: 30_000_000, pct: 10, amount: 3_000_000, reason: "" });
-    expect(savingsSheetView(s0)).toEqual({ warn: null, needsReason: false, problem: null, canSave: true });
+    expect(savingsSheetView(s0)).toEqual({ pctText: "10% khoản lương", warn: null, needsReason: false, problem: null, canSave: true });
     const s30 = savingsSheetDrag(s0, 30);
     expect(s30).toMatchObject({ pct: 30, amount: 9_000_000 });
     const low = savingsSheetType(s30, 150_000);
     expect(low).toMatchObject({ pct: 1, amount: 150_000 });
-    expect(savingsSheetView(low)).toMatchObject({ warn: `Dưới mức tối thiểu 1% (${vnd("300.000")})`, needsReason: false, canSave: true });
-    const zero = savingsSheetType(low, 0);
-    expect(zero.amount).toBe(0);
-    expect(savingsSheetView(zero)).toEqual({ warn: null, needsReason: true, problem: SKIP_REASON_REQUIRED, canSave: false });
+    expect(savingsSheetView(low)).toMatchObject({ pctText: "1% khoản lương", warn: `Dưới mức tối thiểu 1% (${vnd("300.000")})`, needsReason: false, canSave: true });
+    const zero = savingsSheetType(s30, 0);
+    expect(zero).toMatchObject({ amount: 0, pct: 0 });
+    expect(savingsSheetView(zero)).toEqual({ pctText: "0% khoản lương", warn: null, needsReason: true, problem: SKIP_REASON_REQUIRED, canSave: false });
+    // Mở lại việc đã về 0: nhãn 0%, thanh ở 0; chạm vạch 10 → 3.000.000.
+    const reopened = savingsSheetOpen({ ...t, amount: 0 });
+    expect(reopened.pct).toBe(0);
+    expect(savingsSheetView(reopened).pctText).toBe("0% khoản lương");
+    expect(savingsSheetDrag(reopened, 10)).toMatchObject({ pct: 10, amount: 3_000_000 });
     const reasoned = { ...zero, reason: "Tháng này trả viện phí" };
     expect(savingsSheetView(reasoned)).toMatchObject({ needsReason: true, problem: null, canSave: true });
     expect(taskRequest(t.id, savingsSheetAction(reasoned))).toEqual({ method: "PATCH", path: "/v1/pay-cycle-tasks/61", body: { amount: 0, reason: "Tháng này trả viện phí" } });

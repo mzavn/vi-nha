@@ -204,7 +204,7 @@ export const savingsDoneWarn = (c: PayCycleView | null | undefined): boolean => 
 
 // ── Sheet "Trích Tích luỹ" (UC-702 AC-35, ADR-142) ─────────────────
 
-/** Trạng thái sheet: `income` = khoản lương của ① (null khi bị giấu — thanh khoá), `amount` null = số gõ chưa hợp lệ. */
+/** Trạng thái sheet: `income` = khoản lương của ① (null khi bị giấu — thanh khoá), `pct` 0 = số 0 (không vạch nào sáng), `amount` null = số gõ chưa hợp lệ. */
 export interface SavingsSheet {
   income: number | null;
   pct: number;
@@ -214,7 +214,7 @@ export interface SavingsSheet {
 
 export function savingsSheetOpen(t: PayCycleTask): SavingsSheet {
   const income = visibleSource(t)?.amount ?? null;
-  const pct = t.pct !== null && t.pct > 0 ? t.pct : income ? pctOfAmount(t.amount, income) : 1;
+  const pct = t.amount === 0 && income !== null ? 0 : t.pct !== null && t.pct > 0 ? t.pct : income ? pctOfAmount(t.amount, income) : 1;
   return { income, pct, amount: t.amount, reason: "" };
 }
 
@@ -223,14 +223,17 @@ export function savingsSheetDrag(s: SavingsSheet, pct: number): SavingsSheet {
   return s.income === null ? s : { ...s, pct, amount: amountOfPct(s.income, pct) };
 }
 
-/** Gõ số: thanh nhảy tới ⌊số × 100 ÷ lương⌋ (kẹp 1…100); số 0 / chưa hợp lệ giữ thanh. */
+/** Gõ số: thanh nhảy tới ⌊số × 100 ÷ lương⌋ (kẹp 1…100); số 0 → 0% (con trượt ở đầu, không vạch sáng); chưa hợp lệ / không biết lương giữ thanh. */
 export function savingsSheetType(s: SavingsSheet, amount: number | null): SavingsSheet {
-  return { ...s, amount, pct: s.income !== null && amount !== null && amount > 0 ? pctOfAmount(amount, s.income) : s.pct };
+  if (s.income === null || amount === null) return { ...s, amount };
+  return { ...s, amount, pct: amount === 0 ? 0 : pctOfAmount(amount, s.income) };
 }
 
-export function savingsSheetView(s: SavingsSheet): { warn: string | null; needsReason: boolean; problem: string | null; canSave: boolean } {
+/** `pctText`: nhãn trên thanh — "{%} khoản lương"; số 0 → "0% khoản lương" (cả khi không biết lương). */
+export function savingsSheetView(s: SavingsSheet): { pctText: string; warn: string | null; needsReason: boolean; problem: string | null; canSave: boolean } {
   const problem = amountProblem({ kind: "savings" }, s.amount, s.reason);
   return {
+    pctText: `${s.amount === 0 ? 0 : s.pct}% khoản lương`,
     warn: s.income !== null && s.amount !== null ? belowMinText(s.amount, s.income) : null,
     needsReason: s.amount === 0,
     problem,

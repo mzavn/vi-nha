@@ -84,10 +84,11 @@ function shiftOperatingGoals(o: PocketsView["operating"], items: QueuedEntry[]):
  * ADR-141): tiền vận hành = tổng ngăn Vận hành; R giảm theo khoản xếp hàng gắn mục tiêu trả từ tiền chi tiêu; số mỗi ngày tính lại
  * bằng `nearSpendView`; phần an tâm đổi đúng bằng khoản trên tài khoản Dự phòng không gắn mục tiêu, không phải Ví Thưởng, không phải
  * con của tài khoản có mục tiêu hay của Ví Thưởng; đã có (A) của mục tiêu chia lại bằng `goalGroups`; số tháng tính lại bằng
- * `peaceMonthsView`; nhắc chuyển thêm tính lại bằng `topUpView` (giữ đích QR của server). Số đo theo kỳ (`savings.change`,
- * `monthly`, `cycles`) và việc ngày lương không trừ tạm.
+ * `peaceMonthsView`; nhắc chuyển thêm tính lại bằng `topUpView` (giữ đích QR của server; không gợi ý tài khoản riêng tư của người
+ * khác — `hidden`, từ `accounts[].hiddenFromMe` ở bootstrap, access UC-504). Số đo theo kỳ (`savings.change`, `monthly`, `cycles`)
+ * và việc ngày lương không trừ tạm.
  */
-export function applyQueue(s: Snapshot, items: QueuedEntry[]): Snapshot {
+export function applyQueue(s: Snapshot, items: QueuedEntry[], hidden: readonly string[] = []): Snapshot {
   if (items.length === 0) return s;
   const fx = accountEffects(items);
   const p = s.pockets;
@@ -141,7 +142,9 @@ export function applyQueue(s: Snapshot, items: QueuedEntry[]): Snapshot {
     goalRemaining: operating.remaining,
     daysLeft: view.daysLeft,
     pockets,
-    target: s.topUp?.target ?? null,
+    // Đích của server đã bỏ tài khoản bị giấu; giữ lại phép thử phòng bản lưu cũ trên máy (access UC-504 AC-19).
+    target: s.topUp?.target && !hidden.includes(s.topUp.target.accountId) ? s.topUp.target : null,
+    hidden,
   });
   return { ...s, pockets, nearSpend, topUp };
 }

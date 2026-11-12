@@ -9,7 +9,7 @@ import { AT, client, householdC } from "./helpers/household-c";
 import { D_NOW, householdD } from "./helpers/household-d";
 import { householdP, P_NOW } from "./helpers/household-p";
 import { householdShared, SHARED_NOW, vnAt } from "./helpers/household-shared";
-import { householdParent, PARENT_NOW } from "./helpers/household-parent";
+import { householdParent, householdTopUp, PARENT_NOW } from "./helpers/household-parent";
 import { connectClaude, MemoryKV, mcpPost, stubClientMetadata, toolCall as call, type JsonRpc } from "./helpers/oauth";
 
 vi.mock("../src/notify/pay-cycle", () => ({ notifyPayCycle: vi.fn(async () => {}) }));
@@ -822,6 +822,17 @@ describe("tài khoản riêng tư ở MCP (UC-504, ADR-133) — hộ mẫu P", (
     expect(sources.length).toBeGreaterThan(0);
     for (const s of sources) expect(s).toEqual({ hidden: true });
     expect(snap.payCycle).toEqual((await api("GET", "/v1/snapshot")).json.data.payCycle);
+  });
+
+  it("UC-504 AC-19: BIDV (Ví Thưởng) và hai tài khoản chi tiêu riêng tư của vợ → get_snapshot của chồng có topUp chỉ gợi ý Phao, không đích (toAccountId / target null), bằng đúng GET /v1/snapshot của chồng", async () => {
+    vi.setSystemTime(PARENT_NOW);
+    raw = householdTopUp({ history: true });
+    raw.exec("UPDATE accounts SET owner_member_id = 'wife', private = 1 WHERE id IN ('tk-bidv', 'tk-chi-tieu-chong', 'tk-chi-tieu-vo')");
+    env.DB = asD1(raw);
+    token = (await connectClaude(env, { memberId: "husband", password: "mat-khau-chung" })).access;
+    const snap = toolData((await mcp(call("get_snapshot"))).json!);
+    expect(snap.topUp).toMatchObject({ sources: [{ accountId: "phao", name: "Phao", amount: 4_000_000 }], toAccountId: null, target: null });
+    expect(snap.topUp).toEqual((await client(raw)("GET", "/v1/snapshot")).json.data.topUp);
   });
 });
 

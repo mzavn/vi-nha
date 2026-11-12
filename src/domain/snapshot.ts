@@ -10,6 +10,8 @@ export interface SnapshotData {
   drift: { accountId: string; name: string; bookDrift: number | null }[];
   /** Log chờ của tài khoản riêng tư bị giấu với người xem (access UC-504): Gán chỉ hiện một dòng đếm. */
   hiddenPendingLogs: number;
+  /** Tài khoản riêng tư bị giấu với người xem (access UC-504): không gợi ý làm nguồn chuyển thêm (`topUp.sources`). */
+  hiddenAccountIds: readonly string[];
   /** Tài khoản đang dùng kèm ngăn — cho `nearSpend.excluded`. */
   accounts: { id: string; name: string; pocket: Pocket | null }[];
   /** Ba ngăn (pocket UC-1203), tính trước: tiền vận hành = tổng ngăn Vận hành. */
@@ -20,7 +22,7 @@ export interface SnapshotData {
   payCycle: PayCycleView | null;
   /** Phần chưa làm theo việc ngày lương (ledger UC-103) — trừ trước khi chia theo ngày. */
   pendingTasks: number;
-  /** Đích của lời nhắc chuyển thêm: tài khoản ngân hàng ngăn Vận hành có số tài khoản đầu tiên (luật QR UC-1206 bước 10); null = không có. */
+  /** Đích của lời nhắc chuyển thêm: tài khoản ngân hàng ngăn Vận hành có số tài khoản đầu tiên (luật QR UC-1206 bước 10), không bị giấu với người xem (access UC-504); null = không có. */
   topUpTo: QrTarget | null;
   /** Có nguồn đang dùng bật "Mở kỳ lương" (UC-1205 bước 9). */
   hasCycleStream: boolean;
@@ -149,7 +151,7 @@ export interface TopUpSource {
 export interface TopUp {
   /** Y = cần cho tới ngày lương − tiền chi tiêu, làm tròn lên 100.000. */
   amount: number;
-  /** Ví Thưởng (số dư của chính nó) trước, rồi phần an tâm theo số dư lớn trước; không tài khoản con / Tích luỹ / có mục tiêu. Σ < amount = phần chưa có nguồn. */
+  /** Ví Thưởng (số dư của chính nó) trước, rồi phần an tâm theo số dư lớn trước; không tài khoản con / Tích luỹ / có mục tiêu, không tài khoản riêng tư bị giấu với người xem (access UC-504). Σ < amount = phần chưa có nguồn. */
   sources: TopUpSource[];
   /** Đích QR; null (vd chỉ có tiền mặt) → "Chuyển vào tiền chi tiêu", không QR. */
   toAccountId: string | null;
@@ -166,6 +168,8 @@ export interface TopUpInput {
   daysLeft: number;
   pockets: PocketsView;
   target: QrTarget | null;
+  /** Tài khoản riêng tư bị giấu với người xem (access UC-504, ADR-133): không bao giờ là nguồn. */
+  hidden?: readonly string[];
 }
 
 const ceilTo = (n: number, step: number) => Math.ceil(n / step) * step;
@@ -175,7 +179,7 @@ const ceilTo = (n: number, step: number) => Math.ceil(n / step) * step;
  * chi vận hành một tháng − Σ mỗi tháng của mục tiêu trả từ tiền chi tiêu) × số ngày ÷ 30⌉ (chưa đo được → 0); Y = need −
  * tiền chi tiêu làm tròn lên 100.000; Y ≤ 0 → null. Một hàm cho server và PWA (trừ tạm hàng đợi).
  */
-export function topUpView({ amount, pendingTasks, payCycle, goalRemaining, daysLeft, pockets, target }: TopUpInput): TopUp | null {
+export function topUpView({ amount, pendingTasks, payCycle, goalRemaining, daysLeft, pockets, target, hidden = [] }: TopUpInput): TopUp | null {
   const rewardTasks = (payCycle?.tasks ?? []).filter((t) => t.kind === "surplus" && t.toAccountId !== null && t.status === "open").reduce((s, t) => s + t.missing, 0);
   const monthly = pockets.reserve.peaceMonths.monthly;
   const fixed = pockets.operating.goals.reduce((s, g) => s + g.monthly, 0);
@@ -184,7 +188,7 @@ export function topUpView({ amount, pendingTasks, payCycle, goalRemaining, daysL
   if (short <= 0) return null;
   const y = ceilTo(short, 100_000);
   const rewardId = pockets.reserve.reward?.accountId ?? null;
-  const own = pockets.reserve.accounts;
+  const own = pockets.reserve.accounts.filter((a) => !hidden.includes(a.id));
   const candidates = [
     ...own.filter((a) => a.id === rewardId),
     ...own.filter((a) => a.id !== rewardId && a.parentId === null && a.goalIds.length === 0).sort((a, b) => b.balance - a.balance),
@@ -248,6 +252,7 @@ function snapshotTopUp(data: SnapshotData): TopUp | null {
     daysLeft,
     pockets: data.pockets,
     target: data.topUpTo,
+    hidden: data.hiddenAccountIds,
   });
 }
 

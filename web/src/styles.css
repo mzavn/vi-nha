@@ -850,7 +850,7 @@
     flex-wrap: wrap;
     gap: 6px;
   }
-  .cv-goal-row > .k {
+  .field.cv-goal-row > .k {
     flex: 1 1 100%;
     min-width: 0;
     overflow-wrap: anywhere;
@@ -2905,6 +2905,15 @@
   }
   .sv-mark:disabled {
     opacity: 0.5;
+  }
+  /* Sheet "Trích Tích luỹ" (pwa UC-702 AC-35): nhãn trên, thanh chiếm hết bề ngang bên dưới — không bị đẩy sang phải nhãn ở 390px. */
+  .field.sv-field {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+  }
+  .sv-field > .sv-slider {
+    padding: 0 0 8px;
   }
   .acct-child .srow,
   .tier.acct-child {

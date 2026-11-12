@@ -12,6 +12,8 @@ import {
   GOAL_ORDER_NOTE,
   goalGroupLines,
   goalRowAccounts,
+  goalRowChosenText,
+  goalRowOptionText,
   goalTerms,
   goalAccountRequest,
   goalCreateRequest,
@@ -272,6 +274,17 @@ describe("bước 2: mỗi mục tiêu một tài khoản thật", () => {
     } finally {
       setAmountsHidden(false);
     }
+  });
+
+  it("UC-1208 AC-12: tài khoản tên dài đang chọn → ô chọn khép lại chỉ còn tên; dòng dưới 'Tài khoản tiết kiệm học tập của con · đã có 12.000.000 ₫ · dùng chung với Học tập'; tài khoản khác giữ đủ chữ trong danh sách", () => {
+    const house = [account("tk-con", "Tài khoản tiết kiệm học tập của con", { book_balance: 12_000_000 }), account("phao", "Phao", { book_balance: 5_000_000 })];
+    const list = [goal("nha-o", "Nhà ở", { sort: 10 }), goal("hoc-tap", "Học tập", { sort: 20 })];
+    const choices: Record<string, GoalChoice | null> = { "nha-o": { kind: "account", accountId: "tk-con" }, "hoc-tap": { kind: "account", accountId: "tk-con" } };
+    const [chosen, other] = goalRowAccounts("nha-o", list, house, choices, null);
+    expect(goalRowOptionText(chosen!, true)).toBe("Tài khoản tiết kiệm học tập của con");
+    expect(goalRowChosenText(chosen!)).toBe(`Tài khoản tiết kiệm học tập của con · đã có 12.000.000${NBSP}₫ · dùng chung với Học tập`);
+    expect(goalRowOptionText(chosen!, false)).toBe(`Tài khoản tiết kiệm học tập của con · đã có 12.000.000${NBSP}₫ — dùng chung với Học tập`);
+    expect(goalRowOptionText(other!, false)).toBe(`Phao · đã có 5.000.000${NBSP}₫`);
   });
 
   it("UC-1208 AC-3: biến thể nhà một tài khoản — không tài khoản Dự phòng nào, chọn Để sau cho mọi mục tiêu thì Tiếp bật, không gửi gì", () => {

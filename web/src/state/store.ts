@@ -114,8 +114,9 @@ export function useApp(): AppState {
   return state;
 }
 
-/** Snapshot đã trừ tạm các khoản chưa đồng bộ. */
-export const viewSnapshot = (s: AppState = state): Snapshot | null => (s.snap ? applyQueue(s.snap, s.queue) : null);
+/** Snapshot đã trừ tạm các khoản chưa đồng bộ; nhắc chuyển thêm không gợi ý tài khoản riêng tư của người khác (access UC-504). */
+export const viewSnapshot = (s: AppState = state): Snapshot | null =>
+  s.snap ? applyQueue(s.snap, s.queue, s.boot?.accounts.filter((a) => a.hiddenFromMe).map((a) => a.id) ?? []) : null;
 
 // ── Toast ──────────────────────────────────────────────────────────
 let toastSeq = 0;

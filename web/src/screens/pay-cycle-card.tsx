@@ -229,8 +229,8 @@ function SavingsSheet({ task, busy, onSubmit, onClose }: { task: PayCycleTask; b
   const v = savingsSheetView(s);
   return (
     <Sheet open title="Trích Tích luỹ" onClose={onClose}>
-      <div class="field">
-        <span class="k">{s.pct}% khoản lương</span>
+      <div class="field sv-field">
+        <label for="sv-pct">{v.pctText}</label>
         <SavingsSlider id="sv-pct" pct={s.pct} disabled={s.income === null} onPct={(pct) => setS((x) => savingsSheetDrag(x, pct))} />
       </div>
       <div class="field">

@@ -330,12 +330,10 @@ const hasChildren = (accountId: string, accounts: SettingsAccount[]) => accounts
 
 /**
  * Ô "Thuộc tài khoản" (ngoài "Không"): tài khoản ngân hàng đang dùng ở Dự phòng, Tích luỹ hoặc ngoài ngăn (không Vận hành),
- * không phải tài khoản con, không phải Ví Thưởng, không phải chính tài khoản đang sửa.
+ * không phải tài khoản con, không phải chính tài khoản đang sửa. Ví Thưởng làm mẹ được (access UC-506 3n, ADR-140).
  */
-export function accountParentOptions(accounts: SettingsAccount[], item: SettingsAccount | null, rewardAccountId: string | null | undefined): SettingsAccount[] {
-  return accounts.filter(
-    (a) => a.active && a.kind === "bank" && a.pocket !== "operating" && !a.parent_account_id && a.id !== rewardAccountId && a.id !== item?.id,
-  );
+export function accountParentOptions(accounts: SettingsAccount[], item: SettingsAccount | null): SettingsAccount[] {
+  return accounts.filter((a) => a.active && a.kind === "bank" && a.pocket !== "operating" && !a.parent_account_id && a.id !== item?.id);
 }
 
 /**
@@ -350,9 +348,9 @@ export function accountParentField(item: SettingsAccount | null, accounts: Setti
   return { show: true, disabled };
 }
 
-/** Nút "+ Thêm khoản gửi kỳ hạn" ở sheet của một tài khoản: chỉ khi tài khoản đó làm mẹ được. */
-export function canAddDeposit(item: SettingsAccount, accounts: SettingsAccount[], rewardAccountId: string | null | undefined): boolean {
-  return accountParentOptions(accounts, null, rewardAccountId).some((a) => a.id === item.id);
+/** Nút "+ Thêm khoản gửi kỳ hạn" ở sheet của một tài khoản: chỉ khi tài khoản đó làm mẹ được (kể cả Ví Thưởng). */
+export function canAddDeposit(item: SettingsAccount, accounts: SettingsAccount[]): boolean {
+  return accountParentOptions(accounts, null).some((a) => a.id === item.id);
 }
 
 /** Điền sẵn sheet thêm khoản gửi kỳ hạn: mẹ và ngân hàng của mẹ (ngăn / chủ / riêng tư theo mẹ, không gửi). */

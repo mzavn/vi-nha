@@ -7,6 +7,9 @@ import { app } from "../src/index";
 import { asD1 } from "./helpers/d1-sqlite";
 import { AT, client, householdC } from "./helpers/household-c";
 import { householdP, P_NOW } from "./helpers/household-p";
+import { householdTopUp, PARENT_NOW } from "./helpers/household-parent";
+import { daily } from "../src/cron/daily";
+import { getSnapshot } from "../src/services/ledger";
 import { openLegacyDb } from "./helpers/legacy";
 
 let db: DatabaseSync;
@@ -271,5 +274,48 @@ describe("luật giấu ở mọi đường (UC-504, ADR-133) — hộ mẫu P",
     // Cùng khoản vào tài khoản không riêng tư vẫn ghi được (sổ An giảm).
     db.exec("UPDATE accounts SET sepay_enabled = 0 WHERE id = 'vcb-husband'");
     expect((await wife("POST", "/v1/transactions", { ...rent, account_id: "vcb-husband" })).status).toBe(201);
+  });
+});
+
+describe("nhắc chuyển thêm không gợi ý tài khoản riêng tư của người khác (UC-504, ADR-133)", () => {
+  beforeEach(() => {
+    vi.setSystemTime(PARENT_NOW);
+    // Ca UC-103 AC-25; BIDV (Ví Thưởng) là tài khoản riêng tư của vợ.
+    db = householdTopUp({ history: true });
+    db.exec("UPDATE accounts SET owner_member_id = 'wife', private = 1 WHERE id = 'tk-bidv'");
+    call = client(db);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("UC-504 AC-19: BIDV (Ví Thưởng) riêng tư của vợ → topUp của chồng chỉ gợi ý Phao 4.000.000, không tên / số BIDV; vợ thấy BIDV 2.000.000 rồi Phao 3.500.000; tin sáng (người xem null) nói '(từ Phao)'; vợ đã tắt → chồng thấy BIDV", async () => {
+    const topUp = async (who: string) => (await call("GET", "/v1/snapshot", undefined, who)).json.data.topUp;
+    const husband = await topUp("husband");
+    expect(husband).toMatchObject({ amount: 5_500_000, sources: [{ accountId: "phao", name: "Phao", amount: 4_000_000 }], toAccountId: "tk-chi-tieu-chong" });
+    expect(JSON.stringify(husband)).not.toMatch(/tk-bidv|BIDV/);
+    expect((await topUp("wife")).sources).toEqual([
+      { accountId: "tk-bidv", name: "BIDV", amount: 2_000_000 },
+      { accountId: "phao", name: "Phao", amount: 3_500_000 },
+    ]);
+
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({ ok: true, status: 200 }) as Response);
+    vi.stubGlobal("fetch", fetchMock);
+    db.exec("UPDATE members SET tg_chat_id = '111' WHERE id = 'husband'");
+    await daily({ DB: asD1(db), TG_BOT_TOKEN: "test-token" } as Env, new Date("2026-11-20T00:00:00Z"));
+    const { text }: { text: string } = JSON.parse(String(fetchMock.mock.calls[0]![1].body));
+    expect(text.split("\n")[0]).toBe("💰 Vận hành còn 4.000.000 ₫ tới kỳ lương 10/12 (còn 20 ngày) · cần chuyển thêm 5.500.000 ₫ vào tiền chi tiêu (từ Phao)");
+    expect(text).not.toContain("BIDV");
+
+    db.exec("UPDATE members SET active = 0 WHERE id = 'wife'");
+    expect((await topUp("husband")).sources[0]).toEqual({ accountId: "tk-bidv", name: "BIDV", amount: 2_000_000 });
+  });
+
+  it("UC-504 AC-19: đích QR — Chi tiêu chồng riêng tư của vợ → đích của chồng là Chi tiêu vợ; cả hai tài khoản chi tiêu riêng tư của vợ → toAccountId / target null như ca chỉ có tiền mặt, cron (người xem null) cũng vậy; vợ vẫn có đích Chi tiêu chồng", async () => {
+    const topUp = async (who: string) => (await call("GET", "/v1/snapshot", undefined, who)).json.data.topUp;
+    db.exec("UPDATE accounts SET owner_member_id = 'wife', private = 1 WHERE id = 'tk-chi-tieu-chong'");
+    expect(await topUp("husband")).toMatchObject({ toAccountId: "tk-chi-tieu-vo", target: { accountId: "tk-chi-tieu-vo" } });
+    db.exec("UPDATE accounts SET owner_member_id = 'wife', private = 1 WHERE id = 'tk-chi-tieu-vo'");
+    expect(await topUp("husband")).toMatchObject({ amount: 5_500_000, toAccountId: null, target: null });
+    expect((await getSnapshot(asD1(db), null, PARENT_NOW)).topUp).toMatchObject({ toAccountId: null, target: null });
+    expect(await topUp("wife")).toMatchObject({ toAccountId: "tk-chi-tieu-chong", target: { accountId: "tk-chi-tieu-chong" } });
   });
 });
