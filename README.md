@@ -21,7 +21,8 @@ Tích luỹ, nạp mục tiêu, chia phần dư kỳ trước. App chạy trên
 bấm mở Hướng dẫn — không ai thấy số liệu.)
 
 <p>
-  <img src="https://2736867949-files.gitbook.io/~/files/v0/b/gitbook-x-prod.appspot.com/o/spaces%2FAkew07JyqLl5qmM1Jo26%2Fuploads%2Fgit-blob-bec8d942a542b3e9a038fd40f26db73269458726%2Fhom-nay-01-tong-quan-m.jpg?alt=media" alt="Màn Hôm nay" width="260">
+  <img src="docs/img/hom-nay.jpg" alt="Màn Hôm nay: chi khoảng mỗi ngày, việc ngày lương" width="260">
+  <img src="docs/img/ba-ngan.jpg" alt="Cài đặt › Ba ngăn" width="260">
 </p>
 
 *(Hình minh hoạ dùng dữ liệu mẫu.)*

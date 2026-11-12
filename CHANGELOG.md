@@ -6,6 +6,11 @@ bản cài cũ vẫn lên được bình thường (kể cả nâng database t�
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
 trước (xem README › Cập nhật bản mới).
 
+## v2.4.1 — 12/11/2026
+
+- Trang cấp quyền khi nối Claude ghi đúng chữ của v2: quyền Xem "Ba ngăn, chi khoảng mỗi ngày, mục tiêu, giao dịch, sổ nợ", quyền Ghi "Ghi giao dịch, gán, cập nhật giá tài sản" (bỏ chữ "ngân sách", "chia tiền").
+- README có ảnh minh hoạ của bản 2.x.
+
 ## v2.4.0 — 12/11/2026
 
 Có nâng cấp database: `0045` (số kỳ này và danh mục của khoản phải trả). Database tự nâng khi cập nhật; chỉ thêm bảng, không

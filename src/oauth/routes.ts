@@ -97,8 +97,8 @@ ${loopback}
 <fieldset class="scopes">
 <legend>Quyền</legend>
 <input type="hidden" name="scope" value="${SCOPE_READ}">
-<label class="scope"><input type="checkbox" checked disabled><span><b>Xem số liệu</b><small>Còn để chi, ngân sách, giao dịch, sổ nợ — bắt buộc</small></span></label>
-<label class="scope"><input type="checkbox" name="scope" value="${SCOPE_WRITE}" checked><span><b>Ghi giao dịch, gán, chia tiền</b><small>Bỏ chọn nếu chỉ muốn hỏi số liệu</small></span></label>
+<label class="scope"><input type="checkbox" checked disabled><span><b>Xem số liệu</b><small>Ba ngăn, chi khoảng mỗi ngày, mục tiêu, giao dịch, sổ nợ — bắt buộc</small></span></label>
+<label class="scope"><input type="checkbox" name="scope" value="${SCOPE_WRITE}" checked><span><b>Ghi giao dịch, gán, cập nhật giá tài sản</b><small>Bỏ chọn nếu chỉ muốn hỏi số liệu</small></span></label>
 </fieldset>
 <button class="primary" type="submit" name="decision" value="approve">Cho phép</button>
 <button class="secondary" type="submit" name="decision" value="deny">Từ chối</button>
