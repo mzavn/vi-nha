@@ -1149,7 +1149,7 @@ export function ConfigSheet({ d, onClose, onSaved }: { d: SettingsData; onClose:
   const options = rewardAccountOptions(d.accounts, d.goals);
   const stale = reward && !options.some((a) => a.id === reward) ? (d.accounts.find((a) => a.id === reward) ?? { id: reward, name: reward }) : undefined;
   return (
-    <Sheet open title="Tham số" onClose={onClose}>
+    <Sheet open title="Ngưỡng và tỉ lệ" onClose={onClose}>
       <Field id="c-salary" label="Ngưỡng tự nhận lương" error={errors.salary_min_amount} first>
         <AmountInput id="c-salary" value={salary} onChange={setSalary} />
       </Field>

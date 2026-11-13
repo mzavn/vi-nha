@@ -6,6 +6,12 @@ bản cài cũ vẫn lên được bình thường (kể cả nâng database t�
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
 trước (xem README › Cập nhật bản mới).
 
+## v3.0.1 — 13/11/2026
+
+- Báo cáo › Cân đối trên máy tính: "Vốn chủ sở hữu" không còn bị ép thành chữ dọc.
+- Máy tính bật / tắt chế độ gọn ở menu "…" cạnh tên người dùng (thanh bên).
+- Phần Tự do và sheet tham số dùng tên mới "Ngưỡng và tỉ lệ" thay "Tham số".
+
 ## v3.0.0 — 13/11/2026
 
 - **Hôm nay gọn 4 khối:** Vận hành, Việc tháng này, Cần xem, Gần đây; các thẻ Tích luỹ và Dự phòng dời sang màn Tài khoản, bỏ thẻ Sổ giao dịch. Nút "Trả ›" mở thẳng sheet Trả nợ hoặc điền sẵn khoản phải trả.

@@ -3,11 +3,29 @@
     overflow-wrap: anywhere;
   }
 
-/* Vốn chủ: số tổng của báo cáo (DESIGN §2.1 --num-total), tên 500. */
+/* Vốn chủ: số tổng của báo cáo (DESIGN §2.1 --num-total), tên 500. Nhãn đứng trên, số dòng dưới: cột phụ máy tính hẹp không ép
+   nhãn thành chữ dọc. */
+.nw-equity {
+    flex-wrap: wrap;
+  }
+
+.nw-equity .t {
+    flex: 1 0 100%;
+  }
+
 .nw-equity .v {
+    margin-left: auto;
     font-size: var(--num-total); line-height: var(--leading-total);
     letter-spacing: -0.03em;
+    white-space: nowrap;
   }
+
+/* Máy tính: Vốn chủ nằm ở cột phụ hẹp (lưới 8-4) — số nhỏ lại để "775.409.068 ₫" vừa một dòng. */
+@media (min-width: 1024px) {
+  .nw-equity .v {
+    font-size: 28px;
+  }
+}
 
 .nw-group {
     padding: 8px 14px 0;

@@ -5,7 +5,7 @@ import { amountsHidden, formatVnd, moneyDigits } from "./money";
 import { bpsText } from "./net-worth";
 import type { FreedomMilestone, FreedomParams, IncomeMilestone, SafetyMilestone } from "./types";
 
-export const expenseNeededText = "Cần chi phí tháng — nhập ở Tham số hoặc chờ đủ 3 tháng";
+export const expenseNeededText = "Cần chi phí tháng — nhập ở Ngưỡng và tỉ lệ hoặc chờ đủ 3 tháng";
 
 const sourceText = (s: "manual" | "ledger" | null): string => (s === "manual" ? "tự nhập" : "theo sổ, 3 tháng gần nhất");
 

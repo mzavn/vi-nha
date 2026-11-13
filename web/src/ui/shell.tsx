@@ -7,7 +7,7 @@ import { ENTRY_LABEL, sidebarNav } from "../lib/nav";
 import { shortDate, timeHM } from "../lib/period";
 import { GUIDE_URL, SOURCE_URL } from "../lib/splits";
 import { PinSheet, usePinSet } from "../screens/pin-sheet";
-import { go, logout, syncNow, toast, useApp, type Tab } from "../state/store";
+import { go, logout, setCompact, syncNow, toast, useApp, type Tab } from "../state/store";
 import { Icon } from "./icons";
 import { HideAmountsButton } from "./parts";
 
@@ -205,6 +205,10 @@ export function Sidebar() {
               <Icon name="more" size={16} />
             </summary>
             <div class="side-menu-list">
+              {/* Máy tính không có thẻ Máy này của Cài đặt: chế độ gọn bật / tắt ở đây (UC-709 AC-56). */}
+              <button type="button" class="side-menu-item" onClick={() => setCompact(!app.compact)}>
+                {app.compact ? "Tắt chế độ gọn" : "Bật chế độ gọn (chỉ ghi chi)"}
+              </button>
               {hasPin ? (
                 <>
                   <button type="button" class="side-menu-item" onClick={() => setPinMode("change")}>

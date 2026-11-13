@@ -40,14 +40,14 @@ describe("Mốc tự do: câu chữ", () => {
     expect(paramsSummary({ ...params, expenseSource: "ledger", expenseMustSource: "ledger" })).toBe(vnd("Chi 20.000.000 ₫/tháng (theo sổ, 3 tháng gần nhất) · Thiết yếu 15.000.000 · SWR 3,5% · lạm phát 3,5%"));
   });
 
-  it("UC-1103 AC-5: chưa có chi phí tháng → \"Cần chi phí tháng — nhập ở Tham số hoặc chờ đủ 3 tháng\"", () => {
-    expect(paramsSummary({ ...params, expenseMonthly: null, expenseSource: null, expenseMustMonthly: null, expenseMustSource: null })).toBe("Cần chi phí tháng — nhập ở Tham số hoặc chờ đủ 3 tháng · SWR 3,5% · lạm phát 3,5%");
-    expect(expenseNeededText).toBe("Cần chi phí tháng — nhập ở Tham số hoặc chờ đủ 3 tháng");
+  it("UC-1103 AC-5: chưa có chi phí tháng → \"Cần chi phí tháng — nhập ở Ngưỡng và tỉ lệ hoặc chờ đủ 3 tháng\"", () => {
+    expect(paramsSummary({ ...params, expenseMonthly: null, expenseSource: null, expenseMustMonthly: null, expenseMustSource: null })).toBe("Cần chi phí tháng — nhập ở Ngưỡng và tỉ lệ hoặc chờ đủ 3 tháng · SWR 3,5% · lạm phát 3,5%");
+    expect(expenseNeededText).toBe("Cần chi phí tháng — nhập ở Ngưỡng và tỉ lệ hoặc chờ đủ 3 tháng");
   });
 
   it("UC-1103 AC-3: Mốc an tâm — \"Có 156.000.000 ₫ · cần 120.000.000 ₫ · 6 tháng\"; chưa có E thì chỉ \"Có …\" và câu cần chi phí", () => {
     expect(safetyText({ key: "A1", months: 6, need: 120_000_000, have: 156_000_000, pct: 130, reached: true })).toBe(vnd("Có 156.000.000 ₫ · cần 120.000.000 ₫ · 6 tháng"));
-    expect(safetyText({ key: "A1", months: 6, need: null, have: 30_000_000, pct: null, reached: null })).toBe(vnd("Có 30.000.000 ₫ · cần 6 tháng chi phí · Cần chi phí tháng — nhập ở Tham số hoặc chờ đủ 3 tháng"));
+    expect(safetyText({ key: "A1", months: 6, need: null, have: 30_000_000, pct: null, reached: null })).toBe(vnd("Có 30.000.000 ₫ · cần 6 tháng chi phí · Cần chi phí tháng — nhập ở Ngưỡng và tỉ lệ hoặc chờ đủ 3 tháng"));
   });
 
   it("UC-1103 AC-4: mốc thu nhập — đạt / còn thiếu; thu nhập theo kế hoạch ghi \"theo kế hoạch\"; không có số → \"chưa có số\"", () => {
@@ -63,7 +63,7 @@ describe("Mốc tự do: câu chữ", () => {
     const f1 = { key: "F1" as const, need: 5_142_857_143, have: 486_000_000, pct: 9.4, cashflowNeed: 15_000_000, cashflowHave: 104_166, reached: false, target: null };
     expect(freedomHaveText(f1)).toBe(vnd("Tài sản đầu tư trừ nợ 486.000.000 ₫ / cần 5.142.857.143 ₫"));
     expect(freedomCashflowText(f1)).toBe(vnd("hoặc dòng tiền ròng 104.166 ₫ / cần 15.000.000 ₫"));
-    expect(freedomHaveText({ ...f1, need: null })).toBe(vnd("Tài sản đầu tư trừ nợ 486.000.000 ₫ · Cần chi phí tháng — nhập ở Tham số hoặc chờ đủ 3 tháng"));
+    expect(freedomHaveText({ ...f1, need: null })).toBe(vnd("Tài sản đầu tư trừ nợ 486.000.000 ₫ · Cần chi phí tháng — nhập ở Ngưỡng và tỉ lệ hoặc chờ đủ 3 tháng"));
   });
 
   it("UC-1103 AC-2: F1 \"45 tuổi · năm 2035 · còn 9 năm · ≈ 7,01 tỷ ₫ theo giá 2035\"; F2 \"≈ 12,21 tỷ ₫ theo giá 2040\"", () => {
