@@ -6,6 +6,7 @@
 import { Fragment } from "preact";
 import { useState } from "preact/hooks";
 import { api, errorText } from "../lib/api";
+import { EMPTY_STATES } from "../lib/empty-states";
 import { formatVnd } from "../lib/money";
 import { monthText } from "../lib/net-worth";
 import {
@@ -36,7 +37,7 @@ import { useResource } from "../state/resource";
 import { openTx, toast, useApp } from "../state/store";
 import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
-import { Card, Empty, Loadable, NeedsNetwork, Seg, Sheet } from "../ui/parts";
+import { Card, Chip, Empty, Loadable, NeedsNetwork, Row, Seg, Sheet } from "../ui/parts";
 
 /** Hàng chọn kỳ: Tháng / Năm + "‹ Tháng 10/2026 ›"; không có › ở kỳ hiện tại. */
 export function PeriodBar({ period, today, onChange }: { period: string; today: string; onChange: (p: string) => void }) {
@@ -79,17 +80,12 @@ export function CashFlowSection({ period }: { period: string }) {
       <Loadable res={res}>
         {(cf) => (
           <>
-            <Card flush>
-              <div class="blist">
-                {cashFlowSummary(cf).map((r) => (
-                  <div class={r.strong ? "srow nw-closing" : "srow"} key={r.key} style={r.key === "opening" ? { borderTop: 0 } : undefined}>
-                    <span class="srow-t">{r.label}</span>
-                    <Money value={r.value} signed={r.signed} tone={false} />
-                  </div>
-                ))}
-              </div>
+            <Card flush note="Chuyển giữa hai tài khoản của nhà không vào nhóm nào. Xếp lại giao dịch chỉ đổi báo cáo, số dư và ngăn giữ nguyên.">
+              {cashFlowSummary(cf).map((r) => (
+                <Row key={r.key} total={r.strong} title={r.label} value={<Money value={r.value} signed={r.signed} tone={false} />} />
+              ))}
               {closingNotes(cf).map((n) => (
-                <p class="fhint" key={n}>
+                <p class="row-note" key={n}>
                   {n}
                 </p>
               ))}
@@ -97,47 +93,33 @@ export function CashFlowSection({ period }: { period: string }) {
             {cf.groups.map((g) => (
               <Card key={g.group} title={GROUP_LABEL[g.group]} right={<Money value={g.total} signed tone={false} />} flush note={g.group === "investing" ? lotNoteText(cf.lotNote) : undefined}>
                 {g.lines.length === 0 ? (
-                  <Empty title="Không có giao dịch nào trong kỳ." />
+                  <Empty state={EMPTY_STATES.reportCashFlow} />
                 ) : (
-                  <div class="blist">
-                    {g.lines.map((l) => (
-                      <button type="button" class="tier" key={l.line} onClick={() => setLine(l)} aria-label={`${l.label}: ${formatVnd(l.total)}, xem các giao dịch`}>
-                        <div class="nm">
+                  g.lines.map((l) => (
+                    <Row
+                      key={l.line}
+                      title={
+                        <>
                           {l.label}
-                          {l.reclassified > 0 && <span class="chip">đã xếp lại</span>}
-                        </div>
-                        <div class="amt">
-                          <Money value={l.total} signed tone={false} />
-                        </div>
-                        <div class="tsub">
-                          <span>{lineSub(l)}</span>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
+                          {l.reclassified > 0 && <Chip>đã xếp lại</Chip>}
+                        </>
+                      }
+                      sub={lineSub(l)}
+                      value={<Money value={l.total} signed tone={false} />}
+                      onClick={() => setLine(l)}
+                      label={`${l.label}: ${formatVnd(l.total)}, xem các giao dịch`}
+                    />
+                  ))
                 )}
               </Card>
             ))}
             {cf.months && cf.months.length > 0 && (
               <Card title="Từng tháng" flush>
-                <div class="blist">
-                  {cf.months.map((m) => (
-                    <div class="tier" key={m.month}>
-                      <div class="nm">Tháng {monthText(m.month)}</div>
-                      <div class="amt">
-                        <Money value={m.closing} tone={false} />
-                      </div>
-                      <div class="tsub nw-sub">
-                        <span>{cashFlowMonthSub(m)}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                {cf.months.map((m) => (
+                  <Row key={m.month} title={`Tháng ${monthText(m.month)}`} sub={cashFlowMonthSub(m)} value={<Money value={m.closing} tone={false} />} />
+                ))}
               </Card>
             )}
-            <p class="hint" style={{ margin: "0 4px 12px" }}>
-              Chuyển giữa hai tài khoản của nhà không vào nhóm nào. Xếp lại một giao dịch chỉ đổi báo cáo — số dư và ngăn giữ nguyên.
-            </p>
           </>
         )}
       </Loadable>
@@ -242,7 +224,7 @@ function ClassSheet({ tx, onClose, onSaved }: { tx: ReportTx; onClose: () => voi
           </p>
         )}
       </div>
-      <div class="note" style={{ borderTop: "1px solid var(--border)" }}>
+      <div class="note" style={{ borderTop: "1px solid var(--line)" }}>
         Chỉ đổi báo cáo Lưu chuyển tiền và Thu chi. Ví, số dư tài khoản và lần chia tiền của khoản này giữ nguyên.
       </div>
     </Sheet>
@@ -263,7 +245,7 @@ export function IncomeSection({ period }: { period: string }) {
               <StatementLines lines={s.income.lines} />
             </Card>
             <Card title="Chi tiêu" right={<Money value={s.expense.total} tone={false} />} flush>
-              {shownExpenseLines(s.expense.lines).length === 0 ? <Empty title="Không có khoản chi nào trong kỳ." /> : <StatementLines lines={shownExpenseLines(s.expense.lines)} />}
+              {shownExpenseLines(s.expense.lines).length === 0 ? <Empty state={EMPTY_STATES.reportIncome} /> : <StatementLines lines={shownExpenseLines(s.expense.lines)} />}
             </Card>
             <Card title="Để dành" note={footer ?? undefined}>
               <div class="nw-savings">
@@ -273,19 +255,9 @@ export function IncomeSection({ period }: { period: string }) {
             </Card>
             {s.months && s.months.length > 0 && (
               <Card title="Từng tháng" flush>
-                <div class="blist">
-                  {s.months.map((m) => (
-                    <div class="tier" key={m.month}>
-                      <div class="nm">Tháng {monthText(m.month)}</div>
-                      <div class="amt">
-                        <Money value={m.savings} />
-                      </div>
-                      <div class="tsub nw-sub">
-                        <span>{statementMonthSub(m)}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                {s.months.map((m) => (
+                  <Row key={m.month} title={`Tháng ${monthText(m.month)}`} sub={statementMonthSub(m)} value={<Money value={m.savings} />} />
+                ))}
               </Card>
             )}
           </>
@@ -295,23 +267,18 @@ export function IncomeSection({ period }: { period: string }) {
   );
 }
 
+/** Dòng Thu nhập / Chi tiêu: dòng có nhóm con là đầu nhóm (`Row` tên 500), nhóm con là `Row` thụt 16px (DESIGN §4.5, §4.6). */
 function StatementLines({ lines }: { lines: StatementLine[] }) {
   return (
-    <div class="blist">
+    <>
       {lines.map((l) => (
         <Fragment key={l.line}>
-          <div class="srow">
-            <span class="srow-t">{l.label}</span>
-            <Money value={l.total} tone={false} />
-          </div>
+          <Row total={Boolean(l.children?.length)} title={l.label} value={<Money value={l.total} tone={false} />} />
           {l.children?.map((c) => (
-            <div class="srow nw-child" key={c.line}>
-              <span class="srow-s">{c.label}</span>
-              <Money value={c.total} tone={false} />
-            </div>
+            <Row key={c.line} indent title={c.label} value={<Money value={c.total} tone={false} />} />
           ))}
         </Fragment>
       ))}
-    </div>
+    </>
   );
 }

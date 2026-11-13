@@ -1,7 +1,8 @@
 // Hình dạng dữ liệu của /v1. Lấy thẳng kiểu từ src/domain để client không lệch hợp đồng với server.
 
 import type { ManualMeaning } from "../../../src/domain/entry";
-import type { PayCycleTask, PayCycleView, QrTarget, TaskKind } from "../../../src/domain/pay-cycle";
+import type { MoneyAge } from "../../../src/domain/money-age";
+import type { MonthClose, MonthSavings, MonthTask, MonthView, QrTarget, SavingsLevel, TaskKind } from "../../../src/domain/month-tasks";
 import type {
   CashFlow,
   CashFlowGroup,
@@ -31,7 +32,7 @@ import type { Snapshot as DomainSnapshot } from "../../../src/domain/snapshot";
 import type { BillItem } from "../../../src/domain/rental";
 import type { AccountRef as DomainAccountRef, CategoryRef as DomainCategoryRef, MemberRef } from "../../../src/domain/types";
 
-export type { ManualMeaning, MemberRef, PayCycleTask, PayCycleView, QrTarget, TaskKind };
+export type { ManualMeaning, MemberRef, MoneyAge, MonthClose, MonthSavings, MonthTask, MonthView, QrTarget, SavingsLevel, TaskKind };
 
 /** Tài khoản trong bootstrap (UC-111): `private` = cờ tài khoản riêng tư, `hiddenFromMe` = riêng tư của người khác (UC-504). */
 export type AccountRef = DomainAccountRef & { private?: boolean; hiddenFromMe?: boolean };
@@ -39,13 +40,11 @@ export type AccountRef = DomainAccountRef & { private?: boolean; hiddenFromMe?: 
 export type CategoryRef = Omit<DomainCategoryRef, "defaultWalletId">;
 
 /**
- * GET /v1/snapshot (ledger UC-103, Đợt C): thêm kỳ lương hiện tại và danh sách việc (`payCycle`), `paySetup`, số log chờ của
- * tài khoản riêng tư bị giấu. Bản lưu offline cũ thiếu ba trường mới: coi như không kỳ / đã có nguồn mở kỳ / 0.
+ * GET /v1/snapshot (ledger UC-103, ADR-144): việc theo tháng (`month`: nhắc ① trích Tích luỹ, việc chia dư), dư tháng vừa hết
+ * (`monthClose`), tuổi tiền (`moneyAge`), số log chờ của tài khoản riêng tư bị giấu.
  */
 export type Snapshot = Omit<DomainSnapshot, "attention"> & {
   attention: DomainSnapshot["attention"] & { hiddenPendingLogs?: number };
-  payCycle?: PayCycleView | null;
-  paySetup?: { hasCycleStream: boolean };
 };
 
 export type { CashFlow, CashFlowGroup, CashFlowLine, CashFlowLineKey, CashFlowMonth, IncomeStatement, IncomeStatementMonth, ReportClass, StatementLine };
@@ -99,8 +98,8 @@ export interface EntryBody {
   interest_debt_id?: string;
   /** Người nhập xác nhận khoản SePay đã báo (409 `bank_log_exists`) là khoản thật thứ hai. */
   confirm_duplicate?: boolean;
-  /** Thu nhập: "Lương — mở kỳ lương" (pocket UC-1205); thiếu = theo cờ của nguồn. */
-  opens_cycle?: boolean;
+  /** Thu nhập: "Đây là lương" (pocket UC-1205, Q1-B); thiếu = server quyết theo nguồn / `salary_reminder_min`. */
+  is_salary?: boolean;
   /** Mục tiêu Dự phòng mà khoản chi / chuyển ra này dùng tiền (pocket UC-1209 bước 11); chỉ gửi khi người nhập chọn. */
   goal_id?: string;
   /** Khoản thu là tiền lãi (QĐ2, ADR-140): chỉ gửi khi thu vào mẹ có mục tiêu hoặc con của nó. */
@@ -109,9 +108,9 @@ export interface EntryBody {
   from_interest?: boolean;
 }
 
-/** Hệ quả lên kỳ lương của một lần ghi (POST /v1/transactions, /replace, gán log). */
+/** Hệ quả của một lần ghi (POST /v1/transactions, /replace, gán log): nhắc ① vừa sinh, việc vừa tự xong. */
 export interface EntryEffects {
-  cycle: { opened: boolean; startedAt: string; payday: string; tasks: number } | null;
+  savings: { amount: number; pct: number } | null;
   tasksDone: { id: number; kind: TaskKind }[];
 }
 
@@ -145,6 +144,7 @@ export interface TxRow {
   tenant_id?: string | null;
   debt_id?: string | null;
   receivable_id?: string | null;
+  interest_debt_id?: string | null;
   debt_name?: string | null;
   receivable_name?: string | null;
   tenant_name?: string | null;
@@ -162,10 +162,16 @@ export interface TxRow {
   legacy?: boolean;
   /** Mục tiêu Dự phòng của khoản chi / chuyển ra (pocket UC-1209 bước 11); null = không cho mục tiêu nào. */
   goal_id?: string | null;
+  /** Cờ khoản thu là lương: server trả 0/1 (cột SQLite), fixture cũ có thể là boolean — đọc bằng `Number(…) === 1`. */
+  is_salary?: number | boolean;
   /** Khoản thu có phân loại "tiền lãi" tường minh (`passive_income`). */
   is_interest?: boolean;
   /** Khoản chi / chuyển ra lấy từ tiền lãi của nhóm. */
   from_interest?: boolean;
+  /** Mã mẫu đã tự gán khoản này (ingest UC-307 AC-25). */
+  rule_id?: number | null;
+  /** Thông tin mẫu tự gán (GET /v1/transactions/:id). */
+  rule?: { id: number; match_type: string; pattern: string; active: boolean } | null;
 }
 
 /** Loại chi (cách tính cũ) của giao dịch trước v2 (transactions.legacy_class). */
@@ -341,7 +347,7 @@ export interface ReserveGoal {
   account_id: string | null;
   /** Nơi để tiền (ADR-141): `account` một tài khoản để dành · `operating` trả thẳng từ tiền chi tiêu. Bản lưu cũ thiếu = `account`. */
   pays_from?: "account" | "operating";
-  /** Mục tiêu `operating`: còn phải trả kỳ này = max(0, số kỳ này − đã trả); null với mục tiêu `account`. */
+  /** Mục tiêu `operating`: còn phải trả tháng này = max(0, số tháng này − đã trả); null với mục tiêu `account`. */
   remaining?: number | null;
   /** Mục tiêu `operating`: danh mục tự tính là đã trả (ADR-143). Bản lưu cũ thiếu = []. */
   category_ids?: string[];
@@ -350,7 +356,7 @@ export interface ReserveGoal {
   held: number | null;
   /** Số cần (= B); null với mục tiêu % hoặc chưa gắn tài khoản. */
   need: number | null;
-  /** Đã chi cho mục tiêu trong kỳ lương hiện tại. */
+  /** Đã chi cho mục tiêu trong tháng hiện tại. */
   spent: number;
   /** Còn thiếu = max(0, need − held − spent); null khi need null. */
   short: number | null;
@@ -380,12 +386,12 @@ export interface SettingsGoalGroup {
   interest?: number;
 }
 
-/** Nhóm danh mục và hạn mức mềm mỗi kỳ lương (UC-1204); `cycle_limit` null = không đặt. */
+/** Nhóm danh mục và hạn mức mềm mỗi tháng (UC-1204); `monthly_limit` null = không đặt. */
 export interface CategoryGroup {
   id: string;
   name: string;
   essential: boolean;
-  cycle_limit: number | null;
+  monthly_limit: number | null;
   sort: number;
   active: boolean;
 }
@@ -423,8 +429,8 @@ export interface IncomeStream {
   active: boolean;
   /** Ngăn của tiền về (UC-506); null = theo tài khoản nhận. Bản cài đặt lưu offline cũ thiếu. */
   pocket?: Pocket | null;
-  /** "Mở kỳ lương" (pocket UC-1205). Bản cài đặt lưu offline cũ thiếu. */
-  opens_cycle?: boolean;
+  /** "Nguồn lương" (pocket UC-1205): khoản thu từ nguồn này mặc định là lương, có nhắc trích Tích luỹ. */
+  is_salary: boolean;
 }
 
 /** Bí mật chỉ ghi: server chỉ trả đã đặt hay chưa và 4 ký tự cuối. */
@@ -437,6 +443,8 @@ export interface Secret {
 
 export interface SettingsConfig {
   salary_min_amount: number;
+  /** Ngưỡng nhắc trích Tích luỹ (Q1-B): khoản thu không nguồn từ số này thì ô "Đây là lương" bật sẵn. Optional: bản cài đặt lưu offline cũ chưa có. */
+  salary_reminder_min?: number;
   /** Lãi tiền gửi: log tiền vào nhỏ hơn số này (nội dung rỗng / BankAPINotify / "lãi tiền gửi") thì máy tự ghi; 0 = tắt. */
   interest_max_amount: number;
   safety_fund_months: number;
@@ -457,11 +465,11 @@ export interface SettingsConfig {
   fi_target_age_f1: number | null;
   fi_target_age_f2: number | null;
   fi_target_age_f3: number | null;
-  /** Dư cuối kỳ vào Tích luỹ (0–100, mặc định 50, UC-1207). Optional: bản cài đặt lưu offline cũ chưa có. */
+  /** Dư cuối tháng vào Tích luỹ (0–100, mặc định 50, UC-1207). Optional: bản cài đặt lưu offline cũ chưa có. */
   surplus_savings_pct?: number;
   /** Ví Thưởng: mã tài khoản Dự phòng không gắn mục tiêu (UC-1209 bước 4); null = chưa chọn. */
   surplus_reward_account?: string | null;
-  /** % gợi ý trích sang Tích luỹ mỗi kỳ lương (1–100, UC-507). Optional: bản cài đặt lưu offline cũ chưa có. */
+  /** % gợi ý trích sang Tích luỹ khi lương về (1–100, UC-507). Optional: bản cài đặt lưu offline cũ chưa có. */
   savings_pct?: number;
 }
 

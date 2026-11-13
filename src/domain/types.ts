@@ -46,8 +46,8 @@ export interface IncomeStreamRef {
   active: boolean;
   /** Ngăn của tiền về (NULL = theo tài khoản nhận, access UC-506). */
   pocket: "savings" | "reserve" | "operating" | null;
-  /** Khoản thu từ nguồn này mở kỳ lương (pocket UC-1205). */
-  opensCycle: boolean;
+  /** Nguồn lương: khoản thu từ nguồn này mặc định là lương, có nhắc trích Tích luỹ (pocket UC-1205). */
+  isSalary: boolean;
 }
 
 export interface TenantRef {
@@ -76,6 +76,8 @@ export interface Refs {
   receivables: BookRef[];
   /** Nguồn thu mặc định cho tiền người thuê trả (config `rental_income_stream_id`). */
   rentalIncomeStreamId: string | null;
+  /** Ngưỡng nhắc trích (config `salary_reminder_min`, Q1-B): khoản thu không nguồn từ số này thì mặc định là lương. `loadRefs` luôn điền. */
+  salaryReminderMin?: number;
   /** Mục tiêu trả thẳng từ tiền chi tiêu đang dùng, theo thứ tự ưu tiên (ADR-141). `loadRefs` luôn điền. */
   operatingGoalIds?: string[];
 }

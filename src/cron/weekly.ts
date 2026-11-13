@@ -1,6 +1,6 @@
 // Tổng kết tuần theo nhịp Vận hành, gửi vào ngày giờ cả nhà chọn ở Cài đặt (mặc định 08:00 thứ Hai, src/cron/schedule.ts) —
-// specs/notify/UC-406. Số đọc qua ledger: chi tuần (`spendInWeek`), nhóm có hạn mức của kỳ hiện tại (`spendByCategory`),
-// tiền vận hành lúc gửi (snapshot `nearSpend`, cùng dòng 💰 với tin sáng).
+// specs/notify/UC-406. Số đọc qua ledger: chi tuần (`spendInWeek`), nhóm có hạn mức của tháng hiện tại (`spendByCategory`),
+// tiền vận hành lúc gửi (snapshot `nearSpend`, cùng dòng Vận hành với tin sáng).
 
 import { dayKey, isoWeekday, weekKey } from "../domain/period";
 import type { Env } from "../env";
@@ -30,12 +30,11 @@ export async function weekly(env: Env, now: Date): Promise<void> {
     .slice(0, 5)
     .map((c) => ({ name: c.name, spent: c.spent }));
   const limits = lookBack.groups.flatMap((g) => (g.limit === null ? [] : [{ name: g.name, spent: g.spent, limit: g.limit, over: g.over ?? 0 }]));
-  const cycleStart = lookBack.kind === "cycle" ? dayKey(lookBack.cycle.start) : null;
 
   await notifyMembers(
     env,
     "weekly",
     weekKeyPrev,
-    weeklyMessage({ weekLabel, nearSpend: snapshot.nearSpend, totalSpent: week.totalSpent, operatingSpent: week.operatingSpent, topCategories, limits, cycleStart }),
+    weeklyMessage({ weekLabel, nearSpend: snapshot.nearSpend, totalSpent: week.totalSpent, operatingSpent: week.operatingSpent, topCategories, limits, month: lookBack.month }),
   );
 }

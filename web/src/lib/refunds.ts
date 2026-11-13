@@ -15,7 +15,7 @@ export const LINK_DAYS: Record<LinkKind, number> = { spend: 30, lend: 180 };
 export const linkCandidatesPath = (kind: LinkKind) => `/v1/transactions/link-candidates?meaning=${kind}&days=${LINK_DAYS[kind]}`;
 
 /** Khoản gốc còn chờ gán thì chưa có trong danh sách. */
-export const LINK_PENDING_HINT = "Khoản gốc còn chờ gán? Gán nó trước rồi quay lại.";
+export const LINK_PENDING_HINT = "Khoản gốc chưa gán? Gán trước rồi quay lại.";
 
 /**
  * Dòng nhắc khi chưa chọn khoản gốc. Người đang chọn có khoản cho vay trong danh sách → nói thẳng có mấy khoản để chọn
@@ -25,9 +25,9 @@ export const LINK_PENDING_HINT = "Khoản gốc còn chờ gán? Gán nó trư�
 export function linkPickHint(kind: LinkKind, candidates: Pick<LinkCandidate, "receivable_id" | "receivable_name">[], receivableId: string | null): string {
   if (kind === "lend" && receivableId) {
     const mine = candidates.filter((c) => c.receivable_id === receivableId);
-    if (mine.length > 0) return `${mine[0]!.receivable_name ?? "Người này"} có ${mine.length} khoản cho vay ở ô trên — chọn khoản đang trả.`;
+    if (mine.length > 0) return `${mine[0]!.receivable_name ?? "Người này"} có ${mine.length} khoản cho vay ở ô trên, chọn khoản đang trả.`;
   }
-  if (candidates.length > 0) return `Có ${candidates.length} khoản ở ô trên — chọn khoản gốc nếu biết, không thì để trống.`;
+  if (candidates.length > 0) return `Có ${candidates.length} khoản ở ô trên, chọn khoản gốc nếu biết, không thì để trống.`;
   return LINK_PENDING_HINT;
 }
 

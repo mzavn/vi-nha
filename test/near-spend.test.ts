@@ -1,13 +1,14 @@
 // Tiền vận hành (ledger UC-103, ADR-122): tổng ngăn Vận hành, đếm ngược tới ngày lương, dịch ra mỗi ngày / mỗi bữa / mỗi lần
 // đi chợ. Không trừ nợ; không còn lệnh chuyển, không còn trường theo ví / vai trò tài khoản (Đợt E).
 import type { DatabaseSync } from "node:sqlite";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nearSpend, nearSpendView, nextPayday, type NearSpend } from "../src/domain/snapshot";
 import type { Env } from "../src/env";
 import { app } from "../src/index";
 import { getSnapshot } from "../src/services/ledger";
 import { asD1, openDb } from "./helpers/d1-sqlite";
 import { B_NOW, householdB } from "./helpers/household-b";
+import { AT, client, householdC } from "./helpers/household-c";
 
 let env: Env;
 let raw: DatabaseSync;
@@ -42,8 +43,8 @@ describe("tiền vận hành — công thức (hàm thuần)", () => {
       { id: "piggy", name: "piggy", pocket: "savings" as const },
       { id: "momo", name: "momo", pocket: null },
     ];
-    const r = nearSpend(operating, accounts, "2026-11-11", 10, { cyclePayday: null, pendingTasks: 0 });
-    expect(r).toMatchObject({ amount: 4_100_000, paydayDay: 10, payday: "2026-12-10", daysLeft: 29, perDay: 141_000, perMeal: 70_000, perMarket: 140_000, pendingTasks: 0, cyclePayday: null });
+    const r = nearSpend(operating, accounts, "2026-11-11", 10, { salaryPayday: null, pendingTasks: 0 });
+    expect(r).toMatchObject({ amount: 4_100_000, paydayDay: 10, payday: "2026-12-10", daysLeft: 29, perDay: 141_000, perMeal: 70_000, perMarket: 140_000, pendingTasks: 0, salaryPayday: null });
     expect(r.accounts).toEqual([
       { accountId: "main", name: "main", balance: 3_000_000 },
       { accountId: "spend", name: "spend", balance: 1_400_000 },
@@ -131,5 +132,102 @@ describe("ngày lương (tham số payday_day)", () => {
   it("UC-709 AC-34: đặt ngày lương 5 → snapshot tính tới ngày 5 (11/11 → 5/12, còn 24 ngày)", async () => {
     expect((await call("PUT", "/v1/settings/config", { payday_day: 5 })).status).toBe(200);
     expect(await near()).toMatchObject({ paydayDay: 5, payday: "2026-12-05", daysLeft: 24 });
+  });
+});
+
+describe("số mỗi ngày theo payday_day, lương về sớm (UC-103 AC-26)", () => {
+  const vn = (s: string) => new Date(`${s}+07:00`);
+  let c: DatabaseSync;
+  let callC: ReturnType<typeof client>;
+  const salary = (amount: number, at: string, o: Record<string, unknown> = {}) =>
+    callC("POST", "/v1/transactions", { meaning: "income", amount, account_id: "main", income_stream_id: "salary", at: AT(at), ...o });
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(vn("2026-12-10T09:00:00"));
+    c = householdC();
+    callC = client(c);
+    // Khoản phải trả còn 3.500.000 tháng 12 (mục tiêu trả từ tiền chi tiêu).
+    c.exec("INSERT INTO reserve_goals (id, name, account_id, target_amount, monthly_amount, repeat_months, pays_from, sort) VALUES ('rent', 'Tiền nhà', NULL, 3500000, 3500000, 1, 'operating', 9)");
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("UC-103 AC-26: 12/12, Vận hành 21.200.000, ① 2.000.000 mở, phải trả 3.500.000 → 29 ngày, 541.000/ngày; lương về sớm 5/1 → salaryPayday 10/1, 36 ngày; khoản thứ hai không đổi; payday_day 5 → không lương sớm; không khoá kỳ", async () => {
+    expect((await salary(20_000_000, "2026-12-10T08:00:00")).status).toBe(201);
+    const s = await getSnapshot(asD1(c), "husband", vn("2026-12-12T09:00:00"));
+    expect(s.nearSpend).toMatchObject({ amount: 21_200_000, daysLeft: 29, pendingTasks: 2_000_000, goalRemaining: 3_500_000, perDay: 541_000, perMeal: 270_000, perMarket: 540_000, salaryPayday: null });
+    for (const k of ["cyclePayday", "payCycle", "paySetup"]) {
+      expect(s.nearSpend).not.toHaveProperty(k);
+      expect(s).not.toHaveProperty(k);
+    }
+
+    vi.setSystemTime(vn("2027-01-05T09:00:00"));
+    await salary(20_000_000, "2027-01-05T08:00:00");
+    const early = await getSnapshot(asD1(c), "husband", vn("2027-01-05T09:00:00"));
+    expect(early.nearSpend).toMatchObject({ salaryPayday: "2027-01-10", payday: "2027-02-10", daysLeft: 36 });
+    // PWA tính lại bằng đúng luật (hàm dùng chung).
+    expect(nearSpendView(early.nearSpend.amount, "2027-01-05", 10, { salaryPayday: early.nearSpend.salaryPayday, pendingTasks: 0 }).daysLeft).toBe(36);
+    vi.setSystemTime(vn("2027-01-07T09:00:00"));
+    await salary(15_000_000, "2027-01-07T08:00:00", { income_stream_id: null, is_salary: true });
+    expect((await getSnapshot(asD1(c), "husband", vn("2027-01-07T09:00:00"))).nearSpend).toMatchObject({ salaryPayday: "2027-01-10", daysLeft: 34 });
+
+    c.exec("UPDATE config SET v = '5' WHERE k = 'payday_day'");
+    vi.setSystemTime(vn("2027-01-01T09:00:00"));
+    c.exec("UPDATE transactions SET status = 'void' WHERE at >= '2027-01-01'");
+    await salary(20_000_000, "2027-01-01T08:00:00");
+    expect((await getSnapshot(asD1(c), "husband", vn("2027-01-01T09:00:00"))).nearSpend).toMatchObject({ salaryPayday: null, daysLeft: 4 });
+  });
+
+  it("UC-103 AC-26: lương vợ về 5/1 là khoản lương đầu tiên trong cửa sổ → tính là lương sớm", async () => {
+    vi.setSystemTime(vn("2027-01-05T09:00:00"));
+    await salary(15_000_000, "2027-01-05T08:00:00", { income_stream_id: null, is_salary: true });
+    expect((await getSnapshot(asD1(c), "husband", vn("2027-01-05T09:00:00"))).nearSpend).toMatchObject({ salaryPayday: "2027-01-10", daysLeft: 36 });
+  });
+});
+
+describe("tuổi tiền ngăn Vận hành (UC-103 AC-27, chỉ đo)", () => {
+  let m: DatabaseSync;
+  const at = (day: string, hh = "09") => new Date(`${day}T${hh}:00:00+07:00`).toISOString();
+  const tx = (day: string, amount: number, meaning: string, from: string | null, to: string | null, hh = "09") =>
+    m
+      .prepare("INSERT INTO transactions (at, amount, meaning, account_id, counter_account_id, category_id, week_key, month_key, source) VALUES (?, ?, ?, ?, ?, ?, '2026-W45', ?, 'manual')")
+      .run(at(day, hh), amount, meaning, from, to, meaning === "spend" ? "groceries" : null, day.slice(0, 7));
+  const age = async (day = "2026-11-20") => (await getSnapshot(asD1(m), null, new Date(at(day, "21")))).moneyAge;
+  beforeEach(() => {
+    m = openDb();
+    m.exec(`
+      UPDATE reserve_goals SET active = 0;
+      UPDATE accounts SET active = 0;
+      INSERT INTO accounts (id, name, kind, opening_balance, pocket, pocket_confirmed) VALUES
+        ('op', 'Chi tiêu', 'bank', 0, 'operating', 1), ('op2', 'Chi tiêu vợ', 'bank', 0, 'operating', 1), ('sv', 'Tích luỹ', 'bank', 0, 'savings', 1);
+    `);
+    // Lô đầu cửa sổ 10.000.000 ngày 1/11; lương 20.000.000 ngày 10/11; chi 1.000.000 mỗi ngày 2/11 → 20/11.
+    tx("2026-11-01", 10_000_000, "income", null, "op", "07");
+    tx("2026-11-10", 20_000_000, "income", null, "op", "07");
+    for (let d = 2; d <= 20; d++) tx(`2026-11-${String(d).padStart(2, "0")}`, 1_000_000, "spend", "op", null);
+  });
+
+  it("UC-103 AC-27: 10 khoản gần nhất tuổi 10, 2, 3, …, 10 → { days: 6, sample: 10, buffered: false }; chuyển giữa hai tài khoản Vận hành bỏ qua; số mỗi ngày không đổi", async () => {
+    expect(await age()).toEqual({ days: 6, sample: 10, buffered: false });
+    const before = (await getSnapshot(asD1(m), null, new Date(at("2026-11-20", "21")))).nearSpend;
+    tx("2026-11-15", 3_000_000, "transfer", "op", "op2");
+    expect(await age()).toEqual({ days: 6, sample: 10, buffered: false });
+    const after = (await getSnapshot(asD1(m), null, new Date(at("2026-11-20", "21")))).nearSpend;
+    expect([after.daysLeft, after.perDay]).toEqual([before.daysLeft, before.perDay]);
+  });
+
+  it("UC-103 AC-27: chuyển sang Tích luỹ tiêu lô nhưng không vào mẫu; hoàn tiền là lô vào mới; chưa đủ 10 khoản chi → null; từ 30 ngày → buffered", async () => {
+    // Chuyển 5.000.000 sang Tích luỹ ngày 1/11 (trước mọi khoản chi): tiêu nửa lô đầu, khoản chi 7/11 trở đi sang lương sớm hơn.
+    tx("2026-11-01", 5_000_000, "transfer", "op", "sv", "08");
+    const shifted = await age();
+    expect(shifted?.sample).toBe(10);
+    expect(shifted!.days).toBeLessThan(6);
+    m.exec("DELETE FROM transactions WHERE meaning = 'spend' AND at >= '2026-11-11'");
+    expect(await age()).toBeNull();
+
+    m.exec("DELETE FROM transactions");
+    tx("2026-09-01", 30_000_000, "income", null, "op", "07");
+    for (let d = 1; d <= 10; d++) tx(`2026-10-${String(d).padStart(2, "0")}`, 100_000, "spend", "op", null);
+    tx("2026-10-09", 200_000, "refund", null, "op", "07");
+    expect(await age("2026-10-10")).toEqual({ days: 34, sample: 10, buffered: true });
   });
 });

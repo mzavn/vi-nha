@@ -5,6 +5,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { BILL_CATEGORIES, type BillCategory, billMonthLabel, billTotals, CATEGORY_LABEL, MAX_BILL_ITEMS, MAX_ITEM_NAME, previousAmounts } from "../../../src/domain/rental";
 import { ApiError, api, errorText } from "../lib/api";
+import { EMPTY_STATES } from "../lib/empty-states";
 import { formatVnd, maskAmounts } from "../lib/money";
 import { monthKey, nextMonth, previousMonth, shortDate } from "../lib/period";
 import {
@@ -37,8 +38,9 @@ import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
 import { Banner, Card, Empty, Loadable, NeedsNetwork } from "../ui/parts";
 import { qrPngFile, TransferQrBlock } from "../ui/qr";
+import { OtherEntrySheet } from "./other-entry-sheet";
 
-const BILL_CHANGED = "Bản tính vừa được sửa ở máy khác — tải lại.";
+const BILL_CHANGED = "Bản tính vừa sửa ở máy khác, cần tải lại.";
 
 /** localStorage của máy; trình duyệt chặn thì null (dấu "đã gửi" không lưu được). */
 function deviceStorage(): Storage | null {
@@ -70,25 +72,18 @@ export function TenantsTab() {
         if (shown.length === 0) {
           return (
             <Card>
-              <Empty title="Chưa có người thuê.">
-                Thêm người thuê ở Cài đặt › Cho thuê.
-                <div style={{ marginTop: "10px" }}>
-                  <button type="button" class="btn" onClick={() => go("settings")}>
-                    Mở Cài đặt
-                  </button>
-                </div>
-              </Empty>
+              <Empty state={EMPTY_STATES.tenants} onAction={() => go("settings")} />
             </Card>
           );
         }
         const current = shown.find((t) => t.id === sel) ?? shown[0]!;
         return (
           <>
-            <Card title="Người thuê" flush note="Còn nợ là người thuê phải trả thêm; trả dư thì tự trừ vào tháng sau. Nhãn bên cạnh tên là bản tính tháng trước.">
+            <Card title="Người thuê" flush note="Còn nợ là người thuê cần trả thêm; trả dư sẽ tự trừ vào tháng sau. Nhãn cạnh tên là bản tính tháng trước.">
               {shown.map((t) => {
                 const chip = billChip(t.bill, revisions);
                 return (
-                  <button type="button" key={t.id} class="srow" aria-current={t.id === current.id ? "true" : undefined} onClick={() => setSel(t.id)}>
+                  <button type="button" key={t.id} class="srow ten-row" aria-current={t.id === current.id ? "true" : undefined} onClick={() => setSel(t.id)}>
                     <span class="srow-main">
                       <span class="srow-t">
                         {t.name} {!t.active && <span class="chip">đã ra</span>} <span class={`chip ${chip.tone}`}>{chip.text}</span>
@@ -198,18 +193,18 @@ function BillCreate({ view, onCreated }: { view: BillView; onCreated: (v: BillVi
 
   return (
     <div class="pad">
-      <p class="sub-line" style={{ margin: "0 0 8px" }}>
+      <p class="sub-line gap-b">
         {createHint(view.month, view.previous)}
       </p>
       {error && (
-        <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
+        <p class="err gap-b" role="alert">
           {error}
         </p>
       )}
       <button type="button" class="btn btn-primary btn-wide" disabled={!online || busy || !view.tenant.active} onClick={() => void create()}>
         {busy ? "Đang lập…" : `Lập bản tính tháng ${m}`}
       </button>
-      {!view.tenant.active && <p class="fhint">{view.tenant.name} đã ra — không lập bản tính mới.</p>}
+      {!view.tenant.active && <p class="fhint">{view.tenant.name} đã dọn đi, không lập bản tính mới.</p>}
       {!online && <NeedsNetwork what="Ghi sổ người thuê" />}
     </div>
   );
@@ -347,7 +342,7 @@ function BillEditor(props: { view: BillView; onDone: (v: BillView, text: string)
 
   return (
     <div class="bill-editor" onFocusIn={keepVisible}>
-      <p class="sub-line pad" style={{ margin: 0 }}>
+      <p class="sub-line bill-lead">
         {editIssued
           ? `Đang sửa bản đã gửi. Lưu xong gửi lại tin cho ${name}.`
           : bill.copiedFromMonth
@@ -355,7 +350,7 @@ function BillEditor(props: { view: BillView; onDone: (v: BillView, text: string)
             : "Thêm khoản rồi Chốt & gửi."}
       </p>
       {conflict && (
-        <div class="pad" style={{ paddingTop: 0 }}>
+        <div class="pad pad-t0">
           <Banner tone="warn" mark="!" action="Tải lại" onAction={props.onReload}>
             {BILL_CHANGED}
           </Banner>
@@ -391,7 +386,7 @@ function BillEditor(props: { view: BillView; onDone: (v: BillView, text: string)
                     type="button"
                     class="btn btn-ghost bill-sign"
                     aria-pressed={negative.has(r.key)}
-                    aria-label={negative.has(r.key) ? `${r.name || "Khoản"}: khoản trừ — bấm để thành khoản cộng` : `${r.name || "Khoản"}: khoản cộng — bấm để thành khoản trừ`}
+                    aria-label={negative.has(r.key) ? `${r.name || "Khoản"}: khoản trừ, bấm để đổi thành cộng` : `${r.name || "Khoản"}: khoản cộng, bấm để đổi thành trừ`}
                     onClick={() => toggleSign(r)}
                   >
                     {negative.has(r.key) ? "−" : "+"}
@@ -431,7 +426,7 @@ function BillEditor(props: { view: BillView; onDone: (v: BillView, text: string)
       <div class="field">
         <label for={`b-acct-${bill.id}`}>Tài khoản nhận</label>
         <select id={`b-acct-${bill.id}`} class="ctl" value={account} onChange={(e) => setAccount(e.currentTarget.value)}>
-          <option value="">Chưa chọn — tin không có mã QR</option>
+          <option value="">Chưa chọn: tin không có mã QR</option>
           {accounts.map((a) => (
             <option key={a.id} value={a.id}>
               {a.name}
@@ -439,7 +434,7 @@ function BillEditor(props: { view: BillView; onDone: (v: BillView, text: string)
           ))}
         </select>
       </div>
-      <div class="pad flex gap-2" style={{ flexWrap: "wrap" }}>
+      <div class="pad flex flex-wrap gap-2">
         {editIssued ? (
           <button type="button" class="btn" disabled={busy} onClick={props.onCancel}>
             Thôi sửa
@@ -456,20 +451,20 @@ function BillEditor(props: { view: BillView; onDone: (v: BillView, text: string)
         )}
       </div>
       {!online && (
-        <div class="pad" style={{ paddingTop: 0 }}>
+        <div class="pad pad-t0">
           <NeedsNetwork what="Ghi sổ người thuê" />
         </div>
       )}
       <div class="bill-foot">
         <p class="bill-total">{billCompare(view.month, totals.total, view.previous)}</p>
         {error && (
-          <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
+          <p class="err gap-b" role="alert">
             {error}
           </p>
         )}
         {confirmTotal !== null && (
           <div class="bill-confirm" role="alert">
-            <p style={{ margin: "0 0 8px" }}>{resendConfirm(view.total, confirmTotal, name)}</p>
+            <p class="gap-b">{resendConfirm(view.total, confirmTotal, name)}</p>
             <div class="flex gap-2">
               <button type="button" class="btn btn-primary" disabled={!canWrite} onClick={() => void resend()}>
                 {busy ? "Đang lưu…" : "Lưu & gửi lại"}
@@ -496,13 +491,16 @@ function BillEditor(props: { view: BillView; onDone: (v: BillView, text: string)
 }
 
 function BillIssued({ view, sent, onEdit }: { view: BillView; sent: Sent; onEdit: () => void }) {
-  const { online } = useApp();
+  const { online, boot } = useApp();
+  const [cashEntry, setCashEntry] = useState(false);
   const bill = view.bill!;
   const name = view.tenant.name;
   const text = view.text ?? "";
   const qr = view.qr;
   const resend = needsResend({ id: bill.id, revision: bill.revision, edited: bill.editedAt !== null }, sent.revisions);
   const label = `tin gửi ${name}`;
+  const recAccount = boot?.accounts.find((a) => a.id === view.bill?.receiveAccountId);
+  const isBankConnected = Boolean(recAccount?.sepayEnabled);
 
   async function share() {
     const file = qr && "payload" in qr ? qrPngFile(qr.payload, `${qr.memo.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.png`) : null;
@@ -529,7 +527,7 @@ function BillIssued({ view, sent, onEdit }: { view: BillView; sent: Sent; onEdit
   return (
     <>
       {resend && (
-        <div class="pad" style={{ paddingBottom: 0 }}>
+        <div class="pad pad-b0">
           <Banner tone="warn" mark="!">
             Đã sửa sau khi gửi — gửi lại tin cho {name}.
           </Banner>
@@ -538,7 +536,7 @@ function BillIssued({ view, sent, onEdit }: { view: BillView; sent: Sent; onEdit
       <pre class="bill-text pad">{maskAmounts(text)}</pre>
       {qr && <div class="pad">{"payload" in qr ? <TransferQrBlock payload={qr.payload} label={qr.label} memo={qr.memo} /> : <p class="sub-line">{qr.reason}</p>}</div>}
       <div class="pad grid grid-cols-2 gap-2">
-        <button type="button" class="btn btn-primary" style={{ whiteSpace: "normal" }} onClick={() => void share()}>
+        <button type="button" class="btn btn-primary wrap-text" onClick={() => void share()}>
           Gửi cho {name}
         </button>
         <button type="button" class="btn" onClick={() => void copy()}>
@@ -558,7 +556,33 @@ function BillIssued({ view, sent, onEdit }: { view: BillView; sent: Sent; onEdit
         </button>
       ))}
       <p class="pad bill-owed">{owedText(view.balance)}</p>
-      <div class="pad" style={{ paddingTop: 0 }}>
+      {isBankConnected && (
+        <p class="sub-line bill-lead">
+          Khi {name} chuyển khoản, giao dịch sẽ hiện ở Chưa gán.
+        </p>
+      )}
+      <div class="pad pad-y2">
+        <button
+          type="button"
+          class="btn btn-wide"
+          onClick={() => setCashEntry(true)}
+        >
+          Ghi tiền mặt đã nhận
+        </button>
+      </div>
+      {cashEntry && (
+        <OtherEntrySheet
+          kind="income"
+          amount={Math.max(0, view.balance)}
+          tenantId={view.tenant.id}
+          title="Ghi tiền vào"
+          onClose={() => {
+            setCashEntry(false);
+            void refresh();
+          }}
+        />
+      )}
+      <div class="pad pad-t0">
         <button type="button" class="btn btn-wide" disabled={!online} onClick={onEdit}>
           Sửa
         </button>

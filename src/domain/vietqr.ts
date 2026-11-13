@@ -74,11 +74,11 @@ export function transferQr(o: TransferQrOrder): { payload: string; label: string
   if (!bank?.napasBin) return { reason: `Ngân hàng của ${o.to_name} chưa có mã QR.` };
   const va = bank.sepay?.vaRequired && o.to_sepay_enabled && o.to_sub_account ? o.to_sub_account.trim() : null;
   const accountNo = va ?? o.to_account_no?.trim() ?? "";
-  if (!accountNo) return { reason: `Chưa có mã QR — thêm số tài khoản cho ${o.to_name} ở Cài đặt › Tài khoản.` };
+  if (!accountNo) return { reason: `Chưa có mã QR. Thêm số tài khoản cho ${o.to_name} ở Cài đặt › Tài khoản.` };
   if (!/^[A-Za-z0-9]{1,19}$/.test(accountNo)) {
-    return { reason: `Chưa có mã QR — số tài khoản của ${o.to_name} không hợp lệ cho mã QR (chỉ chữ và số, tối đa 19 ký tự).` };
+    return { reason: `Chưa có mã QR. Số tài khoản của ${o.to_name} không hợp lệ (chỉ chữ và số, tối đa 19 ký tự).` };
   }
-  if (qrMemo(o.memo) !== o.memo) return { reason: "Nội dung chuyển khoản có ký tự mã QR không giữ được — chép nội dung để chuyển." };
+  if (qrMemo(o.memo) !== o.memo) return { reason: "Nội dung chuyển khoản có ký tự mã QR không giữ được. Chép nội dung để chuyển." };
   return {
     payload: vietQrPayload({ bin: bank.napasBin, accountNo, amount: o.amount, memo: o.memo }),
     label: `${bank.name} · ${va ? `VA ${va}` : accountNo} · ${o.to_name}`,

@@ -42,6 +42,8 @@ export interface SetupAccount {
   owner: number | null;
   /** Ngăn của tài khoản; mặc định Vận hành, null = ngoài ngăn. */
   pocket: Pocket | null;
+  /** Số dư ban đầu (đồng) từ ô AmountInput; thẻ tín dụng là số đang nợ (dương ở form, âm khi gửi). */
+  balance?: number;
 }
 /** Mục tiêu Dự phòng tuỳ chọn: chữ người gõ. */
 export interface SetupGoal {
@@ -59,9 +61,9 @@ export interface SetupForm {
   accounts: SetupAccount[];
   /** Ngày lương 1–31 (chữ trong ô). */
   paydayDay: string;
-  /** % Tích luỹ mỗi kỳ lương 1–100 (chữ trong ô). */
+  /** % Tích luỹ khi lương về 1–100 (chữ trong ô). */
   savingsPct: string;
-  /** Nhà có tự nộp thuế không; null = chưa trả lời. */
+  /** Nhà có tự nộp thuế không; mặc định false (UC-510 AC-18). */
   taxable: boolean | null;
   groups: GroupChoice[];
   goals: SetupGoal[];
@@ -70,7 +72,14 @@ export interface SetupForm {
 export interface SetupBody {
   password: string;
   members: { name: string; password?: string }[];
-  accounts: { name: string; kind: SettingsAccount["kind"]; bank?: string; owner: number | null; pocket: Pocket | null }[];
+  accounts: {
+    name: string;
+    kind: SettingsAccount["kind"];
+    bank?: string;
+    owner: number | null;
+    pocket: Pocket | null;
+    opening_balance?: number;
+  }[];
   payday_day: number;
   savings_pct: number;
   taxable: boolean;
@@ -78,7 +87,7 @@ export interface SetupBody {
   goals: { name: string; monthly_amount: number; repeat_months: number; account?: number }[];
 }
 
-export const newAccount = (): SetupAccount => ({ name: "", kind: "bank", bank: "", owner: null, pocket: "operating" });
+export const newAccount = (): SetupAccount => ({ name: "", kind: "bank", bank: "", owner: null, pocket: "operating", balance: 0 });
 export const newGoal = (): SetupGoal => ({ name: "", monthly: 0, repeat: "1", account: null });
 
 export const emptySetup = (): SetupForm => ({
@@ -87,7 +96,7 @@ export const emptySetup = (): SetupForm => ({
   accounts: [newAccount()],
   paydayDay: "10",
   savingsPct: "10",
-  taxable: null,
+  taxable: false,
   groups: GROUP_OPTIONS.map((o) => o.value),
   goals: [],
 });
@@ -154,7 +163,6 @@ function pocketErrors(f: SetupForm): Errors {
   const errors: Errors = {};
   if (parseInteger(f.paydayDay, 1, 31) === null) errors.payday_day = "Ngày lương từ 1 đến 31.";
   if (parseInteger(f.savingsPct, 1, 100) === null) errors.savings_pct = "% Tích luỹ từ 1 đến 100.";
-  if (f.taxable === null) errors.taxable = "Chọn Có hoặc Không.";
   if (f.goals.length > MAX_GOALS) errors.goals = `Tối đa ${MAX_GOALS} mục tiêu.`;
   const reserved = f.taxable ? [TAX_GOAL] : [];
   f.goals.forEach((g, i) => {
@@ -171,7 +179,7 @@ function pocketErrors(f: SetupForm): Errors {
 
 /** Lỗi của một bước, khoá theo `field` của server ("members.0.name"…); rỗng = được bấm Tiếp. */
 export function stepErrors(f: SetupForm, step: SetupStep): Errors {
-  if (step === 0) return f.password ? {} : { password: "Nhập mật khẩu chung đã đặt lúc deploy." };
+  if (step === 0) return f.password ? {} : { password: "Nhập mật khẩu chung đã đặt lúc cài app." };
   if (step === 1) return memberErrors(f.members);
   if (step === 2) return accountErrors(f.accounts, f.members.length);
   return pocketErrors(f);
@@ -182,16 +190,20 @@ export function setupPayload(f: SetupForm): Result<SetupBody> {
   return done(errors, () => ({
     password: f.password,
     members: f.members.map((m) => ({ name: m.name.trim(), ...(m.password ? { password: m.password } : {}) })),
-    accounts: f.accounts.map((a) => ({
-      name: a.name.trim(),
-      kind: a.kind,
-      ...(a.kind !== "cash" && a.bank.trim() ? { bank: a.bank.trim() } : {}),
-      owner: a.owner,
-      pocket: a.pocket,
-    })),
+    accounts: f.accounts.map((a) => {
+      const bal = Math.round(Number(a.balance) || 0);
+      return {
+        name: a.name.trim(),
+        kind: a.kind,
+        ...(a.kind !== "cash" && a.bank.trim() ? { bank: a.bank.trim() } : {}),
+        owner: a.owner,
+        pocket: a.pocket,
+        opening_balance: a.kind === "credit" ? -bal : bal,
+      };
+    }),
     payday_day: parseInteger(f.paydayDay, 1, 31)!,
     savings_pct: parseInteger(f.savingsPct, 1, 100)!,
-    taxable: f.taxable!,
+    taxable: Boolean(f.taxable),
     groups: GROUP_OPTIONS.map((o) => o.value).filter((v) => f.groups.includes(v)),
     goals: f.goals.map((g) => ({
       name: g.name.trim(),
@@ -213,7 +225,7 @@ export function setupSummary(f: SetupForm): string {
   const goals = [...f.goals.map((g) => g.name.trim()).filter(Boolean), ...(f.taxable ? [`${TAX_GOAL.name} 10%`] : [])];
   const parts = [
     ...pockets,
-    "nguồn “Lương” mở kỳ lương",
+    "nguồn lương “Lương”",
     `nhóm ${groups.join(", ")}`,
     ...(goals.length ? [`mục tiêu Dự phòng ${goals.join(", ")}`] : []),
   ];

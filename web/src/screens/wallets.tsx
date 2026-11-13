@@ -1,89 +1,96 @@
-// Ví & quỹ (pwa UC-707): Nhìn lại (chi theo nhóm danh mục trong kỳ lương, so hạn mức mềm và kỳ trước), Tích luỹ, Tài khoản,
-// Người thuê, Nợ. Ba trục tách bạch: nhóm kèm "còn / vượt" hạn mức mềm, tài khoản kèm "lệch", danh mục kèm "kỳ trước".
+// Tài khoản (pwa UC-707): Ba ngăn, Chi tiêu (chi theo nhóm danh mục trong tháng, so hạn mức mềm mỗi tháng và tháng trước), Nợ,
+// Cho thuê — điều hướng mục con theo SectionNav (DESIGN §4.18). Ba trục tách bạch: nhóm kèm "còn / vượt" hạn mức mềm, tài khoản
+// kèm "lệch", danh mục kèm "tháng trước".
 
+import { DEBT_CATEGORY_ID } from "../../../src/domain/system-ids";
+import { Fragment } from "preact";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { LookBack, LookBackCategory, LookBackGroup } from "../../../src/domain/look-back";
 import { ApiError } from "../lib/api";
 import { loadAllAssetBuys } from "../lib/asset-buys";
-import { DRIFT_LABEL, driftOf } from "../lib/drift";
+import { driftOf } from "../lib/drift";
+import { EMPTY_STATES } from "../lib/empty-states";
 import { formatVnd, maskAmounts } from "../lib/money";
 import { interestLineText } from "../lib/interest";
 import { accountsTotal, nestAccounts, type NestedAccount } from "../lib/accounts-total";
-import { barPct, compareText, cycleHeading, excludedText, isEmptyLookBack, limitText, LOOK_BACK_EMPTY, LOOK_BACK_NOTE, lookBackPath, queueNote, savingsLine, stepCycle } from "../lib/look-back";
+import { barPct, compareText, excludedText, isEmptyLookBack, limitText, LOOK_BACK_NOTE, lookBackGroups, lookBackPath, monthHeading, principalText, queueNote, savingsLine, stepMonth } from "../lib/look-back";
 import { monthKey, monthLabel, shortDate } from "../lib/period";
-import { NO_SAVINGS_ACCOUNT, savingsCard } from "../lib/pocket-cards";
-import { cycleFilter } from "../lib/tx-filter";
-import type { AccountRow, TxRow } from "../lib/types";
+import { SCREEN_TITLES, WALLETS_TAB_LABELS } from "../lib/nav";
+import { reserveCard, savingsCard } from "../lib/pocket-cards";
+import { monthFilter } from "../lib/tx-filter";
+import type { AccountRow, Bootstrap, TxRow } from "../lib/types";
 import { type Resource, useResource } from "../state/resource";
-import { go, openTx, setLookBackCycle, setWalletsTab, useApp, viewSnapshot, type WalletsTab } from "../state/store";
+import { go, openTx, setLookBackMonth, setWalletsTab, useApp, viewSnapshot, type WalletsTab } from "../state/store";
 import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
-import { Bar, Card, Empty, Loadable, PageHeader, Skeleton } from "../ui/parts";
+import { Bar, Card, Chip, Empty, InfoTip, Loadable, PageHeader, Row, SectionNav } from "../ui/parts";
 import { useWide } from "../ui/shell";
 import { CountSheet } from "./count-sheet";
 import { DebtsTab } from "./debts";
 import { ASSET_KINDS, OtherEntrySheet } from "./other-entry-sheet";
 import { TenantsTab } from "./tenants";
 
-const TABS: { value: WalletsTab; label: string }[] = [
-  { value: "analysis", label: "Nhìn lại" },
-  { value: "wealth-building", label: "Tích luỹ" },
-  { value: "accounts", label: "Tài khoản" },
-  { value: "tenants", label: "Người thuê" },
-  { value: "debts", label: "Nợ" },
-];
+const TABS = (Object.entries(WALLETS_TAB_LABELS) as [WalletsTab, string][]).map(([value, label]) => ({ value, label }));
 
 export function Wallets() {
   const { walletsTab, snap } = useApp();
+  const wide = useWide();
   const now = new Date();
+  const nav = <SectionNav wide={wide} label="Mục" items={TABS} value={walletsTab} onChange={setWalletsTab} />;
+  const body = (
+    <>
+      {walletsTab === "accounts" && <AccountsTab />}
+      {walletsTab === "analysis" && <LookBackTab />}
+      {walletsTab === "debts" && <DebtsTab />}
+      {walletsTab === "tenants" && <TenantsTab />}
+    </>
+  );
   return (
     <>
-      <PageHeader title="Ví & quỹ" sub={monthLabel(snap?.month ?? monthKey(now))} />
-      {/* Năm mục phải thấy hết trên điện thoại: xuống dòng, không cuộn ngang (mục đang chọn không bao giờ khuất). */}
-      <div class="tabs wrap" role="group" aria-label="Mục">
-        {TABS.map((t) => (
-          <button type="button" key={t.value} aria-pressed={walletsTab === t.value} onClick={() => setWalletsTab(t.value)}>
-            {t.label}
-          </button>
-        ))}
-      </div>
-      {walletsTab === "analysis" && <LookBackTab />}
-      {walletsTab === "wealth-building" && <WealthBuildingTab />}
-      {walletsTab === "accounts" && <AccountsTab />}
-      {walletsTab === "tenants" && <TenantsTab />}
-      {walletsTab === "debts" && <DebtsTab />}
+      <PageHeader title={SCREEN_TITLES.wallets} sub={monthLabel(snap?.month.key ?? monthKey(now))} />
+      {wide ? (
+        <div class="sec-layout">
+          {nav}
+          <div class="min-w-0">{body}</div>
+        </div>
+      ) : (
+        <>
+          {nav}
+          {body}
+        </>
+      )}
     </>
   );
 }
 
 // ── Nhìn lại ───────────────────────────────────────────────────────
-type CycleLookBack = Extract<LookBack, { kind: "cycle" }>;
-
 /**
- * Nhìn lại theo kỳ lương (pwa UC-707, ledger UC-108): kỳ chọn nằm trên địa chỉ `#wallets/analysis/<ngày lương>`; ngày đó không
- * phải kỳ nào (server `invalid_cycle`, UC-711 AC-27) thì về kỳ hiện tại. Số của server — khoản chờ đồng bộ chưa tính.
+ * Nhìn lại theo tháng (pwa UC-707 AC-40, ledger UC-108): tháng chọn nằm trên địa chỉ `#wallets/analysis/YYYY-MM` (tháng hiện tại
+ * không ghi). Số của server — khoản chờ đồng bộ chưa tính.
  */
 function LookBackTab() {
-  const { lookBackCycle, queue } = useApp();
-  const res = useResource<LookBack>(lookBackPath(lookBackCycle));
+  const { lookBackMonth, queue } = useApp();
+  const res = useResource<LookBack>(lookBackPath(lookBackMonth));
+  const current = monthKey(new Date());
   useEffect(() => {
-    if (lookBackCycle && res.error?.code === "invalid_cycle") setLookBackCycle(null);
-  }, [lookBackCycle, res.error]);
-  const d = res.data?.kind === "cycle" ? res.data : null;
-  const prev = d && stepCycle(d, -1);
-  const next = d && stepCycle(d, 1);
+    // Tháng trên địa chỉ là tháng hiện tại (địa chỉ cũ theo ngày lương của kỳ đang chạy) hay server không nhận tháng đó → tháng hiện tại.
+    if (lookBackMonth && (lookBackMonth === current || res.error?.code === "invalid_period")) setLookBackMonth(null);
+  }, [lookBackMonth, res.error]);
+  const d = res.data;
+  const prev = d && stepMonth(d, -1, current);
+  const next = d && stepMonth(d, 1, current);
   const queued = queueNote(queue.length);
   return (
     <Card
-      title={d ? cycleHeading(d.cycle) : "Nhìn lại"}
+      title={d ? monthHeading(d) : WALLETS_TAB_LABELS.analysis}
       right={
         d && (
-          <div class="book-month" role="group" aria-label="Kỳ lương">
-            <button type="button" class="btn book-step" aria-label="Kỳ trước" disabled={!prev} onClick={() => prev && setLookBackCycle(prev.cycle)}>
+          <div class="book-month" role="group" aria-label="Tháng">
+            <button type="button" class="btn book-step" aria-label="Tháng trước" disabled={!prev} onClick={() => prev && setLookBackMonth(prev.month)}>
               <Icon name="chevron-left" size={18} />
             </button>
             {next && (
-              <button type="button" class="btn book-step" aria-label="Kỳ sau" onClick={() => setLookBackCycle(next.cycle)}>
+              <button type="button" class="btn book-step" aria-label="Tháng sau" onClick={() => setLookBackMonth(next.month)}>
                 <Icon name="chevron-right" size={18} />
               </button>
             )}
@@ -93,36 +100,41 @@ function LookBackTab() {
       flush
       note={LOOK_BACK_NOTE}
     >
-      <Loadable res={res}>{(raw) => (raw.kind === "cycle" ? <LookBackBody d={raw} queued={queued} /> : null)}</Loadable>
+      <Loadable res={res}>{(raw) => <LookBackBody d={raw} queued={queued} />}</Loadable>
     </Card>
   );
 }
 
-function LookBackBody({ d, queued }: { d: CycleLookBack; queued: string | null }) {
+function LookBackBody({ d, queued }: { d: LookBack; queued: string | null }) {
   const wide = useWide();
+  const { boot } = useApp();
   const [open, setOpen] = useState<string | null>(null);
   const toggle = (id: string) => setOpen(open === id ? null : id);
-  // Chạm danh mục → Sổ giao dịch lọc danh mục đó và đúng kỳ (mốc giờ của kỳ), nên Chi của Sổ bằng số ở đây.
+  // Chạm danh mục → Sổ giao dịch lọc danh mục đó và đúng tháng (`#ledger?month=…&category=…`), nên Chi của Sổ bằng số ở đây.
   const drill = (c: LookBackCategory) => {
-    if (c.categoryId) go("ledger", { book: cycleFilter(d.cycle, c.categoryId, new Date()) });
+    if (c.categoryId) go("ledger", { book: monthFilter(d.month, c.categoryId, new Date()) });
   };
-  const excluded = excludedText(d.excluded.debtPrincipal);
+  // Nhóm chứa danh mục Trả nợ: trả gốc ghi ở hàng này bằng chữ mờ (UC-707 AC-44).
+  const debtGroupId = boot?.categories.find((c) => c.id === DEBT_CATEGORY_ID)?.groupId ?? null;
+  const groups = lookBackGroups(d, debtGroupId);
+  const excluded = excludedText(d, debtGroupId);
   const rows: Rows = {
     open,
     toggle,
     drill,
+    principal: (id) => principalText(d, id, debtGroupId),
     interest: d.interest.lines.length > 0 || d.interest.spent !== 0 || d.interest.previousSpent !== 0,
     ungrouped: d.ungrouped.categories.length > 0 || d.ungrouped.spent !== 0 || d.ungrouped.previousSpent !== 0,
   };
   return (
     <>
       <div class="tier btotal">
-        <div class="nm">Đã chi kỳ này</div>
+        <div class="nm">{d.next === null ? "Đã chi tháng này" : `Đã chi tháng ${Number(d.month.slice(5, 7))}`}</div>
         <div class="amt">
           <Money value={d.total} tone={false} />
         </div>
         <div class="tsub">
-          <span>Kỳ trước {formatVnd(d.previousTotal)}</span>
+          <span>Tháng trước {formatVnd(d.previousTotal)}</span>
         </div>
       </div>
       {queued && (
@@ -130,18 +142,18 @@ function LookBackBody({ d, queued }: { d: CycleLookBack; queued: string | null }
           {queued}
         </p>
       )}
-      {savingsLine(d.savings) && (
+      {savingsLine(d.month, d.savings) && (
         <p class="status-row" style={{ padding: "10px 14px 0" }}>
-          {savingsLine(d.savings)}
+          {savingsLine(d.month, d.savings)}
         </p>
       )}
       {isEmptyLookBack(d) ? (
-        <Empty title={LOOK_BACK_EMPTY} />
+        <Empty state={EMPTY_STATES.spending} />
       ) : wide ? (
-        <LookBackTable d={d} rows={rows} />
+        <LookBackTable d={d} groups={groups} rows={rows} />
       ) : (
         <div class="blist">
-          {d.groups.map((g) => (
+          {groups.map((g) => (
             <GroupItem key={g.id} id={g.id} g={g} rows={rows} />
           ))}
           {rows.interest && (
@@ -180,6 +192,8 @@ interface Rows {
   open: string | null;
   toggle: (id: string) => void;
   drill: (c: LookBackCategory) => void;
+  /** Chữ mờ "Trả gốc … không tính vào chi" của hàng nhóm Trả nợ; nhóm khác null. */
+  principal: (groupId: string) => string | null;
   interest: boolean;
   ungrouped: boolean;
 }
@@ -193,11 +207,12 @@ const SortLink = () => (
 
 type GroupLike = Pick<LookBackGroup, "name" | "essential" | "spent" | "previousSpent" | "pct" | "left" | "over" | "categories">;
 
-/** Điện thoại: một nhóm một hàng — tên, chip Thiết yếu, đã chi; thanh (đầy tối đa 100%) và "còn / vượt"; so kỳ trước. Chạm → danh mục. */
+/** Điện thoại: một nhóm một hàng — tên, chip Thiết yếu, đã chi; thanh (đầy tối đa 100%) và "còn / vượt"; so tháng trước. Chạm → danh mục. */
 function GroupItem({ id, g, rows }: { id: string; g: GroupLike; rows: Rows }) {
   const bar = barPct(g);
   const limit = limitText(g);
   const open = rows.open === id;
+  const principal = rows.principal(id);
   return (
     <>
       <button type="button" class="tier" aria-expanded={open} onClick={() => rows.toggle(id)}>
@@ -205,11 +220,9 @@ function GroupItem({ id, g, rows }: { id: string; g: GroupLike; rows: Rows }) {
           <span>{g.name}</span>
           {g.essential && <span class="chip">Thiết yếu</span>}
         </div>
-        <div class="amt">
-          <Money value={g.spent} tone={false} />
-        </div>
+        <div class="amt">{principal && g.spent === 0 ? null : <Money value={g.spent} tone={false} />}</div>
         <div class="tsub">
-          <span>{compareText(g.spent, g.previousSpent)}</span>
+          <span>{principal ?? compareText(g.spent, g.previousSpent)}</span>
           <span>{limit && `${limit} · ${g.pct}%`}</span>
         </div>
         {bar !== null && <Bar pct={bar} tone={g.over ? "bad" : undefined} />}
@@ -229,7 +242,7 @@ function GroupItem({ id, g, rows }: { id: string; g: GroupLike; rows: Rows }) {
 }
 
 /** Hàng Lãi vay: mỗi khoản nợ có lãi một dòng phụ — ngày trả, lãi dự kiến, đã trả (ledger UC-108 bước 4). */
-function InterestLines({ d }: { d: CycleLookBack }) {
+function InterestLines({ d }: { d: LookBack }) {
   if (d.interest.lines.length === 0) return null;
   return (
     <ul class="interest-lines">
@@ -240,16 +253,16 @@ function InterestLines({ d }: { d: CycleLookBack }) {
   );
 }
 
-/** Máy tính: bảng nhóm cột Kỳ này / Kỳ trước / Hạn mức; chạm nhóm mở danh mục ngay dưới. */
-function LookBackTable({ d, rows }: { d: CycleLookBack; rows: Rows }) {
-  const cell = (v: number | null) => (v === null ? "" : <Money value={v} unit={false} mono tone={false} />);
+/** Máy tính: bảng nhóm cột Tháng này / Tháng trước / Hạn mức /tháng; chạm nhóm mở danh mục ngay dưới. */
+function LookBackTable({ d, groups, rows }: { d: LookBack; groups: LookBackGroup[]; rows: Rows }) {
+  const cell = (v: number | null) => (v === null ? "" : <Money value={v} unit={false} tone={false} />);
   const categoryRows = (id: string, categories: LookBackCategory[]) =>
     rows.open === id &&
     categories.map((c) => (
       <tr key={`${id}:${c.categoryId ?? "none"}`}>
         <td style={{ paddingLeft: "28px" }}>
           {c.categoryId ? (
-            <button type="button" class="link" onClick={() => rows.drill(c)}>
+            <button type="button" class="tx-open" onClick={() => rows.drill(c)}>
               {c.name}
             </button>
           ) : (
@@ -263,7 +276,7 @@ function LookBackTable({ d, rows }: { d: CycleLookBack; rows: Rows }) {
     ));
   const groupCell = (id: string, name: string, sub: preact.ComponentChildren) => (
     <td>
-      <button type="button" class="link" aria-expanded={rows.open === id} onClick={() => rows.toggle(id)}>
+      <button type="button" class="tx-open" aria-expanded={rows.open === id} onClick={() => rows.toggle(id)}>
         {name}
       </button>
       {sub && " "}
@@ -276,20 +289,21 @@ function LookBackTable({ d, rows }: { d: CycleLookBack; rows: Rows }) {
         <thead>
           <tr>
             <th scope="col">Nhóm</th>
-            <th scope="col">Kỳ này ₫</th>
-            <th scope="col">Kỳ trước ₫</th>
-            <th scope="col">Hạn mức ₫</th>
+            <th scope="col">{d.next === null ? "Tháng này ₫" : `Tháng ${Number(d.month.slice(5, 7))} ₫`}</th>
+            <th scope="col">Tháng trước ₫</th>
+            <th scope="col">Hạn mức/tháng ₫</th>
           </tr>
         </thead>
         <tbody>
-          {d.groups.map((g) => {
+          {groups.map((g) => {
             const bar = barPct(g);
             const limit = limitText(g);
+            const principal = rows.principal(g.id);
             return [
               <tr key={g.id}>
-                {groupCell(g.id, g.name, g.essential && <span class="chip">Thiết yếu</span>)}
-                <td class="num">{cell(g.spent)}</td>
-                <td class="num">{cell(g.previousSpent)}</td>
+                {groupCell(g.id, g.name, [g.essential && <span class="chip">Thiết yếu</span>, principal && <div class="sub-line">{principal}</div>])}
+                <td class="num">{principal && g.spent === 0 ? "" : cell(g.spent)}</td>
+                <td class="num">{principal && g.previousSpent === 0 ? "" : cell(g.previousSpent)}</td>
                 <td class="num">
                   {cell(g.limit)}
                   {bar !== null && (
@@ -331,7 +345,7 @@ function LookBackTable({ d, rows }: { d: CycleLookBack; rows: Rows }) {
             categoryRows("ungrouped", d.ungrouped.categories),
           ]}
           <tr class="dk-total">
-            <td>Đã chi kỳ này</td>
+            <td>{d.next === null ? "Đã chi tháng này" : `Đã chi tháng ${Number(d.month.slice(5, 7))}`}</td>
             <td class="num">{cell(d.total)}</td>
             <td class="num">{cell(d.previousTotal)}</td>
             <td />
@@ -371,305 +385,245 @@ function useAssetBuys(): Resource<TxRow[]> {
   return { ...st, reload };
 }
 
-/**
- * Ví & quỹ › Tích luỹ (pwa UC-707, ADR-122): card đầu đọc `pockets.savings` — cùng số thẻ Tích luỹ ở Hôm nay; tài sản đang giữ
- * và nút Mua tài sản (UC-707 AC-37: không còn phần cách tính cũ, không gọi /v1/wealth-building).
- */
-function WealthBuildingTab() {
-  const app = useApp();
-  const snap = viewSnapshot(app);
-  const [buying, setBuying] = useState(false);
-  const txs = useAssetBuys();
-  const wide = useWide();
-  if (!snap) return <Skeleton rows={4} />;
-  const savings = savingsCard(snap.pockets, snap.payCycle);
-  const assets = (txs.data ?? []).filter((r) => r.status === "active");
-  const assetLabel = (k: string | null) => ASSET_KINDS.find((a) => a.value === k)?.label ?? k ?? "";
-
-  const current = (
-    <>
-      {savings && (
-        <section class="card pocket">
-          <div class="pocket-h">
-            <h2>Tích luỹ</h2>
-          </div>
-          {savings.empty ? (
-            <div class="pocket-empty">
-              <button type="button" class="link" style={{ textAlign: "left" }} onClick={() => go("settings", { settingsFocus: "pockets" })}>
-                {NO_SAVINGS_ACCOUNT}
-              </button>
-            </div>
-          ) : (
-            <>
-              <div class="pocket-total">{savings.total}</div>
-              <ul class="hero-parts">
-                {savings.lines.map((l) => (
-                  <li key={l.label}>
-                    <span>{l.label}</span>
-                    <span>{l.value}</span>
-                  </li>
-                ))}
-              </ul>
-              <div class="pocket-meta">
-                <p>{savings.change}</p>
-                <p>{savings.prev}</p>
-                <div class="near-foot" style={{ borderTop: 0, paddingTop: 0, marginTop: 2 }}>
-                  <span>{savings.pct}</span>
-                  <button type="button" class="link" onClick={() => go("settings", { settingsFocus: "parameters" })}>
-                    Đổi ›
-                  </button>
-                </div>
-              </div>
-            </>
-          )}
-        </section>
-      )}
-      <Card title="Tài sản đang giữ" flush>
-        <Loadable res={txs}>
-          {() =>
-            assets.length === 0 ? (
-              <Empty title="Chưa mua tài sản nào.">Tiền Tích luỹ đang nằm ở dạng tiền mặt. Giá tốt thì mua vàng.</Empty>
-            ) : (
-              <table class="data">
-                <thead>
-                  <tr>
-                    <th scope="col">Loại</th>
-                    <th scope="col">Ngày</th>
-                    <th scope="col">Số tiền ₫</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {assets.map((r) => (
-                    <tr key={r.id} class="tx-row" onClick={() => openTx(r.id, r)}>
-                      <td>
-                        <button type="button" class="tx-open">
-                          {assetLabel(r.asset_kind)}
-                        </button>
-                        {r.note && <div class="sub-line">{maskAmounts(r.note)}</div>}
-                      </td>
-                      <td>{shortDate(r.at)}</td>
-                      <td class="num">
-                        <Money value={r.amount} unit={false} mono />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )
-          }
-        </Loadable>
-        <div class="pad">
-          <button type="button" class="btn btn-primary btn-wide" onClick={() => setBuying(true)}>
-            Mua tài sản
-          </button>
-        </div>
-      </Card>
-    </>
-  );
-
-  return (
-    <>
-      {wide ? <div class="dk-cols">{current}</div> : current}
-      {buying && <OtherEntrySheet kind="buy_asset" amount={0} title="Mua tài sản" onClose={() => setBuying(false)} />}
-    </>
-  );
-}
-
-// ── Tài khoản ──────────────────────────────────────────────────────
+// ── Ba ngăn ────────────────────────────────────────────────────────
 /** Dòng phụ của hàng "Tiền thật đang có" (pwa UC-707 AC-31). */
 function accountsTotalNote(hasCredit: boolean, hasExcluded: boolean): string | null {
-  const parts = [hasCredit ? "đã trừ dư nợ thẻ" : null, hasExcluded ? "gồm cả tiền Tích luỹ, Dự phòng và tài khoản ngoài ngăn — tiền vận hành xem ở Hôm nay" : null];
+  const parts = [hasCredit ? "đã trừ dư nợ thẻ" : null, hasExcluded ? "gồm cả Tích luỹ, Dự phòng, ngoài ngăn" : null];
   const text = parts.filter(Boolean).join(" · ");
   return text || null;
 }
 
+/** Quá chừng này ngày chưa nhập số dư thì tài khoản nhập tay hiện chip "chưa đối soát". */
+const COUNT_STALE_DAYS = 30;
+
+/**
+ * Hàng tài khoản (DESIGN §4.5, K-010): tên · số trong sổ; một dòng phụ ("SePay" / "nhập tay" · "N chưa gán"); chạm cả hàng mở
+ * nhập số dư. Sổ lệch ngân hàng: chip "lệch" + số lệch dưới số dư; tài khoản nhập tay chưa nhập số dư lần nào hoặc quá 30 ngày:
+ * chip "chưa đối soát". Khoản gửi kỳ hạn là hàng con thụt 16px.
+ */
+function AccountItem({ item: { row: r, child }, boot, onCount }: { item: NestedAccount<AccountRow>; boot: Bootstrap | null; onCount: (id: string) => void }) {
+  const feed = boot?.accounts.find((a) => a.id === r.accountId)?.sepayEnabled ?? false;
+  const drift = driftOf(r);
+  const stale = !feed && (!r.lastCountAt || Date.now() - Date.parse(r.lastCountAt) > COUNT_STALE_DAYS * 86_400_000);
+  return (
+    <Row
+      title={
+        <>
+          {r.name}
+          {drift !== null ? <Chip tone="neg">lệch</Chip> : stale && <Chip tone="warn">chưa đối soát</Chip>}
+        </>
+      }
+      sub={[feed ? "SePay" : "nhập tay", r.pendingCount ? `${r.pendingCount} chưa gán` : null].filter(Boolean).join(" · ")}
+      value={<Money value={r.bookBalance} />}
+      valueSub={drift !== null && <Money value={drift} signed tone={false} class="neg" />}
+      indent={child}
+      onClick={() => onCount(r.accountId)}
+    />
+  );
+}
+
+/** Tiêu đề thẻ ngăn: chấm 8px màu ngăn · tên · ⓘ sát tên (DESIGN §4.2). */
+function PocketTitle({ pocket, label, term }: { pocket: "operating" | "savings" | "reserve" | "outside"; label: string; term?: "operating" | "savings" | "reserve" }) {
+  return (
+    <span class="card-t">
+      <i class={`card-head-dot pocket-${pocket}`} aria-hidden="true" />
+      {label}
+      {term && <InfoTip term={term} />}
+    </span>
+  );
+}
+
 function AccountsTab() {
-  const { boot, snap } = useApp();
+  const app = useApp();
+  const { boot } = app;
+  const snap = viewSnapshot(app);
   const hasExcluded = (snap?.nearSpend?.excluded.length ?? 0) > 0;
   const res = useResource<AccountRow[]>("/v1/accounts");
-  // Khoản gửi kỳ hạn lồng dưới mẹ (ADR-140, UC-707 AC-39): quan hệ mẹ con lấy từ snapshot (`pockets.*.accounts[].parentId`).
   const parentOf = new Map(
     snap?.pockets ? [snap.pockets.savings, snap.pockets.reserve, snap.pockets.operating, snap.pockets.outside].flatMap((p) => p.accounts.map((a) => [a.id, a.parentId ?? null] as const)) : [],
   );
   const nest = (rows: AccountRow[]) => nestAccounts(rows, (r) => ({ id: r.accountId, name: r.name, balance: r.bookBalance, parentId: parentOf.get(r.accountId) ?? null }));
   const [counting, setCounting] = useState<string | null>(null);
-  const wide = useWide();
+  const [buying, setBuying] = useState(false);
+  const txs = useAssetBuys();
+  const assets = (txs.data ?? []).filter((r) => r.status === "active");
+  const assetLabel = (k: string | null) => ASSET_KINDS.find((a) => a.value === k)?.label ?? k ?? "";
+  const savings = savingsCard(snap?.pockets, snap?.month);
+  const reserve = reserveCard(snap?.pockets);
+
+  const operatingIds = new Set(snap?.pockets?.operating.accounts.map((a) => a.id) ?? []);
+  const savingsIds = new Set(snap?.pockets?.savings.accounts.map((a) => a.id) ?? []);
+  const reserveIds = new Set(snap?.pockets?.reserve.accounts.map((a) => a.id) ?? []);
+  const outsideIds = new Set(snap?.pockets?.outside.accounts.map((a) => a.id) ?? []);
+
   return (
     <>
-      <Card
-        title="Tài khoản"
-        flush
-        note="Muốn chắc số trong sổ đúng: đếm tiền hoặc xem app ngân hàng rồi bấm Nhập số dư — chênh bao nhiêu app ghi một khoản điều chỉnh. Lệch = sổ khác các giao dịch ngân hàng đã gán; khoản chưa gán không tính là lệch."
-      >
-        <Loadable res={res}>
-          {(rows) => {
-            const sum = accountsTotal(rows);
-            const note = accountsTotalNote(sum.hasCredit, hasExcluded);
-            return wide ? <AccountsWide rows={nest(rows)} onCount={setCounting} total={rows.length > 0 ? { value: sum.total, note } : null} /> : (
-            // Điện thoại: mỗi tài khoản một hàng, số sổ to bên phải; dòng "lệch" chỉ có nghĩa với tài khoản SePay
-            // nên chỉ hiện ở đó — không còn bảng bốn cột đầy "—" (audit 261001 F21).
-            <div class="blist">
+      <Loadable res={res}>
+        {(rows) => {
+          const sum = accountsTotal(rows);
+          const note = accountsTotalNote(sum.hasCredit, hasExcluded);
+          const allNested = nest(rows);
+          const opNested = allNested.filter(({ row }) => operatingIds.has(row.accountId));
+          const svNested = allNested.filter(({ row }) => savingsIds.has(row.accountId));
+          const rsNested = allNested.filter(({ row }) => reserveIds.has(row.accountId));
+          const outNested = allNested.filter(({ row }) => outsideIds.has(row.accountId));
+
+          return (
+            <>
               {rows.length > 0 && (
-                <div class="tier accounts-total">
-                  <div class="nm">Tiền thật đang có</div>
-                  <div class="amt">
-                    <Money value={sum.total} />
-                  </div>
-                  {note && (
-                    <div class="tsub">
-                      <span>{note}</span>
-                    </div>
-                  )}
-                </div>
+                <Card flush>
+                  <Row total title="Tiền thật đang có" sub={note} value={<Money value={sum.total} />} valueSub={<span class="row-act">Báo cáo ›</span>} onClick={() => go("net-worth")} />
+                </Card>
               )}
-              {nest(rows).map(({ row: r, child, sub }) => {
-                const feed = boot?.accounts.find((a) => a.id === r.accountId)?.sepayEnabled ?? false;
-                const drift = driftOf(r);
-                return (
-                  <div class={child ? "tier acct-child" : "tier"} key={r.accountId}>
-                    <div class="nm">
-                      {child ? `↳ ${r.name}` : r.name}
-                      {drift !== null && <span class="chip bad">lệch</span>}
-                    </div>
-                    <div class="amt">
-                      <Money value={r.bookBalance} />
-                    </div>
-                    <div class="tsub">
-                      <span>{feed ? "SePay tự cập nhật" : "nhập tay"}</span>
-                      <span>số trong sổ</span>
-                    </div>
-                    {sub && (
-                      <div class="tsub">
-                        <span>{sub}</span>
-                      </div>
-                    )}
-                    {drift !== null && (
-                      <div class="tsub">
-                        <span>{DRIFT_LABEL}</span>
-                        <span>
-                          <Money value={drift} signed tone={false} class="neg" />
-                        </span>
-                      </div>
-                    )}
-                    {!!r.pendingCount && (
-                      <div class="tsub">
-                        <span>
-                          {r.pendingCount} giao dịch chưa gán · vào trừ ra <Money value={r.pendingNet ?? 0} signed tone={false} />
-                        </span>
-                      </div>
-                    )}
-                    {/* Số dư thật chỉ đến từ người nhà nhập — kể cả tài khoản SePay (ADR-87). */}
-                    <div class="bneg calm">
-                      <span>{r.lastCountAt ? `lần nhập gần nhất ${shortDate(r.lastCountAt)}` : "chưa nhập số dư lần nào"}</span>
-                      <button type="button" class="btn" onClick={() => setCounting(r.accountId)}>
-                        Nhập số dư
+
+              <Card title={<PocketTitle pocket="operating" label="Vận hành" term="operating" />} right={snap?.pockets ? <Money value={snap.pockets.operating.total} tone={false} /> : undefined} flush>
+                {opNested.length === 0 ? (
+                  <Empty state={EMPTY_STATES.pocketOperating} onAction={() => go("settings", { settingsFocus: "pockets" })} />
+                ) : (
+                  opNested.map((item) => <AccountItem key={item.row.accountId} item={item} boot={boot} onCount={setCounting} />)
+                )}
+              </Card>
+
+              <Card title={<PocketTitle pocket="savings" label="Tích luỹ" term="savings" />} right={snap?.pockets ? <Money value={snap.pockets.savings.total} tone={false} /> : undefined} flush>
+                {svNested.length === 0 ? (
+                  <Empty state={EMPTY_STATES.pocketSavings} onAction={() => go("settings", { settingsFocus: "pockets" })} />
+                ) : (
+                  svNested.map((item) => <AccountItem key={item.row.accountId} item={item} boot={boot} onCount={setCounting} />)
+                )}
+                {savings && !savings.empty && (
+                  <div class="pocket-meta list-sec">
+                    <p>{savings.change}</p>
+                    <p>{savings.prev}</p>
+                    <div class="near-foot list-foot-row">
+                      <span>{savings.pct}</span>
+                      <button type="button" class="link" onClick={() => go("settings", { settingsFocus: "parameters" })}>
+                        Đổi ›
                       </button>
                     </div>
                   </div>
-                );
-              })}
-            </div>
+                )}
+                <div class="list-h">Tài sản đang giữ</div>
+                <Loadable res={txs}>
+                  {() =>
+                    assets.length === 0 ? (
+                      <Empty state={EMPTY_STATES.holdingAssets} onAction={() => setBuying(true)} />
+                    ) : (
+                      <table class="data">
+                        <thead>
+                          <tr>
+                            <th scope="col">Loại</th>
+                            <th scope="col">Ngày</th>
+                            <th scope="col">Số tiền ₫</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {assets.map((r) => (
+                            <tr key={r.id} class="tx-row" onClick={() => openTx(r.id, r)}>
+                              <td>
+                                <button type="button" class="tx-open">
+                                  {assetLabel(r.asset_kind)}
+                                </button>
+                                {r.note && <div class="sub-line">{maskAmounts(r.note)}</div>}
+                              </td>
+                              <td>{shortDate(r.at)}</td>
+                              <td class="num">
+                                <Money value={r.amount} unit={false} />
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )
+                  }
+                </Loadable>
+                {assets.length > 0 && (
+                  <div class="list-foot">
+                    <button type="button" class="btn" onClick={() => setBuying(true)}>
+                      Mua tài sản
+                    </button>
+                  </div>
+                )}
+              </Card>
+
+              <Card title={<PocketTitle pocket="reserve" label="Dự phòng" term="reserve" />} right={snap?.pockets ? <Money value={snap.pockets.reserve.total} tone={false} /> : undefined} flush>
+                {rsNested.length === 0 ? (
+                  <Empty state={EMPTY_STATES.pocketReserve} onAction={() => go("settings", { settingsFocus: "pockets" })} />
+                ) : (
+                  rsNested.map((item) => <AccountItem key={item.row.accountId} item={item} boot={boot} onCount={setCounting} />)
+                )}
+                {reserve && !reserve.empty && (
+                  <>
+                    <div class="list-h">Mục tiêu</div>
+                    {reserve.groups.length === 0 ? (
+                      <Empty state={EMPTY_STATES.reserveGoals} onAction={() => go("settings", { settingsFocus: "pocket-goals" })} />
+                    ) : (
+                      reserve.groups.map((grp) => (
+                        <Fragment key={grp.key}>
+                          {grp.head && <Row title={grp.head.name} value={grp.head.balance} sub={grp.head.meta} subTone={grp.head.tone === "warn" ? "warn" : undefined} />}
+                          {grp.goals.map((g) => (
+                            <Row
+                              key={g.id}
+                              title={g.name}
+                              sub={g.amount}
+                              subTone={g.over ? "neg" : undefined}
+                              value={
+                                g.needsAccount ? (
+                                  <button type="button" class="row-act" onClick={() => go("settings", { settingsFocus: "pocket-goals" })}>
+                                    Mở tài khoản ›
+                                  </button>
+                                ) : g.pct !== null ? (
+                                  `${g.pct}%`
+                                ) : undefined
+                              }
+                              valueSub={g.full && <Chip tone="pos">đủ</Chip>}
+                              track={g.pct !== null ? { pct: g.pct, pocket: "reserve", tone: g.full ? "pos" : undefined } : null}
+                              indent={Boolean(grp.head)}
+                            />
+                          ))}
+                          {grp.interest && <p class="row-note">{grp.interest}</p>}
+                          {grp.note && <p class="row-note">{grp.note}</p>}
+                        </Fragment>
+                      ))
+                    )}
+                    <Row
+                      title={
+                        <>
+                          {reserve.peace.title}
+                          <InfoTip term="peace" />
+                        </>
+                      }
+                      sub={[reserve.peace.months, reserve.peace.note].filter(Boolean).join(" · ") || undefined}
+                      subTone={reserve.peace.bad ? "neg" : undefined}
+                      value={reserve.peace.pct !== null ? `${reserve.peace.pct}%` : undefined}
+                      track={reserve.peace.pct !== null ? { pct: reserve.peace.pct, pocket: "reserve" } : null}
+                    />
+                    {reserve.reward && (
+                      <Row
+                        title={
+                          <>
+                            {reserve.reward}
+                            <InfoTip term="reward" />
+                          </>
+                        }
+                      />
+                    )}
+                  </>
+                )}
+              </Card>
+
+              {outNested.length > 0 && (
+                <Card title={<PocketTitle pocket="outside" label="Ngoài ngăn" />} right={snap?.pockets ? <Money value={snap.pockets.outside.total} tone={false} /> : undefined} flush>
+                  {outNested.map((item) => (
+                    <AccountItem key={item.row.accountId} item={item} boot={boot} onCount={setCounting} />
+                  ))}
+                </Card>
+              )}
+            </>
           );
-          }}
-        </Loadable>
-      </Card>
+        }}
+      </Loadable>
       {counting && <CountSheet accountId={counting} onClose={() => setCounting(null)} />}
+      {buying && <OtherEntrySheet kind="buy_asset" amount={0} title="Mua tài sản" onClose={() => setBuying(false)} />}
     </>
   );
 }
-
-const ACCOUNT_KIND: Record<string, string> = { bank: "Ngân hàng", cash: "Tiền mặt", ewallet: "Ví điện tử", credit: "Thẻ tín dụng" };
-
-/** Máy tính: mọi cột của /v1/accounts cùng lúc — sổ, feed, lệch, chưa gán, lần cuối; khoản gửi kỳ hạn lồng dưới mẹ. */
-function AccountsWide({ rows, onCount, total }: { rows: NestedAccount<AccountRow>[]; onCount: (id: string) => void; total: { value: number; note: string | null } | null }) {
-  const { boot } = useApp();
-  const money = (v: number | null) => (v === null ? "—" : <Money value={v} unit={false} mono />);
-  return (
-    <div class="table-wrap">
-      <table class="data dk-table">
-        <thead>
-          <tr>
-            <th scope="col">Tài khoản</th>
-            <th scope="col">Sổ</th>
-            <th scope="col">Số SePay</th>
-            <th scope="col">Lệch</th>
-            <th scope="col">Chưa gán</th>
-            <th scope="col">Gần nhất</th>
-            <th scope="col">
-              <span class="sr-only">Việc</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(({ row: r, child, sub }) => {
-            const feed = boot?.accounts.find((a) => a.id === r.accountId)?.sepayEnabled ?? false;
-            const drift = driftOf(r);
-            return (
-              <tr key={r.accountId} class={child ? "acct-child" : undefined}>
-                <td>
-                  {child ? `↳ ${r.name}` : r.name}
-                  <div class="sub-line">
-                    {ACCOUNT_KIND[r.kind] ?? r.kind} · {feed ? "SePay tự cập nhật" : "nhập tay"}
-                  </div>
-                  {sub && <div class="sub-line">{sub}</div>}
-                </td>
-                <td class="num">{money(r.bookBalance)}</td>
-                <td class="num">{money(r.feedBalance)}</td>
-                {/* Không `num` (nowrap): chữ lệch dài, phải xuống dòng; số vẫn mono qua Money. */}
-                <td>
-                  {drift !== null ? (
-                    <>
-                      <Money value={drift} signed unit={false} mono tone={false} class="neg" />
-                      <div class="sub-line">{DRIFT_LABEL}</div>
-                    </>
-                  ) : r.bookDrift === null ? (
-                    "—"
-                  ) : (
-                    "khớp"
-                  )}
-                </td>
-                <td class="num">
-                  {r.pendingCount ? (
-                    <>
-                      {r.pendingCount} khoản
-                      <div class="sub-line">
-                        <Money value={r.pendingNet ?? 0} signed unit={false} mono tone={false} />
-                      </div>
-                    </>
-                  ) : (
-                    "—"
-                  )}
-                </td>
-                <td class="dk-when">
-                  {r.lastAt ? shortDate(r.lastAt) : "—"}
-                  {r.lastCountAt && <div class="sub-line">đếm {shortDate(r.lastCountAt)}</div>}
-                </td>
-                <td>
-                  <div class="dk-act">
-                    <button type="button" class="btn" onClick={() => onCount(r.accountId)}>
-                      Nhập số dư thật
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            );
-          })}
-          {total && (
-            <tr class="dk-total">
-              <td>
-                Tiền thật đang có
-                {total.note && <div class="sub-line">{total.note}</div>}
-              </td>
-              <td class="num">
-                <Money value={total.value} unit={false} mono />
-              </td>
-              <td colSpan={5} />
-            </tr>
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-

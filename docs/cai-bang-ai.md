@@ -106,7 +106,7 @@ tắt để họ gõ vào màn **Thiết lập**:
 3. **Mỗi tài khoản thuộc ngăn nào**: Vận hành (tiền chi hằng ngày — mặc định, thẻ tín dụng cũng để ở đây), Tích luỹ (tiền
    để dành lâu dài), Dự phòng (các khoản đã biết sẽ phải trả như học phí, thuế; tài khoản Dự phòng không gắn mục tiêu là
    phần an tâm) hay ngoài ngăn? Không chắc thì để Vận hành.
-4. **Ngày lương** hằng tháng (mặc định ngày 10) và **% Tích luỹ** trích mỗi kỳ lương (mặc định 10%).
+4. **Ngày lương** hằng tháng (mặc định ngày 10) và **% Tích luỹ** trích mỗi khoản lương (mặc định 10%).
 5. **Có thu nhập phải tự nộp thuế** (làm tự do, cho thuê…)? Có → app tạo mục tiêu Dự phòng "Thuế" (10% thu chịu thuế).
 6. Tuỳ chọn: **nhóm chi thiết yếu** (ăn uống, nhà ở, đi lại, điện nước — mặc định cả bốn) và **mục tiêu Dự phòng** (tên,
    số mỗi tháng, mấy tháng một lần — ví dụ học phí 2.000.000 mỗi tháng, đóng 3 tháng một lần). **Mỗi mục tiêu là một tài

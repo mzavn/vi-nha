@@ -201,7 +201,7 @@ describe("số dư đầu là mốc: không ghi giao dịch trước ngày mở 
   beforeEach(() => {
     raw.prepare("UPDATE accounts SET opened_at = '2026-10-01', opening_balance = 35906 WHERE id = 'cash-wife'").run();
   });
-  const MSG = "Ngày này trước ngày mở sổ của tài khoản Tiền mặt (vợ) (1/10/2026) — số dư đầu đã tính khoản này.";
+  const MSG = "Ngày này trước ngày mở sổ tài khoản Tiền mặt (vợ) (1/10/2026), số dư đầu đã tính khoản này.";
 
   it("nhập tay ngày trước mốc (theo giờ VN) → 400 before_opening, sổ không đổi; đúng ngày mở sổ thì ghi được", async () => {
     const spend = (at: string) => call("POST", "/v1/transactions", { meaning: "spend", amount: 24_400, category_id: "groceries", account_id: "cash-wife", at }, { "X-Member-Id": "wife" });
@@ -251,7 +251,7 @@ describe("đối soát, đường đã bỏ", () => {
     expect((await call("GET", "/v1/tichsan")).status).toBe(404);
   });
 
-  it.each(["/v1/allocate", "/v1/allocate/preview", "/v1/month-close", "/v1/transfer-orders", "/v1/transfer-orders/1/done"])(
+  it.each(["/v1/allocate", "/v1/allocate/preview", "/v1/transfer-orders", "/v1/transfer-orders/1/done"])(
     "UC-101: đường của mô hình ví đã bỏ %s → 410 model_changed",
     async (path) => {
       for (const method of ["GET", "POST"]) {
@@ -260,26 +260,34 @@ describe("đối soát, đường đã bỏ", () => {
       }
     },
   );
+
+  it("UC-1205 AC-7: đường kỳ lương đã bỏ /v1/pay-cycle-tasks/*, /v1/pay-cycle/goal-amounts/* → 404", async () => {
+    expect((await call("POST", "/v1/pay-cycle-tasks/1/done", {})).status).toBe(404);
+    expect((await call("PATCH", "/v1/pay-cycle-tasks/1", { amount: 1 })).status).toBe(404);
+    expect((await call("PUT", "/v1/pay-cycle/goal-amounts/x", { amount: 1 })).status).toBe(404);
+  });
 });
 
 describe("nguồn thu, tiền người thuê (không ví, không chia)", () => {
-  it("UC-101 AC-12: tiền người thuê tự gắn nguồn cho thuê, vào ngăn của tài khoản nhận; không chia, không ví, không mở kỳ", async () => {
+  it("UC-101 AC-12: tiền người thuê tự gắn nguồn cho thuê, vào ngăn của tài khoản nhận; không chia, không ví, không phải lương (không nhắc trích)", async () => {
     raw.prepare("INSERT INTO tenants (id, name) VALUES ('tenant-binh', 'Anh Bình')").run();
     const before = (await call("GET", "/v1/snapshot")).json.data.pockets.operating.total;
     const res = await call("POST", "/v1/transactions", { meaning: "income", account_id: "vcb-husband", amount: 5_191_667, tenant_id: "tenant-binh" });
     expect(res.json.data.tx).toMatchObject({ legacy_class: null, tenant_id: "tenant-binh", income_stream_id: "rental" });
-    expect(res.json.data.effects.cycle).toBeNull();
+    expect(res.json.data.effects.savings).toBeNull();
+    expect(res.json.data.tx.is_salary).toBe(0);
     expect(raw.prepare("SELECT COUNT(*) AS n FROM transactions WHERE meaning = 'fund'").get()).toEqual({ n: 0 });
     expect((await call("GET", "/v1/snapshot")).json.data.pockets.operating.total - before).toBe(5_191_667);
-    expect(raw.prepare("SELECT COUNT(*) AS n FROM pay_cycles").get()).toEqual({ n: 0 });
+    expect(raw.prepare("SELECT COUNT(*) AS n FROM month_tasks").get()).toEqual({ n: 0 });
   });
 
-  it("UC-101 AC-13: nguồn thu chọn tay được lưu trên khoản thu và quyết mở kỳ lương mặc định; gắn nguồn cho khoản không phải thu nhập bị từ chối", async () => {
+  it("UC-101 AC-13: nguồn thu chọn tay được lưu trên khoản thu và quyết \"Đây là lương\" mặc định; gắn nguồn cho khoản không phải thu nhập bị từ chối", async () => {
     const wife = await call("POST", "/v1/transactions", { meaning: "income", amount: 11_000_000, account_id: "vcb-husband", income_stream_id: "salary-wife" });
     expect(wife.json.data.tx.income_stream_id).toBe("salary-wife");
-    expect(wife.json.data.effects.cycle).toBeNull();
+    expect(wife.json.data.effects.savings).toBeNull();
     const husband = await call("POST", "/v1/transactions", { meaning: "income", amount: 20_000_000, account_id: "vcb-husband", income_stream_id: "salary-husband" });
-    expect(husband.json.data.effects.cycle).toMatchObject({ opened: true });
+    expect(husband.json.data.effects.savings).toMatchObject({ amount: expect.any(Number) });
+    expect(husband.json.data.tx.is_salary).toBe(1);
     const wrong = await call("POST", "/v1/transactions", { meaning: "spend", amount: 1000, category_id: "groceries", income_stream_id: "salary-wife" });
     expect(wrong.json.error?.code).toBe("income_only");
     const unknown = await call("POST", "/v1/transactions", { meaning: "income", amount: 1000, account_id: "vcb-husband", tenant_id: "khong-co" });

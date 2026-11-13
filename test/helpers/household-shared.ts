@@ -52,7 +52,7 @@ export function householdShared({ linked = true, cycle = true }: { linked?: bool
   `);
   if (cycle) {
     const income = sharedTx(raw, { at: "2026-11-10 08:00", meaning: "income", amount: 20_000_000, to: "vcb-husband" });
-    raw.prepare("INSERT INTO pay_cycles (income_tx_id, started_at, payday, prev_operating) VALUES (?, ?, '2026-11-10', 3000000)").run(income, vnAt("2026-11-10 08:00"));
+    raw.prepare("UPDATE transactions SET is_salary = 1 WHERE id = ?").run(income);
   }
   return raw;
 }

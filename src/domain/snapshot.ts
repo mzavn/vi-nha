@@ -1,7 +1,8 @@
 // Màn "Hôm nay", tin Telegram sáng và tool MCP `get_snapshot` đều lấy số từ đúng một hàm này.
 
-import type { PayCycleView, QrTarget } from "./pay-cycle";
-import { dayKey, monthKey, weekKey, weeksLeftInMonth } from "./period";
+import type { MoneyAge } from "./money-age";
+import type { MonthClose, MonthView, QrTarget } from "./month-tasks";
+import { dayKey, weekKey, weeksLeftInMonth } from "./period";
 import type { Pocket, PocketsView } from "./pockets";
 
 export interface SnapshotData {
@@ -18,14 +19,18 @@ export interface SnapshotData {
   pockets: PocketsView;
   /** Ngày lương (`config.payday_day`, 1–31). */
   paydayDay: number;
-  /** Kỳ lương hiện tại và danh sách việc (pocket UC-1205, UC-1206); null = chưa có kỳ. */
-  payCycle: PayCycleView | null;
-  /** Phần chưa làm theo việc ngày lương (ledger UC-103) — trừ trước khi chia theo ngày. */
+  /** Việc theo tháng (pocket UC-1206): nhắc ① trích Tích luỹ, việc chia dư; `goalHint` do `buildSnapshot` điền từ `pockets`. */
+  month: Omit<MonthView, "goalHint">;
+  /** Dư của tháng vừa hết (pocket UC-1207); null = chưa có dữ liệu trước đầu tháng này. */
+  monthClose: MonthClose | null;
+  /** Tuổi tiền ngăn Vận hành (ledger UC-103 AC-27, chỉ đo); null = chưa đủ 10 khoản chi. */
+  moneyAge: MoneyAge | null;
+  /** Lương về sớm (ledger UC-103): ngày lương sắp tới khi đã có khoản lương trong cửa sổ 7 ngày trước nó; null = không. */
+  salaryPayday: string | null;
+  /** Phần chưa làm của các việc tháng đang mở (ledger UC-103) — trừ trước khi chia theo ngày. */
   pendingTasks: number;
   /** Đích của lời nhắc chuyển thêm: tài khoản ngân hàng ngăn Vận hành có số tài khoản đầu tiên (luật QR UC-1206 bước 10), không bị giấu với người xem (access UC-504); null = không có. */
   topUpTo: QrTarget | null;
-  /** Có nguồn đang dùng bật "Mở kỳ lương" (UC-1205 bước 9). */
-  hasCycleStream: boolean;
   /** Màn chuyển đổi còn dở (pocket UC-1208); null = không có / đã xong. */
   conversion: ConversionProgress | null;
 }
@@ -53,7 +58,7 @@ export function paydayIn(year: number, month0: number, paydayDay: number): Date 
 
 /**
  * Ngày lương kế tiếp (`YYYY-MM-DD`) sau `today` (ngày VN, `dayKey`): ngày lương của tháng này nếu hôm nay còn trước nó,
- * ngược lại của tháng sau. Ngày lương là ngày đầu kỳ mới; tháng ít ngày hơn `paydayDay` lấy ngày cuối tháng.
+ * ngược lại của tháng sau. Tháng ít ngày hơn `paydayDay` lấy ngày cuối tháng.
  */
 export function nextPayday(today: string, paydayDay: number): string {
   const [y, m, d] = today.split("-").map(Number) as [number, number, number];
@@ -72,27 +77,27 @@ export interface NearSpendView {
   perMeal: number | null;
   /** 1 lần/ngày: mỗi ngày (đã tròn), tròn xuống 10.000; null khi dưới 10.000. */
   perMarket: number | null;
-  /** Phần chưa làm theo danh sách việc ngày lương (ledger UC-103): trừ trước khi chia theo ngày; 0 khi không có kỳ. */
+  /** Phần chưa làm của các việc tháng đang mở (ledger UC-103): trừ trước khi chia theo ngày. */
   pendingTasks: number;
-  /** R: còn phải trả kỳ này của các mục tiêu trả từ tiền chi tiêu (ADR-141) — trừ trước khi chia theo ngày; 0 khi không có. */
+  /** R: còn phải trả tháng này của các mục tiêu trả từ tiền chi tiêu (ADR-141) — trừ trước khi chia theo ngày; 0 khi không có. */
   goalRemaining: number;
 }
 
-/** Kỳ lương hiện tại cho luật số ngày và phần chưa làm (ledger UC-103, pocket UC-1205 bước 7). */
-export interface NearSpendCycle {
-  /** Ngày lương danh nghĩa của kỳ hiện tại (`payCycle.payday`); null = chưa có kỳ. */
-  cyclePayday: string | null;
+/** Lương về sớm và phần chưa làm cho luật số ngày (ledger UC-103). */
+export interface NearSpendContext {
+  /** Ngày lương sắp tới khi lương đã về sớm (`earlySalaryPayday`); null = không. */
+  salaryPayday: string | null;
   pendingTasks: number;
   /** R (`pockets.operating.remaining`, sau trừ tạm hàng đợi ở PWA); thiếu = 0. */
   goalRemaining?: number;
 }
 
 /**
- * Một hàm cho server và PWA (mọi chỗ tính lại số mỗi ngày): hôm nay trước ngày lương của kỳ hiện tại (lương về sớm) →
- * đếm tới ngày lương sau kỳ đó, còn lại tới ngày lương kế tiếp theo hôm nay; số mỗi ngày chia `amount − pendingTasks − R`.
+ * Một hàm cho server và PWA (mọi chỗ tính lại số mỗi ngày): có `salaryPayday` và hôm nay trước nó (lương về sớm) → đếm tới
+ * ngày lương sau đó, còn lại tới ngày lương kế tiếp theo hôm nay; số mỗi ngày chia `amount − pendingTasks − R`.
  */
-export function nearSpendView(amount: number, today: string, paydayDay: number, cycle: NearSpendCycle = { cyclePayday: null, pendingTasks: 0 }): NearSpendView {
-  const payday = cycle.cyclePayday !== null && today < cycle.cyclePayday ? nextPayday(cycle.cyclePayday, paydayDay) : nextPayday(today, paydayDay);
+export function nearSpendView(amount: number, today: string, paydayDay: number, cycle: NearSpendContext = { salaryPayday: null, pendingTasks: 0 }): NearSpendView {
+  const payday = cycle.salaryPayday !== null && today < cycle.salaryPayday ? nextPayday(cycle.salaryPayday, paydayDay) : nextPayday(today, paydayDay);
   const daysLeft = Math.round((Date.parse(`${payday}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / DAY_MS);
   const floorTo = (n: number, step: number) => {
     const r = Math.floor(n / step) * step;
@@ -121,22 +126,22 @@ export interface NearSpend extends NearSpendView {
   /** Tài khoản đang dùng không thuộc ngăn Vận hành. */
   excluded: { accountId: string; name: string; pocket: Pocket | null }[];
   paydayDay: number;
-  /** Ngày lương danh nghĩa của kỳ hiện tại (null = chưa có kỳ) — PWA tính lại số ngày bằng đúng luật này. */
-  cyclePayday: string | null;
+  /** Lương về sớm (`earlySalaryPayday`; null = không) — PWA tính lại số ngày bằng đúng luật này. */
+  salaryPayday: string | null;
 }
 
 /**
- * Tiền vận hành = tổng ngăn Vận hành, đếm ngược tới ngày lương; số mỗi ngày trừ trước phần chưa làm theo việc ngày lương.
+ * Tiền vận hành = tổng ngăn Vận hành, đếm ngược tới ngày lương; số mỗi ngày trừ trước phần chưa làm của việc tháng đang mở.
  * Không trừ nợ.
  */
-export function nearSpend(operating: PocketsView["operating"], accounts: SnapshotData["accounts"], today: string, paydayDay: number, cycle: NearSpendCycle): NearSpend {
+export function nearSpend(operating: PocketsView["operating"], accounts: SnapshotData["accounts"], today: string, paydayDay: number, cycle: NearSpendContext): NearSpend {
   const ids = new Set(operating.accounts.map((a) => a.id));
   return {
     amount: operating.total,
     accounts: operating.accounts.map((a) => ({ accountId: a.id, name: a.name, balance: a.balance })),
     excluded: accounts.filter((a) => !ids.has(a.id)).map((a) => ({ accountId: a.id, name: a.name, pocket: a.pocket })),
     paydayDay,
-    cyclePayday: cycle.cyclePayday,
+    salaryPayday: cycle.salaryPayday,
     ...nearSpendView(operating.total, today, paydayDay, cycle),
   };
 }
@@ -162,8 +167,8 @@ export interface TopUpInput {
   /** Tiền chi tiêu = tổng ngăn Vận hành. */
   amount: number;
   pendingTasks: number;
-  /** Kỳ hiện tại: phần còn thiếu của ④ → Ví Thưởng đang mở bị bỏ khỏi `need`. */
-  payCycle: Pick<PayCycleView, "tasks"> | null;
+  /** Việc tháng: phần còn thiếu của việc chia dư → Ví Thưởng đang mở bị bỏ khỏi `need`. */
+  month: Pick<MonthView, "tasks"> | null;
   goalRemaining: number;
   pockets: PocketsView;
   target: QrTarget | null;
@@ -174,12 +179,12 @@ export interface TopUpInput {
 const ceilTo = (n: number, step: number) => Math.ceil(n / step) * step;
 
 /**
- * Nhắc chuyển thêm (ADR-141, QĐ3; chủ nhà 12/11 — chỉ nhắc khi quỹ không đủ trả các khoản chắc chắn): need = (phần chưa làm − ④ →
- * Ví Thưởng đang mở) + R (khoản phải trả còn lại theo số kỳ này); không có ăn tiêu ước tính. Y = need − tiền chi tiêu làm tròn
+ * Nhắc chuyển thêm (ADR-141, QĐ3; chủ nhà 12/11 — chỉ nhắc khi quỹ không đủ trả các khoản chắc chắn): need = (phần chưa làm − việc chia
+ * dư → Ví Thưởng đang mở) + R (khoản phải trả còn lại theo số tháng này); không có ăn tiêu ước tính. Y = need − tiền chi tiêu làm tròn
  * lên 100.000; Y ≤ 0 → null. Một hàm cho server và PWA (trừ tạm hàng đợi).
  */
-export function topUpView({ amount, pendingTasks, payCycle, goalRemaining, pockets, target, hidden = [] }: TopUpInput): TopUp | null {
-  const rewardTasks = (payCycle?.tasks ?? []).filter((t) => t.kind === "surplus" && t.toAccountId !== null && t.status === "open").reduce((s, t) => s + t.missing, 0);
+export function topUpView({ amount, pendingTasks, month, goalRemaining, pockets, target, hidden = [] }: TopUpInput): TopUp | null {
+  const rewardTasks = (month?.tasks ?? []).filter((t) => t.kind === "surplus" && t.toAccountId !== null && t.status === "open").reduce((s, t) => s + t.missing, 0);
   const short = pendingTasks - rewardTasks + goalRemaining - amount;
   if (short <= 0) return null;
   const y = ceilTo(short, 100_000);
@@ -210,27 +215,33 @@ export interface ConversionProgress {
 
 export function buildSnapshot(data: SnapshotData) {
   const { now } = data;
+  // Gợi ý dưới nhắc ① (UC-1206 AC-18): mục tiêu tài khoản đầu tiên theo thứ tự ưu tiên còn thiếu.
+  const short = data.pockets.reserve.goals.find((g) => (g.short ?? 0) > 0);
+  const month: MonthView = { ...data.month, goalHint: short ? { goalId: short.id, name: short.name, short: short.short ?? 0 } : null };
   return {
     at: now.toISOString(),
     day: dayKey(now),
     week: { key: weekKey(now), ...weekRange(now), weeksLeftInMonth: weeksLeftInMonth(now) },
-    month: monthKey(now),
+    /** Việc theo tháng (pocket UC-1206): nhắc ① trích Tích luỹ, việc chia dư, Tích luỹ tháng này. */
+    month,
     attention: {
       pendingLogs: data.pending.count,
       pendingNet: data.pending.net,
       drift: data.drift.filter((d) => (d.bookDrift ?? 0) !== 0),
       hiddenPendingLogs: data.hiddenPendingLogs,
     },
-    /** Tiền vận hành (ADR-122): tổng ngăn Vận hành, đếm ngược tới ngày lương, trừ trước việc ngày lương chưa làm. */
+    /** Tiền vận hành (ADR-122): tổng ngăn Vận hành, đếm ngược tới ngày lương, trừ trước việc tháng chưa làm. */
     nearSpend: nearSpend(data.pockets.operating, data.accounts, dayKey(now), data.paydayDay, {
-      cyclePayday: data.payCycle?.payday ?? null,
+      salaryPayday: data.salaryPayday,
       pendingTasks: data.pendingTasks,
       goalRemaining: data.pockets.operating.remaining,
     }),
     /** Nhắc chuyển thêm vào tiền chi tiêu (ADR-141); null = đủ tới ngày lương. */
     topUp: snapshotTopUp(data),
-    payCycle: data.payCycle,
-    paySetup: { hasCycleStream: data.hasCycleStream },
+    /** Dư tháng vừa hết (pocket UC-1207); thẻ Tháng dư chỉ hiện khi `status` = `ask`. */
+    monthClose: data.monthClose,
+    /** Tuổi tiền (ledger UC-103 AC-27, chỉ đo). */
+    moneyAge: data.moneyAge,
     /** Ba ngăn chỉ đọc (pocket UC-1203). */
     pockets: data.pockets,
     /** Màn chuyển đổi một lần (pocket UC-1208); null = không có / đã xong. */
@@ -242,7 +253,7 @@ function snapshotTopUp(data: SnapshotData): TopUp | null {
   return topUpView({
     amount: data.pockets.operating.total,
     pendingTasks: data.pendingTasks,
-    payCycle: data.payCycle,
+    month: data.month,
     goalRemaining: data.pockets.operating.remaining,
     pockets: data.pockets,
     target: data.topUpTo,

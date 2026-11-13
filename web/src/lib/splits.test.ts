@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FROM_INTEREST } from "./goal-choices";
 import { formatVnd } from "./money";
+import { isSalaryDefault } from "./other-entry";
 import { ASSIGN_CHOICES, assignBody, assignToast, counterpartAccounts, hiddenLogsLine, interestToast, linkToast, logChip, manualMatchLabel, validateSplits, type AssignChoice, type AssignRow, type SplitMeaning } from "./splits";
 import type { AccountRef } from "./types";
 
@@ -63,28 +64,36 @@ describe("toast sau khi gán: kết quả kèm hệ quả", () => {
     expect(assignToast(two, none)).toBe("Đã gán 2 dòng.");
   });
 
-  it("UC-706 AC-33: gán lương mở kỳ → toast có 'Kỳ lương mới từ 10/11 · 5 việc'; không chữ 'chia', 'lệnh chuyển'", () => {
+  it("UC-706 AC-33: gán lương có nhắc trích → toast 'Đã gán 20.000.000 ₫ · nhắc trích Tích luỹ 10% = 2.000.000 ₫'; không nhắc → 'Đã gán thu nhập …'; không chữ 'chia', 'lệnh chuyển', 'kỳ lương'", () => {
     const income = [{ meaning: "income" as const, amount: 20_000_000 }];
-    const t = assignToast(income, { ...none, effects: { cycle: { opened: true, startedAt: "2026-11-10T01:00:00Z", payday: "2026-11-10", tasks: 5 }, tasksDone: [] } });
-    expect(t).toBe(`Đã gán ${formatVnd(20_000_000)} · Kỳ lương mới từ 10/11 · 5 việc`);
-    expect(assignToast(income, { ...none, effects: { cycle: null, tasksDone: [] } })).toBe(`Đã gán thu nhập ${formatVnd(20_000_000)}.`);
-    expect(t).not.toMatch(/chia|lệnh chuyển/);
+    const t = assignToast(income, { ...none, effects: { savings: { amount: 2_000_000, pct: 10 }, tasksDone: [] } });
+    expect(t).toBe(`Đã gán ${formatVnd(20_000_000)} · nhắc trích Tích luỹ 10% = ${formatVnd(2_000_000)}`);
+    expect(assignToast(income, { ...none, effects: { savings: null, tasksDone: [] } })).toBe(`Đã gán thu nhập ${formatVnd(20_000_000)}.`);
+    expect(t).not.toMatch(/chia|lệnh chuyển|kỳ lương/);
   });
 
-  it("UC-706 AC-34: gán chuyển nội bộ sang tài khoản tích luỹ làm xong ① → 'Đã ghi · Trích Tích luỹ ✓'", () => {
-    expect(assignToast([{ meaning: "transfer", amount: 2_000_000, other_account_id: "wealth" }], { ...none, effects: { cycle: null, tasksDone: [{ id: 11, kind: "savings" }] } })).toBe("Đã ghi · Trích Tích luỹ ✓");
+  it("UC-706 AC-34: gán chuyển nội bộ sang tài khoản tích luỹ làm xong ① → 'Đã ghi · Trích Tích luỹ'", () => {
+    expect(assignToast([{ meaning: "transfer", amount: 2_000_000, other_account_id: "wealth" }], { ...none, effects: { savings: null, tasksDone: [{ id: 11, kind: "savings" }] } })).toBe("Đã ghi · Trích Tích luỹ");
   });
 });
 
 describe("thân yêu cầu Gán (UC-706)", () => {
   const row = (r: Omit<AssignRow, "key">): AssignRow => ({ key: 1, ...r });
 
-  it("UC-706 AC-33: thu nhập nguồn Lương, công tắc bật → split có opens_cycle true, nguồn; không trường ví, không transfer_order_id", () => {
-    const body = assignBody([row({ meaning: "income", amount: 20_000_000, income_stream_id: "salary-husband", opens_cycle: true, taxable: false, category_id: null })], false);
-    expect(body).toEqual({ splits: [{ meaning: "income", amount: 20_000_000, taxable: false, income_stream_id: "salary-husband", opens_cycle: true }], create_rule: false });
-    expect(JSON.stringify(body)).not.toMatch(/wallet|transfer_order_id|allocate|wealth_move/);
-    // tiền người thuê: không gửi opens_cycle
-    expect(assignBody([row({ meaning: "income", amount: 4_000_000, tenantMode: true, tenant_id: "t1", opens_cycle: false })], false).splits[0]).toEqual({ meaning: "income", amount: 4_000_000, taxable: false, tenant_id: "t1" });
+  it("UC-706 AC-33: thu nhập nguồn Lương, ô 'Đây là lương' bật → split có is_salary true, nguồn; không opens_cycle, không trường ví, không transfer_order_id; tiền người thuê → không is_salary", () => {
+    const body = assignBody([row({ meaning: "income", amount: 20_000_000, income_stream_id: "salary-husband", is_salary: true, taxable: false, category_id: null })], false);
+    expect(body).toEqual({ splits: [{ meaning: "income", amount: 20_000_000, taxable: false, income_stream_id: "salary-husband", is_salary: true }], create_rule: false });
+    expect(JSON.stringify(body)).not.toMatch(/wallet|transfer_order_id|allocate|wealth_move|opens_cycle/);
+    expect(assignBody([row({ meaning: "income", amount: 4_000_000, tenantMode: true, tenant_id: "t1", is_salary: true })], false).splits[0]).toEqual({ meaning: "income", amount: 4_000_000, taxable: false, tenant_id: "t1" });
+  });
+
+  it("UC-706 AC-40: log 20.000.000 không nguồn, ngưỡng 5.000.000 → ô 'Đây là lương' bật sẵn (không chạm → không gửi, server quyết theo Q1-B); tắt → is_salary: false; log 1.200.000 → tắt sẵn; tiền lãi (ô 'Đây là tiền lãi' bật) → không is_salary", () => {
+    const streams = [{ id: "salary-husband", is_salary: true }];
+    expect(isSalaryDefault(streams, "", 20_000_000, 5_000_000)).toBe(true);
+    expect(isSalaryDefault(streams, "", 1_200_000, 5_000_000)).toBe(false);
+    expect(assignBody([row({ meaning: "income", amount: 20_000_000 })], false).splits[0]).not.toHaveProperty("is_salary");
+    expect(assignBody([row({ meaning: "income", amount: 20_000_000, is_salary: false })], false).splits[0]).toMatchObject({ is_salary: false });
+    expect(assignBody([row({ meaning: "income", amount: 3_000_000, is_salary: true, is_interest: true })], false, { interest: true }).splits[0]).toEqual({ meaning: "income", amount: 3_000_000, taxable: false, is_interest: true });
   });
 
   it("UC-706 AC-31: lãi tiền gửi → một dòng income interest, không ví", () => {
@@ -129,11 +138,11 @@ describe("thân yêu cầu Gán (UC-706)", () => {
 
 describe("Gán lãi tiền gửi (261018-lai-tien-gui)", () => {
   const label = () => "chưa có luật";
-  it("UC-706: log có gợi ý lãi → chip xanh 'gợi ý: Lãi tiền gửi', sau 'có thể trùng', thay 'tiền vào — phải hỏi'", () => {
+  it("UC-706: log có gợi ý lãi → chip xanh 'gợi ý: Lãi tiền gửi', sau 'có thể trùng', thay 'tiền vào, cần hỏi'", () => {
     const lai = { meaning: "income", interest: true, label: "Lãi tiền gửi" };
     expect(logChip({ direction: "in", suggestion: lai }, label)).toEqual({ cls: "chip ok", text: "gợi ý: Lãi tiền gửi" });
-    expect(logChip({ direction: "in", suggestion: null }, label)).toEqual({ cls: "chip warn", text: "tiền vào — phải hỏi" });
-    expect(logChip({ direction: "in", suggestion: { possible_duplicate_of: "x", label: "Có thể trùng" } }, label)).toEqual({ cls: "chip warn", text: "có thể trùng — xem trước khi gán" });
+    expect(logChip({ direction: "in", suggestion: null }, label)).toEqual({ cls: "chip warn", text: "tiền vào, cần hỏi" });
+    expect(logChip({ direction: "in", suggestion: { possible_duplicate_of: "x", label: "Có thể trùng" } }, label)).toEqual({ cls: "chip warn", text: "có thể trùng, xem trước khi gán" });
   });
 
   it("UC-706 AC-33: loại Lãi tiền gửi có ở tiền vào, không có ở tiền ra; mọi dòng giải thích không có chữ 'ví', 'chia'", () => {
@@ -161,9 +170,9 @@ describe("chữ nhắc dưới hàng chip 'Gán thành'", () => {
     const hint = (dir: "in" | "out", v: SplitMeaning) => ASSIGN_CHOICES[dir].find((c) => c.value === v)!.hint;
     expect(hint("out", "lend")).toMatch(/mua hộ \/ trả hộ người khác \(nhà mình không có phần\)/);
     expect(hint("in", "collect")).toMatch(/mua hộ/);
-    expect(hint("in", "collect")).toMatch(/Trả dư thì Tách thêm dòng Thu nhập/);
+    expect(hint("in", "collect")).toMatch(/Trả dư thì tách thêm dòng Thu nhập/);
     for (const [dir, v] of [["out", "spend"], ["in", "refund"]] as const) {
-      expect(hint(dir, v)).toMatch(/bill/);
+      expect(hint(dir, v)).toMatch(/hoá đơn|góp tiền/);
       expect(hint(dir, v)).not.toMatch(/mua hộ/i);
     }
   });
@@ -174,7 +183,7 @@ describe("Gán: nối vào khoản đã nhập tay", () => {
     const m = { id: 7, at: "2026-10-15T15:20:00.000Z", amount: 500_000, meaning: "spend", category_id: "groceries", note: "đi chợ" };
     expect(manualMatchLabel(m, "Đi chợ")).toBe("15/10 22:20 · Đi chợ · đi chợ");
     expect(manualMatchLabel({ ...m, meaning: "income", category_id: null, note: null }, null)).toBe("15/10 22:20 · Thu nhập");
-    expect(linkToast(500_000)).toBe(`Đã nối ${formatVnd(500_000)} vào khoản đã nhập tay — không ghi thêm.`);
+    expect(linkToast(500_000)).toBe(`Đã nối ${formatVnd(500_000)} vào khoản nhập tay, không ghi thêm.`);
   });
 });
 

@@ -15,7 +15,7 @@ describe("thang Tích luỹ 1 · 10 · 30% (ADR-142)", () => {
   });
 
   it("UC-709 AC-37: câu thang của nhà", () => {
-    expect(SAVINGS_SCALE_TEXT).toBe("Thang của nhà: tối thiểu 1% · thường 10% · hướng tới 30%. Kỳ nào không trích được thì bỏ qua việc trích ở Hôm nay và ghi lý do.");
+    expect(SAVINGS_SCALE_TEXT).toBe("Thang của nhà: tối thiểu 1% · thường 10% · hướng tới 30%. Kỳ nào không trích được, cứ bỏ qua ở Hôm nay và ghi lý do.");
   });
 
   it("UC-702 AC-36: chữ mức đạt", () => {

@@ -30,7 +30,7 @@ const fail = (code: string, message: string, status = 400): never => {
 const has = (b: Input, k: string) => Object.prototype.hasOwnProperty.call(b, k);
 const MAX_AMOUNT = 1_000_000_000_000;
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
-const NO_QR = "Chưa có mã QR — chọn tài khoản nhận trên bản tính.";
+const NO_QR = "Chưa có mã QR: chọn tài khoản nhận trên bản tính.";
 const billChanged = () => fail("bill_changed", "Bản tính vừa được sửa ở máy khác — tải lại.", 409);
 
 function text(b: Input, k: string, required = false): string | null {
@@ -320,7 +320,7 @@ export async function createBill(db: D1Database, tenantId: string, b: Input, act
   const tenant = await requireTenant(db, tenantId);
   const existing = async () => ({ view: await getBill(db, tenantId, month, actor.memberId, now), created: false });
   if (await billOf(db, tenantId, month)) return existing();
-  if (tenant.active !== 1) fail("tenant_inactive", "Người thuê này đã ra — không lập bản tính mới.");
+  if (tenant.active !== 1) fail("tenant_inactive", "Người thuê này đã ra: không lập bản tính mới.");
   const prev = await billBefore(db, tenantId, month);
   const items = prev ? await itemsOf(db, prev.id) : [];
   const receive = prev?.receive_account_id && receivable(await accountOf(db, prev.receive_account_id)) ? prev.receive_account_id : null;
@@ -466,7 +466,7 @@ export async function issueBill(db: D1Database, billId: number, b: Input, actor:
 /** `DELETE /v1/rental/bills/:id` — chỉ bản nháp (lập nhầm tháng); bản đã gửi sửa về rỗng chứ không xoá. */
 export async function deleteBill(db: D1Database, billId: number, actor: Actor): Promise<{ id: number }> {
   const bill = (await billById(db, billId)) ?? fail("not_found", "Không có bản tính này.", 404);
-  if (bill.status === "issued") fail("bill_issued", "Bản tính đã gửi không xoá được — sửa khoản về rỗng nếu cần.", 409);
+  if (bill.status === "issued") fail("bill_issued", "Bản tính đã gửi không xoá được: sửa khoản về rỗng nếu cần.", 409);
   const res = await db.batch([
     db.prepare("DELETE FROM tenant_bill_items WHERE bill_id = ? AND EXISTS (SELECT 1 FROM tenant_bills WHERE id = ? AND status = 'draft')").bind(billId, billId),
     db.prepare("DELETE FROM tenant_bills WHERE id = ? AND status = 'draft'").bind(billId),
@@ -488,7 +488,7 @@ export async function setBillItem(
 ): Promise<BillView> {
   const month = parseMonth(b.month, now);
   const view = (await createBill(db, b.tenant_id, { month }, actor, now)).view;
-  if (view.bill!.status === "issued") fail("bill_issued", "Bản tính đã gửi — sửa trên app.", 409);
+  if (view.bill!.status === "issued") fail("bill_issued", "Bản tính đã gửi: sửa trên app.", 409);
   const bill = (await billById(db, view.bill!.id))!;
   const items = await itemsOf(db, bill.id);
   const key = itemKey(b.name);

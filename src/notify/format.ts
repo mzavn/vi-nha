@@ -5,9 +5,8 @@
 // Mọi hàm ở đây THUẦN: nhận số liệu đã tính sẵn, không đọc DB, không biết giờ hiện tại.
 
 import { limitFigures, NEAR_LIMIT_PCT, weeklyRhythm, type LimitNudge } from "../domain/look-back";
-import { lacksSavingsAccount, type PayCycleTask } from "../domain/pay-cycle";
-import { blessingFor, type PeaceMonths, type Pocket, type PocketGoal, type PocketsView, type ShortDebtItem } from "../domain/pockets";
-import { dayKey } from "../domain/period";
+import type { MonthClose } from "../domain/month-tasks";
+import { blessingFor, type PeaceMonths, type PocketGoal, type PocketsView, type ShortDebtItem } from "../domain/pockets";
 import type { NearSpend, TopUp } from "../domain/snapshot";
 import type { PushText } from "../services/push";
 import { escapeHtml } from "./telegram";
@@ -82,13 +81,13 @@ export function formatWeekLabel(weekKey: string, startDay: string, endDay: strin
 
 /**
  * Câu tiền vận hành (ADR-122) cho tin sáng và tóm tắt `get_snapshot`: mở bằng cả hai số — tổng và chi khoảng X/ngày tới
- * kỳ lương; hết tiền thì nói đã hết, còn ít không đủ 1.000/ngày thì nói số còn lại.
+ * ngày lương; hết tiền thì nói đã hết, còn ít không đủ 1.000/ngày thì nói số còn lại.
  */
 export function nearSpendLine(ns: Pick<NearSpend, "amount" | "payday" | "daysLeft" | "perDay">): string {
   const [, m, d] = ns.payday.split("-").map(Number);
-  if (ns.amount <= 0) return `Tiền vận hành đã hết (${formatMoney(ns.amount)}) — còn ${ns.daysLeft} ngày`;
-  if (ns.perDay === null) return `Vận hành còn ${formatMoney(ns.amount)} tới kỳ lương ${d}/${m} (còn ${ns.daysLeft} ngày)`;
-  return `Vận hành ${formatMoney(ns.amount)} · chi khoảng ${formatMoney(ns.perDay)}/ngày tới kỳ lương ${d}/${m} (còn ${ns.daysLeft} ngày)`;
+  if (ns.amount <= 0) return `Tiền vận hành đã hết (${formatMoney(ns.amount)}), còn ${ns.daysLeft} ngày`;
+  if (ns.perDay === null) return `Vận hành còn ${formatMoney(ns.amount)} tới ngày lương ${d}/${m} (còn ${ns.daysLeft} ngày)`;
+  return `Vận hành ${formatMoney(ns.amount)} · chi khoảng ${formatMoney(ns.perDay)}/ngày tới ngày lương ${d}/${m} (còn ${ns.daysLeft} ngày)`;
 }
 
 /** Tiêu đề bản ngắn của tin sáng (≤ 25 ký tự): cùng số tiền vận hành, phương án dài trước, ngắn dần. */
@@ -103,29 +102,34 @@ function nearSpendTitle(ns: Pick<NearSpend, "amount" | "payday" | "perDay">): st
 export interface DailyMessageInput {
   /** Tiền vận hành — dòng đầu bản đầy đủ và tiêu đề bản ngắn; `perDay` đã trừ phần còn phải trả (ledger UC-103 bước 7b). */
   nearSpend: Pick<NearSpend, "amount" | "payday" | "daysLeft" | "perDay">;
-  /** Nhắc chuyển thêm (`snapshot.topUp`, ADR-141): có → dòng 💰 thêm câu "cần chuyển thêm …" kèm nguồn đầu; null / thiếu = không. */
+  /** Nhắc chuyển thêm (`snapshot.topUp`, ADR-141): có → dòng Vận hành thêm câu "cần chuyển thêm …" kèm nguồn đầu; null / thiếu = không. */
   topUp?: Pick<TopUp, "amount" | "sources"> | null;
-  /** Nhóm có hạn mức cần nhìn lại ở kỳ hiện tại (`limitNudges`, notify UC-402 bước 4): đã lọc & sắp — vượt trước, rồi % giảm dần. */
+  /** Nhóm có hạn mức cần nhìn lại ở tháng hiện tại (`limitNudges`, notify UC-402 bước 4): đã lọc & sắp — vượt trước, rồi % giảm dần. */
   limitNudges: LimitNudge[];
   /** Số giao dịch (bank_logs) còn `pending`, chưa gán. */
   unassignedCount: number;
   /**
    * Mục tiêu Dự phòng theo thứ tự `reserve.goals` của server (thứ tự ưu tiên); `held` = đã có sau khi chia số dư tài khoản,
-   * `spent` = đã chi cho mục tiêu trong kỳ. Mục tiêu theo % (`target` null) và mục tiêu chưa gắn tài khoản (`held` null)
-   * không vào dòng 🎯.
+   * `spent` = đã chi cho mục tiêu trong tháng. Mục tiêu theo % (`target` null) và mục tiêu chưa gắn tài khoản (`held` null)
+   * không vào dòng Mục tiêu.
    */
   reserveGoals: Pick<PocketGoal, "name" | "held" | "target" | "spent">[];
   /** Phần an tâm (`reserve.peace`), âm = thiếu. */
   peace: number;
   peaceMonths: Pick<PeaceMonths, "covered" | "target">;
-  /** Nợ ngắn hạn cần trả (`pockets.shortDebt`) — dòng 💳 luôn có: còn nợ thì nhắc, hết thì lời chúc. */
+  /** Nợ ngắn hạn cần trả (`pockets.shortDebt`) — dòng nợ ngắn hạn luôn có: còn nợ thì nhắc, hết thì lời chúc. */
   shortDebt: Pick<PocketsView["shortDebt"], "total" | "count"> & { items: Pick<ShortDebtItem, "heldFor">[] };
   /** Ngày VN hôm nay (`YYYY-MM-DD`) — chọn lời chúc. */
   day: string;
   /** Tài khoản đang lệch đối soát (bookDrift ≠ 0 — sổ khác giao dịch ngân hàng đã gán); rỗng = khớp. */
   driftAccounts: { name: string; amount: number }[];
-  /** Việc ngày lương còn mở của kỳ hiện tại (`payCycle.openCount`, pocket UC-1206); 0 / không kỳ = không nhắc. */
-  payTasksOpen: number;
+  /**
+   * Nhắc ① trích Tích luỹ đang mở (`snapshot.month.tasks`, pocket UC-1206): `missing` = Σ phần còn thiếu của các nhắc có
+   * khoản lương công khai; `privateCount` = số nhắc của lương về tài khoản riêng tư (ADR-133: chỉ đếm, không số). null / 0 = không nhắc.
+   */
+  savingsDue?: { missing: number; privateCount: number } | null;
+  /** Dư tháng vừa hết (`snapshot.monthClose`, pocket UC-1207): `ask` (chưa chia, chưa bỏ qua) và dư > 0 → dòng mời chia dư. */
+  monthClose?: Pick<MonthClose, "month" | "surplus" | "status"> | null;
   /** Cặp `transfer` tự ghép (log_id_2 IS NOT NULL) có `at` thuộc ngày VN hôm qua. */
   pairedTransfersYesterday: number;
   /** Số giao dịch cron 02:00 đêm qua đã vá thêm. */
@@ -151,58 +155,67 @@ export interface DailyMessageInput {
 }
 
 /**
- * Tin sáng. Bản đầy đủ: dòng 💰, rồi các dòng việc cần làm (📥 ❗ 🔎 ☑️ 🧮 🏠), rồi các dòng thông tin
- * (🎯 💳 🤝 🏦 🔗 🩹). Bản ngắn: tiêu đề là tiền vận hành mỗi ngày, nội dung là việc cần làm theo cùng thứ tự, rồi chỗ lệch đối soát.
+ * Tin sáng. Bản đầy đủ: dòng Vận hành, rồi các dòng việc cần làm (chưa gán, cần xem tay, Chi tiêu tháng này, Chưa trích Tích luỹ, chia dư, đếm tiền mặt, lập bản tính), rồi các dòng thông tin
+ * (Mục tiêu, nợ ngắn hạn, người khác nợ mình, đối soát, chuyển nội bộ, lãi tiền gửi, vá webhook). Bản ngắn: tiêu đề là tiền vận hành mỗi ngày, nội dung là việc cần làm theo cùng thứ tự, rồi chỗ lệch đối soát.
  */
 export function dailyMessage(input: DailyMessageInput): NotifyMessage {
-  const topUp = input.topUp ? ` · cần chuyển thêm ${formatMoney(input.topUp.amount)} vào tiền chi tiêu${input.topUp.sources[0] ? ` (từ ${escapeHtml(input.topUp.sources[0].name)})` : ""}` : "";
-  const lines: string[] = [`💰 ${nearSpendLine(input.nearSpend)}${topUp}`];
+  const topUp = input.topUp ? ` · cần chuyển thêm ${formatMoney(input.topUp.amount)} vào Tiền vận hành${input.topUp.sources[0] ? ` (từ ${escapeHtml(input.topUp.sources[0].name)})` : ""}` : "";
+  const lines: string[] = [`${nearSpendLine(input.nearSpend)}${topUp}`];
   /** Việc cần làm, bản ngắn cho thông báo đẩy — cùng thứ tự với các dòng việc của bản đầy đủ. */
   const todo: string[] = [];
 
   // ── Việc cần làm ──
   if (input.unassignedCount > 0) {
-    lines.push(`📥 ${input.unassignedCount} giao dịch chưa gán`);
+    lines.push(`${input.unassignedCount} giao dịch chưa gán`);
     todo.push(`${input.unassignedCount} chưa gán`);
   }
 
   const unreadable = input.unreadableBankTransactions ?? 0;
   if (unreadable > 0) {
-    lines.push(`❗ ${unreadable} giao dịch ngân hàng cần xem tay`);
+    lines.push(`${unreadable} giao dịch ngân hàng cần xem tay`);
     todo.push(`${unreadable} cần xem tay`);
   }
 
   if (input.limitNudges.length > 0) {
     const nudge = (n: LimitNudge, name: string) => (n.over > 0 ? `${name} vượt ${formatMoney(n.over)}` : `${name} ${n.pct}%`);
-    lines.push(`🔎 Nhìn lại kỳ này: ${input.limitNudges.map((n) => nudge(n, escapeHtml(n.name))).join(SEP)}`);
+    lines.push(`Chi tiêu tháng này: ${input.limitNudges.map((n) => nudge(n, escapeHtml(n.name))).join(SEP)}`);
     todo.push(...input.limitNudges.map((n) => nudge(n, n.name)));
   }
 
-  if (input.payTasksOpen > 0) {
-    lines.push(`☑️ Việc ngày lương còn ${input.payTasksOpen} việc`);
-    todo.push(`việc ngày lương ${input.payTasksOpen}`);
+  const due = input.savingsDue;
+  if (due && (due.missing > 0 || due.privateCount > 0)) {
+    const privateText = due.privateCount > 0 ? `${SEP}${due.privateCount} khoản của tài khoản riêng tư` : "";
+    lines.push(`Chưa trích Tích luỹ${due.missing > 0 ? ` ${formatMoney(due.missing)}` : ""}${privateText}`);
+    todo.push(`chưa trích Tích luỹ${due.missing > 0 ? ` ${plainMoney(due.missing)}` : ""}`);
+  }
+
+  const close = input.monthClose;
+  if (close && close.status === "ask" && close.surplus > 0) {
+    const month = Number(close.month.slice(5, 7));
+    lines.push(`Tháng ${month} dư ${formatMoney(close.surplus)} — mở app để chia`);
+    todo.push(`chia dư tháng ${month}`);
   }
 
   if (input.cashCountReminder.length > 0) {
-    lines.push(`🧮 Chủ nhật: đếm tiền mặt, nhập số dư — ${input.cashCountReminder.map(escapeHtml).join(", ")}`);
+    lines.push(`Chủ nhật: đếm tiền mặt, nhập số dư — ${input.cashCountReminder.map(escapeHtml).join(", ")}`);
     todo.push("đếm tiền mặt");
   }
 
   const bill = input.rentalBillReminder;
   const tenants = bill?.tenants ?? [];
   for (const t of tenants) {
-    lines.push(`🏠 Lập bản tính tháng ${Number(bill!.month.slice(5, 7))} cho ${escapeHtml(t.name)} (số dư ${formatMoney(t.balance)})`);
+    lines.push(`Lập bản tính tháng ${Number(bill!.month.slice(5, 7))} cho ${escapeHtml(t.name)} (số dư ${formatMoney(t.balance)})`);
   }
   if (tenants.length > 0) todo.push(`lập bản tính ${tenants.map((t) => t.name).join(", ")}`);
 
   // ── Thông tin ──
-  // % = phần của mục tiêu (đã có + đã chi trong kỳ) ÷ B, kẹp 0…100 — cùng luật "đủ" của thẻ Dự phòng (pocket UC-1209 bước 9).
+  // % = phần của mục tiêu (đã có + đã chi trong tháng) ÷ B, kẹp 0…100 — cùng luật "đủ" của thẻ Dự phòng (pocket UC-1209 bước 9).
   const goalChips = input.reserveGoals.flatMap((g) =>
     g.held === null || g.target === null || g.target <= 0 ? [] : [`${escapeHtml(g.name)} ${Math.max(0, Math.min(100, Math.floor(((g.held + g.spent) * 100) / g.target)))}%`],
   );
   if (input.peace < 0) goalChips.push(`Phần an tâm thiếu ${formatMoney(-input.peace)}`);
   else if (input.peace > 0 && input.peaceMonths.covered !== null) goalChips.push(`Phần an tâm đủ ${formatDecimal1(input.peaceMonths.covered)}/${input.peaceMonths.target} tháng`);
-  if (goalChips.length > 0) lines.push(`🎯 ${goalChips.join(" · ")}`);
+  if (goalChips.length > 0) lines.push(`Mục tiêu: ${goalChips.join(" · ")}`);
 
   const short = input.shortDebt;
   const allDebts = input.debts ?? { balance: 0, count: 0 };
@@ -211,37 +224,37 @@ export function dailyMessage(input: DailyMessageInput): NotifyMessage {
     const parts = [`Nợ ngắn hạn còn ${formatMoney(short.total)} (${short.count} khoản)`];
     if (heldFor > 0) parts.push(`đã có ${formatMoney(heldFor)} trong tài khoản Trả nợ`);
     if (allDebts.count > short.count) parts.push(`tất cả khoản nợ còn ${formatMoney(allDebts.balance)} (${allDebts.count} khoản)`);
-    lines.push(`💳 ${parts.join(SEP)}`);
+    lines.push(parts.join(SEP));
   } else {
-    lines.push(`💳 ${blessingFor(input.day)}${allDebts.count > 0 ? `${SEP}còn nợ khác ${formatMoney(allDebts.balance)} (${allDebts.count} khoản)` : ""}`);
+    lines.push(`${blessingFor(input.day)}${allDebts.count > 0 ? `${SEP}còn nợ khác ${formatMoney(allDebts.balance)} (${allDebts.count} khoản)` : ""}`);
   }
   if (input.receivables && input.receivables.balance > 0) {
-    lines.push(`🤝 Người khác nợ mình ${formatMoney(input.receivables.balance)} (${input.receivables.count} khoản)`);
+    lines.push(`Người khác nợ mình ${formatMoney(input.receivables.balance)} (${input.receivables.count} khoản)`);
   }
 
   const drift = input.driftAccounts.map((d) => `lệch ${formatMoney(Math.abs(d.amount))} ở ${d.name}`);
   if (drift.length === 0) {
-    lines.push("🏦 Đối soát: khớp");
+    lines.push("Đối soát: khớp");
   } else {
-    lines.push(`🏦 Đối soát: ❌ ${input.driftAccounts.map((d) => `lệch ${formatMoney(Math.abs(d.amount))} ở ${escapeHtml(d.name)}`).join(" · ")}`);
+    lines.push(`Đối soát: ${input.driftAccounts.map((d) => `lệch ${formatMoney(Math.abs(d.amount))} ở ${escapeHtml(d.name)}`).join(" · ")}`);
   }
 
   if (input.pairedTransfersYesterday > 0) {
-    lines.push(`🔗 Hôm qua tự ghép ${input.pairedTransfersYesterday} cặp chuyển nội bộ`);
+    lines.push(`Hôm qua tự ghép ${input.pairedTransfersYesterday} cặp chuyển nội bộ`);
   }
 
   const lai = input.interestYesterday;
   const laiPrivate = lai?.privateCount ?? 0;
   const laiPrivateText = `${laiPrivate} khoản của tài khoản riêng tư`;
   if (lai && lai.count > 0) {
-    lines.push(`💰 Lãi tiền gửi: +${formatMoney(lai.total)} (${lai.count} khoản) — vào ${lai.accounts.map(escapeHtml).join(", ")}${laiPrivate > 0 ? `${SEP}${laiPrivateText}` : ""}`);
+    lines.push(`Lãi tiền gửi: +${formatMoney(lai.total)} (${lai.count} khoản) — vào ${lai.accounts.map(escapeHtml).join(", ")}${laiPrivate > 0 ? `${SEP}${laiPrivateText}` : ""}`);
   } else if (laiPrivate > 0) {
-    lines.push(`💰 Lãi tiền gửi: ${laiPrivateText}`);
+    lines.push(`Lãi tiền gửi: ${laiPrivateText}`);
   }
 
   if (input.backfillAddedLastNight > 0) {
-    const scope = input.backfillScope === "week" ? " (soát lại cả tuần trước)" : input.backfillScope === "month" ? " (soát lại cả tháng trước)" : "";
-    lines.push(`🩹 Đêm qua vá ${input.backfillAddedLastNight} giao dịch webhook bỏ sót${scope}`);
+    const scope = input.backfillScope === "week" ? " (soát cả tuần trước)" : input.backfillScope === "month" ? " (soát cả tháng trước)" : "";
+    lines.push(`Đêm qua vá ${input.backfillAddedLastNight} giao dịch webhook bỏ sót${scope}`);
   }
 
   const items = [...todo, ...drift];
@@ -260,7 +273,7 @@ export function dailyMessage(input: DailyMessageInput): NotifyMessage {
 export interface WeeklyMessageInput {
   /** `T38 (14–20/9)`. */
   weekLabel: string;
-  /** Tiền vận hành lúc gửi (snapshot) — dòng 💰 giống hệt tin sáng, mục đầu bản ngắn. null: không dòng / không mục. */
+  /** Tiền vận hành lúc gửi (snapshot) — dòng Vận hành giống hệt tin sáng, mục đầu bản ngắn. null: không dòng / không mục. */
   nearSpend: Pick<NearSpend, "amount" | "payday" | "daysLeft" | "perDay"> | null;
   /** Tổng chi cả tuần (spend − refund, mọi tài khoản, mọi danh mục) — tiêu đề của bản ngắn. */
   totalSpent: number;
@@ -268,35 +281,35 @@ export interface WeeklyMessageInput {
   operatingSpent: number;
   /** Tối đa 5 danh mục tiêu nhiều nhất, đã sắp giảm dần. */
   topCategories: { name: string; spent: number }[];
-  /** Nhóm có hạn mức của kỳ hiện tại, theo `sort`. */
+  /** Nhóm có hạn mức của tháng hiện tại, theo `sort`. */
   limits: { name: string; spent: number; limit: number; over: number }[];
-  /** Ngày bắt đầu kỳ hiện tại (`YYYY-MM-DD`, giờ VN) cho "🔎 Kỳ từ d/m"; null khi không có kỳ. */
-  cycleStart: string | null;
+  /** Tháng hiện tại (`YYYY-MM`, giờ VN) cho "Từ 1/m". */
+  month: string;
 }
 
 const NO_WEEK_DATA = "Không có dữ liệu chi tiêu tuần này.";
 
 /**
- * Tổng kết tuần theo nhịp Vận hành (notify UC-406). Bản đầy đủ: 💰 như tin sáng, 🧾 chi tuần · từ Vận hành ≈ X/ngày, 🔎 mọi
- * nhóm có hạn mức của kỳ, 🏆 top 5 danh mục. Bản ngắn: tiêu đề "Tuần T38: chi X"; nội dung là Vận hành còn bao nhiêu, nhóm
- * ≥ 80% (vượt trước, % giảm dần), danh mục tiêu nhiều nhất, rồi các nhóm còn lại.
+ * Tổng kết tuần theo nhịp Vận hành (notify UC-406). Bản đầy đủ: Vận hành như tin sáng, chi tuần · từ Vận hành ≈ X/ngày, mọi
+ * nhóm có hạn mức của tháng (từ ngày 1), top 5 danh mục. Bản ngắn: tiêu đề "Tuần T38: chi X"; nội dung là Vận hành còn bao
+ * nhiêu, nhóm ≥ 80% (vượt trước, % giảm dần), danh mục tiêu nhiều nhất, rồi các nhóm còn lại.
  */
 export function weeklyMessage(input: WeeklyMessageInput): NotifyMessage {
-  const lines: string[] = [`📊 Tổng kết tuần ${input.weekLabel}`];
-  if (input.nearSpend) lines.push(`💰 ${nearSpendLine(input.nearSpend)}`);
+  const lines: string[] = [`Tổng kết tuần ${input.weekLabel}`];
+  if (input.nearSpend) lines.push(nearSpendLine(input.nearSpend));
 
   const empty = input.totalSpent === 0 && input.topCategories.length === 0;
   if (!empty) {
-    lines.push(`🧾 Tuần qua chi ${formatMoney(input.totalSpent)} · từ Vận hành ${formatMoney(input.operatingSpent)} ≈ ${formatMoney(weeklyRhythm(input.operatingSpent))}/ngày`);
+    lines.push(`Tuần qua chi ${formatMoney(input.totalSpent)} · từ Vận hành ${formatMoney(input.operatingSpent)} ≈ ${formatMoney(weeklyRhythm(input.operatingSpent))}/ngày`);
   }
 
-  if (input.limits.length > 0 && input.cycleStart) {
+  if (input.limits.length > 0) {
     const groups = input.limits.map((g) => `${escapeHtml(g.name)} ${formatMoney(g.spent)} / ${formatMoney(g.limit)}${g.over > 0 ? ` (vượt ${formatMoney(g.over)})` : ""}`);
-    lines.push(`🔎 Kỳ từ ${dayMonth(input.cycleStart)}: ${groups.join(SEP)}`);
+    lines.push(`Từ ${dayMonth(`${input.month}-01`)}: ${groups.join(SEP)}`);
   }
 
   if (input.topCategories.length > 0) {
-    lines.push("🏆 Top 5 danh mục tiêu nhiều nhất:");
+    lines.push("Top 5 danh mục tiêu nhiều nhất:");
     input.topCategories.forEach((c, i) => lines.push(`${i + 1}. ${escapeHtml(c.name)} — ${formatMoney(c.spent)}`));
   }
   if (empty) lines.push(NO_WEEK_DATA);
@@ -326,82 +339,38 @@ export function weeklyMessage(input: WeeklyMessageInput): NotifyMessage {
   };
 }
 
-// ── Báo kỳ lương mới (notify UC-412) ──────────────────────────────────
+// ── Báo lương về (notify UC-412) ──────────────────────────────────────
 
-const POCKET_LABEL: Record<Pocket, string> = { savings: "Tích luỹ", reserve: "Dự phòng", operating: "Vận hành" };
-
-type PayTask = Pick<PayCycleTask, "kind" | "status" | "amount" | "pct" | "toPocket" | "toAccountId" | "goal" | "source" | "targets" | "targetName">;
-
-export interface PayCycleMessageInput {
-  /** Khoản lương mở kỳ. */
+export interface SalaryMessageInput {
+  /** Khoản lương. */
   income: number;
-  /** Lúc mở kỳ (ISO) — "kỳ lương mới từ d/m". */
-  startedAt: string;
-  /** Dư kỳ trước (âm = tiêu quá). */
-  prevOperating: number;
-  /** Mọi việc của kỳ theo thứ tự; chỉ việc đang mở vào tin. */
-  tasks: PayTask[];
-}
-
-/** Câu nhắc của ① / ④ → Tích luỹ khi ngăn Tích luỹ chưa có tài khoản nào (pocket UC-1206 AC-10). */
-const NO_SAVINGS_ACCOUNT = "chưa có tài khoản Tích luỹ — mở tài khoản thật ›";
-
-/**
- * Chữ một việc, cùng chữ thẻ Việc ngày lương (pwa UC-702, `web/src/lib/pay-cycle.ts` › `taskTitle`) — `full`; và chữ ngắn
- * kèm số không "₫" cho bản ngắn — `short`. `esc` escape tên mục tiêu / nguồn cho bản HTML. `hide`: lương về tài khoản riêng
- * tư (notify UC-412 AC-4) — bỏ mọi số tiền, giữ `{pct}%` và tên mục tiêu.
- */
-function payTaskText(t: PayTask, prevOperating: number, esc: (s: string) => string, hide: boolean): { full: string; short: string } {
-  const amount = hide ? "" : `${SEP}${formatMoney(t.amount)}`;
-  const digits = hide ? "" : ` ${plainMoney(t.amount)}`;
-  const noAccount = lacksSavingsAccount(t) ? `${SEP}${NO_SAVINGS_ACCOUNT}` : "";
-  switch (t.kind) {
-    case "savings": {
-      const what = `Trích Tích luỹ ${t.pct ?? 0}%`;
-      return { full: `${what}${noAccount || amount}`, short: `${what}${digits}` };
-    }
-    case "goal": {
-      const what = `Nạp ${esc(t.goal?.name ?? "")}`;
-      return { full: `${what}${amount}`, short: `${what}${digits}` };
-    }
-    case "move": {
-      const stream = t.source && "streamName" in t.source ? t.source.streamName : null;
-      const what = `Chuyển ${esc(stream ?? "khoản thu")} sang ${t.toPocket ? POCKET_LABEL[t.toPocket] : ""}`;
-      return { full: `${what}${amount}`, short: `${what}${digits}` };
-    }
-    case "surplus": {
-      const to = t.toAccountId ? "Ví Thưởng" : "Tích luỹ";
-      const full = hide ? `Dư kỳ trước vào ${to}` : `Dư kỳ trước ${formatMoney(prevOperating)}: ${formatMoney(t.amount)} vào ${to}`;
-      return { full: `${full}${noAccount}`, short: `Dư kỳ trước vào ${to}${digits}` };
-    }
-  }
+  /** Nhắc ① của khoản lương: số trích và %. */
+  amount: number;
+  pct: number;
+  /** Gợi ý không bắt buộc (`snapshot.month.goalHint`, pocket UC-1206 AC-18): mục tiêu tài khoản đầu tiên còn thiếu. */
+  goalHint: { name: string; short: number } | null;
 }
 
 /**
- * Tin "Lương về" khi một kỳ lương mở (notify UC-412). Bản đầy đủ: 💵 khoản lương — kỳ từ d/m, danh sách việc đang mở (☑️, cùng
- * chữ thẻ việc), dư kỳ trước âm, câu mời mở Hôm nay (kèm "có mã QR" khi có việc mở được QR). Bản ngắn: "Lương về · N việc",
- * nội dung là các việc dạng chữ ngắn + số. `hideAmounts` (lương về tài khoản riêng tư, AC-4): không số lương, không số việc.
+ * Tin "Lương về" (notify UC-412): một dòng khoản lương · trích Tích luỹ {pct}% = số trích, cộng tối đa một dòng gợi ý mục
+ * tiêu còn thiếu (cùng chữ thẻ Trích Tích luỹ). Bản ngắn: "Lương về · trích {số}". `hideAmounts` (lương về tài khoản riêng tư,
+ * ADR-133): không số tiền nào, giữ `{pct}%` và tên mục tiêu.
  */
-export function payCycleMessage(input: PayCycleMessageInput, opts: { hideAmounts?: boolean } = {}): NotifyMessage {
+export function salaryMessage(input: SalaryMessageInput, opts: { hideAmounts?: boolean } = {}): NotifyMessage {
   const hide = opts.hideAmounts === true;
-  const open = input.tasks.filter((t) => t.status === "open");
-  const from = dayMonth(dayKey(input.startedAt));
-  const lines = [`💵 Lương về${hide ? "" : ` ${formatMoney(input.income)}`} — kỳ lương mới từ ${from}`];
-  if (open.length > 0) {
-    lines.push(`Việc ngày lương (${open.length}):`);
-    for (const t of open) lines.push(`☑️ ${payTaskText(t, input.prevOperating, escapeHtml, hide).full}`);
-  }
-  if (input.prevOperating < 0) lines.push(`Kỳ trước tiêu quá ${formatMoney(-input.prevOperating)} — không có gì để chia`);
-  // Mở được QR (pocket UC-1206 bước 10): có tài khoản đích có số tài khoản (② tài khoản của mục tiêu, ④ tài khoản Ví Thưởng).
-  const qr = open.some((t) => t.targets.length > 0);
-  lines.push(`Mở app › Hôm nay để làm${qr ? " — có mã QR chuyển khoản" : ""}`);
+  const what = `trích Tích luỹ ${input.pct}%`;
+  const hint = input.goalHint;
+  const short = hint && !hide ? ` ${formatMoney(hint.short)}` : "";
+  const lines = [hide ? `Lương về · ${what}` : `Lương về ${formatMoney(input.income)} · ${what} = ${formatMoney(input.amount)}`];
+  if (hint) lines.push(`Mục tiêu còn thiếu: ${escapeHtml(hint.name)}${short} ›`);
 
-  const items = open.map((t) => payTaskText(t, input.prevOperating, (s) => s, hide).short);
+  const items = [hide ? `Trích Tích luỹ ${input.pct}%` : `Trích Tích luỹ ${input.pct}% = ${formatMoney(input.amount)} từ lương ${formatMoney(input.income)}`];
+  if (hint) items.push(`mục tiêu còn thiếu: ${hint.name}${short}`);
   return {
     full: lines.join("\n"),
     push: {
-      title: open.length > 0 ? `Lương về · ${open.length} việc` : `Lương về · kỳ từ ${from}`,
-      body: items.length > 0 ? fitJoin(items, PUSH_BODY_MAX) : `Kỳ lương mới từ ${from}, không có việc ngày lương`,
+      title: hide ? `Lương về · trích ${input.pct}%` : `Lương về · trích ${plainMoney(input.amount)}`,
+      body: fitJoin(items, PUSH_BODY_MAX),
     },
   };
 }
@@ -428,7 +397,7 @@ export function pendingMessage(logs: PendingLog[], privateCount = 0): NotifyMess
   const item = (r: PendingLog, name: string) => `${r.direction === "in" ? "+" : MINUS}${r.amount.toLocaleString("vi-VN")} ₫ ${name}`;
   const priv = `${privateCount} khoản của tài khoản riêng tư`;
   const shown = logs.slice(0, PENDING_MAX_LINES);
-  const lines = shown.map((r) => item(r, `— ${escapeHtml(r.accountName ?? "TK lạ")}`));
+  const lines = shown.map((r) => item(r, `· ${escapeHtml(r.accountName ?? "TK lạ")}`));
   if (privateCount > 0) lines.push(priv);
   if (logs.length > shown.length) lines.push(`… và ${logs.length - shown.length} khoản khác`);
   const items = logs.map((r) => item(r, r.accountName ?? "TK lạ"));
@@ -439,9 +408,9 @@ export function pendingMessage(logs: PendingLog[], privateCount = 0): NotifyMess
     if (len(body) <= PUSH_BODY_MAX) break;
   }
   return {
-    full: `⚠️ ${total} giao dịch chưa gán:\n${lines.join("\n")}`,
+    full: `${total} khoản chưa gán:\n${lines.join("\n")}`,
     push: {
-      title: firstFit([`${total} giao dịch chưa gán`, `${total} chưa gán`], PUSH_TITLE_MAX),
+      title: firstFit([`${total} khoản chưa gán`, `${total} chưa gán`], PUSH_TITLE_MAX),
       body,
     },
   };

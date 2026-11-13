@@ -81,8 +81,8 @@ const ALERT_KIND = "security";
  * `(security, audit:<id>)` nên mỗi dòng nhật ký báo đúng một lần mỗi kênh; thêm kênh cũ vừa bị gỡ/thay nếu có.
  */
 export async function alertMembers(env: Env, auditId: number, actor: Actor, alert: Alert): Promise<number> {
-  const text = `${await actorLabel(env.DB, actor)} vừa ${alert.what} — nếu không phải người nhà làm, vào Cài đặt gỡ ngay.`;
-  const full = `⚠️ ${escapeHtml(text)}`;
+  const text = `${await actorLabel(env.DB, actor)} vừa ${alert.what}. Nếu không phải người nhà làm, vào Cài đặt gỡ ngay.`;
+  const full = `Cảnh báo: ${escapeHtml(text)}`;
   const dayKey = `audit:${auditId}`;
   let sent = await notifyMembers(env, ALERT_KIND, dayKey, { full, push: { title: "Ví nhà: có thay đổi cần xem", body: text.slice(0, 150) } });
   const claim = async (chatId: string) =>

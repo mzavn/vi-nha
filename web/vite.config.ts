@@ -1,11 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import preact from "@preact/preset-vite";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, transformWithOxc, type Plugin } from "vite";
 import { installInfo } from "./src/lib/install-info.ts";
+import { fontPrecache } from "./src/lib/precache.ts";
 
 const here = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 
@@ -27,7 +28,9 @@ function serviceWorker(): Plugin {
     apply: "build",
     async generateBundle(_options, bundle) {
       const files = Object.keys(bundle).filter((f) => !f.endsWith(".map"));
-      const shell = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/apple-touch-icon.png", ...files.map((f) => `/${f}`)];
+      // Font tự host nằm ở publicDir (không qua bundle) nên phải thêm tay — offline đúng chữ từ lần mở đầu (pwa UC-710 AC-14).
+      const fonts = fontPrecache(readdirSync(here("./public/fonts")));
+      const shell = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/apple-touch-icon.png", ...fonts, ...files.map((f) => `/${f}`)];
       const unique = [...new Set(shell)];
       const version = createHash("sha256").update(unique.join("\n")).digest("hex").slice(0, 12);
       const fresh = await transformWithOxc(readFileSync(here("./src/lib/sw-fresh.ts"), "utf8"), "sw-fresh.ts");

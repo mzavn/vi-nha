@@ -7,7 +7,7 @@ import { errorText } from "../lib/api";
 import { defaultAccountFor, defaultBankFor, manualAccounts } from "../lib/categories";
 import { goalChoices, goalField, goalValueOf, incomeInterest } from "../lib/goal-choices";
 import { formatTypedVnd } from "../lib/money";
-import { incomeBody, opensCycleDefault, queuedBody, queuedMissing, type QueuedKind } from "../lib/other-entry";
+import { incomeBody, isSalaryDefault, queuedBody, queuedMissing, type QueuedKind } from "../lib/other-entry";
 import { atForDay, dayKey } from "../lib/period";
 import { tenantAccountBlock } from "../lib/rental";
 import { collectToast, defaultReceivableId, lendToast } from "../lib/receivables";
@@ -46,12 +46,14 @@ export function OtherEntrySheet({
   kind: initial,
   amount: initialAmount,
   title,
+  tenantId: initialTenantId,
   edit,
   onClose,
 }: {
   kind: OtherKind;
   amount: number;
   title?: string;
+  tenantId?: string;
   edit?: TxRow;
   onClose: () => void;
 }) {
@@ -64,7 +66,7 @@ export function OtherEntrySheet({
     <Sheet open title={heading ?? "Tiền vào & loại khác"} onClose={onClose}>
       {!heading && <Seg class="pad" label="Loại giao dịch" value={kind} options={KINDS} onChange={setKind} />}
       {kind === "income" ? (
-        <IncomeForm boot={boot} initialAmount={initialAmount} edit={edit && draft ? { tx: edit, draft } : undefined} onDone={onClose} />
+        <IncomeForm boot={boot} initialAmount={initialAmount} initialTenantId={initialTenantId} edit={edit && draft ? { tx: edit, draft } : undefined} onDone={onClose} />
       ) : (
         <QueuedForm boot={boot} kind={kind} initialAmount={initialAmount} edit={edit && draft ? { tx: edit, draft } : undefined} onDone={onClose} />
       )}
@@ -75,8 +77,8 @@ export function OtherEntrySheet({
 /** Khoản đang sửa: dòng sổ gốc và trạng thái đầu của form lấy từ nó. */
 type Editing = { tx: TxRow; draft: TxDraft };
 
-/** "Ghi thu nhập" (UC-705): số, tài khoản nhận, nguồn, người thuê, chịu thuế, công tắc "Lương — mở kỳ lương" — ghi một lần, không chia. */
-function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; initialAmount: number; edit?: Editing; onDone: () => void }) {
+/** "Ghi thu nhập" (UC-705): số, tài khoản nhận, nguồn, người thuê, chịu thuế, ô "Đây là lương" (Q1-B) — ghi một lần, không chia. */
+function IncomeForm({ boot, initialAmount, initialTenantId, edit, onDone }: { boot: Bootstrap; initialAmount: number; initialTenantId?: string; edit?: Editing; onDone: () => void }) {
   const { online, member, snap } = useApp();
   const d = edit?.draft;
   const [amount, setAmount] = useState(initialAmount);
@@ -85,9 +87,9 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
   const [note, setNote] = useState(d?.note ?? "");
   const [day, setDay] = useState(() => d?.day ?? dayKey(new Date()));
   const [streamId, setStreamId] = useState(d?.income_stream_id ?? "");
-  const [tenantId, setTenantId] = useState(d?.tenant_id ?? "");
-  // null = theo nguồn đang chọn; người bấm công tắc thì giữ lựa chọn đó.
-  const [opensCycle, setOpensCycle] = useState<boolean | null>(null);
+  const [tenantId, setTenantId] = useState(d?.tenant_id ?? initialTenantId ?? "");
+  // null = theo mặc định Q1-B (nguồn lương / ngưỡng nhắc trích); người bấm ô thì giữ lựa chọn đó.
+  const [isSalary, setIsSalary] = useState<boolean | null>(null);
   // "Đây là tiền lãi" (QĐ2, UC-705 AC-38): null = theo tài khoản nhận (bật sẵn khi là khoản gửi); sửa khoản giữ cờ cũ.
   const [isInterest, setIsInterest] = useState<boolean | null>(d ? d.is_interest : null);
   const interestOffer = incomeInterest(accountId, snap?.pockets);
@@ -96,7 +98,8 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
   const [error, setError] = useState<string | null>(null);
   const [clientId] = useState(newClientId);
   const today = dayKey(new Date());
-  const allStreams = useResource<SettingsData>(online ? "/v1/settings" : null).data?.incomeStreams ?? [];
+  const settings = useResource<SettingsData>(online ? "/v1/settings" : null).data;
+  const allStreams = settings?.incomeStreams ?? [];
   const streams = withChosen(
     allStreams.filter((s) => s.active),
     d?.income_stream_id,
@@ -108,7 +111,9 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
     d?.tenant_id,
     () => rental?.tenants.find((t) => t.id === d?.tenant_id),
   );
-  const cycleOn = opensCycle ?? opensCycleDefault(streams, streamId);
+  const salaryOn = isSalary ?? isSalaryDefault(streams, streamId, amount, settings?.config.salary_reminder_min);
+  // Tiền người thuê và tiền lãi không bao giờ là lương: không có ô (pocket UC-1205).
+  const salaryBox = !tenantId && !interestOn;
   // Tiền thuê không bao giờ vào tài khoản riêng tư (N-1, UC-705 AC-36): chặn ở máy, không vào hàng đợi.
   const privateBlock = tenantAccountBlock(tenantId, boot.accounts.find((a) => a.id === accountId));
 
@@ -123,13 +128,13 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
       streamId,
       tenantId,
       note,
-      opensCycle: cycleOn,
+      isSalary: salaryOn,
       isInterest: interestOn,
     });
     setBusy(true);
     setError(null);
     if (edit) {
-      // Sửa ghi thẳng lên server (thay khoản cũ trong một lần; kỳ lương của khoản cũ huỷ theo), không qua hàng đợi.
+      // Sửa ghi thẳng lên server (thay khoản cũ trong một lần; nhắc trích của khoản cũ huỷ theo), không qua hàng đợi.
       try {
         await replaceEntry(edit.tx.id, body);
         onDone();
@@ -184,7 +189,7 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
             value={streamId}
             onChange={(e) => {
               setStreamId(e.currentTarget.value);
-              setOpensCycle(null);
+              setIsSalary(null);
             }}
           >
             <option value="">{tenantId ? "Theo cấu hình cho thuê" : "Không chọn nguồn"}</option>
@@ -196,11 +201,11 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
           </select>
         </div>
       )}
-      {!tenantId && (
+      {salaryBox && (
         <div class="field">
           <label class="check">
-            <input type="checkbox" checked={cycleOn} onChange={(e) => setOpensCycle(e.currentTarget.checked)} />
-            Lương — mở kỳ lương
+            <input type="checkbox" checked={salaryOn} onChange={(e) => setIsSalary(e.currentTarget.checked)} />
+            Đây là lương
           </label>
         </div>
       )}
@@ -224,10 +229,10 @@ function IncomeForm({ boot, initialAmount, edit, onDone }: { boot: Bootstrap; in
         <label for="i-day">Ngày</label>
         <input id="i-day" class="ctl" type="date" max={today} value={day} onInput={(e) => setDay(e.currentTarget.value || today)} />
       </div>
-      <div class="note" style={{ borderTop: "1px solid var(--border)" }}>
-        {cycleOn && !tenantId ? "Lương về mở kỳ lương mới và danh sách việc ngày lương ở Hôm nay." : "Ghi một khoản thu vào tài khoản nhận."}
+      <div class="note" style={{ borderTop: "1px solid var(--line)" }}>
+        {salaryOn && salaryBox ? "Lương về có nhắc trích Tích luỹ ở Hôm nay." : "Ghi khoản thu vào tài khoản nhận."}
       </div>
-      <div class="pad">
+      <div class="sheet-foot">
         {error && (
           <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
             {error}
@@ -488,15 +493,15 @@ function QueuedForm({
         <input id="o-day" class="ctl" type="date" max={today} value={day} onInput={(e) => setDay(e.currentTarget.value || today)} />
       </div>
 
-      <div class="note" style={{ borderTop: "1px solid var(--border)" }}>
-        {kind === "spend" && "Chi cho một mục tiêu Dự phòng thì chọn đúng tài khoản của mục tiêu đó ở ô Tiền ra từ; tài khoản dùng chung cho nhiều mục tiêu thì chọn thêm Cho mục tiêu."}
-        {kind === "refund" && "Hoàn tiền tính vào kỳ hiện tại và nối về khoản chi gốc. Tiền cho vay được trả lại thì chọn Nhận lại tiền cho vay."}
-        {kind === "buy_asset" && "Tiền rời tài khoản thành tài sản — không phải chi tiêu."}
-        {kind === "lend" && "Cho vay: tiền rời tài khoản nhưng vẫn là tiền của nhà. Gắn vào khoản phải thu để biết người đó còn nợ mình bao nhiêu."}
-        {kind === "collect" && "Tiền cho vay được trả lại, không phải thu nhập: tài khoản nhận tăng, số phải thu giảm."}
-        {kind === "transfer" && "Chuyển giữa hai tài khoản của nhà. Chuyển sang ngăn Tích luỹ / Dự phòng thì việc ngày lương tự nhận."}
+      <div class="note" style={{ borderTop: "1px solid var(--line)" }}>
+        {kind === "spend" && "Chi cho mục tiêu Dự phòng: chọn tài khoản đó ở ô Tiền ra từ. Nếu tài khoản chung, chọn thêm Cho mục tiêu."}
+        {kind === "refund" && "Hoàn tiền tính vào tháng này và nối về khoản chi gốc. Được trả tiền cho vay thì chọn Nhận lại tiền cho vay."}
+        {kind === "buy_asset" && "Tiền chuyển thành tài sản, không phải chi tiêu."}
+        {kind === "lend" && "Tiền cho vay vẫn là của nhà mình. Gắn vào khoản phải thu để biết họ còn nợ bao nhiêu."}
+        {kind === "collect" && "Tiền cho vay được trả lại không tính là thu nhập: tài khoản nhận tăng, số phải thu giảm."}
+        {kind === "transfer" && "Chuyển giữa hai tài khoản của nhà. Chuyển vào ngăn Tích luỹ hay Ví Thưởng thì phần nhắc trích và chia dư sẽ tự nhận."}
       </div>
-      <div class="pad">
+      <div class="sheet-foot">
         {error && (
           <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
             {error}

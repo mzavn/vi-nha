@@ -167,7 +167,7 @@ describe("bảng cân đối: số và chữ", () => {
     expect(ledgerTarget("receivables:short")).toEqual({ tab: "wallets", walletsTab: "debts" });
     expect(ledgerTarget("debt:vay-nguoi-nha")).toEqual({ tab: "wallets", walletsTab: "debts" });
     expect(ledgerTarget("tenants")).toEqual({ tab: "wallets", walletsTab: "tenants" });
-    expect(ledgerTarget("app:fund")).toEqual({ tab: "wallets", walletsTab: "wealth-building" });
+    expect(ledgerTarget("app:fund")).toEqual({ tab: "wallets", walletsTab: "accounts" });
   });
 
   it("UC-1101 AC-5: dòng tiền 3.000.000 kỳ Năm, kỳ vọng 12% → \"dòng tiền 250.000 ₫/tháng (3.000.000 ₫/năm) · kỳ vọng 12%/năm\"", () => {
@@ -217,9 +217,9 @@ describe("lô, chốt lời / cắt lỗ, CAGR", () => {
 
   it("UC-1101 AC-9: Đất nền — \"+200.000.000 ₫ (+50,0%) · còn cách chốt lời 33,3% · Đang giữ · CAGR 14,4%/năm — cao hơn kỳ vọng 2,4 điểm\"; bỏ chốt lời → không còn khoảng cách; giá mua 0 → \"—\"", () => {
     const p = pos({ pnl: 200_000_000, pnlPct: 50, toTakeProfitPct: 33.3, heldDays: 1096, cagrPct: 14.4, cagrVsExpected: 2.4 });
-    expect(positionText(p)).toBe(vnd("+200.000.000 ₫ (+50,0%) · còn cách chốt lời 33,3% · Đang giữ · CAGR 14,4%/năm — cao hơn kỳ vọng 2,4 điểm"));
-    expect(positionText({ ...p, toTakeProfitPct: null })).toBe(vnd("+200.000.000 ₫ (+50,0%) · Đang giữ · CAGR 14,4%/năm — cao hơn kỳ vọng 2,4 điểm"));
-    expect(growthText(pos({ heldDays: 1096, cagrPct: 9, cagrVsExpected: -3 }))).toBe("CAGR 9%/năm — thấp hơn kỳ vọng 3 điểm");
+    expect(positionText(p)).toBe(vnd("+200.000.000 ₫ (+50,0%) · còn cách chốt lời 33,3% · Đang giữ · CAGR 14,4%/năm, cao hơn kỳ vọng 2,4 điểm"));
+    expect(positionText({ ...p, toTakeProfitPct: null })).toBe(vnd("+200.000.000 ₫ (+50,0%) · Đang giữ · CAGR 14,4%/năm, cao hơn kỳ vọng 2,4 điểm"));
+    expect(growthText(pos({ heldDays: 1096, cagrPct: 9, cagrVsExpected: -3 }))).toBe("CAGR 9%/năm, thấp hơn kỳ vọng 3 điểm");
     expect(growthText(pos({ heldDays: 1096, cagrPct: 14.4, cagrVsExpected: null }))).toBe("CAGR 14,4%/năm");
     expect(positionText(pos({ pnl: 600_000_000, pnlPct: null, heldDays: 1096, cagrPct: null }))).toBe(vnd("+600.000.000 ₫ (—) · Đang giữ · CAGR —"));
     expect(itemTargetsPayload({ costBasis: 400_000_000, acquiredOn: "2023-11-15", takeProfit: 800_000_000, stopLoss: 0 }, TODAY)).toEqual({

@@ -68,7 +68,7 @@ export function txOrigin(tx: TxRow): TxOrigin {
   return "manual";
 }
 
-export const ORIGIN_LABEL: Record<TxOrigin, string> = { manual: "Ghi tay", bank: "Từ ngân hàng (SePay)", system: "Hệ thống" };
+export const ORIGIN_LABEL: Record<TxOrigin, string> = { manual: "Ghi tay", bank: "Từ ngân hàng (SePay)", system: "Tự động" };
 
 const EDITABLE: readonly string[] = ["spend", "income", "refund", "transfer", "buy_asset", "lend", "collect"] satisfies ManualMeaning[];
 
@@ -92,7 +92,7 @@ export function txActions(tx: TxRow, boot: Pick<Bootstrap, "accounts" | "members
   const hidden = boot.accounts.find((a) => a.hiddenFromMe && (a.id === tx.account_id || a.id === tx.counter_account_id));
   if (hidden) {
     const owner = boot.members.find((m) => m.id === hidden.ownerMemberId)?.name ?? hidden.ownerMemberId ?? "người khác";
-    return { ...none, note: `Liên quan tài khoản riêng tư của ${owner} — chỉ chủ tài khoản sửa được` };
+    return { ...none, note: `Thuộc tài khoản riêng tư của ${owner}, chỉ chủ tài khoản sửa được` };
   }
   const origin = txOrigin(tx);
   if (origin === "bank") return { ...none, reassign: true, note: "Giao dịch ngân hàng không xoá được, chỉ gán lại cho đúng." };
@@ -101,8 +101,8 @@ export function txActions(tx: TxRow, boot: Pick<Bootstrap, "accounts" | "members
       ...none,
       note:
         tx.meaning === "fund"
-          ? "Bút toán nạp ví theo cách tính cũ: muốn gỡ thì xoá khoản thu đó."
-          : "Bút toán do hệ thống ghi (chốt tháng, quyết toán thuế): không sửa, không xoá lẻ được.",
+          ? "Khoản nạp ví theo cách tính cũ: muốn gỡ thì xoá khoản thu đó."
+          : "Khoản do Ví nhà tự ghi (chốt tháng, quyết toán thuế): không sửa, không xoá lẻ được.",
     };
   }
   if (!EDITABLE.includes(tx.meaning)) {
@@ -189,10 +189,10 @@ export function withChosen<T extends { id: string }>(list: T[], id: string | nul
   return item ? [...list, item] : list;
 }
 
-/** Câu xác nhận trước khi xoá: nói cả hệ quả không thấy được (kỳ lương / việc của khoản thu, phần nạp ví cũ). */
+/** Câu xác nhận trước khi xoá: nói cả hệ quả không thấy được (nhắc trích Tích luỹ của khoản lương, phần nạp ví cũ). */
 export function voidConfirm(tx: TxRow): string {
   if (tx.meaning !== "income") return "Xoá hẳn khoản này?";
-  return `Xoá hẳn khoản này? Kỳ lương và việc ngày lương sinh từ khoản này (nếu có) cũng bị huỷ${tx.allocated ? "; phần đã nạp vào ví theo cách tính cũ được gỡ" : ""}.`;
+  return `Xoá hẳn khoản này? Nhắc trích Tích luỹ từ khoản này (nếu có) cũng bị huỷ${tx.allocated ? "; phần đã nạp vào ví theo cách tính cũ được gỡ" : ""}.`;
 }
 
 /** "Đã xoá 45.000 ₫ Ăn uống. Vận hành còn 3.945.000 ₫ ≈ 136.000/ngày." */

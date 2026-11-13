@@ -8,8 +8,8 @@ describe("migrations", () => {
     const fromDocs = openDb();
     const migrated = migratedDb();
     expect(schemaShape(migrated)).toEqual(schemaShape(fromDocs));
-    expect(migrated.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.45" });
-    expect(fromDocs.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.45" });
+    expect(migrated.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.48" });
+    expect(fromDocs.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.48" });
   });
 
   it("dựng được DB và mọi view chạy sạch", () => {
@@ -17,7 +17,7 @@ describe("migrations", () => {
     const views = db.prepare("SELECT name FROM sqlite_master WHERE type='view'").all() as { name: string }[];
     expect(views.length).toBeGreaterThan(0);
     for (const v of views) db.prepare(`SELECT * FROM ${v.name} LIMIT 1`).all();
-    expect(db.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.45" });
+    expect(db.prepare("SELECT v FROM config WHERE k='schema_version'").get()).toEqual({ v: "1.48" });
   });
 
   it("đã bỏ hai view ngân sách mù kỳ", () => {
@@ -103,15 +103,17 @@ describe("seed", () => {
     ]);
   });
 
-  it("UC-1205: hộ mẫu v1.40 — nguồn Lương chồng mở kỳ lương (mẫu lương gắn nguồn đó), Ví Thưởng là tài khoản MB Ví Thưởng, dư cuối kỳ 50%, không tài khoản riêng tư, chưa có kỳ, không khoản nào có loại chi cũ, chưa có màn chuyển đổi", () => {
-    expect(db.prepare("SELECT id FROM income_streams WHERE opens_cycle = 1").all()).toEqual([{ id: "salary-husband" }]);
+  it("UC-1205 AC-5: hộ mẫu v1.46 — nguồn Lương chồng là nguồn lương (mẫu lương gắn nguồn đó), ngưỡng nhắc trích 5.000.000, Ví Thưởng là tài khoản MB Ví Thưởng, dư cuối tháng 50%, không tài khoản riêng tư, chưa có việc tháng, tháng 10 đã ghi 'skipped', không khoản nào có loại chi cũ, chưa có màn chuyển đổi", () => {
+    expect(db.prepare("SELECT id FROM income_streams WHERE is_salary = 1").all()).toEqual([{ id: "salary-husband" }]);
+    expect(db.prepare("SELECT v FROM config WHERE k = 'salary_reminder_min'").get()).toEqual({ v: "5000000" });
     expect(db.prepare("SELECT income_stream_id FROM rules WHERE is_salary = 1").all()).toEqual([{ income_stream_id: "salary-husband" }]);
     expect(db.prepare("SELECT k, v FROM config WHERE k LIKE 'surplus_%' ORDER BY k").all()).toEqual([
       { k: "surplus_reward_account", v: "mb-reward" },
       { k: "surplus_savings_pct", v: "50" },
     ]);
     expect(count("SELECT COUNT(*) n FROM accounts WHERE private <> 0")).toBe(0);
-    expect(count("SELECT COUNT(*) n FROM pay_cycles")).toBe(0);
+    expect(count("SELECT COUNT(*) n FROM pay_cycles") + count("SELECT COUNT(*) n FROM month_tasks")).toBe(0);
+    expect(db.prepare("SELECT month_key, status FROM month_surplus").all()).toEqual([{ month_key: "2026-10", status: "skipped" }]);
     expect(count("SELECT COUNT(*) n FROM transactions WHERE legacy_class IS NOT NULL")).toBe(0);
     expect(count("SELECT COUNT(*) n FROM config WHERE k LIKE 'conversion_%' OR k LIKE 'legacy_%'")).toBe(0);
   });
@@ -164,26 +166,23 @@ describe("chốt chặn toàn vẹn ở tầng DB", () => {
     seedLog(db, "r4", "pending", "");
   });
 
-  it("UC-1205: kỳ lương chỉ ghi thêm (active → void một chiều), mỗi ngày lương danh nghĩa một kỳ còn hiệu lực; việc không xoá được, ① bỏ qua / về 0 phải có lý do", () => {
+  it("UC-1205 AC-5: bảng kỳ cũ chỉ còn đọc; việc tháng không xoá được, ① bỏ qua / về 0 phải có lý do, mỗi khoản lương một nhắc còn hiệu lực; chỉ khoản thu là lương được", () => {
     const db = openDb();
     const income = (at: string) =>
-      Number(db.prepare(`INSERT INTO transactions (at, amount, meaning, counter_account_id, week_key, month_key) VALUES (?, 1, 'income', 'vcb-husband', '2026-W46', '2026-11')`).run(at).lastInsertRowid);
+      Number(db.prepare(`INSERT INTO transactions (at, amount, meaning, counter_account_id, week_key, month_key, is_salary) VALUES (?, 1000, 'income', 'vcb-husband', '2026-W46', '2026-11', 1)`).run(at).lastInsertRowid);
     const a = income("2026-11-10T01:00:00.000Z");
-    const b = income("2026-11-10T02:00:00.000Z");
-    db.prepare("INSERT INTO pay_cycles (id, income_tx_id, started_at, payday, prev_operating) VALUES (1, ?, '2026-11-10T01:00:00.000Z', '2026-11-10', 0)").run(a);
-    expect(() => db.prepare("INSERT INTO pay_cycles (income_tx_id, started_at, payday, prev_operating) VALUES (?, '2026-11-10T02:00:00.000Z', '2026-11-10', 0)").run(b)).toThrow(/UNIQUE/);
-    expect(() => db.prepare("UPDATE pay_cycles SET payday = '2026-11-11' WHERE id = 1").run()).toThrow(/pay_cycle_append_only/);
-    expect(() => db.prepare("DELETE FROM pay_cycles WHERE id = 1").run()).toThrow(/pay_cycle_append_only/);
-    db.prepare("INSERT INTO pay_cycle_tasks (id, cycle_id, kind, to_pocket, pct, suggested, amount) VALUES (1, 1, 'savings', 'savings', 10, 1000, 1000)").run();
-    expect(() => db.prepare("UPDATE pay_cycle_tasks SET status = 'skipped' WHERE id = 1").run()).toThrow(/CHECK/);
-    expect(() => db.prepare("UPDATE pay_cycle_tasks SET amount = 0 WHERE id = 1").run()).toThrow(/CHECK/);
-    db.prepare("UPDATE pay_cycle_tasks SET status = 'skipped', reason = 'Tháng này trả viện phí' WHERE id = 1").run();
-    expect(() => db.prepare("INSERT INTO pay_cycle_tasks (cycle_id, kind, suggested, amount) VALUES (1, 'goal', 1, 1)").run()).toThrow(/CHECK/);
-    expect(() => db.prepare("INSERT INTO pay_cycle_tasks (cycle_id, kind, suggested, amount) VALUES (1, 'surplus', 1, 1)").run()).toThrow(/CHECK/);
-    expect(() => db.prepare("DELETE FROM pay_cycle_tasks WHERE id = 1").run()).toThrow(/pay_cycle_append_only/);
-    db.prepare("UPDATE pay_cycles SET status = 'void' WHERE id = 1").run();
-    expect(() => db.prepare("UPDATE pay_cycles SET status = 'active' WHERE id = 1").run()).toThrow(/pay_cycle_append_only/);
-    db.prepare("INSERT INTO pay_cycles (income_tx_id, started_at, payday, prev_operating) VALUES (?, '2026-11-10T02:00:00.000Z', '2026-11-10', 0)").run(b);
+    expect(() => db.prepare("INSERT INTO pay_cycles (income_tx_id, started_at, payday, prev_operating) VALUES (?, '2026-11-10T01:00:00.000Z', '2026-11-10', 0)").run(a)).toThrow(/model_changed/);
+    expect(() => db.prepare("INSERT INTO transactions (at, amount, meaning, account_id, category_id, week_key, month_key, is_salary) VALUES ('2026-11-10T01:00:00.000Z', 1, 'spend', 'vcb-husband', 'groceries', '2026-W46', '2026-11', 1)").run()).toThrow(/cannot_be_salary/);
+    db.prepare("INSERT INTO month_tasks (id, kind, month_key, income_tx_id, to_pocket, amount, pct) VALUES (1, 'savings', '2026-11', ?, 'savings', 100, 10)").run(a);
+    expect(() => db.prepare("INSERT INTO month_tasks (kind, month_key, income_tx_id, to_pocket, amount, pct) VALUES ('savings', '2026-11', ?, 'savings', 100, 10)").run(a)).toThrow(/UNIQUE/);
+    expect(() => db.prepare("UPDATE month_tasks SET status = 'skipped' WHERE id = 1").run()).toThrow(/reason_required/);
+    expect(() => db.prepare("UPDATE month_tasks SET amount = 0 WHERE id = 1").run()).toThrow(/reason_required/);
+    db.prepare("UPDATE month_tasks SET status = 'skipped', reason = 'Tháng này trả viện phí' WHERE id = 1").run();
+    expect(() => db.prepare("INSERT INTO month_tasks (kind, month_key, to_pocket, amount) VALUES ('savings', '2026-11', 'savings', 1)").run()).toThrow(/CHECK/);
+    expect(() => db.prepare("INSERT INTO month_tasks (kind, month_key, amount) VALUES ('surplus', '2026-11', 1)").run()).toThrow(/CHECK/);
+    expect(() => db.prepare("DELETE FROM month_tasks WHERE id = 1").run()).toThrow(/month_task_append_only/);
+    db.prepare("UPDATE month_tasks SET status = 'void' WHERE id = 1").run();
+    db.prepare("INSERT INTO month_tasks (kind, month_key, income_tx_id, to_pocket, amount, pct) VALUES ('savings', '2026-11', ?, 'savings', 100, 10)").run(a);
   });
 
   it("debt_lines chỉ ghi thêm và v_debt_balance trừ khoản trả nợ", () => {

@@ -33,7 +33,6 @@ function page(title: string, body: string): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>${esc(title)} · Ví nhà</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;650&amp;display=swap">
 <link rel="stylesheet" href="/oauth.css">
 </head>
 <body>
@@ -79,7 +78,7 @@ async function consentPage(c: Context<AppEnv>, request: AuthRequest, memberId: s
   const name = esc(details.clientName);
   const domain = details.clientDomain
     ? `<p class="domain"><strong>${esc(details.clientDomain)}</strong><span>tên miền đã xác minh của ứng dụng</span></p>`
-    : banner("warn", "Ứng dụng này không có tên miền đã xác minh — tên bên dưới do nó tự khai.");
+    : banner("warn", "Ứng dụng này không có tên miền đã xác minh. Tên bên dưới do nó tự khai.");
   const loopback = details.redirectIsLoopback
     ? banner("warn", "Quyền sẽ được gửi tới một chương trình trên chính máy này (localhost). Chỉ cho phép nếu vừa bấm nối từ chương trình đó.")
     : "";
@@ -103,7 +102,7 @@ ${loopback}
 <button class="primary" type="submit" name="decision" value="approve">Cho phép</button>
 <button class="secondary" type="submit" name="decision" value="deny">Từ chối</button>
 </form>
-<p class="note">Gỡ kết nối bất cứ lúc nào ở Cài đặt › Claude và ứng dụng AI.</p>`;
+<p class="note">Gỡ kết nối bất cứ lúc nào ở Cài đặt › Trợ lý AI.</p>`;
   return c.html(page(`Cho phép ${details.clientName}`, body), { status: 200, headers: consent.headers });
 }
 

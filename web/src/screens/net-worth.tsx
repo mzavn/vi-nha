@@ -6,6 +6,7 @@
 import { type ComponentChildren, Fragment } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { api, errorText } from "../lib/api";
+import { EMPTY_STATES } from "../lib/empty-states";
 import type { NetWorthSection } from "../lib/hash-route";
 import { formatTypedVnd, formatVnd } from "../lib/money";
 import {
@@ -60,21 +61,17 @@ import { go, setNetWorthSection, toast, useApp } from "../state/store";
 import { AmountInput } from "../ui/fields";
 import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
-import { Card, Empty, Loadable, NeedsNetwork, PageHeader, Seg, Sheet } from "../ui/parts";
+import { Card, Chip, Empty, Loadable, NeedsNetwork, PageHeader, Row, SectionNav, Seg, Sheet } from "../ui/parts";
 import { useWide } from "../ui/shell";
+import { NET_WORTH_SECTION_LABELS, SCREEN_TITLES } from "../lib/nav";
 import { MilestonesSection, ProjectionSection } from "./net-worth-freedom";
 import { CashFlowSection, IncomeSection, PeriodBar } from "./net-worth-reports";
 import { Check, Field, Hint } from "./settings-sheets";
 
-/** Sáu phần (UC-717); hash lạ mở về Cân đối. */
-const SECTIONS: { value: NetWorthSection; label: string }[] = [
-  { value: "sheet", label: "Cân đối" },
-  { value: "pyramid", label: "Tháp" },
-  { value: "cash-flow", label: "Lưu chuyển tiền" },
-  { value: "income", label: "Thu chi" },
-  { value: "milestones", label: "Mốc tự do" },
-  { value: "projection", label: "Thử số" },
-];
+/** Bốn phần (UC-717); hash lạ mở về Cân đối. */
+const SECTIONS: { value: NetWorthSection; label: string }[] = (
+  Object.entries(NET_WORTH_SECTION_LABELS) as [NetWorthSection, string][]
+).map(([value, label]) => ({ value, label }));
 
 type Open =
   | { kind: "add" }
@@ -114,31 +111,32 @@ export function NetWorth() {
   };
   const toItem = () => setOpen(item ? { kind: "item", id: item.id } : null);
 
-  const main = section === "milestones" ? (
-    <MilestonesSection />
-  ) : section === "projection" ? (
-    <ProjectionSection today={today} />
-  ) : report ? (
-    <>
-      <PeriodBar period={period} today={today} onChange={setPeriod} />
-      {section === "cash-flow" ? <CashFlowSection period={period} /> : <IncomeSection period={period} />}
-    </>
-  ) : (
-    <Loadable res={sheet}>
-      {(d) =>
-        section === "pyramid" ? (
-          <Pyramid d={d} onOpen={(id) => setOpen({ kind: "item", id })} />
-        ) : (
-          <BalanceSheetView d={d} history={history} wide={wide} onOpen={(id) => setOpen({ kind: "item", id })} />
-        )
-      }
-    </Loadable>
-  );
+  const main =
+    section === "freedom" ? (
+      <>
+        <MilestonesSection />
+        <ProjectionSection today={today} />
+      </>
+    ) : report ? (
+      <>
+        <PeriodBar period={period} today={today} onChange={setPeriod} />
+        {section === "cash-flow" ? <CashFlowSection period={period} /> : <IncomeSection period={period} />}
+      </>
+    ) : (
+      <Loadable res={sheet}>
+        {(d) => (
+          <>
+            <BalanceSheetView d={d} history={history} wide={wide} onOpen={(id) => setOpen({ kind: "item", id })} onAdd={() => setOpen({ kind: "add" })} />
+            <Pyramid d={d} onOpen={(id) => setOpen({ kind: "item", id })} />
+          </>
+        )}
+      </Loadable>
+    );
 
   return (
     <>
       <PageHeader
-        title="Tài sản & tự do"
+        title={SCREEN_TITLES["net-worth"]}
         sub={`Tới ngày ${dateText(today)}`}
         action={
           <button type="button" class="btn btn-primary" disabled={!app.online} onClick={() => setOpen({ kind: "add" })}>
@@ -146,22 +144,19 @@ export function NetWorth() {
           </button>
         }
       />
-      {/* Hàng nút các phần: xuống dòng khi chật, không cuộn ngang (UC-717 AC-1). */}
-      <div class="tabs wrap" role="group" aria-label="Phần">
-        {SECTIONS.map((s) => (
-          <button type="button" key={s.value} aria-pressed={section === s.value} onClick={() => setNetWorthSection(s.value)}>
-            {s.label}
-          </button>
-        ))}
-      </div>
-
       {wide ? (
-        <div class="dk-cols nw-cols">
-          <div>{main}</div>
-          <div class="dk-panel">{data && <Summary d={data} />}</div>
+        <div class="sec-layout">
+          <SectionNav wide label="Phần" items={SECTIONS} value={section} onChange={setNetWorthSection} />
+          <div class="nw-cols">
+            <div class="min-w-0">{main}</div>
+            <div class="dk-panel">{data && <Summary d={data} />}</div>
+          </div>
         </div>
       ) : (
-        main
+        <>
+          <SectionNav wide={false} label="Phần" items={SECTIONS} value={section} onChange={setNetWorthSection} />
+          {main}
+        </>
       )}
 
       {open?.kind === "add" && <ItemFormSheet item={null} today={today} onClose={() => setOpen(null)} onSaved={(text, id) => changed(text, { kind: "item", id })} />}
@@ -183,27 +178,18 @@ function LotOf({ item, lotId, children }: { item: BalanceItem; lotId: number; ch
 
 // ── Cân đối ─────────────────────────────────────────────────────────
 
-/** Card tóm tắt ba hàng: Tổng tài sản · Nợ phải trả (−) · Vốn chủ sở hữu (28px, không phải hero — DESIGN §4). */
+/** Card tóm tắt ba hàng: Tổng tài sản · Nợ phải trả (−) · Vốn chủ sở hữu (số tổng, không phải hero — DESIGN §4); chân thẻ giải thích. */
 function Summary({ d }: { d: BalanceSheet }) {
   return (
-    <Card>
-      <div class="srow" style={{ borderTop: 0 }}>
-        <span class="srow-t">Tổng tài sản</span>
-        <Money value={d.totalAssets} tone={false} />
-      </div>
-      <div class="srow">
-        <span class="srow-t">Nợ phải trả</span>
-        <Money value={-d.totalLiabilities} tone={false} />
-      </div>
-      <div class="srow nw-equity">
-        <span class="srow-t">Vốn chủ sở hữu</span>
-        <Money value={d.equity} />
-      </div>
+    <Card flush note="Vốn chủ = tài sản − nợ. Tiền, nợ, phải thu lấy từ sổ. Số ở đây không đổi số dư hay tiền vận hành.">
+      <Row title="Tổng tài sản" value={<Money value={d.totalAssets} tone={false} />} />
+      <Row title="Nợ phải trả" value={<Money value={-d.totalLiabilities} tone={false} />} />
+      <Row total class="nw-equity" title="Vốn chủ sở hữu" value={<Money value={d.equity} />} />
     </Card>
   );
 }
 
-function BalanceSheetView({ d, history, wide, onOpen }: { d: BalanceSheet; history: Resource<BalanceHistory>; wide: boolean; onOpen: (id: string) => void }) {
+function BalanceSheetView({ d, history, wide, onOpen, onAdd }: { d: BalanceSheet; history: Resource<BalanceHistory>; wide: boolean; onOpen: (id: string) => void; onAdd?: () => void }) {
   const items = new Map(d.items.map((i) => [i.id, i]));
   const groups = (["A", "B"] as const).map((g) => ({ g, sections: d.assets.filter((s) => s.section.startsWith(g)) })).filter((x) => x.sections.length > 0);
   const empty = d.assets.length === 0 && d.liabilities.length === 0;
@@ -212,7 +198,7 @@ function BalanceSheetView({ d, history, wide, onOpen }: { d: BalanceSheet; histo
       {!wide && <Summary d={d} />}
       {empty && (
         <Card>
-          <Empty title="Chưa có gì trong bảng cân đối.">Tiền, nợ, phải thu lấy từ sổ. Thêm vàng, đất, chứng khoán bằng nút Thêm tài sản.</Empty>
+          <Empty state={EMPTY_STATES.reportSheet} onAction={onAdd} />
         </Card>
       )}
       {groups.map(({ g, sections }) => (
@@ -233,30 +219,26 @@ function BalanceSheetView({ d, history, wide, onOpen }: { d: BalanceSheet; histo
         </Card>
       ))}
       {d.items.some((i) => !i.present) && (
-        <Card title="Chưa có trong bảng" flush note="Mục chưa có định giá hay lô đang giữ thì chưa cộng vào bảng. Chạm để cập nhật giá hoặc thêm lô.">
+        <Card title="Chưa có trong bảng" flush note="Mục chưa có giá hay lô thì chưa cộng vào bảng. Chạm để cập nhật giá hoặc thêm lô.">
           {d.items
             .filter((i) => !i.present)
             .map((i) => (
-              <button type="button" key={i.id} class="srow" onClick={() => onOpen(i.id)}>
-                <span class="srow-main">
-                  <span class="srow-t">{i.name}</span>
-                  <span class="srow-s">{[SECTION_LABEL[i.section], pyramidLabel(i.pyramid), i.measure === "units" ? `theo lô (${i.unit})` : "theo giá trị"].join(" · ")}</span>
-                </span>
-                <Icon name="chevron-right" size={16} />
-              </button>
+              <Row
+                key={i.id}
+                title={i.name}
+                sub={[SECTION_LABEL[i.section], pyramidLabel(i.pyramid), i.measure === "units" ? `theo lô (${i.unit})` : "theo giá trị"].join(" · ")}
+                onClick={() => onOpen(i.id)}
+              />
             ))}
         </Card>
       )}
       {d.liabilities.length > 0 && <Liabilities d={d} />}
-      <p class="hint" style={{ margin: "0 4px 12px" }}>
-        Vốn chủ = tài sản − nợ. Tiền, nợ, phải thu lấy từ sổ. Số ở đây không đổi số dư hay tiền vận hành.
-      </p>
       <Loadable res={history}>{(h) => <History h={h} />}</Loadable>
     </>
   );
 }
 
-/** Một dòng tài sản: tên trái, giá trị phải; dòng phụ % / dòng tiền / ngày giá; mục theo lô thêm số lượng, lãi / lỗ, chip chạm giá. */
+/** Một dòng tài sản: tên trái, giá trị phải; một dòng phụ % / dòng tiền / ngày giá (mục theo lô thêm số lượng, lãi / lỗ); chip chạm giá. */
 function AssetLine({ r, item, onOpen }: { r: BalanceRow; item: BalanceItem | null; onOpen: (id: string) => void }) {
   const lots = item ? lotsSummary(item) : null;
   const ledger = r.source === "ledger";
@@ -266,28 +248,23 @@ function AssetLine({ r, item, onOpen }: { r: BalanceRow; item: BalanceItem | nul
     go(t.tab, { walletsTab: t.walletsTab });
   };
   return (
-    <button type="button" class="tier" onClick={click} aria-label={`${r.name}: ${formatVnd(r.value)}${ledger ? ", từ sổ — mở sổ nguồn" : ", xem chi tiết"}`}>
-      <div class="nm">
-        {r.name}
-        {ledger && <span class="chip">từ sổ</span>}
-        {lots?.chips.map((c) => (
-          <span key={c.label} class={`chip ${c.tone}`}>
-            {c.label}
-          </span>
-        ))}
-      </div>
-      <div class="amt">
-        <Money value={r.value} tone={false} />
-      </div>
-      <div class="tsub nw-sub">
-        <span>{assetRowSub(r, item)}</span>
-      </div>
-      {lots?.text && (
-        <div class="tsub nw-sub">
-          <span>{lots.text}</span>
-        </div>
-      )}
-    </button>
+    <Row
+      title={
+        <>
+          {r.name}
+          {ledger && <Chip>từ sổ</Chip>}
+          {lots?.chips.map((c) => (
+            <span key={c.label} class={`chip ${c.tone}`}>
+              {c.label}
+            </span>
+          ))}
+        </>
+      }
+      sub={[assetRowSub(r, item), lots?.text].filter(Boolean).join(" · ")}
+      value={<Money value={r.value} tone={false} />}
+      onClick={click}
+      label={`${r.name}: ${formatVnd(r.value)}${ledger ? ", từ sổ, mở sổ nguồn" : ", xem chi tiết"}`}
+    />
   );
 }
 
@@ -316,12 +293,7 @@ function Liabilities({ d }: { d: BalanceSheet }) {
             </Fragment>
           );
         })}
-        <div class="tier btotal">
-          <div class="nm">Tiền lãi mỗi năm</div>
-          <div class="amt">
-            <Money value={d.interestPerYear} tone={false} />
-          </div>
-        </div>
+        <Row total title="Tiền lãi mỗi năm" value={<Money value={d.interestPerYear} tone={false} />} />
       </div>
     </Card>
   );
@@ -330,18 +302,18 @@ function Liabilities({ d }: { d: BalanceSheet }) {
 function LiabilityLine({ r }: { r: LiabilityRow }) {
   const t = ledgerTarget(r.key);
   return (
-    <button type="button" class="tier" onClick={() => go(t.tab, { walletsTab: t.walletsTab })} aria-label={`${liabilityName(r)}: ${formatVnd(r.value)}, từ sổ — mở sổ nguồn`}>
-      <div class="nm">
-        {liabilityName(r)}
-        <span class="chip">từ sổ</span>
-      </div>
-      <div class="amt">
-        <Money value={r.value} tone={false} />
-      </div>
-      <div class="tsub nw-sub">
-        <span>{liabilityRowSub(r)}</span>
-      </div>
-    </button>
+    <Row
+      title={
+        <>
+          {liabilityName(r)}
+          <Chip>từ sổ</Chip>
+        </>
+      }
+      sub={liabilityRowSub(r)}
+      value={<Money value={r.value} tone={false} />}
+      onClick={() => go(t.tab, { walletsTab: t.walletsTab })}
+      label={`${liabilityName(r)}: ${formatVnd(r.value)}, từ sổ, mở sổ nguồn`}
+    />
   );
 }
 
@@ -349,27 +321,17 @@ function LiabilityLine({ r }: { r: LiabilityRow }) {
 function History({ h }: { h: BalanceHistory }) {
   if (h.points.length === 0) return null;
   return (
-    <Card title="Theo tháng" flush note="Mỗi tháng tính tại cuối tháng; tháng đang chạy tính tới hôm nay.">
-      <div class="blist">
-        {[...h.points].reverse().map((p) => (
-          <div class="tier" key={p.month}>
-            <div class="nm">Tháng {monthText(p.month)}</div>
-            <div class="amt">
-              <Money value={p.equity} />
-            </div>
-            <div class="tsub nw-sub">
-              <span>{historySub(p)}</span>
-            </div>
-          </div>
-        ))}
-      </div>
+    <Card title="Theo tháng" flush note="Mỗi tháng tính vào cuối tháng; tháng này tính tới hôm nay.">
+      {[...h.points].reverse().map((p) => (
+        <Row key={p.month} title={`Tháng ${monthText(p.month)}`} sub={historySub(p)} value={<Money value={p.equity} />} />
+      ))}
     </Card>
   );
 }
 
 // ── Tháp ────────────────────────────────────────────────────────────
 
-/** Năm hàng từ trên xuống, thanh căn giữa rộng theo %; chạm tầng → danh sách dòng của tầng. */
+/** Năm hàng từ trên xuống: tên · giá trị · % tổng tài sản, thanh tiến độ 4px theo % (DESIGN §4.9); chạm tầng → danh sách dòng của tầng. */
 function Pyramid({ d, onOpen }: { d: BalanceSheet; onOpen: (id: string) => void }) {
   const [tier, setTier] = useState<PyramidTier | null>(null);
   const rows = d.assets.flatMap((s) => s.rows);
@@ -377,22 +339,21 @@ function Pyramid({ d, onOpen }: { d: BalanceSheet; onOpen: (id: string) => void 
   return (
     <>
       <Card title="Tháp tài sản" flush note={cashflowFooter(d.cashflowMonthly, d.netCashflowMonthly)}>
-        <div class="blist">
-          {PYRAMID.map(({ tier: t, label }) => {
-            const p = d.pyramid.find((x) => x.tier === t);
-            return (
-              <button type="button" key={t} class="tier nw-tier" aria-expanded={tier === t} onClick={() => setTier(tier === t ? null : t)}>
-                <div class="nm">{label}</div>
-                <div class="amt">
-                  <Money value={p?.total ?? 0} tone={false} /> <span class="nw-pct">{pctText(p?.pct ?? null)}</span>
-                </div>
-                <div class="nw-bar" aria-hidden="true">
-                  <i style={{ width: `${Math.max(0, Math.min(100, p?.pct ?? 0))}%` }} />
-                </div>
-              </button>
-            );
-          })}
-        </div>
+        {PYRAMID.map(({ tier: t, label }) => {
+          const p = d.pyramid.find((x) => x.tier === t);
+          return (
+            <Row
+              key={t}
+              class="nw-tier"
+              title={label}
+              value={<Money value={p?.total ?? 0} tone={false} />}
+              valueSub={pctText(p?.pct ?? null)}
+              track={{ pct: p?.pct ?? 0 }}
+              expanded={tier === t}
+              onClick={() => setTier(tier === t ? null : t)}
+            />
+          );
+        })}
       </Card>
       {tier && (
         <Card title={`Tầng ${pyramidLabel(tier)}`} flush>
@@ -448,7 +409,7 @@ function ItemSheet({ item, onClose, open, onChanged }: { item: BalanceItem; onCl
     <Sheet open title={item.name} onClose={onClose}>
       <div class="srow" style={{ borderTop: 0 }}>
         <span class="srow-main">
-          <span class="srow-t">{units ? `${item.unitPrice !== null ? `Giá ${formatVnd(item.unitPrice)}/${item.unit}` : "Chưa có giá — mỗi lô tính theo giá mua"}` : "Giá trị"}</span>
+          <span class="srow-t">{units ? `${item.unitPrice !== null ? `Giá ${formatVnd(item.unitPrice)}/${item.unit}` : "Chưa có giá, mỗi lô tính theo giá mua"}` : "Giá trị"}</span>
           <span class="srow-s">{[item.priceOn ? `ngày ${dateText(item.priceOn)}` : null, ret].filter(Boolean).join(" · ") || flags}</span>
         </span>
         <Money value={item.value} tone={false} class="srow-amt" />
@@ -563,8 +524,8 @@ function ItemSheet({ item, onClose, open, onChanged }: { item: BalanceItem; onCl
           </button>
         )}
       </div>
-      <div class="note" style={{ borderTop: "1px solid var(--border)" }}>
-        Chỉ ghi thêm: ghi sai thì huỷ dòng rồi ghi lại. Không có giao dịch nào được ghi — tiền bán về tài khoản ghi ở sổ như mọi khoản khác.
+      <div class="note" style={{ borderTop: "1px solid var(--line)" }}>
+        Chỉ ghi thêm, sai thì huỷ dòng rồi ghi lại. Ở đây không tự ghi sổ: tiền bán về tài khoản bạn ghi như mọi khoản khác.
       </div>
       {!online && (
         <div class="pad">
@@ -609,7 +570,7 @@ function useSend() {
 function Footer({ busy, error, label, onSubmit }: { busy: boolean; error: string | null; label: string; onSubmit: () => void }) {
   const { online } = useApp();
   return (
-    <div class="pad">
+    <div class="sheet-foot">
       {error && (
         <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
           {error}
@@ -649,7 +610,7 @@ function ItemFormSheet({ item, today, onClose, onSaved }: { item: BalanceItem | 
 
   return (
     <Sheet open title={item ? `Sửa ${item.name}` : "Thêm tài sản"} onClose={onClose}>
-      {!item && <Hint>Tiền ngân hàng, tiền mặt, khoản nợ, khoản người khác nợ mình lấy từ sổ — không thêm ở đây.</Hint>}
+      {!item && <Hint>Tiền ngân hàng, tiền mặt, khoản nợ, khoản người khác nợ mình lấy từ sổ, không thêm ở đây.</Hint>}
       <Field id="i-name" label="Tên" error={errors.name} first={!!item}>
         <input id="i-name" class="ctl" maxLength={80} placeholder="Vàng nhẫn, Đất nền…" value={f.name} onInput={(e) => set({ name: e.currentTarget.value })} />
       </Field>
@@ -687,7 +648,7 @@ function ItemFormSheet({ item, today, onClose, onSaved }: { item: BalanceItem | 
           />
         )}
       </div>
-      {locked && <Hint>Đã có định giá hoặc lô nên không đổi được cách tính.</Hint>}
+      {locked && <Hint>Đã có giá hoặc lô nên không đổi được cách tính.</Hint>}
       {f.measure === "units" && (
         <Field id="i-unit" label="Đơn vị" error={errors.unit}>
           <input id="i-unit" class="ctl" maxLength={20} placeholder="chỉ, lượng, cổ phiếu" value={f.unit} onInput={(e) => set({ unit: e.currentTarget.value })} />
@@ -703,8 +664,8 @@ function ItemFormSheet({ item, today, onClose, onSaved }: { item: BalanceItem | 
           </Field>
         </>
       )}
-      <Check id="i-liquid" label="Tiền lỏng — đếm cho Mốc an tâm" checked={f.liquid} onChange={(v) => set({ liquid: v })} />
-      <Check id="i-investable" label="Tài sản đầu tư — đếm cho mốc Tự do" checked={f.investable} onChange={(v) => set({ investable: v })} />
+      <Check id="i-liquid" label="Tiền lỏng, tính vào Mốc an tâm" checked={f.liquid} onChange={(v) => set({ liquid: v })} />
+      <Check id="i-investable" label="Tài sản đầu tư, tính vào Mốc tự do" checked={f.investable} onChange={(v) => set({ investable: v })} />
       <Field id="i-kind" label="Loại mua qua app">
         <select id="i-kind" class="ctl" value={f.assetKind} onChange={(e) => set({ assetKind: e.currentTarget.value as ItemForm["assetKind"] })}>
           <option value="">không gắn</option>
@@ -744,9 +705,9 @@ function ValueSheet({ item, today, onClose, onSaved }: { item: BalanceItem; toda
         <AmountInput id="v-cash" value={f.cashflow} onChange={(n) => set({ cashflow: n })} />
       </Field>
       <div class="field">
-        <span class="k">Kỳ của dòng tiền</span>
+        <span class="k">Kỳ dòng tiền</span>
         <Seg
-          label="Kỳ của dòng tiền"
+          label="Kỳ dòng tiền"
           value={f.period}
           onChange={(period) => set({ period })}
           options={[
@@ -755,11 +716,11 @@ function ValueSheet({ item, today, onClose, onSaved }: { item: BalanceItem; toda
           ]}
         />
       </div>
-      <Hint>Cổ tức, tiền thuê, lãi thật sự về — số sau thuế.</Hint>
+      <Hint>Cổ tức, tiền thuê, lãi thực nhận sau thuế.</Hint>
       <Field id="v-exp" label="Lợi suất kỳ vọng %/năm" error={errors.expected}>
         <input id="v-exp" class="ctl" inputMode="decimal" placeholder="tuỳ chọn" value={f.expected} onInput={(e) => set({ expected: e.currentTarget.value })} />
       </Field>
-      <Hint>Lợi suất kỳ vọng gồm cả tăng giá — không tính là thu nhập.</Hint>
+      <Hint>Lợi suất kỳ vọng gồm cả tăng giá, không tính là thu nhập.</Hint>
       <Footer
         busy={busy}
         error={error}
@@ -788,7 +749,7 @@ function LotSheet({ item, today, onClose, onSaved }: { item: BalanceItem; today:
       <Field id="l-note" label="Ghi chú">
         <input id="l-note" class="ctl" maxLength={500} value={f.note} onInput={(e) => set({ note: e.currentTarget.value })} />
       </Field>
-      <Hint>Số mua của lô không sửa được; ghi sai thì huỷ lô rồi ghi lại. Bán một phần: huỷ lô rồi ghi lại hai lô.</Hint>
+      <Hint>Lô đã mua không sửa được; ghi sai thì huỷ ghi lại. Bán một phần: huỷ rồi chia làm hai lô.</Hint>
       <Footer
         busy={busy}
         error={error}
@@ -839,7 +800,7 @@ function LotTargetsSheet({ item, lot, onClose, onSaved }: { item: BalanceItem; l
       <Field id="t-sl" label={`Cắt lỗ (một ${item.unit ?? "đơn vị"})`} error={errors.stopLoss}>
         <AmountInput id="t-sl" value={f.stopLoss} onChange={(n) => setF((x) => ({ ...x, stopLoss: n }))} />
       </Field>
-      <Hint>Để trống là bỏ. Chỉ để nhìn — app không tự bán, không nhắc.</Hint>
+      <Hint>Để trống là bỏ. Chỉ để xem, app không tự bán, không nhắc.</Hint>
       <Footer
         busy={busy}
         error={error}

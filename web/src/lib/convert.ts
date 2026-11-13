@@ -12,7 +12,7 @@ import { goalAccountOptions, pocketGoal, rewardAccountOptions, type GoalAccountO
 import type { IncomeStream, ReserveGoal, SettingsAccount, SettingsGoalGroup } from "./types";
 
 /** Năm bước theo thứ tự server (`conversion_claims`). */
-export const CONVERSION_STEPS = ["pockets", "goals", "savings_gap", "pay_cycle", "savings_pct"] as const;
+export const CONVERSION_STEPS = ["pockets", "goals", "savings_gap", "salary", "savings_pct"] as const;
 export type ConversionStep = (typeof CONVERSION_STEPS)[number];
 
 /** Tiến độ trong snapshot (`conversion`); null = không có / đã xong. */
@@ -170,7 +170,7 @@ export function goalRowAccounts(
  */
 export function goalRowOptionText(a: GoalAccountOption, selected: boolean): string {
   if (selected) return a.name;
-  return `${a.name} · đã có ${formatVnd(a.book_balance ?? 0)}${a.deposits ? ` (${a.deposits})` : ""}${a.shared ? ` — ${a.shared}` : ""}${a.blocked ? ` (${a.blocked})` : ""}`;
+  return `${a.name} · đã có ${formatVnd(a.book_balance ?? 0)}${a.deposits ? ` (${a.deposits})` : ""}${a.shared ? ` · ${a.shared}` : ""}${a.blocked ? ` (${a.blocked})` : ""}`;
 }
 
 /** Dòng dưới ô chọn của tài khoản đang chọn (như sheet mục tiêu ở Cài đặt): "{tên} · đã có X · gồm khoản gửi kỳ hạn · dùng chung với … · lý do tắt". */
@@ -287,20 +287,20 @@ export function goalCreateRequest(goal: Record<string, unknown>): StepRequest {
 
 /** Câu khi nhà chưa có tài khoản Dự phòng nào đang dùng (bước 2). */
 export const NO_RESERVE_ACCOUNT =
-  "Nhà chưa có tài khoản nào ở ngăn Dự phòng: mở một tài khoản thật (tài khoản phụ, sổ tiết kiệm…) cho từng mục tiêu, hoặc để sau.";
+  "Nhà chưa có tài khoản ở ngăn Dự phòng: mở tài khoản thật (tài khoản phụ, sổ tiết kiệm…) cho từng mục tiêu, hoặc để sau.";
 
 // ── Bước 3: Tích luỹ — tiền thật khác ví cũ ─────────────────────────
 
 export const SAVINGS_GAP_EXPLAIN =
-  "Bản cũ chia lương vào ví Tích sản ngay khi lương về, kể cả khi tiền chưa chuyển sang tài khoản tích luỹ (lệnh chuyển bị bỏ qua hay chưa làm), và tính cả các lần chuyển giữa ví. Từ bản 2.0, Tích luỹ là tiền thật đang nằm ở các tài khoản ngăn Tích luỹ. Số ví cũ chỉ còn ở màn này; giao dịch cũ vẫn xem được trong Sổ với nhãn 'cách tính cũ'.";
+  "Bản cũ chia lương vào ví Tích sản trên giấy ngay khi có lương, dù tiền chưa chuyển vào tài khoản tích luỹ và tính cả chuyển giữa các ví. Từ bản 2.0, Tích luỹ là tiền thật ở các tài khoản ngăn Tích luỹ. Số ví cũ chỉ còn ở màn này; giao dịch cũ vẫn xem được trong Sổ giao dịch với nhãn 'cách tính cũ'.";
 
 export const SAVINGS_GAP_NO_ACCOUNT =
-  "Chưa có tài khoản Tích luỹ: mở một tài khoản thật cho Tích luỹ (tài khoản phụ, sổ tích luỹ…), rồi xếp vào ngăn Tích luỹ ở Cài đặt › Ba ngăn.";
+  "Chưa có tài khoản Tích luỹ: mở tài khoản thật cho Tích luỹ (tài khoản phụ, sổ tích luỹ…), rồi xếp vào ngăn Tích luỹ ở Cài đặt › Ba ngăn.";
 
 /** Chữ bước 3 (chỉ đọc). Chênh có dấu: "+500.000 ₫" / "−1.000.000 ₫" / "0 ₫". */
 export function savingsGapLines(gap: SavingsGap): { legacy: string; assets: string; real: string; diff: string; noAccount: string | null } {
   return {
-    legacy: `Ví Tích sản cũ (số app chia trên giấy): ${formatVnd(gap.legacyCash)}`,
+    legacy: `Ví Tích sản cũ (chia trên giấy): ${formatVnd(gap.legacyCash)}`,
     assets: `không gồm ${formatVnd(gap.legacyAssets)} tài sản đã mua`,
     real: `Tích luỹ thật hôm nay: ${formatVnd(gap.realSavings)}`,
     diff: `Chênh: ${gap.diff > 0 ? "+" : ""}${formatVnd(gap.diff)}`,
@@ -308,21 +308,18 @@ export function savingsGapLines(gap: SavingsGap): { legacy: string; assets: stri
   };
 }
 
-// ── Bước 4: bật "Mở kỳ lương" ───────────────────────────────────────
+// ── Bước 4: "Nguồn lương" (khoá bước `salary`, UC-1208 AC-15) ─────────
 
-/** Nguồn thu đang dùng có công tắc "Mở kỳ lương" (nguồn cho thuê không có). */
-export const cycleSwitchStreams = (streams: IncomeStream[], rentalStreamId: string | null | undefined): IncomeStream[] =>
+export const SALARY_STEP_TITLE = "Nguồn lương";
+
+/** Nguồn thu đang dùng có công tắc "Nguồn lương" (nguồn cho thuê không có). */
+export const salarySwitchStreams = (streams: IncomeStream[], rentalStreamId: string | null | undefined): IncomeStream[] =>
   streams.filter((s) => s.active && s.id !== rentalStreamId);
 
-/** "Đang bật {N} nguồn: …" khi từ hai nguồn trở lên; ít hơn → null. */
-export function cycleStreamsNote(on: number): string | null {
-  return on >= 2 ? `Đang bật ${on} nguồn: khoản về trước trong 7 ngày quanh ngày lương mở kỳ` : null;
-}
-
 /** Nút Tiếp ở bước 4: ≥ 1 nguồn đang dùng bật, hoặc chọn "Nhà mình không có lương cố định". */
-export const payCycleReady = (on: number, noSalary: boolean): boolean => on > 0 || noSalary;
+export const salaryStepReady = (on: number, noSalary: boolean): boolean => on > 0 || noSalary;
 
-// ── Bước 5: % Tích luỹ mỗi kỳ lương ─────────────────────────────────
+// ── Bước 5: % Tích luỹ khi lương về ─────────────────────────────────
 
 /** Lương mẫu cho ví dụ ở bước 5. */
 const EXAMPLE_SALARY = 20_000_000;

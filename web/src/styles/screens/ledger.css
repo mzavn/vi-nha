@@ -1,0 +1,342 @@
+@layer components {
+/* Phân trang một dòng (K-002): "Mỗi trang" trái; "Trang N" + hai nút icon ‹ › phải. */
+.pager {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s2);
+    padding: var(--s2) var(--s4);
+    border-top: 1px solid var(--line);
+  }
+
+.pager-size {
+    display: flex;
+    align-items: center;
+    gap: var(--s2);
+    color: var(--fg-2);
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    white-space: nowrap;
+  }
+
+.pager-size .ctl {
+    width: auto;
+    max-width: none;
+  }
+
+.pager-nav {
+    display: flex;
+    align-items: center;
+    gap: var(--s1);
+    margin-left: auto;
+  }
+
+.pager-at {
+    margin-right: var(--s1);
+    color: var(--fg-2);
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+/* Nút icon: vòng 44px trên điện thoại (vùng chạm), 36px trên máy tính. */
+.pager-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--r-pill);
+    background: none;
+    color: var(--fg-2);
+    cursor: pointer;
+  }
+
+.pager-btn:hover:not(:disabled) {
+    background: var(--surface-2);
+    color: var(--fg);
+  }
+
+.pager-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+.pager-off {
+    flex-basis: 100%;
+    text-align: right;
+  }
+
+/* Thanh dính (K-003): nền đặc phủ hết chiều cao kể cả đệm trên / dưới, không xén nút, vạch mảnh ở mép dưới, nằm trên nội dung. */
+.book-bar {
+    position: sticky;
+    top: var(--topbar-h, 64px);
+    z-index: 15;
+    background: var(--bg);
+    box-shadow: 0 1px 0 var(--line);
+    margin: 0 -12px var(--s3);
+    padding: var(--s2) 12px var(--s3);
+    display: grid;
+    gap: var(--s2);
+  }
+
+.book-bar .btn,
+  .book-bar .ctl {
+    box-sizing: border-box;
+    height: 44px;
+    min-height: 44px;
+  }
+
+.book-month {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+.book-step {
+    width: 44px;
+    padding: 0;
+    flex: none;
+  }
+
+.book-month-t {
+    flex: 1;
+    text-align: center;
+    font-weight: 600;
+    font-size: var(--text-md); line-height: var(--leading-md);
+  }
+
+.book-all[aria-pressed="true"] {
+    border-color: var(--fg);
+  }
+
+.book-find {
+    display: flex;
+    gap: 8px;
+  }
+
+.book-q {
+    flex: 1;
+    position: relative;
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+
+.book-q svg {
+    position: absolute;
+    left: 11px;
+    color: var(--fg-3);
+    pointer-events: none;
+  }
+
+.book-q .ctl {
+    padding-left: 34px;
+  }
+
+/* Sheet Lọc (K-004): mọi ô cao 44px, cùng cỡ chữ, cùng bo; nhãn trái – ô phải thì các ô cùng rộng 220px (máy tính). */
+.book-f .ctl {
+    box-sizing: border-box;
+    width: 220px;
+    max-width: 220px;
+    height: 44px;
+    min-height: 44px;
+    border-radius: var(--r-inner);
+    font-family: inherit;
+    font-size: 16px; /* ≥ 16px: iOS không tự phóng to (DESIGN §4.11) */
+  }
+
+.book-sheet-h {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s2);
+  }
+
+.book-sheet-h .book-sheet-k {
+    margin-bottom: 0;
+  }
+
+.book-f-first {
+    border-top: 0;
+  }
+
+/* Nút chọn Loại / Nguồn: viên thuốc cao 36px nhìn thấy, vùng chạm 44px (::after nới 4px trên dưới). */
+.book-pick {
+    row-gap: var(--s2);
+  }
+
+.book-pick button {
+    min-height: 36px;
+    height: 36px;
+    padding: 0 var(--s3);
+  }
+
+.book-pick button::after {
+    inset: -4px 0;
+  }
+
+.book-check {
+    cursor: pointer;
+    color: var(--fg);
+    font-size: var(--text-md); line-height: var(--leading-md);
+  }
+
+.book-check input {
+    flex: none;
+    width: 20px;
+    height: 20px;
+    margin: 0;
+    accent-color: var(--fg);
+  }
+
+/* Điện thoại: ô rộng hết, nằm dưới nhãn. */
+@media (max-width: 1023px) {
+  .book-f {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--s1);
+    padding-top: var(--s2);
+    padding-bottom: var(--s2);
+  }
+  .book-f .ctl {
+    width: 100%;
+    max-width: none;
+  }
+}
+
+.book-hint {
+    margin: -2px 2px 0;
+  }
+
+.book-chips button {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+.book-sum-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 14px;
+    margin: 0;
+    padding: 12px 14px 0;
+  }
+
+.book-sum-grid dt {
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    color: var(--fg-2);
+  }
+
+.book-sum-grid dd {
+    margin: 0;
+    font-size: var(--text-lg); line-height: var(--leading-lg);
+    font-weight: 600;
+  }
+
+table.data.book-table tr.group th {
+    text-align: left;
+    background: none;
+    color: var(--fg-2);
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    font-weight: 500;
+    padding: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+/* Tiêu đề ngày: cả hàng là nút thu / mở các khoản của ngày đó (UC-716). */
+
+.day-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 44px;
+    padding: 8px 14px;
+    border: 0;
+    background: none;
+    color: inherit;
+    font-family: inherit; font-size: inherit; line-height: inherit; font-weight: inherit;
+    font-size: var(--text-md); line-height: var(--leading-md);
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+  }
+
+.day-toggle .day-head {
+    flex: 1;
+  }
+
+.day-toggle .day-count {
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    font-weight: 500;
+    color: var(--fg-2);
+  }
+
+/* Cột chữ canh trái thẳng tiêu đề; cột số (tiêu đề "Số tiền ₫" và ô) canh phải. */
+table.data th.l,
+  table.data td.l {
+    text-align: left;
+  }
+
+table.data th.num,
+  table.data td.num {
+    text-align: right;
+  }
+
+/* Dòng đầu các ô trong một hàng thẳng nhau (K-001): nút tiêu điểm trong ô Khoản không cao hơn dòng chữ. */
+table.data tr.tx-row .tx-open {
+    min-height: 0;
+    vertical-align: baseline;
+  }
+
+.book-more {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border-top: 1px solid var(--line);
+  }
+
+.book-sheet-k {
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    color: var(--fg-2);
+    margin-bottom: 8px;
+  }
+
+.book-sheet-act {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding-bottom: 8px;
+  }
+
+/* Máy tính: phân trang, thanh tháng + tìm. Đặt sau luật gốc để thắng thứ tự. */
+@media (min-width: 1024px) {
+    .pager-size .ctl {
+      min-height: 36px;
+      padding: var(--s1) var(--s8) var(--s1) var(--s2);
+      font-size: var(--text-sm); line-height: var(--leading-sm);
+    }
+    .pager-btn {
+      width: 36px;
+      height: 36px;
+    }
+    .book-bar {
+      margin: 0 0 var(--s3);
+      padding: var(--s2) 0 var(--s3);
+      grid-template-columns: minmax(320px, auto) minmax(0, 1fr);
+      align-items: center;
+    }
+    .book-hint,
+    .book-chips {
+      grid-column: 1 / -1;
+    }
+    .book-sum-grid {
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    }
+  }
+}

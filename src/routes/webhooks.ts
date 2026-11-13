@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
 import { DomainError } from "../domain/types";
-import { notifyPayCycle } from "../notify/pay-cycle";
+import { notifySalary } from "../notify/salary";
 import { afterResponse } from "../services/audit";
 import { blockedFor, clientIp, recordFailure } from "../services/auth-throttle";
 import { ingestLog, parseWebhookPayload, recordIngestError } from "../services/ingest";
@@ -53,15 +53,15 @@ webhooks.post("/sepay", async (c) => {
     await recordIngestError(c.env.DB, "webhook", ref, err instanceof Error ? err.message : "unknown", now).catch(() => {});
     return c.json({ success: true }, 200);
   }
-  let cycleOpened: string | undefined;
+  let salaryTxId: number | undefined;
   try {
-    ({ cycleOpened } = await ingestLog(c.env.DB, parsed, "webhook", now, connectionId));
+    ({ salaryTxId } = await ingestLog(c.env.DB, parsed, "webhook", now, connectionId));
   } catch (err) {
     console.error("[webhooks/sepay] lỗi tạm thời, để SePay gửi lại:", err instanceof Error ? err.message : "unknown");
     return c.json({ success: false }, 503);
   }
-  // Lương vừa mở kỳ: báo "Lương về · N việc" sau khi trả lời (notify UC-412); lỗi gửi không ảnh hưởng khoản đã ghi.
-  if (cycleOpened) await afterResponse(c, notifyPayCycle(c.env, cycleOpened));
+  // Rule lương vừa ghi khoản lương có nhắc ①: báo "Lương về" sau khi trả lời (notify UC-412); lỗi gửi không ảnh hưởng khoản đã ghi.
+  if (salaryTxId) await afterResponse(c, notifySalary(c.env, salaryTxId));
   return c.json({ success: true }, 200);
 });
 

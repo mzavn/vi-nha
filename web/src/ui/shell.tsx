@@ -1,15 +1,15 @@
-// Khung máy tính (≥1024px): thanh bên thay thanh dưới và nút "+", phím N mở màn Nhập.
+// Khung máy tính (≥1024px): thanh bên thay thanh dưới và nút "+", phím N mở Ghi khoản (pwa UC-711 AC-31).
 // Dưới 1024px không component nào ở đây được vẽ — giao diện điện thoại giữ nguyên.
 
 import { useEffect, useState } from "preact/hooks";
 import { errorText } from "../lib/api";
+import { ENTRY_LABEL, sidebarNav } from "../lib/nav";
 import { shortDate, timeHM } from "../lib/period";
-import { appVersionLabel } from "../lib/settings";
 import { GUIDE_URL, SOURCE_URL } from "../lib/splits";
 import { PinSheet, usePinSet } from "../screens/pin-sheet";
 import { go, logout, syncNow, toast, useApp, type Tab } from "../state/store";
 import { Icon } from "./icons";
-import { HideAmountsButton, Seg } from "./parts";
+import { HideAmountsButton } from "./parts";
 
 /** Một mốc duy nhất cho cả app: CSS dùng cùng giá trị trong @media (min-width: 1024px). */
 export const WIDE = "(min-width: 1024px)";
@@ -26,6 +26,11 @@ export function useWide(): boolean {
 }
 
 type Theme = "auto" | "light" | "dark";
+
+/** Nút giao diện ở chân thanh bên: bấm đổi vòng Theo máy → Sáng → Tối. */
+const THEME_NEXT: Record<Theme, Theme> = { auto: "light", light: "dark", dark: "auto" };
+const THEME_LABEL: Record<Theme, string> = { auto: "Theo máy", light: "Sáng", dark: "Tối" };
+const THEME_ICON: Record<Theme, "monitor" | "sun" | "moon"> = { auto: "monitor", light: "sun", dark: "moon" };
 
 /** Sáng / tối theo máy, người dùng chọn đè được (DESIGN.md §7). Dùng chung cho chân màn Hôm nay và thanh bên. */
 export function useTheme(): [Theme, (v: Theme) => void] {
@@ -68,7 +73,7 @@ export function signOutEverywhereNote(name: string | undefined, unsynced: number
   return unsynced > 0 ? `${base} Còn ${unsynced} khoản của ${name} chưa lên sổ, nằm lại trên máy này đến khi ${name} đăng nhập lại.` : base;
 }
 
-/** Phím N ở bất cứ đâu (trừ khi đang gõ hoặc đang mở sheet) → màn Nhập, con trỏ trong ô số tiền. */
+/** Phím N ở bất cứ đâu (trừ khi đang gõ hoặc đang mở sheet) → màn Ghi khoản, con trỏ trong ô số tiền. */
 export function useQuickEntryKey() {
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
@@ -86,13 +91,6 @@ export function useQuickEntryKey() {
   }, []);
 }
 
-const NAV: { tab: Tab; label: string; icon: string }[] = [
-  { tab: "today", label: "Hôm nay", icon: "home" },
-  { tab: "entry", label: "Nhập", icon: "plus-circle" },
-  { tab: "assign", label: "Gán", icon: "inbox" },
-  { tab: "wallets", label: "Ví & quỹ", icon: "wallet" },
-];
-
 export function Sidebar() {
   const app = useApp();
   const [theme, setTheme] = useTheme();
@@ -103,15 +101,15 @@ export function Sidebar() {
   const mine = app.queue.filter((q) => q.memberId === app.member?.id);
   const pending = mine.filter((q) => q.status === "pending").length;
   const rejected = mine.filter((q) => q.status === "rejected").length;
-  const a = app.snap?.attention;
-  const badges: Partial<Record<Tab, { n: number; label: string }>> = {
-    entry: { n: mine.length, label: "chưa lên sổ" },
-    assign: { n: a?.pendingLogs ?? 0, label: "chưa gán" },
-  };
+  const pendingLogs = app.snap?.attention.pendingLogs ?? 0;
   const snapAt = app.snap?.at;
 
-  const item = (tab: Tab, label: string, icon: string) => {
-    const b = badges[tab];
+  const items = sidebarNav(app.compact);
+  const mainItems = items.filter((n) => n.tab !== "settings");
+  const settingsItem = items.find((n) => n.tab === "settings");
+
+  const renderItem = (tab: Tab, label: string) => {
+    const isAssign = tab === "assign";
     return (
       <button
         type="button"
@@ -120,11 +118,10 @@ export function Sidebar() {
         aria-current={app.tab === tab ? "page" : undefined}
         onClick={() => go(tab)}
       >
-        <Icon name={icon} size={18} />
         <span class="side-label">{label}</span>
-        {!!b?.n && (
-          <span class="side-badge" aria-label={`${b.n} ${b.label}`}>
-            {b.n}
+        {isAssign && pendingLogs > 0 && (
+          <span class="side-badge" aria-label={`${pendingLogs} chưa gán`}>
+            {pendingLogs}
           </span>
         )}
       </button>
@@ -133,28 +130,24 @@ export function Sidebar() {
 
   return (
     <aside class="side" aria-label="Điều hướng">
-      <div class="side-brand">
-        <span class="side-logo" aria-hidden="true">
-          <Icon name="wallet" size={16} />
-        </span>
-        Ví nhà
-      </div>
+      <div class="side-brand">Ví nhà</div>
 
       <button type="button" class="btn side-new" onClick={() => go("entry")} aria-keyshortcuts="N">
-        <Icon name="plus" size={16} />
-        Nhập khoản chi
+        <span>{ENTRY_LABEL}</span>
+        {mine.length > 0 && (
+          <span class="side-badge" aria-label={`${mine.length} chưa lên sổ`}>
+            {mine.length}
+          </span>
+        )}
         <kbd>N</kbd>
       </button>
 
       <nav class="side-nav" aria-label="Màn chính">
-        {NAV.map((n) => item(n.tab, n.label, n.icon))}
-        {item("ledger", "Sổ giao dịch", "book")}
-        {item("net-worth", "Tài sản & tự do", "trending-up")}
+        {mainItems.map((n) => renderItem(n.tab, n.label))}
         <div class="side-sep" />
-        {item("settings", "Cài đặt", "settings")}
+        {settingsItem && renderItem(settingsItem.tab, settingsItem.label)}
         {/* Hướng dẫn mở GitBook ở tab mới, không phải màn trong app (UC-711 AC-26). */}
         <a class="side-item" href={GUIDE_URL} target="_blank" rel="noopener">
-          <Icon name="help" size={18} />
           <span class="side-label">Hướng dẫn</span>
         </a>
       </nav>
@@ -162,85 +155,93 @@ export function Sidebar() {
       <div class="side-foot">
         <div class="side-status" role="status">
           <span class="side-line">
-            {app.online ? (
-              <>
-                <i class="side-dot" aria-hidden="true" /> Có mạng
-              </>
-            ) : (
-              <>
-                <Icon name="cloud-off" size={14} /> Không có mạng
-              </>
-            )}
-          </span>
-          {snapAt && (
-            <span class="side-line">
-              {app.stale ? "Số cũ lúc " : "Số lúc "}
-              {timeHM(snapAt)}
-              {shortDate(snapAt) !== shortDate(new Date().toISOString()) ? ` ngày ${shortDate(snapAt)}` : ""}
+            {app.online ? <i class="side-dot" aria-hidden="true" /> : <Icon name="cloud-off" size={16} />}
+            {/* Một hàng: chấm xanh = có mạng (chữ đầy đủ ở title), giờ của số, rồi Đồng bộ · Che số · Giao diện. */}
+            <span class="side-line-t" title={app.online ? "Có mạng" : "Chưa có mạng"}>
+              {app.online ? "" : "Mất mạng · "}
+              {snapAt ? (
+                <>
+                  {app.stale ? "số cũ " : "số lúc "}
+                  {timeHM(snapAt)}
+                  {shortDate(snapAt) !== shortDate(new Date().toISOString()) ? ` ${shortDate(snapAt)}` : ""}
+                </>
+              ) : app.online ? (
+                "Có mạng"
+              ) : (
+                ""
+              )}
             </span>
-          )}
-          {pending > 0 && <span class="chip warn">{pending} chờ đồng bộ, đã trừ tạm</span>}
+            <button
+              type="button"
+              class="side-ic"
+              aria-label="Đồng bộ"
+              title={app.syncing ? "Đang đồng bộ…" : "Đồng bộ"}
+              onClick={() => void syncNow()}
+              disabled={app.syncing}
+            >
+              <Icon name="sync" size={16} />
+            </button>
+            <HideAmountsButton class="side-ic" />
+            <button
+              type="button"
+              class="side-ic"
+              aria-label={`Giao diện: ${THEME_LABEL[theme]}`}
+              title={`Giao diện: ${THEME_LABEL[theme]}`}
+              onClick={() => setTheme(THEME_NEXT[theme])}
+            >
+              <Icon name={THEME_ICON[theme]} size={16} />
+            </button>
+          </span>
+          {pending > 0 && <span class="chip warn">{app.online ? `${pending} khoản đang chờ gửi` : `Chưa có mạng · ${pending} khoản sẽ tự gửi khi có mạng`}</span>}
           {rejected > 0 && <span class="chip bad">{rejected} bị máy chủ từ chối</span>}
         </div>
-        <button type="button" class="btn side-sync" onClick={() => void syncNow()} disabled={app.syncing}>
-          <Icon name="sync" size={14} />
-          {app.syncing ? "Đang đồng bộ…" : "Đồng bộ"}
-        </button>
-        <HideAmountsButton class="btn side-sync" label />
-        <div class="side-pin">
-          {hasPin ? (
-            <>
-              <button type="button" class="btn side-sync" onClick={() => setPinMode("change")}>
-                Đổi mã PIN
+
+        <div class="side-member">
+          <span class="side-member-nm">
+            <span class="side-k">Đang dùng</span> <strong>{app.member?.name}</strong>
+          </span>
+          <details class="side-menu">
+            <summary class="side-ic" aria-label="Tuỳ chọn tài khoản" title="Tuỳ chọn tài khoản">
+              <Icon name="more" size={16} />
+            </summary>
+            <div class="side-menu-list">
+              {hasPin ? (
+                <>
+                  <button type="button" class="side-menu-item" onClick={() => setPinMode("change")}>
+                    Đổi mã PIN
+                  </button>
+                  <button type="button" class="side-menu-item" onClick={() => setPinMode("off")}>
+                    Tắt PIN
+                  </button>
+                </>
+              ) : (
+                <button type="button" class="side-menu-item" onClick={() => setPinMode("set")}>
+                  Đặt mã PIN
+                </button>
+              )}
+              <button type="button" class="side-menu-item" onClick={onLogout}>
+                {confirmOut ? "Vẫn đăng xuất" : "Đăng xuất"}
               </button>
-              <button type="button" class="btn side-sync" onClick={() => setPinMode("off")}>
-                Tắt PIN
+              {confirmOut && (
+                <p class="side-warn" role="alert">
+                  Còn {unsynced} khoản của {app.member?.name} chưa lên sổ. Chúng nằm lại trên máy này và chỉ gửi khi {app.member?.name} đăng nhập lại.
+                </p>
+              )}
+              <button type="button" class="side-menu-item" onClick={all.onLogout}>
+                {all.confirmOut ? "Vẫn đăng xuất mọi máy" : "Đăng xuất mọi máy"}
               </button>
-            </>
-          ) : (
-            <button type="button" class="btn side-sync" onClick={() => setPinMode("set")}>
-              Đặt mã PIN
-            </button>
-          )}
+              {all.confirmOut && (
+                <p class="side-warn" role="alert">
+                  {signOutEverywhereNote(app.member?.name, all.unsynced)}
+                </p>
+              )}
+            </div>
+          </details>
         </div>
         {pinMode && <PinSheet mode={pinMode} limits onClose={() => setPinMode(null)} />}
 
-        <Seg
-          class="side-theme"
-          label="Giao diện"
-          value={theme}
-          onChange={setTheme}
-          options={[
-            { value: "auto", label: "Theo máy" },
-            { value: "light", label: "Sáng" },
-            { value: "dark", label: "Tối" },
-          ]}
-        />
-
-        <div class="side-member">
-          <span class="min-w-0">
-            <span class="side-k">Đang dùng</span>
-            <strong>{app.member?.name}</strong>
-          </span>
-          <button type="button" class="btn side-out" onClick={onLogout}>
-            {confirmOut ? "Vẫn đăng xuất" : "Đăng xuất"}
-          </button>
-        </div>
-        {confirmOut && (
-          <p class="side-warn" role="alert">
-            Còn {unsynced} khoản của {app.member?.name} chưa lên sổ. Chúng nằm lại trên máy này và chỉ gửi khi {app.member?.name} đăng nhập lại.
-          </p>
-        )}
-        <button type="button" class="link side-k" onClick={all.onLogout}>
-          {all.confirmOut ? "Vẫn đăng xuất mọi máy" : "Đăng xuất mọi máy"}
-        </button>
-        {all.confirmOut && (
-          <p class="side-warn" role="alert">
-            {signOutEverywhereNote(app.member?.name, all.unsynced)}
-          </p>
-        )}
         <p class="side-k side-about">
-          Ví nhà · {appVersionLabel(__APP_VERSION__)} ·{" "}
+          {__APP_VERSION__ ? `Ví nhà ${__APP_VERSION__}` : "Ví nhà"} ·{" "}
           <a class="link" href={SOURCE_URL} target="_blank" rel="noopener">
             Mã nguồn
           </a>

@@ -31,10 +31,8 @@ export interface ConnectionRow {
   title: string;
   /** Tên miền đã xác minh ("claude.ai"); không có thì nơi chuyển về; trùng tên ứng dụng thì bỏ. */
   domain: string | null;
-  /** "của Chồng · Xem + Ghi". */
+  /** Một dòng phụ (K-010): "của Chồng · Xem + Ghi · nối ngày 8/10". */
   sub: string;
-  /** "nối ngày 8/10". */
-  sub2: string;
   revokePath: string;
 }
 
@@ -48,8 +46,7 @@ export function connectionRows(list: McpConnection[], now: Date): ConnectionRow[
         key: `${c.memberId}/${c.grantId}`,
         title: c.clientName,
         domain: domain === c.clientName ? null : domain,
-        sub: `của ${c.memberName} · ${scopeLabel(c.scopes)}`,
-        sub2: connectedDate(c.createdAt, now),
+        sub: `của ${c.memberName} · ${scopeLabel(c.scopes)} · ${connectedDate(c.createdAt, now)}`,
         revokePath: revokePath(c),
       };
     });

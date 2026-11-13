@@ -4,13 +4,14 @@
 import { useState } from "preact/hooks";
 import { changePin, createPinRecord, deviceStorage, isPinText, readPin, removePin, savePin, type PinCheck } from "../lib/pin";
 import { forgetPin, toast, useApp } from "../state/store";
+import { Icon } from "../ui/icons";
 import { Sheet } from "../ui/parts";
 import { Field, Hint } from "./settings-sheets";
 
 type Mode = "set" | "change" | "off";
 
 export const PIN_LIMITS =
-  "Mã PIN chặn người cầm máy mở app, không thay mật khẩu. Quên PIN thì đăng xuất máy này rồi đăng nhập lại bằng mật khẩu. Safari chưa thêm ra màn hình chính có thể tự xoá dữ liệu sau 7 ngày không mở — khi đó PIN mất, phải đặt lại.";
+  "Mã PIN để khoá app trên máy này, không thay mật khẩu. Quên PIN thì đăng xuất rồi đăng nhập lại bằng mật khẩu. Dùng Safari chưa thêm ra màn hình chính có thể bị xoá dữ liệu sau 7 ngày không mở và phải đặt lại PIN.";
 
 /** PIN của người đang dùng có đặt trên máy này không (đọc lại mỗi lần vẽ — localStorage, đồng bộ). */
 export function usePinSet(): boolean {
@@ -18,29 +19,31 @@ export function usePinSet(): boolean {
   return readPin(deviceStorage(), member?.id ?? null) !== null;
 }
 
-/** Hàng "Mã PIN" của Máy này: Đặt, hoặc Đổi / Tắt khi đã có. */
+/** Hàng "Mã PIN" của Máy này (K-010: một hàng một việc): Đặt mã PIN, hoặc Đổi / Tắt thành hai hàng khi đã có. */
 export function PinRow() {
   const has = usePinSet();
   const [mode, setMode] = useState<Mode | null>(null);
+  const row = (m: Mode, title: string, sub?: string) => (
+    <button type="button" class="srow" onClick={() => setMode(m)}>
+      <span class="srow-main">
+        <span class="srow-t">{title}</span>
+        {sub && <span class="srow-s">{sub}</span>}
+      </span>
+      <span class="srow-r">
+        <Icon name="chevron-right" size={16} />
+      </span>
+    </button>
+  );
   return (
     <>
-      <div class="field">
-        <span class="k">Mã PIN {has ? "· đang bật" : ""}</span>
-        {has ? (
-          <span class="flex items-center gap-1">
-            <button type="button" class="btn" onClick={() => setMode("change")}>
-              Đổi
-            </button>
-            <button type="button" class="btn" onClick={() => setMode("off")}>
-              Tắt
-            </button>
-          </span>
-        ) : (
-          <button type="button" class="btn" onClick={() => setMode("set")}>
-            Đặt mã PIN
-          </button>
-        )}
-      </div>
+      {has ? (
+        <>
+          {row("change", "Đổi mã PIN", "Mã PIN đang bật")}
+          {row("off", "Tắt mã PIN")}
+        </>
+      ) : (
+        row("set", "Đặt mã PIN", "Khoá app trên máy này")
+      )}
       <div class="note">{PIN_LIMITS}</div>
       {mode && <PinSheet mode={mode} onClose={() => setMode(null)} />}
     </>
@@ -49,7 +52,7 @@ export function PinRow() {
 
 const TITLE: Record<Mode, string> = { set: "Đặt mã PIN", change: "Đổi mã PIN", off: "Tắt mã PIN" };
 const DONE: Record<Mode, string> = {
-  set: "Đã đặt mã PIN. App hỏi PIN khi mở lại hoặc quay lại sau 1 phút.",
+  set: "Đã đặt mã PIN. App sẽ hỏi PIN khi mở lại hoặc sau 1 phút ở nền.",
   change: "Đã đổi mã PIN.",
   off: "Đã tắt mã PIN trên máy này.",
 };
@@ -127,10 +130,10 @@ export function PinSheet({ mode, limits = false, onClose }: { mode: Mode; limits
       <Hint>
         {mode === "off"
           ? "Tắt thì mở app không hỏi PIN nữa. Sai 5 lần liên tiếp thì máy này đăng xuất."
-          : "App hỏi PIN khi mở, hoặc khi quay lại sau từ 1 phút ở nền. Sai 5 lần liên tiếp thì máy này đăng xuất, đăng nhập lại bằng mật khẩu."}
+          : "App hỏi PIN khi mở lại hoặc sau 1 phút ở nền. Nhập sai 5 lần liên tiếp sẽ tự đăng xuất, cần vào lại bằng mật khẩu."}
         {limits && ` ${PIN_LIMITS}`}
       </Hint>
-      <div class="pad">
+      <div class="sheet-foot">
         {error && (
           <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
             {error}

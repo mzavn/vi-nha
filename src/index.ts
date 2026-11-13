@@ -56,7 +56,7 @@ app.onError((err, c) => {
     return c.json({ ok: false, error: { code: "model_changed", message: "Ví nhà v2 đã bỏ ví và chia tiền." } }, 400);
   }
   console.error(`[${c.req.method} ${new URL(c.req.url).pathname}]`, err instanceof Error ? err.message : err);
-  return c.json({ ok: false, error: { code: "internal", message: "Lỗi hệ thống. Thử lại sau." } }, 500);
+  return c.json({ ok: false, error: { code: "internal", message: "Có lỗi rồi. Thử lại sau." } }, 500);
 });
 
 app.notFound((c) => {

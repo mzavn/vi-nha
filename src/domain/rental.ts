@@ -119,7 +119,7 @@ export function statementText(input: StatementInput): string {
   const monthName = (m: string) => (m.slice(0, 4) === month.slice(0, 4) ? `tháng ${Number(m.slice(5, 7))}` : `tháng ${billMonthLabel(m)}`);
   const out: string[] = [];
   if (input.status === "draft") out.push("(nháp)");
-  else if (input.editedAt) out.push(`(đã sửa ${shortDay(input.editedAt)} — thay tin trước)`);
+  else if (input.editedAt) out.push(`(đã sửa ${shortDay(input.editedAt)}, thay tin trước)`);
   out.push(`Tiền nhà tháng ${billMonthLabel(month)} — ${input.tenantName}`);
   for (const c of BILL_CATEGORIES) {
     const group = input.items.filter((i) => i.category === c);
@@ -136,7 +136,7 @@ export function statementText(input: StatementInput): string {
   }
   out.push(`Tổng ${monthName(month)}: ${formatMoney(total)}${compare}`);
   if (input.transfer) out.push(`Chuyển khoản: ${input.transfer}`);
-  if (input.previousBalance > 0) out.push(`Các tháng trước: còn nợ ${formatMoney(input.previousBalance)} (chưa gồm trong số trên)`);
-  else if (input.previousBalance < 0) out.push(`Các tháng trước: trả dư ${formatMoney(-input.previousBalance)} (chưa gồm trong số trên)`);
+  if (input.previousBalance > 0) out.push(`Các tháng trước còn nợ ${formatMoney(input.previousBalance)} (chưa tính ở trên)`);
+  else if (input.previousBalance < 0) out.push(`Các tháng trước trả dư ${formatMoney(-input.previousBalance)} (chưa tính ở trên)`);
   return out.join("\n");
 }

@@ -9,7 +9,7 @@ export function accountsTotal(rows: Pick<AccountRow, "kind" | "bookBalance">[]):
   };
 }
 
-/** Một hàng của danh sách tài khoản có lồng khoản gửi kỳ hạn: `line` (con) = "↳ {tên} · {số}"; `sub` (mẹ) = "gồm {n} khoản gửi · tổng {gộp}". */
+/** Một hàng của danh sách tài khoản có lồng khoản gửi kỳ hạn: `line` (con, thụt 16px, không ký tự dẫn) = "{tên} · {số}"; `sub` (mẹ) = "gồm {n} khoản gửi · tổng {gộp}". */
 export interface NestedAccount<T> {
   row: T;
   child: boolean;
@@ -31,7 +31,7 @@ export function nestAccounts<T>(rows: T[], info: (row: T) => { id: string; name:
       const total = i.balance + kids.reduce((s, k) => s + k.balance, 0);
       return [
         { row: i.row, child: false, line: null, sub: kids.length ? `gồm ${kids.length} khoản gửi · tổng ${formatVnd(total)}` : null },
-        ...kids.map((k) => ({ row: k.row, child: true, line: `↳ ${k.name} · ${formatVnd(k.balance)}`, sub: null })),
+        ...kids.map((k) => ({ row: k.row, child: true, line: `${k.name} · ${formatVnd(k.balance)}`, sub: null })),
       ];
     });
 }

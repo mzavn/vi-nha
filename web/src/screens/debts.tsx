@@ -3,22 +3,21 @@
 // Trả nợ là khoản chi danh mục Trả nợ gắn vào khoản nợ; cho vay / nhận lại tiền là giao dịch đổi tài khoản, không phải chi hay thu nhập.
 // Ba việc đó đi qua hàng đợi như mọi khoản nhập (ghi được khi không có mạng). Thêm khoản, thêm dòng, huỷ dòng ghi thẳng lên server nên cần mạng.
 
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { api, errorText } from "../lib/api";
 import { defaultAccountFor, manualAccounts } from "../lib/categories";
 import { debtLinePayload, debtPayload, owedText } from "../lib/debts";
+import { EMPTY_STATES } from "../lib/empty-states";
 import { groupBook } from "../lib/memo-books";
 import { debtInterestText, debtTermsPayload, debtTermsToForm, type DebtTermsForm } from "../lib/interest";
 import { formatTypedVnd, formatVnd } from "../lib/money";
 import { TERM_LABEL } from "../lib/net-worth";
-import { netWorthLines } from "../lib/networth";
 import { atForDay, dayKey } from "../lib/period";
 import { collectToast, defaultReceivableId, lendToast, moneyMoveBody, receivableLinePayload, receivablePayload, unpaidText } from "../lib/receivables";
-import type { Debt, DebtsData, NetWorth, Receivable, ReceivableRef, ReceivablesData } from "../lib/types";
+import type { Debt, DebtsData, Receivable, ReceivableRef, ReceivablesData } from "../lib/types";
 import { useResource } from "../state/resource";
-import { go, refresh, saveEntry, toast, useApp } from "../state/store";
+import { refresh, saveEntry, setState, toast, useApp } from "../state/store";
 import { AccountSelect, AmountInput, newClientId } from "../ui/fields";
-import { Money } from "../ui/money";
 import { Loadable, NeedsNetwork, Seg, Sheet } from "../ui/parts";
 import { DebtSheet } from "./budget-sheets";
 import { type BookItem, type BookLabels, BookAddSheet, BookCard, BookDetailSheet, BookLineSheet } from "./memo-book";
@@ -26,9 +25,10 @@ import { LinkSourcePicker } from "./ref-pickers";
 
 const DEBT: BookLabels = {
   title: "Mình nợ",
-  note: "Còn nợ = đã vay − đã trả. Trả nợ là khoản chi danh mục Trả nợ từ tài khoản trả; trả qua tài khoản SePay báo cả tiền ra thì gán ở màn Gán.",
+  note: "Còn nợ = đã vay − đã trả. Khoản trả nợ ghi vào danh mục Trả nợ. Nếu tài khoản SePay có báo tiền ra thì gán ở màn Gán.",
   emptyTitle: "Chưa ghi khoản nợ nào.",
-  emptyBody: "Thêm từng khoản nợ với số còn nợ hôm nay; mỗi lần trả nợ, số này tự giảm.",
+  emptyBody: "Thêm từng khoản nợ với số còn nợ hôm nay. Mỗi lần trả nợ, số này sẽ tự giảm.",
+  emptyState: EMPTY_STATES.debtsIowe,
   noun: "khoản nợ",
   book: "sổ nợ",
   totalLabel: "Tổng còn nợ",
@@ -69,6 +69,7 @@ const RECEIVABLE: BookLabels = {
   note: "Còn phải thu = đã cho vay − đã nhận lại. Cho vay và nhận lại tiền chỉ đổi tài khoản, tiền nhận lại không phải thu nhập.",
   emptyTitle: "Chưa ghi khoản phải thu nào.",
   emptyBody: "Cho ai vay hay trả hộ ai thì thêm một khoản với số người đó còn nợ hôm nay; mỗi lần nhận lại tiền, số này tự giảm.",
+  emptyState: EMPTY_STATES.debtsOwedMe,
   noun: "khoản phải thu",
   book: "sổ phải thu",
   totalLabel: "Tổng còn phải thu",
@@ -117,19 +118,24 @@ type Open =
   | null;
 
 export function DebtsTab() {
-  const { boot, online } = useApp();
+  const { boot, online, debtPayId } = useApp();
   const debts = useResource<DebtsData>("/v1/debts");
   const receivables = useResource<ReceivablesData>("/v1/receivables");
-  const networth = useResource<NetWorth>("/v1/networth");
   const [open, setOpen] = useState<Open>(null);
   const accountName = (id: string | null) => boot?.accounts.find((a) => a.id === id)?.name ?? null;
+
+  useEffect(() => {
+    if (debtPayId) {
+      setOpen({ kind: "pay", id: debtPayId });
+      setState({ debtPayId: null });
+    }
+  }, [debtPayId]);
 
   // Số còn lại cũng nằm trong bootstrap (ô chọn khoản khi trả nợ / cho vay, màn Gán): tải lại cả hai.
   const changed = (text: string) => {
     toast(text);
     debts.reload();
     receivables.reload();
-    networth.reload();
     void refresh();
   };
 
@@ -145,8 +151,6 @@ export function DebtsTab() {
 
   return (
     <>
-      <Loadable res={networth}>{(nw) => <CashFirst nw={nw} />}</Loadable>
-
       <Loadable res={debts}>
         {(data) => {
           const g = groupBook(data.debts);
@@ -181,8 +185,8 @@ export function DebtsTab() {
         }}
       </Loadable>
 
-      <p class="hint" style={{ margin: "0 4px 12px" }}>
-        Số ở đây là ghi nhớ ai nợ ai — chưa phải tiền trong tài khoản. Chỉ khi tiền thật đi hoặc về thì số dư tài khoản mới đổi.
+      <p class="hint debts-hint">
+        Số ở đây để nhớ ai nợ ai, chưa phải tiền trong tài khoản. Khi tiền thật đi hoặc về thì số dư mới đổi.
       </p>
 
       {open?.kind === "add" &&
@@ -269,49 +273,7 @@ export function DebtsTab() {
   );
 }
 
-/**
- * Tiền thật trước (DESIGN.md §4): tiền thật đang có là số to nhất; tài sản, người khác nợ mình, mình nợ kê bên dưới,
- * tài sản ròng đứng cuối và nhỏ hơn — nó không giúp quyết định tiêu gì hôm nay.
- */
-function CashFirst({ nw }: { nw: NetWorth }) {
-  const [hero, ...rest] = netWorthLines(nw);
-  const total = rest.pop()!;
-  return (
-    <section class="hero" aria-label="Tiền thật trước">
-      <div class="lab">
-        {hero!.label} <span class="sub-line">· {hero!.hint}</span>
-      </div>
-      <div class="big">
-        <Money value={hero!.value} tone={false} />
-      </div>
-      <div class="meta">{hero!.note}</div>
-      {rest.length > 0 && (
-        <ul class="hero-parts">
-          {rest.map((l) => (
-            <li key={l.key} style={l.level === "part" ? { paddingLeft: "12px", fontSize: "12.5px" } : undefined}>
-              <span>
-                {l.label}
-                {l.note && <span class="sub-line"> · {l.note}</span>}
-              </span>
-              <Money value={l.value} tone={false} />
-            </li>
-          ))}
-        </ul>
-      )}
-      <ul class="hero-parts">
-        <li>
-          <span>{total.label}</span>
-          <Money value={total.value} tone={false} />
-        </li>
-      </ul>
-      <div class="meta">{total.note}</div>
-      {/* pwa UC-707 AC-24: mở thẳng phần Cân đối của màn Tài sản & tự do. */}
-      <button type="button" class="link" style={{ marginTop: "6px", minHeight: "44px" }} onClick={() => go("net-worth", { netWorthSection: "sheet" })}>
-        Xem bảng cân đối ›
-      </button>
-    </section>
-  );
-}
+
 
 /**
  * Cho vay thêm / nhận lại tiền cho vay: tiền thật rời một tài khoản hoặc về một tài khoản, gắn vào khoản phải thu.
@@ -345,7 +307,7 @@ function MoneyMoveSheet(props: { meaning: "lend" | "collect"; refs: ReceivableRe
 
   return (
     <Sheet open title={lend ? "Cho vay thêm" : "Nhận lại tiền cho vay"} onClose={props.onClose}>
-      <div class="field" style={{ borderTop: 0 }}>
+      <div class="field field-first">
         <label for="r-recv">{lend ? "Cho ai vay" : "Ai trả"}</label>
         <select
           id="r-recv"
@@ -385,12 +347,12 @@ function MoneyMoveSheet(props: { meaning: "lend" | "collect"; refs: ReceivableRe
         <label for="r-day">Ngày</label>
         <input id="r-day" class="ctl" type="date" max={today} value={day} onInput={(e) => setDay(e.currentTarget.value || today)} />
       </div>
-      <div class="note" style={{ borderTop: "1px solid var(--border)" }}>
+      <div class="note note-line">
         {lend
           ? "Tiền rời tài khoản nhưng vẫn là tiền của nhà, không phải khoản chi: số phải thu tăng thêm đúng số này."
           : "Tiền người ta trả lại, không phải thu nhập. Chỉ tài khoản nhận tăng, số phải thu giảm."}
       </div>
-      <div class="pad">
+      <div class="sheet-foot">
         <button type="button" class="btn btn-primary btn-wide" disabled={!!problem || busy} onClick={() => void submit()}>
           {problem ?? (lend ? `Ghi cho vay thêm ${formatTypedVnd(amount)}` : `Ghi nhận lại ${formatTypedVnd(amount)}`)}
         </button>
@@ -442,7 +404,7 @@ function DebtTermsFields({ f, onChange }: { f: DebtTermsForm; onChange: (f: Debt
         <label for="n-due">Ngày trả (1–28)</label>
         <input id="n-due" class="ctl" inputMode="numeric" placeholder="để trống nếu không cố định" value={f.dueDay} onInput={(e) => onChange({ ...f, dueDay: e.currentTarget.value })} />
       </div>
-      <p class="fhint">Khoản có lãi: lãi dự kiến mỗi tháng hiện ở Ví & quỹ › Nhìn lại (hàng Lãi vay); trả nợ thì tách lãi (chi phí) và gốc (giảm nợ). Lãi không tự cộng vào số còn nợ.</p>
+      <p class="fhint">Khoản có lãi: lãi dự kiến mỗi tháng hiện ở Tài khoản › Chi tiêu (hàng Lãi vay); trả nợ thì tách lãi (chi phí) và gốc (giảm nợ). Lãi không tự cộng vào số còn nợ.</p>
     </>
   );
 }
@@ -486,9 +448,9 @@ function DebtTermsSheet({ debt, onClose, onSaved }: { debt: Debt; onClose: () =>
   return (
     <Sheet open title={`Lãi & kỳ hạn · ${debt.name}`} onClose={onClose}>
       <DebtTermsFields f={f} onChange={setF} />
-      <div class="pad">
+      <div class="sheet-foot">
         {error && (
-          <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
+          <p class="err err-gap" role="alert">
             {error}
           </p>
         )}

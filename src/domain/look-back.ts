@@ -1,13 +1,13 @@
-// Nhìn lại theo kỳ lương (ledger UC-108, pocket UC-1204 — ADR-127). Hàm thuần: gộp chi ròng theo danh mục vào nhóm theo cấu
-// hình hiện tại, so hạn mức mềm hiện tại (không âm, không bù), luật dòng 🔎 của tin sáng, số mỗi ngày của tin tuần. Server
-// dùng cho `GET /v1/spend-by-category`, MCP, cron; PWA dùng lại kiểu và chữ "còn / vượt".
+// Nhìn lại theo tháng dương lịch (ledger UC-108, pocket UC-1204 — ADR-127 sửa theo ADR-144). Hàm thuần: gộp chi ròng theo danh
+// mục vào nhóm theo cấu hình hiện tại, so hạn mức mềm mỗi tháng (không âm, không bù), luật dòng Chi tiêu tháng này của tin sáng, số mỗi ngày
+// của tin tuần. Server dùng cho `GET /v1/spend-by-category`, MCP, cron; PWA dùng lại kiểu và chữ "còn / vượt".
 
-import type { SavingsLevel } from "./pay-cycle";
+import type { MonthSavings } from "./month-tasks";
 
-/** Ngưỡng "gần chạm" hạn mức (%), dùng chung dòng 🔎 tin sáng và tin tuần bản ngắn. */
+/** Ngưỡng "gần chạm" hạn mức (%), dùng chung dòng Chi tiêu tháng này tin sáng và tin tuần bản ngắn. */
 export const NEAR_LIMIT_PCT = 80;
 
-/** Chi ròng của một danh mục ở kỳ chọn và kỳ trước. `categoryId` null: khoản hoàn không danh mục. */
+/** Chi ròng của một danh mục ở tháng chọn và tháng trước. `categoryId` null: khoản hoàn không danh mục. */
 export interface LookBackCategory {
   categoryId: string | null;
   name: string;
@@ -43,27 +43,12 @@ export interface LookBackInterestLine {
   dueDay: number | null;
 }
 
-export interface LookBackCycle {
-  payday: string;
-  start: string;
-  end: string | null;
-  stored: boolean;
-  days: number;
-  daysElapsed: number;
-  lateDays?: number;
-}
-
-export type CycleRef = Pick<LookBackCycle, "payday" | "start" | "end" | "stored">;
-
 /**
- * Tích luỹ của một kỳ lưu (ledger UC-108, ADR-142): tính như `savingsDone` trên các việc ① của chính kỳ đó — `amount` đã trích
- * (chuyển khoản thật đã ghép), `base` = Σ khoản lương có ①, `level` như `savingsLevel`; `reason` = lý do bỏ qua / sửa về 0
+ * Tích luỹ của một tháng (ledger UC-108, ADR-142): `savingsDone` trên các nhắc ① có `month_key` đó — `amount` đã trích
+ * (chuyển khoản thật đã ghép), `base` = Σ khoản lương có ①, `pct`, `level` như `savingsLevel`; `reason` = lý do bỏ qua / sửa về 0
  * khi `level` là `zero`, còn lại null.
  */
-export interface LookBackSavings {
-  amount: number;
-  base: number;
-  level: SavingsLevel;
+export interface LookBackSavings extends MonthSavings {
   reason: string | null;
 }
 
@@ -77,10 +62,21 @@ interface LookBackBody {
   categories: LookBackCategory[];
 }
 
-/** Kết quả `GET /v1/spend-by-category` (ledger UC-108 bước 5–6). */
-export type LookBack =
-  | ({ kind: "cycle"; cycle: LookBackCycle; previous: CycleRef | null; next: CycleRef | null; savings?: LookBackSavings | null } & LookBackBody)
-  | ({ kind: "month"; month: string; previous: string } & LookBackBody);
+/** Kết quả `GET /v1/spend-by-category` (ledger UC-108 bước 5–6): luôn một tháng VN. */
+export type LookBack = {
+  kind: "month";
+  /** `YYYY-MM` của tháng chọn. */
+  month: string;
+  previous: string;
+  /** Tháng sau; null khi tháng chọn là tháng hiện tại (hoặc sau đó). */
+  next: string | null;
+  /** Số ngày của tháng. */
+  days: number;
+  /** Số ngày đã qua tính cả hôm nay (tháng hiện tại); tháng đã hết = `days`, tháng chưa tới = 0. */
+  daysElapsed: number;
+  /** Tích luỹ của tháng theo nhắc ①; null khi tháng không có khoản lương nào có ①. */
+  savings: LookBackSavings | null;
+} & LookBackBody;
 
 /**
  * `pct` = ⌊max(0, spent) × 100 ÷ limit⌋, `left` = max(0, limit − max(0, spent)) (hoàn nhiều hơn chi vẫn chỉ "còn" đủ hạn mức,
@@ -95,12 +91,11 @@ export function limitFigures(limit: number | null, spent: number): LimitFigures 
 /**
  * Gộp danh mục vào nhóm (UC-1204 bước 2, UC-108 bước 3): danh mục có `groupId` của một nhóm đang dùng vào nhóm đó (kể cả
  * danh mục đã tắt), còn lại vào `ungrouped`. Nhóm giữ thứ tự `groups` (theo `sort`); danh mục trong nhóm giảm dần theo `spent`.
- * `withLimits` false (tháng lịch): mọi `limit` / `pct` / `left` / `over` = null.
+ * Hạn mức (`limit`, mỗi tháng) luôn được so.
  */
 export function groupSpend(
   rows: (LookBackCategory & { groupId: string | null })[],
   groups: CategoryGroupRef[],
-  withLimits: boolean,
 ): { groups: LookBackGroup[]; ungrouped: LookBackBody["ungrouped"] } {
   const byDesc = (a: LookBackCategory, b: LookBackCategory) => b.spent - a.spent || b.previousSpent - a.previousSpent;
   const strip = ({ groupId: _, ...c }: LookBackCategory & { groupId: string | null }): LookBackCategory => c;
@@ -109,14 +104,13 @@ export function groupSpend(
   const out = groups.map((g) => {
     const categories = rows.filter((r) => r.groupId === g.id).map(strip).sort(byDesc);
     const spent = sum(categories, "spent");
-    const limit = withLimits ? g.limit : null;
-    return { ...g, limit, spent, previousSpent: sum(categories, "previousSpent"), ...limitFigures(limit, spent), categories };
+    return { ...g, spent, previousSpent: sum(categories, "previousSpent"), ...limitFigures(g.limit, spent), categories };
   });
   const rest = rows.filter((r) => r.groupId === null || !known.has(r.groupId)).map(strip).sort(byDesc);
   return { groups: out, ungrouped: { spent: sum(rest, "spent"), previousSpent: sum(rest, "previousSpent"), categories: rest } };
 }
 
-/** Một nhóm vào dòng 🔎 của tin sáng / mục nhóm ở bản ngắn. */
+/** Một nhóm vào dòng Chi tiêu tháng này của tin sáng / mục nhóm ở bản ngắn. */
 export interface LimitNudge {
   name: string;
   pct: number;
@@ -124,11 +118,11 @@ export interface LimitNudge {
 }
 
 /**
- * Dòng 🔎 "Nhìn lại kỳ này" (notify UC-402 bước 4): nhóm có hạn mức đã vượt, hoặc ≥ 80% khi còn hơn 1/5 kỳ
+ * Dòng "Chi tiêu tháng này" (notify UC-402 bước 4): nhóm có hạn mức đã vượt, hoặc ≥ 80% khi còn hơn 1/5 tháng
  * (`daysElapsed × 100 < 80 × days`). Vượt trước (vượt nhiều trước), rồi `pct` giảm dần, rồi thứ tự nhóm.
  */
-export function limitNudges(groups: Pick<LookBackGroup, "name" | "pct" | "over">[], cycle: Pick<LookBackCycle, "days" | "daysElapsed">): LimitNudge[] {
-  const early = cycle.daysElapsed * 100 < NEAR_LIMIT_PCT * cycle.days;
+export function limitNudges(groups: Pick<LookBackGroup, "name" | "pct" | "over">[], month: { days: number; daysElapsed: number }): LimitNudge[] {
+  const early = month.daysElapsed * 100 < NEAR_LIMIT_PCT * month.days;
   return groups
     .map((g, i) => ({ name: g.name, pct: g.pct, over: g.over, i }))
     .filter((g): g is { name: string; pct: number; over: number; i: number } => g.pct !== null && g.over !== null && (g.over > 0 || (g.pct >= NEAR_LIMIT_PCT && early)))

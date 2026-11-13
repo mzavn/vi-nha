@@ -10,7 +10,7 @@ export type Pocket = (typeof POCKETS)[number];
 
 /** Trần số tiền của mục tiêu / hạn mức (đồng). */
 export const MONEY_MAX = 1e12;
-/** % Tích luỹ mỗi kỳ lương khi chưa đặt (config `savings_pct`, UC-507). */
+/** % Tích luỹ trích từ mỗi khoản lương khi chưa đặt (config `savings_pct`, UC-507). */
 export const DEFAULT_SAVINGS_PCT = 10;
 /** Ngăn của tài khoản thêm mới không gửi `pocket` (UC-1201 bước 4): mọi loại, kể cả thẻ tín dụng, vào Vận hành, chưa xác nhận. */
 export const DEFAULT_ACCOUNT_POCKET: Pocket = "operating";
@@ -87,14 +87,14 @@ export interface PocketGoalInput {
   debtId: string | null;
   /** Thứ tự ưu tiên (`reserve_goals.sort`, nhỏ đứng trước — UC-1209 bước 10). */
   sort: number;
-  /** Đã chi cho mục tiêu trong kỳ lương hiện tại (UC-1209 bước 11); 0 khi không có. */
+  /** Đã chi cho mục tiêu trong tháng VN hiện tại (UC-1209 bước 11); 0 khi không có. */
   spent: number;
   /** Thiếu = `account`. `operating`: `accountId` null, lặp mỗi tháng — không vào `reserve`, vào `operating.goals`. */
   paysFrom?: GoalPaysFrom;
-  /** Mục tiêu `operating`: số riêng cho kỳ lương hiện tại (UC-1209 bước 12, ADR-143); thiếu / null = theo số mỗi tháng. */
-  cycleAmount?: number | null;
-  /** Lý do ngắn của số kỳ này; null = không có. */
-  cycleNote?: string | null;
+  /** Mục tiêu `operating`: số riêng cho tháng VN hiện tại (UC-1209 bước 12, ADR-143, ADR-144); thiếu / null = theo số mỗi tháng. */
+  monthAmount?: number | null;
+  /** Lý do ngắn của số tháng này; null = không có. */
+  monthNote?: string | null;
   /** Mục tiêu `operating`: danh mục mà khoản chi từ Vận hành không gắn mục tiêu tính là đã trả (đã gộp vào `spent`). */
   categoryIds?: string[];
 }
@@ -128,7 +128,7 @@ export interface PocketGoal {
   held: number | null;
   /** Số cần (= B); null với mục tiêu % hoặc chưa gắn tài khoản. */
   need: number | null;
-  /** Đã chi cho mục tiêu trong kỳ lương hiện tại. */
+  /** Đã chi cho mục tiêu trong tháng VN hiện tại. */
   spent: number;
   /** Còn thiếu = max(0, need − held − spent); null khi need null. */
   short: number | null;
@@ -170,22 +170,22 @@ export interface GoalGroup {
 }
 
 /**
- * Mục tiêu trả thẳng từ tiền chi tiêu (UC-1203 bước 7, UC-1209 bước 12, ADR-141, ADR-143): còn phải trả kỳ này = max(0, số kỳ
- * này − đã trả); số kỳ này = `cycleAmount` nếu có, không thì `monthly`.
+ * Mục tiêu trả thẳng từ tiền chi tiêu (UC-1203 bước 7, UC-1209 bước 12, ADR-141, ADR-143, ADR-144): còn phải trả tháng này =
+ * max(0, số tháng này − đã trả); số tháng này = `monthAmount` nếu có, không thì `monthly`.
  */
 export interface OperatingGoal {
   id: string;
   name: string;
   monthly: number;
-  /** Số riêng cho kỳ này (0 = kỳ này không trả); null = theo số mỗi tháng. */
-  cycleAmount: number | null;
+  /** Số riêng cho tháng này (0 = tháng này không trả); null = theo số mỗi tháng. */
+  monthAmount: number | null;
   note: string | null;
   categoryIds: string[];
   spent: number;
   remaining: number;
 }
 
-/** Tích luỹ thay đổi theo kỳ (UC-1203 bước 10): `amount` = bây giờ − đầu kỳ; `prevAmount` = đầu kỳ − đầu kỳ trước. */
+/** Tích luỹ thay đổi theo tháng (UC-1203 bước 10): `amount` = bây giờ − đầu tháng; `prevAmount` = đầu tháng − đầu tháng trước. */
 export interface SavingsChange {
   since: string;
   amount: number;
@@ -193,12 +193,12 @@ export interface SavingsChange {
   prevAmount: number;
 }
 
-/** Phần an tâm đo bằng tháng vận hành (UC-1203 bước 11). `covered` / `monthly` null khi chưa có kỳ lương trọn nào để đo. */
+/** Phần an tâm đo bằng tháng vận hành (UC-1203 bước 11). `covered` / `monthly` null khi chưa có tháng trọn nào để đo. */
 export interface PeaceMonths {
   covered: number | null;
   target: number;
   monthly: number | null;
-  cycles: number;
+  months: number;
 }
 
 /** `snapshot.pockets` (UC-1203 bước 7). Số theo đồng, số nguyên. */
@@ -220,7 +220,7 @@ export interface PocketsView {
     /** Tài khoản Ví Thưởng (`config.surplus_reward_account`) khi đang dùng, ở ngăn Dự phòng, không gắn mục tiêu; `balance` gộp con; null = chưa chọn. */
     reward: { accountId: string; balance: number } | null;
   };
-  /** `goals`: mục tiêu trả từ tiền chi tiêu theo thứ tự ưu tiên; `remaining` = R = Σ còn phải trả kỳ này. */
+  /** `goals`: mục tiêu trả từ tiền chi tiêu theo thứ tự ưu tiên; `remaining` = R = Σ còn phải trả tháng này. */
   operating: { total: number; accounts: PocketAccountLine[]; goals: OperatingGoal[]; remaining: number };
   outside: { total: number; accounts: PocketAccountLine[] };
   unconfirmed: number;
@@ -229,7 +229,7 @@ export interface PocketsView {
   shortDebt: { total: number; count: number; items: ShortDebtItem[] };
 }
 
-/** Một tài khoản ở hai mốc đầu kỳ / đầu kỳ trước: số trong sổ tại mốc; null = không tính ở mốc đó (đã tắt trước mốc). */
+/** Một tài khoản ở hai mốc đầu tháng / đầu tháng trước: số trong sổ tại mốc; null = không tính ở mốc đó (đã tắt trước mốc). */
 export interface PocketAccountAt {
   id: string;
   pocket: Pocket | null;
@@ -244,10 +244,10 @@ export interface PocketsInput {
   rewardAccountId: string | null;
   debts: PocketDebt[];
   savingsPct: number;
-  /** Trạng thái tại đầu kỳ (`since`) và đầu kỳ trước (`prevSince`), ngày `YYYY-MM-DD` giờ VN. */
+  /** Trạng thái tại đầu tháng (`since`) và đầu tháng trước (`prevSince`), ngày `YYYY-MM-DD` giờ VN. */
   history: { since: string; prevSince: string; accounts: PocketAccountAt[] };
-  /** Chi vận hành của tối đa 3 kỳ lương trọn gần nhất (ngày VN đầu kỳ, số, số ngày của kỳ), và ngày bắt đầu dữ liệu (null = chưa có). */
-  operatingSpend: { cycles: { start: string; amount: number; days: number }[]; dataStart: string | null };
+  /** Chi vận hành của tối đa 3 tháng dương lịch trọn gần nhất (ngày 1 "YYYY-MM-01", số, số ngày của tháng), và ngày bắt đầu dữ liệu (null = chưa có). */
+  operatingSpend: { months: { start: string; amount: number; days: number }[]; dataStart: string | null };
   /** Số tháng vận hành muốn có ở phần an tâm (`safety_fund_months`). */
   peaceTarget: number;
   /** Tiền lãi theo tài khoản mẹ có mục tiêu (`groupInterest`); thiếu = 0. */
@@ -256,7 +256,7 @@ export interface PocketsInput {
 
 type Totals = Record<Pocket | "outside", number>;
 
-/** Tổng ngăn X = Σ sổ các tài khoản ngăn X — một luật cho số bây giờ và số tại mỗi mốc đầu kỳ. */
+/** Tổng ngăn X = Σ sổ các tài khoản ngăn X — một luật cho số bây giờ và số tại mỗi mốc đầu tháng. */
 function pocketTotals(accounts: Pick<PocketAccount, "pocket" | "balance">[]): Totals {
   const totals: Totals = { savings: 0, reserve: 0, operating: 0, outside: 0 };
   for (const a of accounts) totals[a.pocket ?? "outside"] += a.balance;
@@ -275,13 +275,13 @@ export function peaceMonthsView(peace: number, monthly: number | null, target: n
 }
 
 /**
- * Chi vận hành một tháng, chuẩn hoá theo ngày (UC-1203 bước 11, ADR-127 (8)): ⌊Σ chi × 30 ÷ Σ số ngày⌋ của các kỳ có ngày đầu
- * ≥ ngày bắt đầu dữ liệu và có chi > 0 — kỳ lưu mở sớm / trễ dài 8–53 ngày không làm lệch.
+ * Chi vận hành một tháng, chuẩn hoá theo ngày (UC-1203 bước 11, ADR-144): ⌊Σ chi × 30 ÷ Σ số ngày⌋ của các tháng có ngày 1
+ * ≥ ngày bắt đầu dữ liệu và có chi > 0 — tháng dữ liệu bắt đầu giữa chừng bị bỏ.
  */
-function operatingMonthly({ cycles, dataStart }: PocketsInput["operatingSpend"]): { monthly: number | null; cycles: number } {
-  const used = dataStart === null ? [] : cycles.filter((c) => c.start >= dataStart && c.amount > 0);
-  const days = used.reduce((s, c) => s + c.days, 0);
-  return { monthly: used.length && days > 0 ? Math.floor((used.reduce((s, c) => s + c.amount, 0) * 30) / days) : null, cycles: used.length };
+function operatingMonthly({ months, dataStart }: PocketsInput["operatingSpend"]): { monthly: number | null; months: number } {
+  const used = dataStart === null ? [] : months.filter((m) => m.start >= dataStart && m.amount > 0);
+  const days = used.reduce((s, m) => s + m.days, 0);
+  return { monthly: used.length && days > 0 ? Math.floor((used.reduce((s, m) => s + m.amount, 0) * 30) / days) : null, months: used.length };
 }
 
 /** Thứ tự ưu tiên (UC-1209 bước 10): `sort` tăng dần, rồi hạn (chưa có hạn xuống cuối), rồi tên (`vi`), rồi mã. */
@@ -403,13 +403,13 @@ export function groupInterest(opening: number, steps: InterestStep[]): number {
   return interest;
 }
 
-/** Mục tiêu trả từ tiền chi tiêu đang dùng (đã xếp `goalOrder`): còn phải trả kỳ này = max(0, số kỳ này − đã trả). */
+/** Mục tiêu trả từ tiền chi tiêu đang dùng (đã xếp `goalOrder`): còn phải trả tháng này = max(0, số tháng này − đã trả). */
 export function operatingGoals(goals: PocketGoalInput[]): OperatingGoal[] {
   return goals.flatMap((g) => {
     if (g.paysFrom !== "operating" || g.monthly === null) return [];
     const spent = Math.max(0, g.spent);
-    const cycleAmount = g.cycleAmount ?? null;
-    return [{ id: g.id, name: g.name, monthly: g.monthly, cycleAmount, note: g.cycleNote ?? null, categoryIds: g.categoryIds ?? [], spent, remaining: Math.max(0, (cycleAmount ?? g.monthly) - spent) }];
+    const monthAmount = g.monthAmount ?? null;
+    return [{ id: g.id, name: g.name, monthly: g.monthly, monthAmount, note: g.monthNote ?? null, categoryIds: g.categoryIds ?? [], spent, remaining: Math.max(0, (monthAmount ?? g.monthly) - spent) }];
   });
 }
 
@@ -477,7 +477,7 @@ export function pocketsView({ accounts, goals, rewardAccountId, debts, savingsPc
       goals: goalLines,
       groups,
       peace,
-      peaceMonths: { covered: peaceMonthsView(peace, spend.monthly, peaceTarget).covered, target: peaceTarget, monthly: spend.monthly, cycles: spend.cycles },
+      peaceMonths: { covered: peaceMonthsView(peace, spend.monthly, peaceTarget).covered, target: peaceTarget, monthly: spend.monthly, months: spend.months },
       reward,
     },
     operating: { total: totals.operating, accounts: lines.operating, goals: opGoals, remaining: opGoals.reduce((s, g) => s + g.remaining, 0) },
@@ -488,11 +488,11 @@ export function pocketsView({ accounts, goals, rewardAccountId, debts, savingsPc
   };
 }
 
-/** Lời chúc khi không còn nợ ngắn hạn (thẻ Vận hành, dòng 💳 tin sáng), đúng thứ tự xoay. */
+/** Lời chúc khi không còn nợ ngắn hạn (thẻ Vận hành, dòng nợ ngắn hạn tin sáng), đúng thứ tự xoay. */
 export const BLESSINGS = [
-  "Không còn nợ ngắn hạn 🎉 — tiền vận hành là của mình trọn vẹn",
+  "Không còn nợ ngắn hạn — tiền vận hành là của mình trọn vẹn",
   "Sạch nợ ngắn hạn — mỗi đồng chi hôm nay là tiền của mình",
-  "Không nợ ngắn hạn nào. Giữ nhịp này nhé 👏",
+  "Không nợ ngắn hạn nào. Giữ nhịp này nhé",
   "Hết nợ ngắn hạn — tháng này nhẹ hẳn",
 ] as const;
 

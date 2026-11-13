@@ -50,14 +50,22 @@ export function classify(res: RawResponse): SendResult {
 
 /** Trường ví do app bản cũ lưu trong hàng đợi (UC-704 AC-27): bỏ khi gửi, khoản chi / thu / hoàn / chuyển hai tài khoản vẫn đúng nghĩa. */
 const LEGACY_FIELDS = ["wallet_id", "counter_wallet_id", "from_wallet_id", "wealth_move", "allocate"] as const;
-export const WALLET_TRANSFER_GONE = "Chuyển giữa hai ví không còn ở bản mới — xoá khoản này";
-export const MODEL_CHANGED_KEPT = "Bản mới đã bỏ ví — mở lại app để gửi lại";
+export const WALLET_TRANSFER_GONE = "Bản mới không còn chuyển giữa hai ví, hãy xoá khoản này";
+export const MODEL_CHANGED_KEPT = "Bản mới đã bỏ ví, mở lại app để gửi lại";
 
-/** Thân sẽ gửi của một khoản trong hàng đợi; khoản "chuyển giữa hai ví" (không tài khoản) không đổi được → lý do giữ lại. */
+/**
+ * Thân sẽ gửi của một khoản trong hàng đợi; khoản "chuyển giữa hai ví" (không tài khoản) không đổi được → lý do giữ lại.
+ * Khoản thu xếp hàng từ bản trước v2.5 (pwa UC-705 AC-39): `opens_cycle: true` → `is_salary: true`; `opens_cycle: false` → bỏ
+ * trường, để mặc định của server (Q1-B) quyết — server trả 400 `model_changed` nếu còn `opens_cycle`.
+ */
 export function sendableBody(body: EntryBody): { body: EntryBody } | { blocked: string } {
   if (body.meaning === "transfer" && !body.account_id && !body.to_account_id) return { blocked: WALLET_TRANSFER_GONE };
   const clean: Record<string, unknown> = { ...body };
   for (const k of LEGACY_FIELDS) delete clean[k];
+  if ("opens_cycle" in clean) {
+    if (clean.opens_cycle === true && clean.is_salary === undefined) clean.is_salary = true;
+    delete clean.opens_cycle;
+  }
   return { body: clean as unknown as EntryBody };
 }
 

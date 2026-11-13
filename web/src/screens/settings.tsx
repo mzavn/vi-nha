@@ -2,13 +2,13 @@
 // Mười hai phần, mỗi phần một card (Thông báo có hai: giờ nhắc của cả nhà và thông báo trên máy này);
 // mọi chỗ sửa nằm trong sheet (DESIGN.md §4: sheet là nơi mọi edge case được giải).
 // Thứ tự theo mức hay sửa của nhà (audit 261001 F05): ba ngăn và tài khoản trước; khoá kết nối, Claude, tham số, nhật ký thay đổi và cập nhật bản mới gom vào "Nâng cao".
-// Điện thoại: các card xếp dọc, hàng chip dính dưới thanh tiêu đề để nhảy tới phần cần sửa; "Nâng cao" gập sẵn;
+// Điện thoại: các card xếp dọc, hàng tab dính dưới thanh tiêu đề để nhảy tới phần cần sửa; "Nâng cao" gập sẵn;
 // cuối trang là "Máy này" (giao diện sáng/tối, đăng xuất).
-// Máy tính (≥1024px): hai cột — danh sách phần bên trái, nội dung phần đang chọn bên phải; tài khoản, mã là bảng.
+// Máy tính (≥1024px): cột mục lục bên trái, nội dung phần đang chọn bên phải (SectionNav, DESIGN §4.18); tài khoản, mã là bảng.
 // Cần mạng: offline thì hiện bản tải gần nhất, chỉ xem.
 
 import { Fragment, type ComponentChildren } from "preact";
-import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useState } from "preact/hooks";
 import { api, ApiError, errorText } from "../lib/api";
 import { LATEST_RELEASE_API, releaseTag, UPDATE_COMMAND, UPDATE_GUIDE_URL, updateView, type UpdateView } from "../lib/app-update";
 import { connectionRows } from "../lib/ai-connections";
@@ -16,6 +16,7 @@ import { canAddMember, passwordLine } from "../lib/members";
 import { formatVnd } from "../lib/money";
 import { dayKey, previousDay, shortDate } from "../lib/period";
 import { conversionSettingsRow } from "../lib/convert";
+import { SETTINGS_SECTIONS } from "../lib/nav";
 import { groupAccountsByPocket, groupSummary, unconfirmedChip } from "../lib/pockets";
 import { nestAccounts } from "../lib/accounts-total";
 import {
@@ -24,18 +25,18 @@ import {
   appVersionLabel,
   auditView,
   bankName,
-  cycleStreamReminder,
   debtGoalSuggestions,
   depositPreset,
   fiConfigSummary,
   GOAL_SECTION_LABEL,
   type GoalForm,
   type GoalListGroup,
-  goalLineText,
+  type GoalRowView,
   goalListGroups,
+  goalRowView,
   MATCH_LABEL,
   MEANING_LABEL,
-  operatingGoalLines,
+  operatingGoalRows,
   scheduleRows,
   secretLabel,
   sepayLabel,
@@ -70,12 +71,12 @@ import type {
   ZaloWebhookResult,
 } from "../lib/types";
 import { useResource } from "../state/resource";
-import { cacheKey, go, loadCached, refresh, setState, toast, useApp } from "../state/store";
+import { cacheKey, go, loadCached, refresh, setCompact, setState, toast, useApp } from "../state/store";
 import { boundSubscriptionId, cancelTestSeries, enablePush, loadPushInfo, onPushChange, readPushState, sendTestPush, startTestSeries, unbindPush } from "../state/push";
 import { copyText } from "../ui/clipboard";
 import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
-import { Card, PageHeader, Seg, Skeleton } from "../ui/parts";
+import { Card, Chip, PageHeader, Row as ListRow, SectionNav, Seg, Skeleton } from "../ui/parts";
 import { signOutEverywhereNote, useLogout, useTheme, useWide } from "../ui/shell";
 import { PinRow } from "./pin-sheet";
 import {
@@ -98,25 +99,7 @@ import {
   TenantSheet,
 } from "./settings-sheets";
 
-const SECTIONS = [
-  // Ba ngăn (v2, UC-709 AC-35…39, AC-46, AC-48): xếp tài khoản vào ngăn, mục tiêu Dự phòng (nhóm theo tài khoản, đổi thứ tự), nhóm danh mục.
-  { id: "pockets", label: "Ba ngăn", advanced: false },
-  { id: "accounts", label: "Tài khoản", advanced: false },
-  { id: "rental", label: "Cho thuê", advanced: false },
-  { id: "income-streams", label: "Nguồn thu", advanced: false },
-  { id: "transfer-codes", label: "Mã chuyển khoản", advanced: false },
-  { id: "notifications", label: "Thông báo", advanced: false },
-  { id: "members", label: "Thành viên", advanced: false },
-  // Làm một lần khi dựng nhà, gần như không đụng lại.
-  { id: "connections", label: "Kết nối", advanced: true },
-  // Địa chỉ MCP và các kết nối OAuth của từng người: gỡ khi thấy ứng dụng lạ.
-  { id: "ai-connections", label: "Claude và ứng dụng AI", advanced: true },
-  { id: "parameters", label: "Tham số", advanced: true },
-  // Ai đổi gì, lúc nào (ADR-90): xem khi nghi có người lạ đụng vào.
-  { id: "audit-log", label: "Nhật ký thay đổi", advanced: true },
-  // Hỏi GitHub bản mới khi bấm, chỉ cách cập nhật (UC-709 AC-30).
-  { id: "app-update", label: "Cập nhật Ví nhà", advanced: true },
-] as const;
+const SECTIONS = SETTINGS_SECTIONS;
 type SectionId = (typeof SECTIONS)[number]["id"];
 const MAIN = SECTIONS.filter((x) => !x.advanced);
 const ADVANCED = SECTIONS.filter((x) => x.advanced);
@@ -170,7 +153,7 @@ function useSettings() {
 }
 
 export function Settings() {
-  const { online, settingsFocus, member } = useApp();
+  const { online, settingsFocus, member, compact } = useApp();
   const s = useSettings();
   const wide = useWide();
   const [section, setSection] = useState<SectionId>(settingsFocus === "pocket-goals" ? "pockets" : settingsFocus === "streams" ? "income-streams" : (settingsFocus ?? "pockets"));
@@ -195,7 +178,7 @@ export function Settings() {
   const header = (
     <PageHeader
       title="Cài đặt"
-      sub="Ba ngăn, tài khoản, cho thuê, thông báo"
+      sub="Ba ngăn, tài khoản, thông báo"
       action={
         <button type="button" class="btn" onClick={() => go("today")}>
           Xong
@@ -203,6 +186,18 @@ export function Settings() {
       }
     />
   );
+
+  if (compact) {
+    return (
+      <>
+        {header}
+        <div class="status-row status-compact-hint" role="status">
+          <span>Đang ở chế độ gọn. Tắt để thấy đủ các mục.</span>
+        </div>
+        <DeviceCard />
+      </>
+    );
+  }
 
   if (!s.data) {
     return (
@@ -270,17 +265,14 @@ export function Settings() {
         </div>
       )}
       {wide ? (
-        <div class="set-layout">
-          <nav class="card set-nav" aria-label="Các phần cài đặt">
-            {SECTIONS.map((x, i) => (
-              <Fragment key={x.id}>
-                {x.advanced && !SECTIONS[i - 1]?.advanced && <div class="set-nav-h">Nâng cao</div>}
-                <button type="button" aria-current={section === x.id ? "true" : undefined} onClick={() => setSection(x.id)}>
-                  {x.label}
-                </button>
-              </Fragment>
-            ))}
-          </nav>
+        <div class="sec-layout">
+          <SectionNav
+            wide
+            label="Các phần cài đặt"
+            items={SECTIONS.map((x) => ({ value: x.id, label: x.label, group: x.advanced ? "Nâng cao" : undefined }))}
+            value={section}
+            onChange={setSection}
+          />
           <div class="min-w-0">{render(section)}</div>
         </div>
       ) : (
@@ -298,7 +290,7 @@ export function Settings() {
             <button type="button" class="srow" aria-expanded={advanced} onClick={() => setAdvanced((v) => !v)}>
               <span class="srow-main">
                 <span class="srow-t">Nâng cao</span>
-                <span class="srow-s">{ADVANCED.map((x) => x.label).join(" · ")}: khoá SePay, Telegram, Zalo, nối Claude, ngưỡng tự chia, phần an tâm, ai đổi gì lúc nào, bản mới</span>
+                <span class="srow-s">Ngân hàng, tin nhắn, Trợ lý AI, ngưỡng, nhật ký, bản mới</span>
               </span>
               <span class="srow-r">
                 <Icon name={advanced ? "chevron-up" : "chevron-down"} size={16} />
@@ -367,23 +359,25 @@ export function Settings() {
   );
 }
 
+/** Mục của hàng tab điện thoại: các phần chính + "Nâng cao" (mở phần gập rồi mới nhảy tới). */
+const JUMP_ITEMS = [...MAIN.map((x) => ({ value: x.id as string, label: x.label })), { value: "advanced", label: "Nâng cao" }];
+
 /**
- * Hàng nhảy tới phần (điện thoại): dính dưới thanh tiêu đề, chip của phần đang xem được tô và cuộn vào tầm nhìn.
+ * Hàng tab nhảy tới phần (điện thoại, SectionNav): dính dưới thanh tiêu đề, tab của phần đang xem được tô và cuộn vào tầm nhìn.
  * "Nâng cao" mở phần gập rồi mới nhảy tới.
  */
 function JumpBar({ onAdvanced }: { onAdvanced: () => void }) {
-  const bar = useRef<HTMLElement>(null);
   const [current, setCurrent] = useState<string>("pockets");
   useEffect(() => {
     let frame = 0;
     const on = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
-        // Phần đang xem: phần cuối cùng có đầu đã qua vạch đọc — một phần ba khoảng màn dưới hàng chip, nên card vừa cuộn
-        // tới (đầu cách hàng chip vài chục px) được tô, không phải phần trước nó.
-        const bottom = bar.current?.getBoundingClientRect().bottom ?? 0;
+        // Phần đang xem: phần cuối cùng có đầu đã qua vạch đọc — một phần ba khoảng màn dưới hàng tab, nên card vừa cuộn
+        // tới (đầu cách hàng tab vài chục px) được tô, không phải phần trước nó.
+        const bottom = document.querySelector(".sec-tabs")?.getBoundingClientRect().bottom ?? 0;
         const line = bottom + Math.max(16, (innerHeight - bottom) / 3);
-        const ids = [...MAIN.map((x) => x.id), "advanced"];
+        const ids = JUMP_ITEMS.map((x) => x.value);
         const seen = ids.filter((id) => (document.getElementById(id)?.getBoundingClientRect().top ?? Infinity) <= line);
         setCurrent(seen[seen.length - 1] ?? ids[0]!);
       });
@@ -395,28 +389,20 @@ function JumpBar({ onAdvanced }: { onAdvanced: () => void }) {
       removeEventListener("scroll", on);
     };
   }, []);
-  useEffect(() => {
-    const nav = bar.current;
-    const chip = nav?.querySelector<HTMLElement>('[aria-current="true"]');
-    if (nav && chip) nav.scrollTo({ left: chip.offsetLeft - 12, behavior: "smooth" });
-  }, [current]);
   return (
-    <nav ref={bar} class="tabs sticky" aria-label="Nhảy tới phần">
-      {MAIN.map((x) => (
-        <button type="button" key={x.id} aria-current={current === x.id ? "true" : undefined} onClick={() => document.getElementById(x.id)?.scrollIntoView({ block: "start" })}>
-          {x.label}
-        </button>
-      ))}
-      <button type="button" aria-current={current === "advanced" ? "true" : undefined} onClick={onAdvanced}>
-        Nâng cao
-      </button>
-    </nav>
+    <SectionNav
+      wide={false}
+      label="Đi tới mục"
+      items={JUMP_ITEMS}
+      value={current}
+      onChange={(id) => (id === "advanced" ? onAdvanced() : document.getElementById(id)?.scrollIntoView({ block: "start" }))}
+    />
   );
 }
 
 /** Máy này (điện thoại): giao diện sáng/tối, mã PIN, đăng xuất, đăng xuất mọi máy — trước nằm cuối Hôm nay. Máy tính đã có ở thanh bên. */
 function DeviceCard() {
-  const { member } = useApp();
+  const { member, compact } = useApp();
   const [theme, changeTheme] = useTheme();
   const { confirmOut, unsynced, onLogout } = useLogout();
   const all = useLogout(true);
@@ -435,36 +421,20 @@ function DeviceCard() {
           ]}
         />
       </div>
+      <label class="field check-row">
+        <span>Chế độ gọn (chỉ ghi chi)</span>
+        <input type="checkbox" checked={compact} onChange={(e) => setCompact(e.currentTarget.checked)} />
+      </label>
       <PinRow />
-      <div class="field">
-        <span class="k">Hướng dẫn</span>
-        <a class="btn" href={GUIDE_URL} target="_blank" rel="noopener">
-          Mở hướng dẫn
-        </a>
-      </div>
-      <div class="field">
-        <span class="k">Về Ví nhà · {appVersionLabel(__APP_VERSION__)}</span>
-        <a class="btn" href={SOURCE_URL} target="_blank" rel="noopener">
-          Mã nguồn
-        </a>
-      </div>
-      <div class="field">
-        <span class="k">Đang dùng: {member?.name}</span>
-        <button type="button" class="btn" onClick={onLogout}>
-          {confirmOut ? "Vẫn đăng xuất" : "Đăng xuất"}
-        </button>
-      </div>
+      <Row title="Hướng dẫn" href={GUIDE_URL} />
+      <Row title="Mã nguồn" sub={`Ví nhà · ${appVersionLabel(__APP_VERSION__)}`} href={SOURCE_URL} />
+      <Row title={confirmOut ? "Vẫn đăng xuất" : "Đăng xuất"} sub={`Đang dùng: ${member?.name ?? ""}`} onClick={onLogout} />
       {confirmOut && (
         <div class="note" role="alert">
-          Còn {unsynced} khoản của {member?.name} chưa lên sổ. Chúng nằm lại trên máy này và chỉ gửi khi {member?.name} đăng nhập lại.
+          Còn {unsynced} khoản của {member?.name} chưa lên sổ, tạm lưu trên máy này và chỉ gửi khi {member?.name} đăng nhập lại.
         </div>
       )}
-      <div class="field">
-        <span class="k">Mất máy, lộ mật khẩu?</span>
-        <button type="button" class="btn" onClick={all.onLogout}>
-          {all.confirmOut ? "Vẫn đăng xuất mọi máy" : "Đăng xuất mọi máy"}
-        </button>
-      </div>
+      <Row title={all.confirmOut ? "Vẫn đăng xuất mọi máy" : "Đăng xuất mọi máy"} sub="Khi mất máy, lộ mật khẩu" onClick={all.onLogout} />
       {all.confirmOut && (
         <div class="note" role="alert">
           {signOutEverywhereNote(member?.name, all.unsynced)}
@@ -477,20 +447,25 @@ function DeviceCard() {
 // ── Hàng dùng chung ──────────────────────────────────────────────
 
 /** Hàng danh sách: bấm được thì là nút mở sheet, chỉ xem thì là div. */
-function Row(props: { title: ComponentChildren; sub?: ComponentChildren; sub2?: ComponentChildren; right?: ComponentChildren; onClick?: () => void }) {
+function Row(props: { title: ComponentChildren; sub?: ComponentChildren; right?: ComponentChildren; onClick?: () => void; href?: string }) {
   const inner = (
     <>
       <span class="srow-main">
         <span class="srow-t">{props.title}</span>
         {props.sub && <span class="srow-s">{props.sub}</span>}
-        {props.sub2 && <span class="srow-s2">{props.sub2}</span>}
       </span>
       <span class="srow-r">
         {props.right}
-        {props.onClick && <Icon name="chevron-right" size={16} />}
+        {(props.onClick || props.href) && <Icon name="chevron-right" size={16} />}
       </span>
     </>
   );
+  if (props.href)
+    return (
+      <a class="srow" href={props.href} target="_blank" rel="noopener">
+        {inner}
+      </a>
+    );
   return props.onClick ? (
     <button type="button" class="srow" onClick={props.onClick}>
       {inner}
@@ -596,7 +571,7 @@ function Connections({ d, ro, open }: SectionProps) {
   );
 
   return (
-    <Card id="connections" title="Kết nối" flush note="Khoá và token chỉ ghi: đã lưu thì app chỉ hiện 2 ký tự cuối, không bao giờ hiện lại cả khoá.">
+    <Card id="connections" title="Kết nối" flush note="Để bảo mật, lưu xong app chỉ hiện 2 ký tự cuối, không hiện lại cả khoá.">
       <div class="set-sub">SePay</div>
       <div class="srow srow-stack">
         <span class="srow-t">Chưa có tài khoản SePay?</span>
@@ -609,7 +584,7 @@ function Connections({ d, ro, open }: SectionProps) {
       </div>
       <div class="srow srow-stack">
         <span class="srow-t">Địa chỉ webhook</span>
-        <span class="srow-s">Mọi tài khoản SePay dán cùng địa chỉ này vào mục Webhook, mỗi tài khoản kèm khoá webhook riêng của nó.</span>
+        <span class="srow-s">Dán địa chỉ này vào mục Webhook trên SePay, mỗi tài khoản đi kèm khoá riêng.</span>
         <span class="copyrow">
           <code class="num">{it.webhook_url}</code>
           <button type="button" class="btn" onClick={() => void copy()} aria-label="Chép địa chỉ webhook">
@@ -630,7 +605,7 @@ function Connections({ d, ro, open }: SectionProps) {
             {sepaySecret(c, "api_token", "Token API", "Dùng để rà soát lại giao dịch lúc 2 giờ sáng và khi đồng bộ lại")}
             <div class="srow srow-stack">
               <span class="copyrow">
-                <span class="srow-s">{names.length ? `Nối ${names.length} tài khoản: ${names.join(", ")}` : "Chưa tài khoản nào nối qua đây — bật Nối SePay ở phần Tài khoản."}</span>
+                <span class="srow-s">{names.length ? `Nối ${names.length} tài khoản: ${names.join(", ")}` : "Chưa tài khoản nào nối qua đây. Bật Nối SePay ở phần Tài khoản."}</span>
                 <span class="srow-r">
                   {!ro && (
                     <button type="button" class="btn" aria-label={`Sửa ${c.name}`} onClick={() => open({ kind: "sepay", item: c })}>
@@ -668,29 +643,21 @@ function Connections({ d, ro, open }: SectionProps) {
           </Fragment>
         );
       })}
-      <div class="srow">
-        <span class="srow-main">
-          <span class="srow-s">Mỗi tài khoản SePay một khoá webhook và một token. Nhà dùng hai tài khoản SePay thì thêm kết nối thứ hai.</span>
-        </span>
-        <span class="srow-r">
-          <AddButton ro={ro} label="Thêm kết nối SePay" onClick={() => open({ kind: "sepay", item: null })} />
-        </span>
-      </div>
+      {!ro && <Row title="Thêm kết nối SePay" sub="Mỗi tài khoản SePay một kết nối" onClick={() => open({ kind: "sepay", item: null })} />}
 
       <div class="set-sub">Telegram</div>
       {secret("telegram_bot_token", "Bot token", "Token của bot nhắc việc, lấy từ @BotFather")}
       {d.members.map((m) => {
         const r = tg[m.id];
-        const why = !it.telegram_bot_token.set ? "chưa đặt bot token" : !m.tg_chat_id ? "chưa có chat_id — đặt ở phần Thành viên" : `chat_id ${m.tg_chat_id}`;
+        const why = !it.telegram_bot_token.set ? "chưa đặt bot token" : !m.tg_chat_id ? "chưa có chat_id, đặt ở phần Thành viên" : `chat_id ${m.tg_chat_id}`;
         return (
           <div class="srow" key={m.id}>
             <span class="srow-main">
               <span class="srow-t">{m.name}</span>
-              <span class="srow-s">{why}</span>
-              {r?.text && <span class={r.bad ? "srow-s2 err" : "srow-s2"}>{r.text}</span>}
+              <span class={r?.bad ? "srow-s err" : "srow-s"}>{r?.text || why}</span>
             </span>
             <span class="srow-r">
-              <button type="button" class="btn" disabled={ro || r?.busy || !m.tg_chat_id || !it.telegram_bot_token.set} onClick={() => void testTelegram(m)}>
+              <button type="button" class="btn btn-ghost" disabled={ro || r?.busy || !m.tg_chat_id || !it.telegram_bot_token.set} onClick={() => void testTelegram(m)}>
                 {r?.busy ? "Đang gửi…" : "Gửi thử"}
               </button>
             </span>
@@ -701,12 +668,11 @@ function Connections({ d, ro, open }: SectionProps) {
       <div class="set-sub">Zalo Bot</div>
       <div class="srow srow-stack">
         <span class="srow-s">
-          Tạo bot trong app Zalo: tìm “Zalo Bot Manager”, chọn Zalo Bot Creator, đặt tên bot — Zalo gửi Bot Token. Dán token ở dưới, tự đặt một khoá webhook, rồi bấm Đặt webhook.
-          Gói miễn phí: 3.000 tin mỗi tháng, tối đa 50 người.
+          Tạo bot trong Zalo: tìm “Zalo Bot Manager”, chọn Zalo Bot Creator, đặt tên bot để nhận Bot Token. Dán token ở dưới, tự đặt khoá webhook rồi bấm Đặt webhook. Gói miễn phí: 3.000 tin mỗi tháng, tối đa 50 người.
         </span>
       </div>
       {secret("zalo_bot_token", "Bot token", "Token Zalo gửi khi tạo bot")}
-      {secret("zalo_webhook_secret", "Khoá webhook", "Chuỗi tự đặt; Zalo gửi kèm mỗi tin nhắn để app biết là thật")}
+      {secret("zalo_webhook_secret", "Khoá webhook", "Chuỗi tự đặt, Zalo gửi kèm mỗi tin nhắn để app biết tin thật")}
       <div class="srow srow-stack">
         <span class="srow-t">Địa chỉ webhook</span>
         <span class="copyrow">
@@ -727,7 +693,7 @@ function Connections({ d, ro, open }: SectionProps) {
   );
 }
 
-/** Đồng bộ lại SePay: lấy lại giao dịch của một khoảng ngày (giờ VN) khi app lỡ mất; giao dịch đã có không ghi lần hai. */
+/** Tải lại từ SePay: lấy lại giao dịch của một khoảng ngày (giờ VN) khi app lỡ mất; giao dịch đã có không ghi lần hai. */
 function SepaySync({ d, ro }: SectionProps) {
   const connections = d.integrations.sepay_connections ?? [];
   const today = dayKey(new Date());
@@ -754,7 +720,7 @@ function SepaySync({ d, ro }: SectionProps) {
   }
 
   return (
-    <Card id="sepay-sync" title="Đồng bộ lại SePay" flush note="Lấy lại giao dịch SePay của những ngày app lỡ mất. Giao dịch đã có không bị ghi hai lần. Mỗi lần tối đa 31 ngày.">
+    <Card id="sepay-sync" title="Tải lại từ SePay" flush note="Lấy lại giao dịch SePay của những ngày app lỡ mất. Giao dịch đã có không bị ghi hai lần. Mỗi lần tối đa 31 ngày.">
       <div class="field" style={{ borderTop: 0 }}>
         <label for="sync-from">Từ ngày</label>
         <input id="sync-from" class="ctl" type="date" max={today} value={from} onInput={(ev) => setFrom(ev.currentTarget.value)} />
@@ -802,7 +768,7 @@ function SepaySync({ d, ro }: SectionProps) {
   );
 }
 
-// ── Claude và ứng dụng AI ────────────────────────────────────────
+// ── Trợ lý AI ────────────────────────────────────────
 
 /**
  * Địa chỉ MCP để dán vào Claude, cách nối, và các kết nối đang có của cả nhà (OAuth, mỗi kết nối gắn một người).
@@ -834,14 +800,14 @@ function AiConnections({ ro }: { ro: boolean }) {
   return (
     <Card
       id="ai-connections"
-      title="Claude và ứng dụng AI"
+      title="Trợ lý AI"
       flush
-      note="Mỗi người tự nối bằng mật khẩu của mình; ứng dụng chỉ thấy những gì người đó thấy trong app. Đổi mật khẩu riêng, tắt người hay Đăng xuất mọi máy cũng gỡ kết nối."
+      note="Mỗi người tự nối bằng mật khẩu riêng, app chỉ thấy những gì người đó thấy. Đổi mật khẩu, tắt thành viên hay Đăng xuất mọi máy cũng tự gỡ kết nối."
     >
       <div class="srow srow-stack">
         <span class="srow-t">Địa chỉ MCP</span>
         <span class="srow-s">
-          Trong Claude: Settings › Connectors › Add custom connector › dán địa chỉ này › đăng nhập Ví nhà › chọn quyền Xem hoặc Xem + Ghi. Ứng dụng AI khác có nối MCP cũng dùng địa chỉ này.
+          Trong Claude: Settings › Connectors › Add custom connector › dán địa chỉ này › đăng nhập Ví nhà › chọn Xem hoặc Xem + Ghi. App AI khác có nối MCP cũng dùng địa chỉ này.
         </span>
         {mcp.data ? (
           <span class="copyrow">
@@ -874,9 +840,8 @@ function AiConnections({ ro }: { ro: boolean }) {
               </>
             }
             sub={r.sub}
-            sub2={r.sub2}
             right={
-              <button type="button" class={confirmRevoke === r.key ? "btn btn-bad" : "btn"} disabled={ro || busy} onClick={() => void revoke(r)}>
+              <button type="button" class={confirmRevoke === r.key ? "btn btn-bad" : "btn btn-ghost"} disabled={ro || busy} onClick={() => void revoke(r)}>
                 {confirmRevoke === r.key ? "Gỡ hẳn" : "Gỡ"}
               </button>
             }
@@ -902,7 +867,7 @@ function NotifyScheduleCard({ d, ro, open }: SectionProps) {
       id="notifications"
       title="Giờ nhắc"
       flush
-      note="Áp dụng cho cả nhà. Giao dịch chưa gán: kiểm tra mỗi 15 phút (đêm 1–4 giờ: mỗi giờ). Giờ trong 01:00–04:00 chạy theo lượt mỗi giờ. Rà soát ngân hàng vẫn chạy 02:00, không gửi tin."
+      note="Áp dụng cho cả nhà. Giao dịch chưa gán kiểm tra mỗi 15 phút (đêm 1–4 giờ: mỗi giờ). Giờ nhắc từ 01:00–04:00 gửi theo lượt mỗi giờ. Rà soát ngân hàng vẫn chạy 02:00, không gửi tin."
     >
       {s ? (
         scheduleRows(s).map((r) => <Row key={r.title} title={r.title} sub={r.sub} right={<span class="srow-v">{r.value}</span>} onClick={edit} />)
@@ -970,7 +935,7 @@ function PushNotifications() {
         if (r.sent === 0) return { text: "Chưa gửi được: máy không nhận. Tắt rồi bật lại thông báo.", bad: true };
         return { text: `Đã gửi tin thử tới ${r.sent} máy${r.failed ? `, ${r.failed} máy không nhận` : ""}. Xem thông báo.`, bad: r.failed > 0 };
       } catch (err) {
-        if (err instanceof ApiError && err.code === "no_subscription") return { text: "Server không còn giữ máy này. Tắt rồi bật lại thông báo.", bad: true };
+        if (err instanceof ApiError && err.code === "no_subscription") return { text: "Máy chủ đã gỡ máy này khỏi danh sách nhận tin. Tắt rồi bật lại thông báo.", bad: true };
         throw err;
       }
     });
@@ -985,7 +950,7 @@ function PushNotifications() {
         await startTestSeries();
         return null; // dòng lượt gửi thử (đọc lại sau run) hiện hướng dẫn tắt app
       } catch (err) {
-        if (err instanceof ApiError && err.code === "no_subscription") return { text: "Server không còn giữ máy này. Tắt rồi bật lại thông báo.", bad: true };
+        if (err instanceof ApiError && err.code === "no_subscription") return { text: "Máy chủ đã gỡ máy này khỏi danh sách nhận tin. Tắt rồi bật lại thông báo.", bad: true };
         if (err instanceof ApiError && err.code === "series_running") return { text: "Đang có một lượt gửi thử chưa xong. Đợi xong hoặc bấm Huỷ.", bad: true };
         throw err;
       }
@@ -1018,68 +983,50 @@ function PushNotifications() {
       case null:
         return <Skeleton rows={1} />;
       case "unsupported":
-        return <Row title="Máy này không nhận được thông báo" sub={`${thisDevice} không hỗ trợ thông báo đẩy. Tin vẫn tới Telegram, Zalo.`} />;
+        return (
+          <>
+            <Row title="Máy này không nhận được thông báo" />
+            <p class="row-note">{thisDevice} không hỗ trợ thông báo. Tin vẫn tới Telegram, Zalo.</p>
+          </>
+        );
       case "needs-install":
         return (
-          <Row
-            title="Thêm Ví nhà vào màn hình chính trước"
-            sub="iPhone, iPad chỉ nhận thông báo khi app mở từ icon ngoài màn hình chính. Trong Safari bấm Chia sẻ → Thêm vào MH chính, rồi mở Ví nhà từ icon đó và bật ở đây."
-          />
+          <>
+            <Row title="Thêm Ví nhà vào màn hình chính trước" />
+            <p class="row-note">iPhone, iPad chỉ nhận thông báo khi mở từ màn hình chính. Trong Safari, bấm Chia sẻ → Thêm vào MH chính, rồi mở Ví nhà từ đó để bật.</p>
+          </>
         );
       case "blocked":
         return (
-          <Row
-            title="Thông báo đang bị chặn"
-            sub={
-              ios
+          <>
+            <Row title="Thông báo đang bị chặn" />
+            <p class="row-note">
+              {ios
                 ? "Mở Cài đặt của máy → Thông báo → Ví nhà → bật Cho phép thông báo, rồi quay lại đây."
-                : "Bấm biểu tượng cạnh địa chỉ trang → Thông báo → Cho phép, rồi tải lại trang. App cài trên Android: Cài đặt → Ứng dụng → Ví nhà → Thông báo."
-            }
-          />
+                : "Bấm biểu tượng cạnh địa chỉ trang → Thông báo → Cho phép, rồi tải lại trang. App cài trên Android: Cài đặt → Ứng dụng → Ví nhà → Thông báo."}
+            </p>
+          </>
         );
       case "off":
         return (
           <Row
             title="Chưa bật"
-            sub={`Bật để ${thisDevice} nhận tin sáng, tổng kết tuần và nhắc gán giao dịch.`}
-            right={
-              <button type="button" class="btn" disabled={!online || busy || !info} onClick={() => void enable()}>
-                {busy ? "Đang bật…" : "Bật thông báo"}
-              </button>
-            }
+            sub="Tin sáng, tổng kết tuần, nhắc gán"
+            right={<span class="srow-v">{busy ? "Đang bật…" : "Bật thông báo"}</span>}
+            onClick={!online || busy || !info ? undefined : () => void enable()}
           />
         );
       case "on":
         return (
           <>
-            <Row
-              title={`Đang bật cho ${member?.name ?? "người đang dùng"}`}
-              sub={thisDevice}
-              right={
-                <>
-                  <button type="button" class="btn" disabled={!online || busy} onClick={() => void test()}>
-                    Gửi thử
-                  </button>
-                  <button type="button" class="btn" disabled={!online || busy} onClick={() => void disable()}>
-                    Tắt
-                  </button>
-                </>
-              }
-            />
+            <Row title={`Đang bật cho ${member?.name ?? "người đang dùng"}`} sub={thisDevice} />
+            <Row title="Gửi thử" onClick={!online || busy ? undefined : () => void test()} />
+            <Row title="Tắt" onClick={!online || busy ? undefined : () => void disable()} />
             <Row
               title={series.title}
               sub={series.sub}
-              right={
-                series.active ? (
-                  <button type="button" class="btn" disabled={!online || busy} onClick={() => void cancelSeries()}>
-                    Huỷ
-                  </button>
-                ) : (
-                  <button type="button" class="btn" disabled={!online || busy || !info} onClick={() => void startSeries()}>
-                    Thử khi tắt app
-                  </button>
-                )
-              }
+              right={<span class="srow-v">{series.active ? "Huỷ" : "Thử khi tắt app"}</span>}
+              onClick={!online || busy || (!series.active && !info) ? undefined : () => void (series.active ? cancelSeries() : startSeries())}
             />
           </>
         );
@@ -1087,7 +1034,7 @@ function PushNotifications() {
   })();
 
   return (
-    <Card id="device-notifications" title="Thông báo trên máy này" flush note="Tin gửi cho mỗi người tới Telegram và Zalo (bản đầy đủ) và mọi máy người đó đã bật ở đây (bản ngắn, việc cần làm trước). Đổi người hay đăng xuất thì máy này tự tắt.">
+    <Card id="device-notifications" title="Thông báo trên máy này" flush note="Telegram và Zalo nhận tin đầy đủ; các máy bật ở đây nhận tin ngắn với việc cần làm trước. Đổi người hay đăng xuất thì máy này tự tắt.">
       {status}
       {result && (
         <div class="srow" aria-live="polite">
@@ -1112,10 +1059,9 @@ function PushNotifications() {
                 {x.memberName} {x.id === thisId && state === "on" && <span class="chip">máy này</span>}
               </>
             }
-            sub={x.device ?? "Máy không rõ"}
-            sub2={`bật ngày ${shortDate(sqliteUtcToIso(x.createdAt))} · ${lastOkText(x.lastOkAt)}`}
+            sub={`${x.device ?? "Máy không rõ"} · ${lastOkText(x.lastOkAt)}`}
             right={
-              <button type="button" class={confirmRemove === x.id ? "btn btn-bad" : "btn"} disabled={!online || busy} onClick={() => remove(x.id)}>
+              <button type="button" class={confirmRemove === x.id ? "btn btn-bad" : "btn btn-ghost"} disabled={!online || busy} onClick={() => remove(x.id)}>
                 {confirmRemove === x.id ? "Gỡ hẳn" : "Gỡ"}
               </button>
             }
@@ -1130,7 +1076,7 @@ function PushNotifications() {
 
 function Accounts({ d, ro, wide, open }: SectionProps) {
   const rows = [...d.accounts].sort((a, b) => Number(b.active) - Number(a.active));
-  // Khoản gửi kỳ hạn đang dùng lồng ngay dưới mẹ (ADR-140): "↳ Gửi 6 tháng · 100.000.000 ₫", mẹ "gồm 1 khoản gửi · tổng …".
+  // Khoản gửi kỳ hạn đang dùng lồng ngay dưới mẹ (ADR-140): "Gửi 6 tháng · 100.000.000 ₫" thụt 16px, mẹ "gồm 1 khoản gửi · tổng …".
   const nested = nestAccounts(rows, (a) => ({ id: a.id, name: a.name, balance: a.book_balance ?? 0, parentId: a.active ? (a.parent_account_id ?? null) : null }));
   const owner = (a: SettingsAccount) => nameOf(d.members, a.owner_member_id) ?? "chung";
   const connections = d.integrations.sepay_connections ?? [];
@@ -1142,7 +1088,7 @@ function Accounts({ d, ro, wide, open }: SectionProps) {
       title="Tài khoản"
       right={<AddButton ro={ro} label="Thêm" onClick={() => open({ kind: "account", item: null })} />}
       flush
-      note="Tiền vào tài khoản nối SePay tự về, không nhập tay; tiền ra cũng vậy nếu tài khoản bật “SePay báo cả tiền ra” — còn không thì khoản chi từ nó nhập tay."
+      note="Tiền vào tài khoản nối SePay tự về, không cần nhập tay. Tiền ra cũng tự về nếu bật “SePay báo cả tiền ra”, nếu không thì khoản chi vẫn nhập tay."
     >
       {wide ? (
         <div class="table-wrap">
@@ -1178,7 +1124,7 @@ function Accounts({ d, ro, wide, open }: SectionProps) {
                   <td class="l">{sepay(a) ?? "ghi tay"}</td>
                   <td class="l">{owner(a)}</td>
                   <td class="num">
-                    <Money value={a.opening_balance} unit={false} mono />
+                    <Money value={a.opening_balance} unit={false} />
                   </td>
                   <td class="l">{a.active ? "đang dùng" : <span class="chip">ngừng dùng</span>}</td>
                   <EditCell ro={ro} label={`Sửa ${a.name}`} onClick={() => open({ kind: "account", item: a })} />
@@ -1196,11 +1142,10 @@ function Accounts({ d, ro, wide, open }: SectionProps) {
                   {child ? line : a.name} {a.sepay_enabled && <span class="chip">{sepay(a)}</span>} {!a.active && <span class="chip">ngừng dùng</span>}
                 </>
               }
-              sub={[ACCOUNT_KIND_LABEL[a.kind], bankName(a.bank), a.account_no, owner(a)].filter(Boolean).join(" · ")}
-              sub2={sub ?? undefined}
+              sub={sub ?? `${bankName(a.bank) ?? ACCOUNT_KIND_LABEL[a.kind]} · ${owner(a)}`}
               right={
                 <span class="srow-v">
-                  <Money value={a.opening_balance} />
+                  <Money value={a.opening_balance} unit={false} />
                   <span class="sub-line">số dư đầu</span>
                 </span>
               }
@@ -1216,46 +1161,70 @@ function Accounts({ d, ro, wide, open }: SectionProps) {
 // ── Ba ngăn ──────────────────────────────────────────────────────
 
 /**
+ * Hàng mục tiêu (UC-709 AC-36, AC-53; DESIGN §4.5): `Row` tên · số bên phải, chip "Thiếu …" / "Đủ" nhỏ dưới số, một dòng phụ,
+ * thanh 2px màu Dự phòng (đủ thì --pos). Mục tiêu của tài khoản chung thụt 16px dưới hàng đầu nhóm. Chưa có tài khoản thật thì
+ * bên phải là "Mở tài khoản ›" (chạm hàng mở sheet mục tiêu để gắn / tạo tài khoản).
+ */
+function GoalRow({ v, off, indent, onClick }: { v: GoalRowView; off: boolean; indent?: boolean; onClick?: () => void }) {
+  const full = v.chip?.tone === "ok";
+  return (
+    <ListRow
+      title={
+        <>
+          {v.name}
+          {off && <Chip>ngừng dùng</Chip>}
+        </>
+      }
+      sub={v.sub}
+      value={v.needsAccount ? <span class="row-act">Mở tài khoản ›</span> : (v.amount ?? undefined)}
+      valueSub={v.chip && <Chip tone={full ? "pos" : "warn"}>{v.chip.text}</Chip>}
+      track={v.pct !== null ? { pct: v.pct, pocket: "reserve", tone: full ? "pos" : undefined } : null}
+      indent={indent}
+      onClick={onClick}
+    />
+  );
+}
+
+/**
  * Ba ngăn (UC-709 AC-35…39, AC-46, AC-48): hàng "Chuyển sang ba ngăn · còn N bước ›" khi đang chuyển đổi, xếp tài khoản vào ngăn
  * (chip "N chưa xác nhận"), mục tiêu Dự phòng nhóm theo tài khoản (nhóm chung có nút Đổi thứ tự) kèm gợi ý "Tạo mục tiêu Trả
  * nợ" từ sổ nợ, nhóm danh mục & hạn mức mềm. Số tiền đều qua bộ định dạng có che số (UC-718).
  */
 function Pockets({ d, ro, open }: SectionProps) {
-  const conversion = conversionSettingsRow(useApp().snap?.conversion);
+  const snap = useApp().snap;
+  const conversion = conversionSettingsRow(snap?.conversion);
   const chip = unconfirmedChip(d.accounts);
   const counts = groupAccountsByPocket(d.accounts, Object.fromEntries(d.accounts.map((a) => [a.id, a.pocket ?? null])))
+    .filter((g) => g.accounts.length > 0)
     .map((g) => `${g.label} ${g.accounts.length}`)
     .join(" · ");
   const goalGroups = goalListGroups(d);
-  const saving = goalGroups.filter((g) => g.key !== "+off");
+  const saving = goalGroups.filter((g) => g.key !== "+off" && g.key !== "+none");
+  const loose = goalGroups.filter((g) => g.key === "+none");
   const stopped = goalGroups.filter((g) => g.key === "+off");
-  const monthly = operatingGoalLines(d.goals);
+  const monthly = operatingGoalRows(d.goals, new Map(snap?.pockets?.operating.goals.map((g) => [g.id, g.monthAmount])));
+  const openGoal = (g: ReserveGoal) => (ro ? undefined : () => open({ kind: "goal", item: g }));
   const goalGroupView = (grp: GoalListGroup) => (
-    <div key={grp.key}>
-      {grp.title && (
-        <div class="set-sub goal-list-h">
-          <span>{grp.title}</span>
-          {grp.reorder && !ro && (
-            <button type="button" class="btn btn-ghost" onClick={() => open({ kind: "goal-order", accountId: grp.accountId! })}>
-              Đổi thứ tự
-            </button>
-          )}
-        </div>
-      )}
-      {grp.note && <p class="fhint">{grp.note}</p>}
-      {grp.goals.map((g) => (
-        <Row
-          key={g.id}
-          title={
-            <>
-              {goalLineText(g, d.accounts, grp.shared)} {!g.active && <span class="chip">ngừng dùng</span>}
-            </>
+    <Fragment key={grp.key}>
+      {grp.head && (
+        <ListRow
+          title={grp.head.name}
+          sub={grp.head.meta}
+          value={grp.head.balance}
+          valueSub={
+            grp.reorder && !ro ? (
+              <button type="button" class="row-act" onClick={() => open({ kind: "goal-order", accountId: grp.accountId! })}>
+                Đổi thứ tự
+              </button>
+            ) : undefined
           }
-          sub={g.active && !g.account_id ? <span class="chip warn">Mở tài khoản thật</span> : undefined}
-          onClick={ro ? undefined : () => open({ kind: "goal", item: g })}
         />
+      )}
+      {grp.goals.map((g) => (
+        <GoalRow key={g.id} v={goalRowView(g)} off={!g.active} indent={Boolean(grp.head)} onClick={openGoal(g)} />
       ))}
-    </div>
+      {grp.note && <p class="row-note">{grp.note}</p>}
+    </Fragment>
   );
   const groups = [...(d.categoryGroups ?? [])].sort((a, b) => Number(b.active) - Number(a.active) || a.sort - b.sort);
   const debts = useResource<DebtsData>(ro ? null : "/v1/debts");
@@ -1263,7 +1232,7 @@ function Pockets({ d, ro, open }: SectionProps) {
   return (
     <>
       <Card id="pockets" title="Ba ngăn" flush note="Tiền về tài khoản nào là tiền của ngăn đó. Thẻ tín dụng để ở Vận hành.">
-        {conversion && <Row title={conversion} sub="Năm bước một lần: xếp ngăn, gắn mục tiêu với tài khoản thật, đối chiếu Tích luỹ" onClick={() => go("convert")} />}
+        {conversion && <Row title={conversion} sub="Xếp ngăn, gắn mục tiêu, đối chiếu Tích luỹ" onClick={() => go("convert")} />}
         <Row
           title={
             <>
@@ -1279,26 +1248,34 @@ function Pockets({ d, ro, open }: SectionProps) {
         title="Mục tiêu Dự phòng"
         right={<AddButton ro={ro} label="Thêm" onClick={() => open({ kind: "goal", item: null })} />}
         flush
-        note="Khoản phải trả để dành ở một tài khoản Dự phòng (nhiều khoản dùng chung được, số dư lấp lần lượt theo thứ tự ưu tiên) hoặc trả thẳng từ tiền chi tiêu mỗi tháng"
+        note="Số dư một tài khoản lấp lần lượt các mục tiêu theo thứ tự ưu tiên. Khoản trả từ tiền chi tiêu không cần tài khoản riêng."
       >
         {goalGroups.length === 0 && monthly.length === 0 && suggestions.length === 0 && <p class="empty">Chưa có mục tiêu nào.</p>}
-        {saving.length > 0 && <div class="set-sub goal-section-h">{GOAL_SECTION_LABEL.account}</div>}
+        {saving.length > 0 && <div class="list-h">{GOAL_SECTION_LABEL.account}</div>}
         {saving.map(goalGroupView)}
-        {monthly.length > 0 && <div class="set-sub goal-section-h">{GOAL_SECTION_LABEL.operating}</div>}
-        {monthly.map((l) => (
-          <Row key={l.goal.id} title={l.text} onClick={ro ? undefined : () => open({ kind: "goal", item: l.goal })} />
+        {loose.length > 0 && <div class="list-h">{GOAL_SECTION_LABEL.none}</div>}
+        {loose.map(goalGroupView)}
+        {monthly.length > 0 && (
+          <div class="list-h">
+            <i class="card-head-dot pocket-operating" aria-hidden="true" />
+            {GOAL_SECTION_LABEL.operating}
+          </div>
+        )}
+        {monthly.map((r) => (
+          <ListRow key={r.goal.id} title={r.goal.name} sub={r.sub} value={r.amount} onClick={openGoal(r.goal)} />
         ))}
-        {stopped.length > 0 && <div class="set-sub goal-section-h">Ngừng dùng</div>}
+        {stopped.length > 0 && <div class="list-h">Ngừng dùng</div>}
         {stopped.map(goalGroupView)}
+        {suggestions.length > 0 && <div class="list-h">Gợi ý từ sổ nợ</div>}
         {suggestions.map((s) => (
-          <Row key={s.debt.id} title={s.text} sub="Gợi ý từ sổ nợ: nợ ngắn hạn chưa có mục tiêu" onClick={ro ? undefined : () => open({ kind: "goal", item: null, prefill: s.prefill })} />
+          <ListRow key={s.debt.id} title={s.text} sub="Nợ ngắn hạn chưa có mục tiêu" onClick={ro ? undefined : () => open({ kind: "goal", item: null, prefill: s.prefill })} />
         ))}
       </Card>
       <Card
-        title="Nhóm danh mục & hạn mức mềm"
+        title="Danh mục và hạn mức"
         right={<AddButton ro={ro} label="Thêm nhóm" onClick={() => open({ kind: "group", item: null })} />}
         flush
-        note="Hạn mức mềm chỉ để nhìn lại, không giữ tiền, không âm, không bù"
+        note="Hạn mức mềm chỉ để theo dõi, không giữ tiền, không âm, không bù"
       >
         {groups.length === 0 && <p class="empty">Chưa có nhóm danh mục nào.</p>}
         {groups.map((g) => {
@@ -1312,7 +1289,6 @@ function Pockets({ d, ro, open }: SectionProps) {
                 </>
               }
               sub={groupSummary(g, cats.length)}
-              sub2={cats.length ? cats.map((c) => c.name).join(", ") : undefined}
               onClick={ro ? undefined : () => open({ kind: "group", item: g })}
             />
           );
@@ -1386,7 +1362,6 @@ function Rules({ d, ro, wide, open }: SectionProps) {
               </>
             }
             sub={`${MEANING_LABEL[r.meaning]}${streamName(r) ? ` · ${streamName(r)}` : ""} → ${target(r)}`}
-            sub2={[r.by_member_id ? `của ${nameOf(d.members, r.by_member_id)}` : null, `ưu tiên ${r.priority}`].filter(Boolean).join(" · ")}
             onClick={ro ? undefined : () => open({ kind: "rule", item: r })}
           />
         ))
@@ -1405,9 +1380,8 @@ function Streams({ d, ro, open }: SectionProps) {
       title="Nguồn thu"
       right={<AddButton ro={ro} label="Thêm nguồn" onClick={() => open({ kind: "stream", item: null })} />}
       flush
-      note="Nguồn bật Mở kỳ lương: lương về từ nguồn đó mở kỳ lương mới và danh sách việc ở Hôm nay. Chọn nguồn cho mã lương ở Mã chuyển khoản."
+      note="Bật Nguồn lương: lương về từ nguồn này sẽ nhắc trích Tích luỹ ở Hôm nay. Chọn nguồn cho mã lương ở Mã chuyển khoản."
     >
-      {cycleStreamReminder(streams) && <p class="note">{cycleStreamReminder(streams)}</p>}
       {streams.length === 0 && <p class="empty">Chưa có nguồn thu nào.</p>}
       {streams.map((s) => (
         <Row
@@ -1417,7 +1391,7 @@ function Streams({ d, ro, open }: SectionProps) {
               {s.name} {!s.active && <span class="chip">ngừng dùng</span>}
             </>
           }
-          sub={streamSummary(s)}
+          sub={streamSummary(s) || undefined}
           onClick={ro ? undefined : () => open({ kind: "stream", item: s })}
         />
       ))}
@@ -1436,7 +1410,7 @@ function RentalSettings({ d, ro, open }: SectionProps) {
       title="Cho thuê"
       right={<AddButton ro={ro || !r} label="Thêm người thuê" onClick={() => open({ kind: "tenant", item: null })} />}
       flush
-      note="Người thuê không phải thành viên, không đăng nhập. Mỗi tháng lập bản tính ở Ví & quỹ › Người thuê: chép tháng trước, sửa số, chốt & gửi."
+      note="Người thuê không phải thành viên, không đăng nhập. Mỗi tháng lập bản tính ở Tài khoản › Cho thuê: chép tháng trước, sửa số, chốt & gửi."
     >
       {!r ? (
         res.loading ? (
@@ -1484,7 +1458,7 @@ function Members({ d, ro, open }: SectionProps) {
       title="Thành viên"
       right={full ? <span class="chip">đủ 6 người</span> : <AddButton ro={ro} label="Thêm người" onClick={() => open({ kind: "member-new" })} />}
       flush
-      note="Chạm tên người để đặt mật khẩu riêng, tắt hay bật lại. Telegram: nhắn một tin bất kỳ cho bot của nhà, rồi nhắn @userinfobot — nó trả lại dãy số chat_id. Zalo: chạm tên người, bấm Nối Zalo rồi nhắn mã cho bot Zalo của nhà."
+      note="Chạm tên người để đặt mật khẩu riêng, tắt hay bật lại. Telegram: nhắn tin bất kỳ cho bot của nhà, rồi nhắn @userinfobot để lấy số chat_id. Zalo: chạm tên người, bấm Nối Zalo rồi nhắn mã cho bot Zalo của nhà."
     >
       {d.members.map((m) => (
         <Row
@@ -1494,12 +1468,7 @@ function Members({ d, ro, open }: SectionProps) {
               {m.name} {m.role === "owner" && <span class="chip">chủ hộ</span>} {!m.active && <span class="chip">ngừng dùng</span>}
             </>
           }
-          sub={
-            <>
-              {m.tg_chat_id ? <span class="num">chat_id {m.tg_chat_id}</span> : "chưa có chat_id Telegram"} · {m.zalo_chat_id ? "đã nối Zalo" : "chưa nối Zalo"}
-            </>
-          }
-          sub2={passwordLine(m)}
+          sub={[passwordLine(m), m.zalo_chat_id ? "đã nối Zalo" : null, m.tg_chat_id ? "có Telegram" : null].filter(Boolean).join(" · ")}
           onClick={ro ? undefined : () => open({ kind: "member", item: m })}
         />
       ))}
@@ -1507,24 +1476,33 @@ function Members({ d, ro, open }: SectionProps) {
   );
 }
 
-// ── 6. Tham số ───────────────────────────────────────────────────
+// ── 6. Ngưỡng và tỉ lệ ───────────────────────────────────────────────────
 
 function Params({ d, ro, open }: SectionProps) {
   const c = d.config;
   const edit = ro ? undefined : () => open({ kind: "config" });
   return (
-    <Card id="parameters" title="Tham số" flush>
+    <Card id="parameters" title="Ngưỡng và tỉ lệ" flush>
       <Row
         title="Ngưỡng tự nhận lương"
-        sub="Khoản khớp mẫu lương từ mức này trở lên thì tự ghi (mở kỳ lương theo nguồn); nhỏ hơn thì chờ ở màn Gán"
+        sub="Khoản khớp mẫu lương từ mức này trở lên thì tự ghi; nhỏ hơn thì chờ ở màn Gán"
         right={<span class="srow-v">{c.salary_min_amount ? formatVnd(c.salary_min_amount) : "không ngưỡng"}</span>}
         onClick={edit}
       />
+      {/* Bản cài đặt lưu offline từ trước v2.5 thiếu khoá này thì chưa hiện hàng (UC-709 AC-55). */}
+      {c.salary_reminder_min !== undefined && (
+        <Row
+          title="Ngưỡng nhắc trích Tích luỹ"
+          sub="Khoản thu không chọn nguồn từ mức này trở lên thì ô “Đây là lương” bật sẵn"
+          right={<span class="srow-v">{formatVnd(c.salary_reminder_min)}</span>}
+          onClick={edit}
+        />
+      )}
       {/* Bản cài đặt lưu offline từ trước bản lãi tiền gửi thiếu khoá này thì chưa hiện hàng. */}
       {c.interest_max_amount !== undefined && (
         <Row
           title="Lãi tiền gửi: tự ghi khoản dưới"
-          sub="Lãi ngân hàng trả nhỏ hơn mức này thì máy tự ghi vào tài khoản nhận"
+          sub="Lãi ngân hàng trả dưới mức này sẽ tự ghi vào tài khoản nhận"
           right={<span class="srow-v">{c.interest_max_amount ? formatVnd(c.interest_max_amount) : "tắt"}</span>}
           onClick={edit}
         />
@@ -1540,14 +1518,14 @@ function Params({ d, ro, open }: SectionProps) {
         <Row title="Ngày lương" sub="Thẻ Vận hành ở Hôm nay đếm ngược tới ngày này; tháng ít ngày hơn lấy ngày cuối tháng" right={<span class="srow-v">ngày {c.payday_day}</span>} onClick={edit} />
       )}
       {/* Bản cài đặt lưu offline từ trước v2 thiếu khoá này thì chưa hiện hàng. */}
-      {c.savings_pct !== undefined && <Row title="% Tích luỹ mỗi kỳ lương" sub="Số gợi ý trích sang Tích luỹ khi lương về" right={<span class="srow-v">{c.savings_pct}%</span>} onClick={edit} />}
-      {/* Bản cài đặt lưu offline từ trước Đợt C thiếu khoá dư cuối kỳ thì chưa hiện hai hàng này. */}
+      {c.savings_pct !== undefined && <Row title="% Tích luỹ khi lương về" sub="Số gợi ý trích sang Tích luỹ khi lương về" right={<span class="srow-v">{c.savings_pct}%</span>} onClick={edit} />}
+      {/* Bản cài đặt lưu offline từ trước Đợt C thiếu khoá dư cuối tháng thì chưa hiện hai hàng này. */}
       {c.surplus_savings_pct !== undefined && (
         <>
-          <Row title="Dư cuối kỳ vào Tích luỹ (%)" sub="Phần còn lại vào Ví Thưởng khi lương mở kỳ mới" right={<span class="srow-v">{c.surplus_savings_pct}%</span>} onClick={edit} />
+          <Row title="Dư cuối tháng vào Tích luỹ (%)" sub="Phần còn lại vào Ví Thưởng khi chia dư tháng vừa hết" right={<span class="srow-v">{c.surplus_savings_pct}%</span>} onClick={edit} />
           <Row
             title="Ví Thưởng"
-            sub="Tài khoản ngăn Dự phòng nhận phần dư kỳ trước; chưa chọn thì phần đó ở lại Vận hành"
+            sub="Tài khoản ngăn Dự phòng nhận phần dư cuối tháng; chưa chọn thì phần đó ở lại Vận hành"
             right={<span class="srow-v">{c.surplus_reward_account ? (nameOf(d.accounts, c.surplus_reward_account) ?? c.surplus_reward_account) : "Chưa chọn"}</span>}
             onClick={edit}
           />
@@ -1555,7 +1533,7 @@ function Params({ d, ro, open }: SectionProps) {
       )}
       {/* Bản cài đặt lưu offline từ trước 0031 thiếu các khoá fi_* thì chưa hiện hàng này. */}
       {c.fi_safety_months !== undefined && (
-        <Row title="Tài sản & tự do" sub={fiConfigSummary(c)} right={<Icon name="chevron-right" size={16} />} onClick={ro ? undefined : () => open({ kind: "fi-config" })} />
+        <Row title="Báo cáo" sub={fiConfigSummary(c)} right={<Icon name="chevron-right" size={16} />} onClick={ro ? undefined : () => open({ kind: "fi-config" })} />
       )}
     </Card>
   );
@@ -1571,7 +1549,7 @@ function AuditLog() {
       id="audit-log"
       title="Nhật ký thay đổi"
       flush
-      note="50 thay đổi gần nhất: ai làm, qua đâu, lúc nào. Thấy việc lạ (máy lạ, khoá bị đổi) thì gỡ ngay ở phần tương ứng và đổi mật khẩu."
+      note="50 thay đổi gần nhất: ai làm, qua đâu, lúc nào. Thấy máy lạ hay khoá bị đổi thì gỡ ngay và đổi mật khẩu."
     >
       {log.error && !log.data ? (
         <div class="srow">
@@ -1584,7 +1562,7 @@ function AuditLog() {
       ) : (
         log.data.map((e) => {
           const v = auditView(e);
-          return <Row key={e.id} title={v.title} sub={v.sub} sub2={v.fields ?? undefined} />;
+          return <Row key={e.id} title={v.title} sub={v.fields ? `${v.sub} · ${v.fields}` : v.sub} />;
         })
       )}
     </Card>
@@ -1623,7 +1601,7 @@ function AppUpdate() {
           </button>
         </div>
       ) : (
-        <Row title="Bản phát triển — cập nhật bằng git." />
+        <Row title="Bản phát triển, cập nhật bằng git." />
       )}
       {result === "error" && (
         <div class="srow">

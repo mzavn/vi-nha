@@ -49,8 +49,8 @@ describe("Thử số / Dự phóng (tính ở máy, không lưu)", () => {
     const p = project(base);
     expect(p.f1).toEqual({ year: 2036, age: 46, targetYear: 2035, diff: 1 });
     expect(p.f2).toEqual({ year: 2039, age: 49, targetYear: 2040, diff: -1 });
-    expect(reachText("F1", p.f1)).toBe("F1 ở 46 tuổi (2036) — trễ 1 năm");
-    expect(reachText("F2", p.f2)).toBe("F2 ở 49 tuổi (2039) — sớm 1 năm");
+    expect(reachText("F1", p.f1)).toBe("F1 lúc 46 tuổi (2036), trễ 1 năm");
+    expect(reachText("F2", p.f2)).toBe("F2 lúc 49 tuổi (2039), sớm 1 năm");
     expect(p.rows.at(-1)!.year).toBe(2040);
     expect(p.rows.find((r) => r.year === 2036)!.f1).toBe(true);
     expect(p.rows.find((r) => r.year === 2035)!.f1).toBe(false);
@@ -74,7 +74,7 @@ describe("Thử số / Dự phóng (tính ở máy, không lưu)", () => {
     expect(noAge.rows[0]!.age).toBeNull();
     expect(noAge.f1).toEqual({ year: 2036, age: null, targetYear: null, diff: null });
     expect(reachText("F1", noAge.f1)).toBe("F1 năm 2036");
-    expect(reachText("F2", { year: 2040, age: 50, targetYear: 2040, diff: 0 })).toBe("F2 ở 50 tuổi (2040) — đúng mục tiêu");
+    expect(reachText("F2", { year: 2040, age: 50, targetYear: 2040, diff: 0 })).toBe("F2 lúc 50 tuổi (2040), đúng mục tiêu");
   });
 
   it("UC-1107 AC-2: hàm thuần — cùng đầu vào cùng kết quả, không đổi đầu vào", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isLegacyTx, LEGACY_LABEL } from "./transactions";
-import { bookFromHashQuery, bookHashQuery, bookPath, clearFilters, cycleFilter, defaultFilter, entryDay, filterChips, groupByDay, privateAccountLine, removeChip, stepMonth, summaryParts, summaryPath, toggleMeaning, type BookFilter } from "./tx-filter";
+import { bookFromHashQuery, bookHashQuery, bookPath, clearFilters, defaultFilter, entryDay, filterChips, groupByDay, monthFilter, privateAccountLine, removeChip, stepMonth, summaryParts, summaryPath, toggleMeaning, type BookFilter } from "./tx-filter";
 import type { Bootstrap, TxRow } from "./types";
 
 const now = new Date("2026-10-06T03:00:00Z");
@@ -63,34 +63,42 @@ describe("Sổ giao dịch: bộ lọc (change 261006-so-giao-dich)", () => {
     expect(privateAccountLine({ accountId: null }, boot)).toBeNull();
   });
 
-  it("UC-716 AC-9: từ Nhìn lại chạm danh mục Ăn ngoài → Sổ giao dịch chip \"Kỳ từ 10/11\" + Ăn ngoài, tổng Chi đọc cùng kỳ (cycle thay tháng)", () => {
+  it("UC-716 AC-9: từ Nhìn lại tháng 11 chạm danh mục Ăn ngoài → Sổ giao dịch tháng 11 + chip Ăn ngoài, tổng Chi đọc cùng tháng (month, không cycle)", () => {
     const today = new Date("2026-11-25T03:00:00Z");
-    const cur = { payday: "2026-11-10", start: "2026-11-10T01:00:00.000Z", end: null };
-    const f = cycleFilter(cur, "eating-out", today);
-    expect(f).toMatchObject({ month: null, fromDate: null, toDate: null, categoryId: "eating-out", cycle: { payday: "2026-11-10", from: "2026-11-10", to: null } });
-    expect(filterChips(f, { ...boot, categories: [{ id: "eating-out", name: "Ăn ngoài" }] } as unknown as Bootstrap).map((c) => c.label)).toEqual(["Kỳ từ 10/11", "Ăn ngoài"]);
-    expect(summaryPath(f)).toBe("/v1/transactions/summary?cycle=2026-11-10&category_id=eating-out");
+    const f = monthFilter("2026-11", "eating-out", today);
+    expect(f).toMatchObject({ month: "2026-11", fromDate: null, toDate: null, categoryId: "eating-out" });
+    expect(filterChips(f, { ...boot, categories: [{ id: "eating-out", name: "Ăn ngoài" }] } as unknown as Bootstrap).map((c) => c.label)).toEqual(["Ăn ngoài"]);
+    expect(summaryPath(f)).toBe("/v1/transactions/summary?month=2026-11&category_id=eating-out");
+    expect(bookPath(monthFilter("2026-10", "eating-out", today))).toBe("/v1/transactions?month=2026-10&category_id=eating-out&limit=51");
   });
 
-  it("UC-716 AC-23: chip kỳ + danh mục; F5 (địa chỉ #ledger?…) giữ cả hai; × trên chip kỳ → tháng hiện tại, bỏ cycle", () => {
+  it("UC-716 AC-23: không còn chip kỳ; tháng + danh mục trên địa chỉ #ledger?month=…&category=… để F5 giữ cả hai; ghi thêm ở tháng đã qua điền ngày cuối tháng", () => {
     const today = new Date("2026-11-25T03:00:00Z");
-    const f = cycleFilter({ payday: "2026-11-10", start: "2026-11-10T01:00:00.000Z", end: null }, "eating-out", today);
+    const f = monthFilter("2026-11", "eating-out", today);
     const q = bookHashQuery(f, today);
-    expect(q).toBe("category_id=eating-out&cycle=2026-11-10&cycle_from=2026-11-10");
+    expect(q).toBe("month=2026-11&category=eating-out");
     expect(bookFromHashQuery(q, today)).toEqual(f);
-    const chips = filterChips(f, boot);
-    expect(chips[0]).toEqual({ key: "cycle", label: "Kỳ từ 10/11" });
-    const back = removeChip(f, chips[0]!, today);
-    expect(back).toMatchObject({ cycle: null, month: "2026-11", categoryId: "eating-out" });
-    expect(bookPath(back)).toBe("/v1/transactions?month=2026-11&category_id=eating-out&limit=51");
-    // Bỏ hết bộ lọc khi đang lọc kỳ cũng về tháng hiện tại.
-    expect(clearFilters(f, today)).toMatchObject({ cycle: null, month: "2026-11", categoryId: null });
-    // Kỳ đã kết thúc: chip "Kỳ 10/10 – 9/11"; ghi thêm điền sẵn ngày cuối kỳ.
-    const oct = cycleFilter({ payday: "2026-10-10", start: "2026-10-10T01:00:00.000Z", end: "2026-11-10T01:00:00.000Z" }, null, today);
-    expect(filterChips(oct, boot)).toEqual([{ key: "cycle", label: "Kỳ 10/10 – 9/11" }]);
+    expect(filterChips(f, boot).map((c) => c.key)).toEqual(["categoryId"]);
+    expect(JSON.stringify(filterChips(f, boot))).not.toMatch(/Kỳ|cycle/);
+    const oct = monthFilter("2026-10", null, today);
+    expect(bookHashQuery(oct, today)).toBe("month=2026-10");
     expect(bookFromHashQuery(bookHashQuery(oct, today), today)).toEqual(oct);
-    expect(entryDay(oct, today)).toBe("2026-11-09");
+    expect(entryDay(oct, today)).toBe("2026-10-31");
     expect(entryDay(f, today)).toBe("2026-11-25");
+    expect(clearFilters(f, today)).toMatchObject({ month: "2026-11", categoryId: null });
+  });
+
+  it("UC-716 AC-25: địa chỉ cũ #ledger?cycle=2026-11-10&category=eating-out → bộ lọc tháng 11 + Ăn ngoài, địa chỉ ghi lại thành month=2026-11&category=eating-out; không gọi API với cycle", () => {
+    const today = new Date("2026-11-25T03:00:00Z");
+    const f = bookFromHashQuery("cycle=2026-11-10&category=eating-out", today);
+    expect(f).toEqual(monthFilter("2026-11", "eating-out", today));
+    expect(bookHashQuery(f, today)).toBe("month=2026-11&category=eating-out");
+    expect(bookPath(f)).toBe("/v1/transactions?month=2026-11&category_id=eating-out&limit=51");
+    expect(summaryPath(f)).not.toContain("cycle");
+    // Địa chỉ cũ hơn mang category_id và cycle_from / cycle_to: vẫn ra tháng của ngày lương.
+    const old = bookFromHashQuery("category_id=eating-out&cycle=2026-10-10&cycle_from=2026-10-10&cycle_to=2026-11-09", today);
+    expect(old).toEqual(monthFilter("2026-10", "eating-out", today));
+    expect(bookPath(old)).not.toContain("cycle");
   });
 
   it("UC-716 AC-23: địa chỉ chỉ mang bộ lọc khác mặc định, đọc lại đủ mọi ô; chữ lạ trên địa chỉ bị bỏ qua", () => {
@@ -154,8 +162,8 @@ describe("Sổ giao dịch: bộ lọc (change 261006-so-giao-dich)", () => {
       row(0, "2026-10-03T03:00:00Z", "income", 1_000_000),
     ]);
     expect(groups.map((g) => [g.heading, g.rows.map((r) => r.id)])).toEqual([
-      ["Thứ Hai 5/10 · chi 312.000\u00a0₫", [5, 4, 3, 2, 1]],
-      ["Thứ Bảy 3/10", [0]],
+      ["T2 5/10 · chi 312.000\u00a0₫", [5, 4, 3, 2, 1]],
+      ["T7 3/10", [0]],
     ]);
   });
 
@@ -179,7 +187,7 @@ describe("Sổ giao dịch: bộ lọc (change 261006-so-giao-dich)", () => {
     const fresh = { ...row(3, "2026-10-05T10:00:00Z", "spend", 400_000), legacy: false, legacy_class: null };
     expect(LEGACY_LABEL).toBe("cách tính cũ");
     expect([old, fresh].map(isLegacyTx)).toEqual([true, false]);
-    expect(groupByDay([fresh, old]).map((g) => g.heading)).toEqual(["Thứ Hai 5/10 · chi 550.000\u00a0₫"]);
+    expect(groupByDay([fresh, old]).map((g) => g.heading)).toEqual(["T2 5/10 · chi 550.000\u00a0₫"]);
     const zero = { count: 0, spend: 0, refund: 0, income: 0, lend: 0, collect: 0, transfer: 0, buy_asset: 0, adjust_in: 0, adjust_out: 0 };
     expect(summaryParts({ ...zero, count: 2, spend: 550_000 })[0]).toEqual({ label: "Chi", amount: 550_000 });
   });

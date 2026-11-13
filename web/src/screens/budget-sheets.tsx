@@ -98,7 +98,7 @@ export function DebtSheet({ debtId, onClose }: { debtId?: string; onClose: () =>
             <label for="d-principal">Tiền gốc</label>
             <AmountInput id="d-principal" value={split.principal} onChange={(n) => setDraft((d) => withPrincipal(d, n))} />
           </div>
-          <p class="fhint">Lãi là chi phí của kỳ, gốc làm giảm nợ.</p>
+          <p class="fhint">Lãi tính vào chi tiêu, gốc làm giảm nợ.</p>
         </>
       )}
       <div class="field">
@@ -113,10 +113,10 @@ export function DebtSheet({ debtId, onClose }: { debtId?: string; onClose: () =>
         <label for="d-day">Ngày</label>
         <input id="d-day" class="ctl" type="date" max={today} value={day} onInput={(e) => setDay(e.currentTarget.value || today)} />
       </div>
-      <div class="note" style={{ borderTop: "1px solid var(--border)" }}>
-        Trả từ tài khoản SePay báo cả tiền ra thì đợi giao dịch về màn Gán, chọn Chi tiêu rồi chọn khoản ở ô Trả nợ cho.
+      <div class="note" style={{ borderTop: "1px solid var(--line)" }}>
+        Nếu tài khoản SePay có báo tiền ra, đợi giao dịch về màn Gán, chọn Chi tiêu rồi chọn ô Trả nợ cho.
       </div>
-      <div class="pad">
+      <div class="sheet-foot">
         <button type="button" class="btn btn-primary btn-wide" disabled={!!problem || busy} onClick={() => void submit()}>
           {problem ?? `Ghi trả nợ ${formatTypedVnd(amount)}`}
         </button>

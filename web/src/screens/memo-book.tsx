@@ -12,6 +12,7 @@ import type { Result } from "../lib/settings";
 import { openTx, toast, useApp } from "../state/store";
 import { AmountInput } from "../ui/fields";
 import { Icon } from "../ui/icons";
+import type { EmptyState } from "../lib/empty-states";
 import { Money } from "../ui/money";
 import { Card, Empty, NeedsNetwork, Seg, Sheet, TierRow } from "../ui/parts";
 
@@ -22,6 +23,7 @@ export interface BookLabels {
   note: string;
   emptyTitle: string;
   emptyBody: string;
+  emptyState?: EmptyState;
   /** Danh từ của một khoản: "khoản nợ" / "khoản phải thu". */
   noun: string;
   /** Tên sổ: "sổ nợ" / "sổ phải thu". */
@@ -116,7 +118,9 @@ export function BookCard(props: {
   return (
     <Card title={l.title} flush note={l.note}>
       {open.length === 0 && done.length === 0 ? (
-        <Empty title={l.emptyTitle}>{l.emptyBody}</Empty>
+        <Empty state={l.emptyState} title={l.emptyState ? undefined : l.emptyTitle} onAction={props.onAdd}>
+          {!l.emptyState && l.emptyBody}
+        </Empty>
       ) : (
         <div class="blist">
           <div class="tier btotal">
@@ -138,7 +142,7 @@ export function BookCard(props: {
               right={`${progressPct(d.total, d.back)}%`}
               bar={{ pct: progressPct(d.total, d.back) }}
               onClick={() => props.onOpen(d.id)}
-              label={`${d.name} — ${l.balanceWord.toLowerCase()} ${formatVnd(d.balance)}, xem lịch sử`}
+              label={`${d.name}: ${l.balanceWord.toLowerCase()} ${formatVnd(d.balance)}, xem lịch sử`}
             />
           ))}
           {done.length > 0 && (
@@ -161,7 +165,7 @@ export function BookCard(props: {
                 amount={<Money value={d.balance} tone={false} />}
                 left={`${l.backWord.toLowerCase()} ${formatVnd(d.back)}`}
                 onClick={() => props.onOpen(d.id)}
-                label={`${d.name} — ${l.doneGroup.toLowerCase()}, xem lịch sử`}
+                label={`${d.name}: ${l.doneGroup.toLowerCase()}, xem lịch sử`}
               />
             ))}
         </div>
@@ -170,7 +174,7 @@ export function BookCard(props: {
         <button type="button" class="btn" style={{ whiteSpace: "normal", textAlign: "center" }} disabled={!online} onClick={props.onAdd}>
           <Icon name="plus" size={16} /> Thêm {l.noun}
         </button>
-        <button type="button" class="btn btn-primary" disabled={open.length === 0} onClick={props.onPrimary}>
+        <button type="button" class="btn" disabled={open.length === 0} onClick={props.onPrimary}>
           {l.primary}
         </button>
       </div>
@@ -260,7 +264,7 @@ export function BookDetailSheet(props: {
                       <button
                         type="button"
                         class={confirmVoid === line.id ? "btn btn-bad" : "link"}
-                        style={{ fontSize: "12.5px" }}
+                        style={{ fontSize: "var(--text-sm)" }}
                         disabled={busy}
                         onClick={() => (confirmVoid === line.id ? void voidLine(line) : setConfirmVoid(line.id))}
                       >
@@ -269,7 +273,7 @@ export function BookDetailSheet(props: {
                     )}
                   </td>
                   <td class="num">
-                    <Money value={line.amount} unit={false} mono signed tone={false} />
+                    <Money value={line.amount} unit={false} signed tone={false} />
                   </td>
                 </tr>
               ) : (
@@ -281,7 +285,7 @@ export function BookDetailSheet(props: {
                     <div class="sub-line">{[shortDate(movement!.at), ...movement!.sub].filter(Boolean).join(" · ")}</div>
                   </td>
                   <td class="num">
-                    <Money value={movement!.amount} unit={false} mono signed tone={false} />
+                    <Money value={movement!.amount} unit={false} signed tone={false} />
                   </td>
                 </tr>
               ),
@@ -289,7 +293,7 @@ export function BookDetailSheet(props: {
           </tbody>
         </table>
       </div>
-      <div class="note" style={{ borderTop: "1px solid var(--border)" }}>
+      <div class="note" style={{ borderTop: "1px solid var(--line)" }}>
         Sổ chỉ ghi thêm: ghi sai thì huỷ dòng rồi ghi lại.
       </div>
       {!online && (
@@ -351,10 +355,10 @@ export function BookAddSheet(props: {
         <input id="n-note" class="ctl" maxLength={500} placeholder={l.add.notePlaceholder} value={note} onInput={(e) => setNote(e.currentTarget.value)} />
       </div>
       {props.extra?.fields}
-      <div class="note" style={{ borderTop: "1px solid var(--border)" }}>
+      <div class="note" style={{ borderTop: "1px solid var(--line)" }}>
         {l.add.hint}
       </div>
-      <div class="pad">
+      <div class="sheet-foot">
         {error && (
           <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
             {error}
@@ -420,7 +424,7 @@ export function BookLineSheet<K extends string>(props: {
       {!inc && (
         <Seg
           class="pad"
-          label="Chiều chỉnh"
+          label="Tăng/giảm"
           value={f.sign > 0 ? "up" : "down"}
           onChange={(v) => set({ sign: v === "up" ? 1 : -1 })}
           options={[
@@ -445,10 +449,10 @@ export function BookLineSheet<K extends string>(props: {
           onInput={(e) => set({ note: e.currentTarget.value })}
         />
       </div>
-      <div class="note" style={{ borderTop: "1px solid var(--border)" }}>
+      <div class="note" style={{ borderTop: "1px solid var(--line)" }}>
         {inc ? inc.hint : l.adjust.hint}
       </div>
-      <div class="pad">
+      <div class="sheet-foot">
         {error && (
           <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
             {error}

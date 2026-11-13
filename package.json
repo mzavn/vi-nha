@@ -1,6 +1,6 @@
 {
   "name": "vi-nha",
-  "version": "2.4.1",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,9 +12,6 @@
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "build": "vite build --config web/vite.config.ts",
     "dev:web": "vite --config web/vite.config.ts",
-    "specs:gen": "python3 .claude/skills/mk-specs/scripts/gen.py",
-    "specs:check": "python3 .claude/skills/mk-specs/scripts/verify.py",
-    "check:private": "node scripts/check-private.mjs",
     "setup": "node scripts/setup.mjs"
   },
   "dependencies": {
@@ -22,6 +19,7 @@
     "@cloudflare/workers-oauth-provider": "^1.2.3",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "hono": "^4.13.18",
+    "lucide-preact": "^1.72.0",
     "preact": "^10.29.8",
     "uqr": "^0.1.3",
     "zod": "^4.6.7"

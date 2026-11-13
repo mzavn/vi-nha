@@ -22,7 +22,7 @@ const invalid = (field: string, message: string): never => {
 
 export const isSetUp = async (db: D1Database) => Boolean(await db.prepare("SELECT 1 FROM config WHERE k = 'setup_done'").first());
 /** 409: nhà đã thiết lập (kiểm trước khi so mật khẩu, và khi batch vấp khoá chính `setup_done`). */
-export const alreadySetup = () => new DomainError("already_setup", "Nhà đã thiết lập rồi — đăng nhập để dùng.", 409);
+export const alreadySetup = () => new DomainError("already_setup", "Nhà đã thiết lập rồi. Đăng nhập để dùng.", 409);
 
 type GroupChoice = "food" | "housing" | "transport" | "utilities";
 type Category = { id: string; name: string; icon: string; sort: number };
@@ -83,7 +83,7 @@ export interface SetupGoal {
 }
 export interface SetupInput {
   members: { id: string; name: string; password: string | null }[];
-  accounts: { id: string; name: string; kind: AccountKind; bank: string | null; owner: number | null; pocket: Pocket | null }[];
+  accounts: { id: string; name: string; kind: AccountKind; bank: string | null; owner: number | null; pocket: Pocket | null; openingBalance: number }[];
   paydayDay: number;
   savingsPct: number;
   taxable: boolean;
@@ -164,7 +164,7 @@ export function parseSetup(body: unknown): SetupInput {
     const { name, id } = memberName(m.name, `members.${i}.name`);
     if (members.some((x) => nameKey(x.name) === nameKey(name))) invalid(`members.${i}.name`, "Trùng tên với người khác.");
     const twin = members.find((x) => x.id === id);
-    if (twin) invalid(`members.${i}.name`, `Tên này ra cùng mã với “${twin.name}” — đặt tên khác đi một chút.`);
+    if (twin) invalid(`members.${i}.name`, `Tên này ra cùng mã với “${twin.name}”. Đặt tên khác đi một chút.`);
     members.push({ id, name, password: memberPassword(m.password, `members.${i}.password`) });
   });
 
@@ -180,7 +180,7 @@ export function parseSetup(body: unknown): SetupInput {
     if (!id) invalid(`accounts.${i}.name`, "Tên tài khoản cần có chữ hoặc số.");
     if (accounts.some((x) => nameKey(x.name) === nameKey(name))) invalid(`accounts.${i}.name`, "Trùng tên với tài khoản khác.");
     const twin = accounts.find((x) => x.id === id);
-    if (twin) invalid(`accounts.${i}.name`, `Tên này ra cùng mã với “${twin.name}” — đặt tên khác đi một chút.`);
+    if (twin) invalid(`accounts.${i}.name`, `Tên này ra cùng mã với “${twin.name}”. Đặt tên khác đi một chút.`);
     const kind = a.kind as AccountKind;
     if (!ACCOUNT_KINDS.includes(kind)) invalid(`accounts.${i}.kind`, "Chọn loại tài khoản.");
     if (a.bank !== undefined && a.bank !== null && typeof a.bank !== "string") invalid(`accounts.${i}.bank`, "Ngân hàng phải là chuỗi.");
@@ -193,7 +193,12 @@ export function parseSetup(body: unknown): SetupInput {
     // Không gửi → Vận hành (mọi loại, kể cả thẻ tín dụng, tiền mặt); null = ngoài ngăn.
     const pocket = a.pocket === undefined ? "operating" : a.pocket;
     if (pocket !== null && !(POCKETS as readonly unknown[]).includes(pocket)) invalid(`accounts.${i}.pocket`, "Ngăn là Tích luỹ, Dự phòng, Vận hành hoặc ngoài ngăn.");
-    accounts.push({ id, name, kind, bank, owner: owner as number | null, pocket: pocket as Pocket | null });
+    // Số dư lúc thiết lập (UC-510 AC-17): số nguyên ±10^12; thẻ tín dụng gửi số âm của số đang nợ; không gửi / null = 0.
+    const opening = a.opening_balance ?? 0;
+    if (typeof opening !== "number" || !Number.isInteger(opening) || Math.abs(opening) > 1e12) {
+      invalid(`accounts.${i}.opening_balance`, "Số dư là số nguyên, tối đa 1.000 tỷ.");
+    }
+    accounts.push({ id, name, kind, bank, owner: owner as number | null, pocket: pocket as Pocket | null, openingBalance: opening as number });
   });
 
   const paydayDay = intIn(b, "payday_day", 1, 31, DEFAULT_PAYDAY_DAY, "Ngày lương là số nguyên từ 1 đến 31.");
@@ -256,16 +261,16 @@ export async function createHousehold(db: D1Database, input: SetupInput): Promis
     ...input.accounts.map((a) =>
       db
         .prepare(
-          "INSERT INTO accounts (id, name, kind, bank, owner_member_id, opened_at, pocket, pocket_confirmed) VALUES (?, ?, ?, ?, ?, date('now'), ?, 1)",
+          "INSERT INTO accounts (id, name, kind, bank, owner_member_id, opened_at, pocket, pocket_confirmed, opening_balance) VALUES (?, ?, ?, ?, ?, date('now'), ?, 1, ?)",
         )
-        .bind(a.id, a.name, a.kind, a.bank, a.owner === null ? null : input.members[a.owner]!.id, a.pocket),
+        .bind(a.id, a.name, a.kind, a.bank, a.owner === null ? null : input.members[a.owner]!.id, a.pocket, a.openingBalance),
     ),
     config.bind("payday_day", String(input.paydayDay)),
     config.bind("savings_pct", String(input.savingsPct)),
     ...groups.flatMap((g) => [group.bind(g.id, g.name, g.essential ? 1 : 0, g.sort), ...g.categories.map((c) => category.bind(c.id, c.name, c.icon, c.sort, g.id))]),
     ...SYSTEM_CATEGORIES.map((c) => category.bind(c.id, c.name, c.icon, c.sort, null)),
-    // Nguồn "Lương" mở kỳ; ngăn theo tài khoản nhận (pocket UC-1205).
-    db.prepare("INSERT INTO income_streams (id, name, sort, pocket, opens_cycle) VALUES (?, ?, 10, NULL, 1)").bind(SALARY_STREAM.id, SALARY_STREAM.name),
+    // Nguồn "Lương" là nguồn lương (lương về có nhắc trích Tích luỹ); ngăn theo tài khoản nhận (pocket UC-1205).
+    db.prepare("INSERT INTO income_streams (id, name, sort, pocket, is_salary) VALUES (?, ?, 10, NULL, 1)").bind(SALARY_STREAM.id, SALARY_STREAM.name),
     // Mục tiêu sau tài khoản trong cùng batch: trigger thấy tài khoản ngăn Dự phòng vừa tạo. Thứ tự ưu tiên mặc định (pocket
     // UC-1209 bước 10): hạn gần trước, không hạn xuống cuối (giữ thứ tự gửi); "Thuế" sau cùng.
     ...defaultOrder(input.goals).map((g, i) => goal.bind(g.id, g.name, g.accountId, g.targetAmount, null, g.monthlyAmount, g.repeatMonths, g.dueDate, 10 * (i + 1))),

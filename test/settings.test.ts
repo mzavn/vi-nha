@@ -16,7 +16,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-type Json = { ok: boolean; data: any; error?: { code: string; message: string; field?: string } };
+type Json = { ok: boolean; data: any; error?: { code: string; message: string; field?: string; fields?: string[] } };
 async function call(method: string, path: string, body?: unknown, auth = true, headers: Record<string, string> = {}) {
   const res = await app.request(
     `https://app.example.com${path}`,
@@ -40,7 +40,7 @@ describe("đọc cài đặt", () => {
     const { json } = await call("GET", "/v1/settings");
     expect(Object.keys(json.data).sort()).toEqual(["accounts", "categories", "categoryGroups", "config", "goal_groups", "goals", "incomeStreams", "integrations", "members", "notifySchedule", "rules"]);
     expect(json.data.integrations.webhook_url).toBe("https://app.example.com/webhooks/sepay");
-    expect(json.data.config).toMatchObject({ salary_min_amount: 1_000_000, safety_fund_months: 6, fi_swr_bps: 350, fi_safety_months: "6,12,24", fi_birth_year: null });
+    expect(json.data.config).toMatchObject({ salary_min_amount: 1_000_000, salary_reminder_min: 5_000_000, safety_fund_months: 6, fi_swr_bps: 350, fi_safety_months: "6,12,24", fi_birth_year: null });
     expect(json.data.notifySchedule).toEqual({
       dailyTime: "07:00",
       weeklyDay: 1,
@@ -53,11 +53,11 @@ describe("đọc cài đặt", () => {
     });
   });
 
-  it("UC-505 AC-16: hộ mẫu sau 0040 → có opens_cycle, private, surplus_* (gồm surplus_reward_account); không có wallets, allocations, locks, month_close_*", async () => {
+  it("UC-505 AC-16: hộ mẫu sau 0046 → có is_salary, private, surplus_* (gồm surplus_reward_account); không có opens_cycle, wallets, allocations, locks, month_close_*", async () => {
     const { data } = (await call("GET", "/v1/settings")).json;
     expect(data).not.toHaveProperty("wallets");
     expect(data).not.toHaveProperty("allocations");
-    expect(data.incomeStreams.map((s: any) => [s.id, s.opens_cycle, "locks" in s])).toEqual([
+    expect(data.incomeStreams.map((s: any) => [s.id, s.is_salary, "locks" in s || "opens_cycle" in s])).toEqual([
       ["salary-husband", true, false],
       ["salary-wife", false, false],
       ["rental", false, false],
@@ -176,7 +176,8 @@ describe("khoá kết nối SePay / Telegram", () => {
     expect((await testTelegram(env, "husband", okFetch)).error).toMatch(/bot token/);
     await call("PUT", "/v1/settings/integrations", { telegram_bot_token: "123456:telegram-token-zz99" });
     expect(await testTelegram(env, "husband", okFetch)).toEqual({ sent: true });
-  });
+    // Lưu khoá (mã hoá bí mật) chậm khi cả bộ test chạy song song: chừa 20 giây thay cho mặc định 5 giây.
+  }, 20_000);
 
   it("kiểm tra một kết nối SePay (API v2): liệt kê tài khoản SePay đang nối; tài khoản có trong SePay thì đếm giao dịch 7 ngày; chưa nối thì báo; token sai thì báo", async () => {
     await call("PATCH", "/v1/settings/sepay/connections/default", { api_token: "sepay-api-token-1234" });
@@ -390,6 +391,20 @@ describe("thành viên, mã chuyển khoản, tham số", () => {
     expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ salary_min_amount: 0, safety_fund_months: 3 });
   });
 
+  it("UC-709 AC-55: ngưỡng nhắc trích Tích luỹ salary_reminder_min mặc định 5.000.000, lưu riêng với salary_min_amount; số nguyên 0…1e12, sai → 400 invalid_input, không ghi gì", async () => {
+    raw.exec("DELETE FROM config WHERE k = 'salary_reminder_min'");
+    expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ salary_min_amount: 1_000_000, salary_reminder_min: 5_000_000 });
+    const saved = await call("PUT", "/v1/settings/config", { salary_reminder_min: 8_000_000 });
+    expect([saved.status, saved.json.data?.salary_reminder_min, saved.json.data?.salary_min_amount]).toEqual([200, 8_000_000, 1_000_000]);
+    expect(raw.prepare("SELECT v FROM config WHERE k = 'salary_reminder_min'").get()).toEqual({ v: "8000000" });
+    for (const bad of [-1, 1.5, 1e12 + 1, "5000000"]) {
+      const res = await call("PUT", "/v1/settings/config", { salary_reminder_min: bad, salary_min_amount: 7 });
+      expect([res.status, res.json.error?.code], String(bad)).toEqual([400, "invalid_input"]);
+    }
+    expect((await call("PUT", "/v1/settings/config", { salary_reminder_min: 0 })).json.data.salary_reminder_min).toBe(0);
+    expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ salary_min_amount: 1_000_000, salary_reminder_min: 0 });
+  });
+
   it("UC-507 AC-22: surplus_savings_pct 0–100 nguyên; surplus_reward_account theo UC-1209 AC-4; surplus_reward_earmark / month_close_* → 400 model_changed; nhật ký ghi giá trị", async () => {
     for (const v of [101, -1, 2.5, "50", null]) {
       const res = await call("PUT", "/v1/settings/config", { surplus_savings_pct: v });
@@ -465,37 +480,41 @@ describe("nguồn thu", () => {
   it("thêm / sửa nguồn; không có thì 404", async () => {
     const created = await call("POST", "/v1/settings/income-streams", { name: "Thưởng" });
     expect(created.status).toBe(201);
-    expect(created.json.data).toEqual({ id: "thuong", name: "Thưởng", sort: 100, active: true, pocket: null, opens_cycle: false });
+    expect(created.json.data).toEqual({ id: "thuong", name: "Thưởng", sort: 100, active: true, pocket: null, is_salary: false });
     const patched = await call("PATCH", "/v1/settings/income-streams/thuong", { name: "Thưởng Tết", active: false });
-    expect(patched.json.data).toEqual({ id: "thuong", name: "Thưởng Tết", sort: 100, active: false, pocket: null, opens_cycle: false });
+    expect(patched.json.data).toEqual({ id: "thuong", name: "Thưởng Tết", sort: 100, active: false, pocket: null, is_salary: false });
     expect((await call("PATCH", "/v1/settings/income-streams/khong-co", { name: "X" })).status).toBe(404);
   });
 
-  it("UC-506 AC-29: PATCH nguồn Lương { opens_cycle: false } → lưu; locks trong thân → 400 model_changed, không ghi gì; opens_cycle không phải boolean → 400 invalid_input", async () => {
-    const off = await call("PATCH", "/v1/settings/income-streams/salary-husband", { opens_cycle: false });
-    expect([off.status, off.json.data?.opens_cycle]).toEqual([200, false]);
-    expect(raw.prepare("SELECT opens_cycle FROM income_streams WHERE id = 'salary-husband'").get()).toEqual({ opens_cycle: 0 });
+  it("UC-506 AC-29: PATCH nguồn Lương { is_salary: false } → lưu; locks trong thân → 400 model_changed, không ghi gì; is_salary không phải boolean → 400 invalid_input", async () => {
+    const off = await call("PATCH", "/v1/settings/income-streams/salary-husband", { is_salary: false });
+    expect([off.status, off.json.data?.is_salary]).toEqual([200, false]);
+    expect(raw.prepare("SELECT is_salary FROM income_streams WHERE id = 'salary-husband'").get()).toEqual({ is_salary: 0 });
     const locks = await call("PATCH", "/v1/settings/income-streams/salary-husband", { name: "Lương", locks: [{ wallet_id: "wealth-building", percent: 0.3 }] });
     expect([locks.status, locks.json.error?.code]).toEqual([400, "model_changed"]);
     expect(raw.prepare("SELECT name FROM income_streams WHERE id = 'salary-husband'").get()).toEqual({ name: "Lương chồng" });
     const createLocks = await call("POST", "/v1/settings/income-streams", { name: "Thưởng", locks: [{ wallet_id: "wealth-building", percent: 0.5 }] });
     expect([createLocks.status, createLocks.json.error?.code]).toEqual([400, "model_changed"]);
     expect(raw.prepare("SELECT COUNT(*) AS n FROM income_streams WHERE id = 'thuong'").get()).toEqual({ n: 0 });
-    const bad = await call("PATCH", "/v1/settings/income-streams/salary-husband", { opens_cycle: "true" });
-    expect([bad.status, bad.json.error?.code, bad.json.error?.field]).toEqual([400, "invalid_input", "opens_cycle"]);
-    const on = await call("POST", "/v1/settings/income-streams", { name: "Lương vợ mới", opens_cycle: true });
-    expect(on.json.data).toMatchObject({ id: "luong-vo-moi", opens_cycle: true });
+    const bad = await call("PATCH", "/v1/settings/income-streams/salary-husband", { is_salary: "true" });
+    expect([bad.status, bad.json.error?.code, bad.json.error?.field]).toEqual([400, "invalid_input", "is_salary"]);
+    const on = await call("POST", "/v1/settings/income-streams", { name: "Lương vợ mới", is_salary: true });
+    expect(on.json.data).toMatchObject({ id: "luong-vo-moi", is_salary: true });
   });
 
-  it("UC-1205 AC-3: tắt Mở kỳ lương của nguồn duy nhất → paySetup.hasCycleStream false; nguồn cho thuê bật opens_cycle → 400 cannot_open_cycle", async () => {
-    expect((await call("GET", "/v1/snapshot")).json.data.paySetup).toEqual({ hasCycleStream: true });
-    await call("PATCH", "/v1/settings/income-streams/salary-husband", { opens_cycle: false });
-    expect((await call("GET", "/v1/snapshot")).json.data.paySetup).toEqual({ hasCycleStream: false });
-    const rental = await call("PATCH", "/v1/settings/income-streams/rental", { opens_cycle: true });
-    expect([rental.status, rental.json.error?.code]).toEqual([400, "cannot_open_cycle"]);
-    expect(raw.prepare("SELECT opens_cycle FROM income_streams WHERE id = 'rental'").get()).toEqual({ opens_cycle: 0 });
-    // Tắt thì luôn được.
-    expect((await call("PATCH", "/v1/settings/income-streams/rental", { opens_cycle: false })).status).toBe(200);
+  it("UC-1205 AC-7: PATCH / POST nguồn thu gửi opens_cycle (true hay false) → 400 model_changed kèm fields [\"opens_cycle\"], không ghi gì; nguồn cho thuê bật is_salary → 400 cannot_be_salary, tắt thì luôn được", async () => {
+    for (const opens_cycle of [true, false]) {
+      const old = await call("PATCH", "/v1/settings/income-streams/salary-husband", { name: "Lương mới", opens_cycle });
+      expect([old.status, old.json.error?.code, old.json.error?.fields]).toEqual([400, "model_changed", ["opens_cycle"]]);
+    }
+    expect(raw.prepare("SELECT name, is_salary FROM income_streams WHERE id = 'salary-husband'").get()).toEqual({ name: "Lương chồng", is_salary: 1 });
+    const created = await call("POST", "/v1/settings/income-streams", { name: "Thưởng", opens_cycle: true });
+    expect([created.status, created.json.error?.code]).toEqual([400, "model_changed"]);
+    expect(raw.prepare("SELECT COUNT(*) AS n FROM income_streams WHERE id = 'thuong'").get()).toEqual({ n: 0 });
+    const rental = await call("PATCH", "/v1/settings/income-streams/rental", { is_salary: true });
+    expect([rental.status, rental.json.error?.code, rental.json.error?.field]).toEqual([400, "cannot_be_salary", "is_salary"]);
+    expect(raw.prepare("SELECT is_salary FROM income_streams WHERE id = 'rental'").get()).toEqual({ is_salary: 0 });
+    expect((await call("PATCH", "/v1/settings/income-streams/rental", { is_salary: false })).status).toBe(200);
   });
 
   it("mẫu lương gắn nguồn thu; mã chi thì không gắn được", async () => {
@@ -535,7 +554,7 @@ describe("mốc theo dõi SePay của tài khoản đã dùng (ADR-113)", () => 
       code: "feed_from_after_logs",
       status: 409,
       field: "feed_from",
-      message: "Đã có giao dịch ngân hàng của tài khoản này trước mốc này — chọn mốc sớm hơn.",
+      message: "Đã có giao dịch ngân hàng của tài khoản này trước mốc này: chọn mốc sớm hơn.",
     });
     expect(stored()).toMatchObject({ feed_from: null });
     expect(await updateAccount(env.DB, "mb-husband", { feed_from: "2026-10-10T03:00:00.000Z" }, later)).toMatchObject({ feed_from: "2026-10-10T03:00:00.000Z" });
@@ -661,7 +680,7 @@ describe("ba ngăn: cấu hình (261112-ba-ngan-nen-du-lieu)", () => {
     // Mục tiêu đã tắt vẫn có trong danh sách.
     raw.exec("UPDATE reserve_goals SET active = 0 WHERE id = 'car-service'");
     expect((await call("GET", "/v1/settings")).json.data.goals.find((g: any) => g.id === "car-service")).toMatchObject({ active: false });
-    expect(data.categoryGroups.find((g: any) => g.id === "food")).toEqual({ id: "food", name: "Ăn uống", essential: true, cycle_limit: 2_709_000, sort: 41, active: true });
+    expect(data.categoryGroups.find((g: any) => g.id === "food")).toEqual({ id: "food", name: "Ăn uống", essential: true, monthly_limit: 2_709_000, sort: 41, active: true });
     expect(data.categories.find((c: any) => c.id === "groceries").groupId).toBe("food");
   });
 
@@ -690,20 +709,31 @@ describe("ba ngăn: cấu hình (261112-ba-ngan-nen-du-lieu)", () => {
   });
 
   it("UC-1204 AC-2: nhóm danh mục — tạo, trùng, bỏ hạn mức, hạn mức 0, tắt khi còn danh mục", async () => {
-    const created = await call("POST", "/v1/settings/category-groups", { name: "Đi lại xa", cycle_limit: 800_000 });
+    const created = await call("POST", "/v1/settings/category-groups", { name: "Đi lại xa", monthly_limit: 800_000 });
     expect(created.status).toBe(201);
-    expect(created.json.data).toEqual({ id: "di-lai-xa", name: "Đi lại xa", essential: false, cycle_limit: 800_000, sort: 100, active: true });
+    expect(created.json.data).toEqual({ id: "di-lai-xa", name: "Đi lại xa", essential: false, monthly_limit: 800_000, sort: 100, active: true });
     expect((await call("GET", "/v1/settings")).json.data.categoryGroups.some((g: any) => g.id === "di-lai-xa")).toBe(true);
-    expect(auditOf("category_group.create")).toEqual([{ target: "category_group:di-lai-xa", detail: { fields: ["cycle_limit", "name"] } }]);
+    expect(auditOf("category_group.create")).toEqual([{ target: "category_group:di-lai-xa", detail: { fields: ["monthly_limit", "name"] } }]);
     expect((await call("POST", "/v1/settings/category-groups", { name: "Đi lại xa" })).json.error?.code).toBe("duplicate");
-    expect((await call("PATCH", "/v1/settings/category-groups/di-lai-xa", { cycle_limit: null })).json.data.cycle_limit).toBeNull();
-    expect((await call("PATCH", "/v1/settings/category-groups/di-lai-xa", { cycle_limit: 0 })).json.error?.code).toBe("invalid_input");
+    expect((await call("PATCH", "/v1/settings/category-groups/di-lai-xa", { monthly_limit: null })).json.data.monthly_limit).toBeNull();
+    expect((await call("PATCH", "/v1/settings/category-groups/di-lai-xa", { monthly_limit: 0 })).json.error?.code).toBe("invalid_input");
     expect((await call("PATCH", "/v1/categories/ride-hailing", { group_id: "di-lai-xa" })).status).toBe(200);
     const inUse = await call("PATCH", "/v1/settings/category-groups/di-lai-xa", { active: false });
     expect([inUse.status, inUse.json.error?.code]).toEqual([409, "group_in_use"]);
     await call("PATCH", "/v1/categories/ride-hailing", { group_id: "transport" });
     expect((await call("PATCH", "/v1/settings/category-groups/di-lai-xa", { active: false })).json.data.active).toBe(false);
-    expect(auditOf("category_group.update").map((r) => r.detail)).toEqual([{ fields: ["cycle_limit"] }, { fields: ["active"] }]);
+    expect(auditOf("category_group.update").map((r) => r.detail)).toEqual([{ fields: ["monthly_limit"] }, { fields: ["active"] }]);
+  });
+
+  it("UC-108 AC-9: PATCH nhóm Ăn uống { cycle_limit } → 400 model_changed kèm fields [\"cycle_limit\"], không ghi gì; { monthly_limit: 7000000 } → lưu", async () => {
+    const old = await call("PATCH", "/v1/settings/category-groups/food", { cycle_limit: 6_000_000 });
+    expect([old.status, old.json.error?.code, old.json.error?.fields]).toEqual([400, "model_changed", ["cycle_limit"]]);
+    const created = await call("POST", "/v1/settings/category-groups", { name: "Nhóm cũ", cycle_limit: 6_000_000 });
+    expect([created.status, created.json.error?.code]).toEqual([400, "model_changed"]);
+    expect(raw.prepare("SELECT monthly_limit FROM category_groups WHERE id = 'food'").get()).toEqual({ monthly_limit: 2_709_000 });
+    const saved = await call("PATCH", "/v1/settings/category-groups/food", { monthly_limit: 7_000_000 });
+    expect([saved.status, saved.json.data?.monthly_limit]).toEqual([200, 7_000_000]);
+    expect(raw.prepare("SELECT monthly_limit FROM category_groups WHERE id = 'food'").get()).toEqual({ monthly_limit: 7_000_000 });
   });
 
   it("UC-109 AC-8: danh mục nhận group_id — nhóm đang dùng thì lưu; nhóm lạ / đã tắt 400 unknown_group; null bỏ nhóm; GET /v1/categories và /v1/bootstrap trả groupId", async () => {
@@ -868,11 +898,11 @@ describe("tài khoản con — khoản gửi kỳ hạn (261112-tai-khoan-me-va-
     expect(auditOf("account.update").at(-1)!.detail.changes).toEqual({ parent_account_id: { from: "tk-tiet-kiem", to: null } });
   });
 
-  it("UC-507 AC-23: D1 mới không có khoá savings_pct → GET /v1/settings savings_pct 10; kỳ mở với lương 20.000.000 → ① 2.000.000", async () => {
+  it("UC-507 AC-23: D1 mới không có khoá savings_pct → GET /v1/settings savings_pct 10; lương 20.000.000 → nhắc trích 2.000.000", async () => {
     raw.exec("DELETE FROM config WHERE k = 'savings_pct'");
     expect((await call("GET", "/v1/settings")).json.data.config.savings_pct).toBe(10);
     const salary = await call("POST", "/v1/transactions", { meaning: "income", amount: 20_000_000, account_id: "cash-husband", income_stream_id: "salary-husband" });
     expect(salary.status).toBe(201);
-    expect(raw.prepare("SELECT amount FROM pay_cycle_tasks WHERE kind = 'savings'").all()).toEqual([{ amount: 2_000_000 }]);
+    expect(raw.prepare("SELECT amount, pct FROM month_tasks WHERE kind = 'savings' AND income_tx_id = ?").all(salary.json.data.tx.id)).toEqual([{ amount: 2_000_000, pct: 10 }]);
   });
 });

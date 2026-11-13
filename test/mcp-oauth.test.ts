@@ -159,6 +159,9 @@ describe("UC-601 AC-9: trang uỷ quyền", () => {
     expect(html).toContain('<input type="checkbox" name="scope" value="mcp:write" checked>');
     expect(html).toContain('name="decision" value="deny"');
     expect(html).not.toContain("localhost");
+    // change 261113-giao-dien-m1-va-ten-moi: tên mục mới, font tự host qua /oauth.css (không gọi Google).
+    expect(html).toContain("Cài đặt › Trợ lý AI");
+    expect(html).not.toMatch(/fonts\.(googleapis|gstatic)\.com/);
     // Không cho nhúng khung; form-action cho thêm origin của redirect_uri đã xác thực (không thì trình duyệt chặn bước về Claude).
     expect(res.headers.get("X-Frame-Options")).toBe("DENY");
     const csp = res.headers.get("Content-Security-Policy") ?? "";
@@ -381,7 +384,7 @@ describe("UC-602, UC-603: tool nhìn và ghi như người đã uỷ quyền", (
     expect(ok.data.tx).toMatchObject({ category_id: "loan-interest", legacy_class: null, interest_debt_id: "vay-tieu-dung" });
     const both = await json(await mcpPost(env, access, toolCall("add_transaction", { meaning: "spend", amount: 1_000, interest_debt_id: "vay-tieu-dung", debt_id: "vay-tieu-dung" })));
     expect(both.result.isError).toBe(true);
-    expect(both.result.content[0].text).toBe("Một khoản chi không vừa trả gốc vừa trả lãi — ghi hai khoản: lãi (interest_debt_id) và gốc (debt_id).");
+    expect(both.result.content[0].text).toBe("Khoản chi không vừa trả gốc vừa trả lãi: hãy ghi riêng lãi (interest_debt_id) và gốc (debt_id).");
     const debts = (await rest("GET", "/v1/debts")).data.debts as { id: string; balance: number; interestPaidThisMonth: number }[];
     expect(debts.find((d) => d.id === "vay-tieu-dung")).toMatchObject({ balance: 20_000_000 });
   });

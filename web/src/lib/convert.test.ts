@@ -7,8 +7,9 @@ import {
   conversionBanner,
   conversionSettingsRow,
   convertTitle,
-  cycleStreamsNote,
-  cycleSwitchStreams,
+  salarySwitchStreams,
+  salaryStepReady,
+  SALARY_STEP_TITLE,
   GOAL_ORDER_NOTE,
   goalGroupLines,
   goalRowAccounts,
@@ -22,7 +23,6 @@ import {
   initialGoalChoices,
   markInvited,
   NO_RESERVE_ACCOUNT,
-  payCycleReady,
   rewardRowAccounts,
   SAVINGS_GAP_EXPLAIN,
   savingsGapLines,
@@ -106,7 +106,7 @@ const goals = [
 
 describe("màn chuyển đổi: bước, banner, hàng Cài đặt", () => {
   it("UC-1208 AC-7: tiêu đề 'Chuyển sang ba ngăn · Bước {n}/5' theo bước kế tiếp; bước lạ → 0", () => {
-    expect(CONVERSION_STEPS).toEqual(["pockets", "goals", "savings_gap", "pay_cycle", "savings_pct"]);
+    expect(CONVERSION_STEPS).toEqual(["pockets", "goals", "savings_gap", "salary", "savings_pct"]);
     expect(convertTitle("pockets")).toBe("Chuyển sang ba ngăn · Bước 1/5");
     expect(convertTitle("savings_gap")).toBe("Chuyển sang ba ngăn · Bước 3/5");
     expect(convertTitle("savings_pct")).toBe("Chuyển sang ba ngăn · Bước 5/5");
@@ -184,14 +184,14 @@ describe("409 theo next", () => {
 });
 
 describe("bước 2: mỗi mục tiêu một tài khoản thật", () => {
-  it("UC-1208 AC-3: mỗi dòng có cách đặt số và hạn — lặp, một lần, % thuế; che số thì số tiền thành ••••, % giữ", () => {
+  it("UC-1208 AC-3: mỗi dòng có cách đặt số và hạn — lặp, một lần, % thuế; che số thì số tiền thành •••••, % giữ", () => {
     expect(goalTerms(goal("hoc-phi", "Học phí", { monthly_amount: 2_000_000, repeat_months: 3, target_amount: 6_000_000, due_date: "2027-01-15" }))).toBe("2.000.000/tháng, 3 tháng một lần · hạn 15/01/2027");
     expect(goalTerms(goals[1]!)).toBe("1.300.000/tháng");
     expect(goalTerms(goal("xe", "Bảo dưỡng xe", { monthly_amount: null, repeat_months: null, target_amount: 4_800_000, due_date: "2027-03-31" }))).toBe("cần 4.800.000 · hạn 31/03/2027");
     expect(goalTerms(goals[2]!)).toBe("10% thu chịu thuế");
     setAmountsHidden(true);
     try {
-      expect(goalTerms(goals[1]!)).toBe("••••/tháng");
+      expect(goalTerms(goals[1]!)).toBe("•••••/tháng");
       expect(goalTerms(goals[2]!)).toBe("10% thu chịu thuế");
     } finally {
       setAmountsHidden(false);
@@ -270,7 +270,7 @@ describe("bước 2: mỗi mục tiêu một tài khoản thật", () => {
     ]);
     setAmountsHidden(true);
     try {
-      expect(goalGroupLines(list, house, choices)[0]!.text).toBe(`MB tiết kiệm ••••${NBSP}₫ cho Nhà ở, Học tập · thiếu ••••${NBSP}₫`);
+      expect(goalGroupLines(list, house, choices)[0]!.text).toBe(`MB tiết kiệm •••••${NBSP}₫ cho Nhà ở, Học tập · thiếu •••••${NBSP}₫`);
     } finally {
       setAmountsHidden(false);
     }
@@ -283,14 +283,14 @@ describe("bước 2: mỗi mục tiêu một tài khoản thật", () => {
     const [chosen, other] = goalRowAccounts("nha-o", list, house, choices, null);
     expect(goalRowOptionText(chosen!, true)).toBe("Tài khoản tiết kiệm học tập của con");
     expect(goalRowChosenText(chosen!)).toBe(`Tài khoản tiết kiệm học tập của con · đã có 12.000.000${NBSP}₫ · dùng chung với Học tập`);
-    expect(goalRowOptionText(chosen!, false)).toBe(`Tài khoản tiết kiệm học tập của con · đã có 12.000.000${NBSP}₫ — dùng chung với Học tập`);
+    expect(goalRowOptionText(chosen!, false)).toBe(`Tài khoản tiết kiệm học tập của con · đã có 12.000.000${NBSP}₫ · dùng chung với Học tập`);
     expect(goalRowOptionText(other!, false)).toBe(`Phao · đã có 5.000.000${NBSP}₫`);
   });
 
   it("UC-1208 AC-3: biến thể nhà một tài khoản — không tài khoản Dự phòng nào, chọn Để sau cho mọi mục tiêu thì Tiếp bật, không gửi gì", () => {
     const one = [account("chinh", "Tài khoản chính", { pocket: "operating" })];
     expect(goalRowAccounts("hoc-phi", goals, one, {}, null)).toEqual([]);
-    expect(NO_RESERVE_ACCOUNT).toBe("Nhà chưa có tài khoản nào ở ngăn Dự phòng: mở một tài khoản thật (tài khoản phụ, sổ tiết kiệm…) cho từng mục tiêu, hoặc để sau.");
+    expect(NO_RESERVE_ACCOUNT).toBe("Nhà chưa có tài khoản ở ngăn Dự phòng: mở tài khoản thật (tài khoản phụ, sổ tiết kiệm…) cho từng mục tiêu, hoặc để sau.");
     const later = { "hoc-phi": { kind: "later" }, "hoa-don": { kind: "later" }, "thue": { kind: "later" } } as const;
     expect(goalsReady(goals, later)).toBe(true);
     expect(goalStepRequests(goals, later, { current: null, next: null })).toEqual([]);
@@ -352,13 +352,13 @@ describe("bước 3: Tích luỹ — tiền thật khác ví cũ", () => {
   it("UC-1208 AC-4: hộ mẫu E — ví cũ 7.000.000, không gồm 2.000.000 tài sản, thật 6.000.000, chênh −1.000.000; có tài khoản Tích luỹ thì không có câu mở tài khoản", () => {
     const l = savingsGapLines({ legacyCash: 7_000_000, legacyAssets: 2_000_000, realSavings: 6_000_000, diff: -1_000_000, hasSavingsAccount: true });
     expect(l).toEqual({
-      legacy: `Ví Tích sản cũ (số app chia trên giấy): 7.000.000${NBSP}₫`,
+      legacy: `Ví Tích sản cũ (chia trên giấy): 7.000.000${NBSP}₫`,
       assets: `không gồm 2.000.000${NBSP}₫ tài sản đã mua`,
       real: `Tích luỹ thật hôm nay: 6.000.000${NBSP}₫`,
       diff: `Chênh: −1.000.000${NBSP}₫`,
       noAccount: null,
     });
-    expect(SAVINGS_GAP_EXPLAIN).toContain("Từ bản 2.0, Tích luỹ là tiền thật đang nằm ở các tài khoản ngăn Tích luỹ.");
+    expect(SAVINGS_GAP_EXPLAIN).toContain("Từ bản 2.0, Tích luỹ là tiền thật ở các tài khoản ngăn Tích luỹ.");
     expect(savingsGapLines({ legacyCash: 1, legacyAssets: 0, realSavings: 501, diff: 500, hasSavingsAccount: true }).diff).toBe(`Chênh: +500${NBSP}₫`);
   });
 
@@ -366,14 +366,14 @@ describe("bước 3: Tích luỹ — tiền thật khác ví cũ", () => {
     const l = savingsGapLines({ legacyCash: 3_000_000, legacyAssets: 0, realSavings: 0, diff: -3_000_000, hasSavingsAccount: false });
     expect(l.real).toBe(`Tích luỹ thật hôm nay: 0${NBSP}₫`);
     expect(l.diff).toBe(`Chênh: −3.000.000${NBSP}₫`);
-    expect(l.noAccount).toBe("Chưa có tài khoản Tích luỹ: mở một tài khoản thật cho Tích luỹ (tài khoản phụ, sổ tích luỹ…), rồi xếp vào ngăn Tích luỹ ở Cài đặt › Ba ngăn.");
+    expect(l.noAccount).toBe("Chưa có tài khoản Tích luỹ: mở tài khoản thật cho Tích luỹ (tài khoản phụ, sổ tích luỹ…), rồi xếp vào ngăn Tích luỹ ở Cài đặt › Ba ngăn.");
   });
 
-  it("UC-1208 AC-7: che số → mọi số tiền bước 3 thành ••••, 'Bước 3/5' giữ", () => {
+  it("UC-1208 AC-7: che số → mọi số tiền bước 3 thành •••••, 'Bước 3/5' giữ", () => {
     setAmountsHidden(true);
     const l = savingsGapLines({ legacyCash: 7_000_000, legacyAssets: 2_000_000, realSavings: 6_000_000, diff: -1_000_000, hasSavingsAccount: true });
-    expect(l.legacy).toBe(`Ví Tích sản cũ (số app chia trên giấy): ••••${NBSP}₫`);
-    expect(l.diff).toBe(`Chênh: −••••${NBSP}₫`);
+    expect(l.legacy).toBe(`Ví Tích sản cũ (chia trên giấy): •••••${NBSP}₫`);
+    expect(l.diff).toBe(`Chênh: −•••••${NBSP}₫`);
     expect(Object.values(l).join(" ")).not.toMatch(/\d/);
     expect(convertTitle("savings_gap")).toBe("Chuyển sang ba ngăn · Bước 3/5");
   });
@@ -381,16 +381,23 @@ describe("bước 3: Tích luỹ — tiền thật khác ví cũ", () => {
 
 describe("bước 4 và 5", () => {
   afterEach(() => setAmountsHidden(false));
-  const stream = (id: string, opens_cycle: boolean, active = true) => ({ id, name: id, sort: 10, active, pocket: null, opens_cycle });
+  const stream = (id: string, is_salary: boolean, active = true) => ({ id, name: id, sort: 10, active, pocket: null, is_salary });
 
-  it("UC-1208 AC-5: nguồn cho thuê không có công tắc; tắt hết → Tiếp khoá trừ khi chọn 'Nhà mình không có lương cố định'; bật 2 nguồn → câu 'Đang bật 2 nguồn…'", () => {
+  it("UC-1208 AC-5: nguồn cho thuê không có công tắc; tắt hết → Tiếp khoá trừ khi chọn 'Nhà mình không có lương cố định'; bật 2 nguồn lương được, không câu dặn", () => {
     const streams = [stream("salary", true), stream("side", false), stream("rental", false), stream("old", true, false)];
-    expect(cycleSwitchStreams(streams, "rental").map((s) => s.id)).toEqual(["salary", "side"]);
-    expect(payCycleReady(1, false)).toBe(true);
-    expect(payCycleReady(0, false)).toBe(false);
-    expect(payCycleReady(0, true)).toBe(true);
-    expect(cycleStreamsNote(1)).toBeNull();
-    expect(cycleStreamsNote(2)).toBe("Đang bật 2 nguồn: khoản về trước trong 7 ngày quanh ngày lương mở kỳ");
+    expect(salarySwitchStreams(streams, "rental").map((s) => s.id)).toEqual(["salary", "side"]);
+    expect(salaryStepReady(1, false)).toBe(true);
+    expect(salaryStepReady(0, false)).toBe(false);
+    expect(salaryStepReady(0, true)).toBe(true);
+    expect(salaryStepReady(2, false)).toBe(true);
+  });
+
+  it("UC-1208 AC-15: bước 4 có khoá `salary`, tiêu đề 'Nguồn lương' (không 'kỳ lương'); 'Chuyển sang ba ngăn · Bước 4/5'", () => {
+    expect(CONVERSION_STEPS[3]).toBe("salary");
+    expect(stepNumber("salary")).toBe(4);
+    expect(convertTitle("salary")).toBe("Chuyển sang ba ngăn · Bước 4/5");
+    expect(SALARY_STEP_TITLE).toBe("Nguồn lương");
+    expect(stepNumber("pay_cycle")).toBe(0);
   });
 
   it("UC-1208 AC-6, AC-7: đặt 15% → câu trích 15% kèm ví dụ 'Lương 20.000.000 → trích 3.000.000'; che số → số tiền che, '15%' giữ; % sai → không có câu; toast khi xong", () => {
@@ -401,7 +408,7 @@ describe("bước 4 và 5", () => {
     setAmountsHidden(true);
     expect(savingsPctLines(15)).toEqual({
       line: "Lương về, việc đầu tiên là trích 15% sang Tích luỹ. Kỳ nào không trích được thì bỏ qua và ghi lý do.",
-      example: "Lương •••• → trích ••••",
+      example: "Lương ••••• → trích •••••",
     });
     expect(savingsPctLines(null)).toBeNull();
     expect(CONVERT_DONE_TOAST).toBe("Xong. Từ giờ Hôm nay là tiền thật của ba ngăn.");

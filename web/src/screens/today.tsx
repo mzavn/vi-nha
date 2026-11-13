@@ -1,27 +1,32 @@
-// Hôm nay — mở app là thấy câu trả lời: thẻ Vận hành (tổng và chi khoảng bao nhiêu mỗi ngày tới kỳ lương, phần đã chừa cho khoản
-// phải trả, nhắc chuyển thêm), thẻ Việc ngày lương, rồi thẻ Tích luỹ và thẻ Dự phòng — ba ngăn đọc `snapshot.pockets` (ADR-122).
+// Hôm nay — mở app là thấy câu trả lời: thẻ Vận hành (chi khoảng bao nhiêu mỗi ngày tới ngày lương, gợi ý hôm nay, các hàng trạng
+// thái: khoản phải trả, nợ ngắn hạn, tuổi tiền; nhắc chuyển thêm), thẻ Tháng dư, thẻ Trích Tích luỹ, rồi thẻ Tích luỹ và thẻ Dự phòng — ba ngăn đọc
+// `snapshot.pockets` (ADR-122).
 // Banner chỉ hiện khi có việc phải làm.
 
+import { type ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import type { OperatingGoal } from "../../../src/domain/pockets";
 import { api, errorText } from "../lib/api";
 import { conversionBanner } from "../lib/convert";
 import { DRIFT_LABEL, driftOf } from "../lib/drift";
-import { cycleAmountBody, nearSpendCard } from "../lib/near-spend";
-import { topUpQr } from "../lib/pay-cycle";
+import { EMPTY_STATES } from "../lib/empty-states";
+import { monthAmountBody, nearSpendCard } from "../lib/near-spend";
+import { savingsTaskCard, topUpQr } from "../lib/month-tasks";
+import { formatVnd, maskAmounts, moneyDigits } from "../lib/money";
 import { dayHeading, dayKey, shortDate, timeHM, weekLabel } from "../lib/period";
-import { NO_SAVINGS_ACCOUNT, reserveCard, savingsCard } from "../lib/pocket-cards";
-import type { Snapshot } from "../lib/types";
-import { go, refresh, syncNow, toast, useApp, viewSnapshot } from "../state/store";
+import { txLabel, txSign } from "../lib/transactions";
+import type { Snapshot, TxRow } from "../lib/types";
+import { useResource } from "../state/resource";
+import { go, openTx, refresh, syncNow, toast, useApp, viewSnapshot } from "../state/store";
 import { AmountInput } from "../ui/fields";
 import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
-import { Banner, Bar, Card, FirstLoadFailed, PageHeader, Sheet, Skeleton, TierRow } from "../ui/parts";
-import { PayCycleCard, QrSheet } from "./pay-cycle-card";
+import { Banner, Card, CardHead, Empty, FirstLoadFailed, InfoTip, PageHeader, Sheet, Skeleton, TxRow as TxRowView } from "../ui/parts";
+import { MonthCloseCard } from "./month-close-card";
+import { QrSheet, SavingsDoneRow, SavingsTaskCard } from "./savings-card";
 import { OtherEntrySheet } from "./other-entry-sheet";
 
 const toPockets = () => go("settings", { settingsFocus: "pockets" });
-const toPocketGoals = () => go("settings", { settingsFocus: "pocket-goals" });
 
 export function Today() {
   const app = useApp();
@@ -41,7 +46,7 @@ export function Today() {
               <Icon name="settings" size={20} />
             </button>
             <button type="button" class="btn btn-primary" onClick={() => setIncome(true)}>
-              Tiền vào
+              Ghi tiền vào
             </button>
           </div>
         }
@@ -54,13 +59,13 @@ export function Today() {
       ) : (
         <TodayBody snap={snap} />
       )}
-      {income && <OtherEntrySheet kind="income" amount={0} title="Ghi thu nhập" onClose={() => setIncome(false)} />}
+      {income && <OtherEntrySheet kind="income" amount={0} title="Ghi tiền vào" onClose={() => setIncome(false)} />}
     </>
   );
 }
 
-/** "số lúc HH:mm" khi đang hiện số cũ, kèm số khoản chờ đồng bộ. */
-function FreshnessRow() {
+/** "số lúc HH:mm" khi đang hiện số cũ, kèm số khoản chờ đồng bộ (UC-711 AC-38). */
+export function FreshnessRow() {
   const { stale, snap, queue, member, online, syncing } = useApp();
   const pending = queue.filter((q) => q.memberId === member?.id && q.status === "pending").length;
   if (!stale && !pending && online) return null;
@@ -68,11 +73,11 @@ function FreshnessRow() {
     <div class="status-row" role="status">
       {!online && (
         <span class="chip">
-          <Icon name="cloud-off" size={12} /> không có mạng
+          <Icon name="cloud-off" size={12} /> {pending > 0 ? `Chưa có mạng · ${pending} khoản sẽ tự gửi khi có mạng` : "Chưa có mạng"}
         </span>
       )}
+      {online && pending > 0 && <span class="chip warn">{pending} khoản đang chờ gửi</span>}
       {stale && snap && <span>số lúc {timeHM(snap.at)}{shortDate(snap.at) !== shortDate(new Date().toISOString()) ? ` ngày ${shortDate(snap.at)}` : ""}</span>}
-      {pending > 0 && <span class="chip warn">{pending} chờ đồng bộ, đã trừ tạm</span>}
       <button type="button" class="btn" onClick={() => void syncNow()} disabled={syncing}>
         <Icon name="sync" size={14} />
         {syncing ? "Đang đồng bộ…" : "Đồng bộ"}
@@ -82,14 +87,23 @@ function FreshnessRow() {
 }
 
 function TodayBody({ snap }: { snap: Snapshot }) {
-  const { queue, member } = useApp();
+  const { queue, member, compact } = useApp();
   const rejected = queue.filter((q) => q.memberId === member?.id && q.status === "rejected").length;
-  const a = snap.attention;
   const convert = conversionBanner(snap.conversion);
-  const drift = a.drift.flatMap((d) => {
-    const amount = driftOf(d);
-    return amount === null ? [] : [{ name: d.name, amount }];
-  });
+
+  if (compact) {
+    return (
+      <>
+        {rejected > 0 && (
+          <Banner tone="bad" mark={String(rejected)} action="Xem" onAction={() => go("entry")}>
+            <strong>{rejected} khoản nhập bị máy chủ từ chối.</strong> Nằm trong hàng đợi, chờ sửa hoặc bỏ.
+          </Banner>
+        )}
+        <NearSpendCard snap={snap} compact />
+        <RecentCard />
+      </>
+    );
+  }
 
   return (
     <>
@@ -100,167 +114,380 @@ function TodayBody({ snap }: { snap: Snapshot }) {
         </Banner>
       )}
       <NearSpendCard snap={snap} />
-      <PayCycleCard snap={snap} />
-
-      {rejected > 0 && (
-        <Banner tone="bad" mark={String(rejected)} action="Xem" onAction={() => go("entry")}>
-          <strong>{rejected} khoản nhập bị máy chủ từ chối.</strong> Nằm trong hàng đợi, chờ sửa hoặc bỏ.
-        </Banner>
-      )}
-      {drift.map((d) => (
-        <Banner key={d.name} tone="bad" mark="!" action="Đối soát" onAction={() => go("wallets", { walletsTab: "accounts" })}>
-          <strong>Lệch đối soát ở {d.name}.</strong> {DRIFT_LABEL}: <Money value={d.amount} signed tone={false} />.
-        </Banner>
-      ))}
-      {a.pendingLogs > 0 && (
-        <Banner tone="warn" mark={String(a.pendingLogs)} action="Gán" onAction={() => go("assign")}>
-          <strong>{a.pendingLogs} giao dịch ngân hàng chưa gán</strong>, vào trừ ra <Money value={a.pendingNet} tone={false} />.
-        </Banner>
-      )}
-
-      {/* Lối vào Sổ giao dịch trên điện thoại (UC-716) — chủ nhà: "không xem được trên mobile cái chi tiết các bản ghi à? tôi tìm không thấy". */}
-      <Card flush class="card-invert">
-        <TierRow
-          name={
-            <>
-              <Icon name="book" size={16} /> Sổ giao dịch
-            </>
-          }
-          dot={null}
-          amount={<span class="link-more">Mở <Icon name="chevron-right" size={14} /></span>}
-          left="Xem lại theo tháng, lọc, tìm, sửa các khoản đã ghi"
-          onClick={() => go("ledger", { book: null })}
-          label="Mở Sổ giao dịch"
-        />
-      </Card>
-
-      <SavingsCard snap={snap} />
-      <ReserveCard snap={snap} />
+      <MonthCloseCard snap={snap} />
+      <SavingsTaskCard snap={snap} />
+      <NeedReviewBlock snap={snap} rejected={rejected} />
+      <RecentCard />
     </>
   );
 }
 
+function NeedReviewBlock({ snap, rejected }: { snap: Snapshot; rejected: number }) {
+  const a = snap.attention;
+  const drift = a.drift.flatMap((d) => {
+    const amount = driftOf(d);
+    return amount === null ? [] : [{ name: d.name, amount }];
+  });
+
+  const hasItems = rejected > 0 || drift.length > 0 || a.pendingLogs > 0;
+  if (!hasItems) return null;
+
+  return (
+    <Card title="Cần xem" flush>
+      <div class="dash-todo">
+        {rejected > 0 && (
+          <button type="button" class="srow" onClick={() => go("entry")}>
+            <span class="srow-main">
+              <span class="srow-t">{rejected} khoản nhập bị máy chủ từ chối</span>
+              <span class="srow-s">Nằm trong hàng đợi, chờ sửa hoặc bỏ.</span>
+            </span>
+            <span class="srow-r">
+              <span class="chip bad">từ chối</span>
+              <Icon name="chevron-right" size={16} />
+            </span>
+          </button>
+        )}
+        {drift.map((d) => (
+          <button type="button" key={d.name} class="srow" onClick={() => go("wallets", { walletsTab: "accounts" })}>
+            <span class="srow-main">
+              <span class="srow-t">Lệch đối soát ở {d.name}</span>
+              <span class="srow-s">
+                {DRIFT_LABEL}: <Money value={d.amount} signed tone={false} />
+              </span>
+            </span>
+            <span class="srow-r">
+              <span class="chip bad">lệch</span>
+              <Icon name="chevron-right" size={16} />
+            </span>
+          </button>
+        ))}
+        {a.pendingLogs > 0 && (
+          <button type="button" class="srow" onClick={() => go("assign")}>
+            <span class="srow-main">
+              <span class="srow-t">{a.pendingLogs} giao dịch ngân hàng chưa gán</span>
+              <span class="srow-s">
+                vào trừ ra <Money value={a.pendingNet} tone={false} />
+              </span>
+            </span>
+            <span class="srow-r">
+              <span class="chip warn">chưa gán</span>
+              <Icon name="chevron-right" size={16} />
+            </span>
+          </button>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function RecentCard() {
+  const { boot } = useApp();
+  const res = useResource<TxRow[]>("/v1/transactions?limit=5");
+  const rows = (res.data ?? []).slice(0, 5);
+
+  return (
+    <Card
+      title="Gần đây"
+      flush
+      right={
+        <button type="button" class="link link-more" onClick={() => go("ledger", { book: null })}>
+          Mở Sổ ›
+        </button>
+      }
+    >
+      {res.loading && !res.data ? (
+        <Skeleton rows={3} />
+      ) : rows.length === 0 ? (
+        <Empty state={EMPTY_STATES.recent} onAction={() => go("entry")} />
+      ) : (
+        <div class="pad recent-list">
+          {rows.map((r) => {
+            const sign = txSign(r);
+            const acct = boot?.accounts.find((x) => x.id === r.account_id)?.name;
+            return (
+              <TxRowView
+                key={r.id}
+                title={txLabel(r)}
+                chip={
+                  <>
+                    {r.status !== "active" && <span class="chip">đã xoá</span>}
+                    {r.rule_id != null && <span class="chip">tự gán</span>}
+                  </>
+                }
+                sub={[timeHM(r.at), r.note && maskAmounts(r.note), acct].filter(Boolean).join(" · ")}
+                amount={<span class={sign === "+" ? "pos" : undefined}>{sign}{moneyDigits(r.amount)}</span>}
+                deleted={r.status !== "active"}
+                onClick={() => openTx(r.id, r)}
+                ariaLabel={`Xem ${txLabel(r)} ${formatVnd(r.amount)}`}
+              />
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 /**
- * Thẻ Vận hành (ADR-122, ADR-141): tổng ngăn Vận hành và chi khoảng bao nhiêu mỗi ngày tới kỳ lương — hai số to cùng cỡ — rồi phần
- * đã chừa cho khoản phải trả kỳ này (chạm → danh sách), khối vàng nhắc chuyển thêm (Mở QR từng nguồn), bữa ăn / lần đi chợ, nợ ngắn
- * hạn cần trả (chỉ nhắc) hay lời chúc. Snapshot cũ trong cache chưa có `nearSpend` thì không hiện.
+ * Hàng trạng thái của thẻ Vận hành (DESIGN §4.5): nhãn một dòng (+ dòng phụ) trái, giá trị phải, một "›" khi bấm được. Cả hàng
+ * bấm được nhờ nút trên nhãn phủ kín hàng (::after); nút ⓘ nằm ngoài nút hàng, giải thích mở thành khối riêng dưới nhãn.
  */
-export function NearSpendCard({ snap }: { snap: Snapshot }) {
-  const [list, setList] = useState(false);
-  const [edit, setEdit] = useState<OperatingGoal | null>(null);
+function NearRow({
+  label,
+  tip,
+  note,
+  value,
+  onClick,
+  aria,
+}: {
+  label: ComponentChildren;
+  tip?: ComponentChildren;
+  note?: string | null;
+  value: string;
+  onClick?: () => void;
+  aria?: string;
+}) {
+  const isDone = /[✓✔☑]/.test(value);
+  const valEl = isDone ? (
+    <span class="inline-flex items-center gap-1">
+      {value.replace(/[✓✔☑]/g, "").trim()}
+      <Icon name="check" size={16} />
+    </span>
+  ) : (
+    value
+  );
+  return (
+    <div class={onClick ? "near-row is-btn" : "near-row"}>
+      <span class="near-row-l">
+        <span class="near-row-t">
+          {onClick ? (
+            <button type="button" class="near-row-btn" onClick={onClick} aria-label={aria}>
+              {label}
+            </button>
+          ) : (
+            <span class="near-row-lab">{label}</span>
+          )}
+          {tip}
+        </span>
+        {note && <span class="near-row-n">{note}</span>}
+      </span>
+      <span class="near-row-r">
+        <span class="near-row-v">{valEl}</span>
+        {onClick && <Icon name="chevron-right" size={16} />}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Thẻ Vận hành (ADR-122, ADR-141): số chính "Chi khoảng X/ngày" kèm dòng phụ "còn {tổng} · {n} ngày tới lương {d/m}"; khối vàng
+ * nhắc chuyển thêm (Mở QR từng nguồn); hai ô gợi ý hôm nay (bữa ăn, đi chợ); các hàng trạng thái (`NearStatusRows`); chân nhỏ
+ * nhạt: tài khoản thuộc Vận hành + Đổi ngăn. Máy tính (`rowsApart`) đưa các hàng trạng thái sang cột phụ (`NearStatusCard`).
+ * Snapshot cũ trong cache chưa có `nearSpend` thì không hiện.
+ */
+export function NearSpendCard({ snap, compact, rowsApart }: { snap: Snapshot; compact?: boolean; rowsApart?: boolean }) {
   const [qrFrom, setQrFrom] = useState<string | null>(null);
   if (!snap.nearSpend) return null;
   const today = dayKey(new Date());
   const topUp = snap.topUp ?? null;
-  const v = nearSpendCard(snap.nearSpend, today, snap.pockets, topUp);
+  const v = nearSpendCard(snap.nearSpend, today, snap.pockets, topUp, snap.moneyAge ?? null);
+  const perDayNum = v.perDay ? v.perDay.replace(/\/ngày$/, "") : null;
+
   return (
-    <section class="hero near" aria-labelledby="near-lab">
-      <div class="lab" id="near-lab">
-        {v.head}
-      </div>
-      {!v.noAccounts && (
+    <section class="card near" aria-labelledby="near-lab">
+      <CardHead
+        pocket="operating"
+        title={
+          <span class="card-head-title-wrap">
+            Vận hành
+            <InfoTip term="operating" />
+          </span>
+        }
+        action={compact ? undefined : "Đổi ngăn ›"}
+        onAction={compact ? undefined : toPockets}
+        id="near-lab"
+      />
+      {perDayNum ? (
         <>
-          <div class={v.out ? "near-total out" : "near-total"}>Còn {v.amount}</div>
-          {v.perDay ? (
-            <div class="near-big">
-              Chi khoảng <span class="nowrap">{v.perDay}</span>
-            </div>
-          ) : (
-            <div class="near-say">{v.big}</div>
-          )}
-          {v.sub && <div class="meta">{v.sub}</div>}
-          {v.reserved && (
-            <button type="button" class="near-reserved link" onClick={() => setList(true)}>
-              {v.reserved.line}
-            </button>
-          )}
-          {v.topUp && (
-            <div class="near-topup" role="status">
-              <strong>{v.topUp.title}</strong>
-              {v.topUp.sources.map((s) => (
-                <div class="near-topup-row" key={s.accountId}>
-                  <span class="min-w-0">{s.text}</span>
-                  {s.qr && (
-                    <button type="button" class="btn" onClick={() => setQrFrom(s.accountId)}>
-                      Mở QR
-                    </button>
-                  )}
-                </div>
-              ))}
-              {v.topUp.missing && <p>{v.topUp.missing}</p>}
-              {v.topUp.hint && <p>{v.topUp.hint}</p>}
-            </div>
-          )}
-          {v.meals.map((line) => (
-            <p key={line} class="near-meals">
-              {line}
-            </p>
-          ))}
-          {v.payday && <p class="near-note">{v.payday}</p>}
-          {v.debt && (
-            <div class="near-debt">
-              <div class="near-foot">
-                <span class="min-w-0">{v.debt.line}</span>
-                <button type="button" class="link" onClick={() => go("wallets", { walletsTab: "debts" })}>
-                  Trả ›
-                </button>
-              </div>
-              {v.debt.next && <div class="sub-line">{v.debt.next}</div>}
-            </div>
-          )}
-          {v.blessing && <p class="near-debt">{v.blessing}</p>}
+          <div class="near-lead">Chi khoảng</div>
+          <div class="near-big">
+            <span class="near-num">{perDayNum}</span>
+            <span class="unit">/ngày</span>
+          </div>
         </>
+      ) : (
+        v.big && <div class="near-say">{v.big}</div>
       )}
-      <div class="near-foot">
-        <span class="min-w-0">{v.source}</span>
-        <button type="button" class="link" onClick={toPockets}>
-          Đổi ngăn ›
-        </button>
+      <div class="near-ctx">
+        {v.amount && (
+          <>
+            còn <b class={v.out ? "neg" : undefined}>{v.amount}</b> ·{" "}
+          </>
+        )}
+        {v.days}
       </div>
-      {v.unconfirmed && (
+      {v.sub && <div class="near-sub">{v.sub}</div>}
+      {!compact && v.topUp && (
+        <div class="near-topup" role="status">
+          <strong>{v.topUp.title}</strong>
+          {v.topUp.sources.map((s) => (
+            <div class="near-topup-row" key={s.accountId}>
+              <span class="min-w-0">{s.text}</span>
+              {s.qr && (
+                <button type="button" class="btn" onClick={() => setQrFrom(s.accountId)}>
+                  Mở QR
+                </button>
+              )}
+            </div>
+          ))}
+          {v.topUp.missing && <p>{v.topUp.missing}</p>}
+          {v.topUp.hint && <p>{v.topUp.hint}</p>}
+        </div>
+      )}
+      {v.meals.length > 0 && (
+        <div class="near-tiles">
+          {v.meals.map((m) => (
+            <div class="near-tile" key={m.label}>
+              <span class="near-tile-l">{m.label}</span>
+              <span class="near-tile-v">{m.value}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {!compact && !rowsApart && <NearStatusRows snap={snap} />}
+      {!compact && (
+        <div class="near-foot">
+          <span class="min-w-0">{v.source}</span>
+        </div>
+      )}
+      {!compact && v.unconfirmed && (
         <button type="button" class="chip warn near-chip" onClick={toPockets}>
           {v.unconfirmed}
         </button>
       )}
-      {v.late && <p class="near-note">{v.late}</p>}
-      {v.pending && <p class="near-note">{v.pending}</p>}
-      {list && v.reserved && !edit && (
-        <Sheet open title="Khoản phải trả kỳ này" onClose={() => setList(false)}>
-          {v.reserved.items.map((g) => (
-            <button
-              type="button"
-              class="srow"
-              style={{ display: "block", width: "100%", textAlign: "left" }}
-              key={g.id}
-              onClick={() => setEdit(snap.pockets.operating.goals?.find((o) => o.id === g.id) ?? null)}
-            >
-              <div>{g.title} ›</div>
-              {g.cycle && <div class="sub-line">{g.cycle}</div>}
-              <div class="sub-line">{g.spent}</div>
-            </button>
-          ))}
-          <p class="fhint pad">Chạm một khoản để đặt số cho riêng kỳ này; kỳ sau về số mỗi tháng.</p>
-        </Sheet>
-      )}
-      {edit && <CycleAmountSheet goal={edit} onClose={() => setEdit(null)} />}
       {qrFrom && topUp && <QrSheet qrOf={() => topUpQr(topUp, qrFrom, today)} onClose={() => setQrFrom(null)} />}
     </section>
   );
 }
 
+/** Máy tính: các hàng trạng thái của Vận hành và hàng Tiết kiệm tháng này thành một thẻ ở cột phụ (lưới 8–4). */
+export function NearStatusCard({ snap }: { snap: Snapshot }) {
+  const { online } = useApp();
+  if (!snap.nearSpend) return null;
+  const v = nearSpendCard(snap.nearSpend, dayKey(new Date()), snap.pockets, snap.topUp ?? null, snap.moneyAge ?? null);
+  const savings = savingsTaskCard(snap.month, online)?.collapsed ?? null;
+  const hasRows = !v.noAccounts && !!(v.reserved || v.debt || v.age || v.blessing || v.payday || v.pending);
+  if (!hasRows && !savings) return null;
+  return (
+    <section class="card near near-status" aria-label="Vận hành tháng này">
+      {hasRows && <NearStatusRows snap={snap} />}
+      <SavingsDoneRow snap={snap} />
+    </section>
+  );
+}
+
+/** Các hàng trạng thái: khoản phải trả tháng này (chạm → danh sách), nợ ngắn hạn (chạm → trả nợ) hay lời chúc, tuổi tiền (UC-702 AC-41). */
+function NearStatusRows({ snap }: { snap: Snapshot }) {
+  const { boot } = useApp();
+  const [list, setList] = useState(false);
+  const [edit, setEdit] = useState<OperatingGoal | null>(null);
+  const today = dayKey(new Date());
+  const v = nearSpendCard(snap.nearSpend, today, snap.pockets, snap.topUp ?? null, snap.moneyAge ?? null);
+  if (v.noAccounts) return null;
+
+  const shortDebtItems = snap.pockets?.shortDebt?.items ?? [];
+  const dayNum = Number(today.slice(8, 10));
+  const dated = shortDebtItems.filter((x) => x.dueDay !== null);
+  const soon = dated.find((x) => x.dueDay! >= dayNum) ?? dated[0];
+  const targetDebt = soon ?? [...shortDebtItems].sort((a, b) => b.balance - a.balance)[0];
+
+  return (
+    <div class="near-side">
+      {v.reserved && (
+        <NearRow
+          label="Khoản phải trả tháng này"
+          tip={<InfoTip term="payables" />}
+          note={v.reserved.note}
+          value={v.reserved.value}
+          onClick={() => setList(true)}
+        />
+      )}
+      {v.debt && (
+        <NearRow
+          label="Nợ ngắn hạn"
+          note={v.debt.next ? `${v.debt.sub} · ${v.debt.next}` : v.debt.sub}
+          value={v.debt.value}
+          aria={`Trả nợ ngắn hạn, còn ${v.debt.value}`}
+          onClick={() => go("wallets", targetDebt ? { walletsTab: "debts", debtPayId: targetDebt.id } : { walletsTab: "debts" })}
+        />
+      )}
+      {v.age && <NearRow label="Tuổi tiền" tip={<InfoTip term="moneyAge" />} note={v.age.note} value={v.age.value} />}
+      {v.blessing && <p class="near-note">{v.blessing}</p>}
+      {v.payday && <p class="near-note">{v.payday}</p>}
+      {v.pending && <p class="near-note">{v.pending}</p>}
+      {list && v.reserved && !edit && (
+        <Sheet open title="Khoản phải trả tháng này" onClose={() => setList(false)}>
+          {v.reserved.items.map((g) => {
+            const goalObj = snap.pockets.operating.goals?.find((o) => o.id === g.id);
+            const remaining = goalObj?.remaining ?? 0;
+            const catIds = goalObj?.categoryIds ?? [];
+            const firstCatId = boot?.categories
+              ?.filter((c) => catIds.includes(c.id))
+              ?.sort((a, b) => a.name.localeCompare(b.name, "vi"))[0]?.id ?? null;
+            return (
+              <div class="srow" key={g.id}>
+                <button
+                  type="button"
+                  class="srow-btn"
+                  onClick={() => setEdit(goalObj ?? null)}
+                >
+                  <div>{g.title} ›</div>
+                  {g.month && <div class="sub-line">{g.month}</div>}
+                  <div class="sub-line">{g.spent}</div>
+                </button>
+                {remaining > 0 && (
+                  <button
+                    type="button"
+                    class="link link-pay"
+                    onClick={() => {
+                      setList(false);
+                      go("entry", {
+                        entryPreset: {
+                          back: "today",
+                          goal_id: g.id,
+                          category_id: firstCatId,
+                          amount: remaining,
+                        },
+                      });
+                    }}
+                  >
+                    Trả ›
+                  </button>
+                )}
+              </div>
+            );
+          })}
+          <p class="fhint pad">Chạm một khoản để đặt số cho riêng tháng này; tháng sau về số mỗi tháng.</p>
+        </Sheet>
+      )}
+      {edit && <MonthAmountSheet goal={edit} onClose={() => setEdit(null)} />}
+    </div>
+  );
+}
+
 /**
- * Số kỳ này của một khoản phải trả (UC-702 AC-37, ADR-143): điền sẵn số kỳ này, lý do ≤ 80 ký tự, 0 được; "Về số mỗi tháng" khi
- * đang có số riêng. Lưu xong tải lại snapshot.
+ * Số tháng này của một khoản phải trả (UC-702 AC-37, ADR-143 sửa theo ADR-144): điền sẵn số tháng này, lý do ≤ 80 ký tự, 0 được;
+ * "Về số mỗi tháng" khi đang có số riêng. Lưu `PUT /v1/goal-month-amounts/:goalId` xong tải lại snapshot.
  */
-function CycleAmountSheet({ goal, onClose }: { goal: OperatingGoal; onClose: () => void }) {
-  const custom = (goal.cycleAmount ?? null) !== null;
-  const [amount, setAmount] = useState<number | null>(goal.cycleAmount ?? goal.monthly);
+function MonthAmountSheet({ goal, onClose }: { goal: OperatingGoal; onClose: () => void }) {
+  const custom = goal.monthAmount !== null;
+  const [amount, setAmount] = useState<number | null>(goal.monthAmount ?? goal.monthly);
   const [note, setNote] = useState(goal.note ?? "");
   const [busy, setBusy] = useState(false);
   async function save(value: number | null) {
     setBusy(true);
     try {
-      await api.put(`/v1/pay-cycle/goal-amounts/${encodeURIComponent(goal.id)}`, cycleAmountBody(value, note));
+      await api.put(`/v1/goal-month-amounts/${encodeURIComponent(goal.id)}`, monthAmountBody(value, note));
       await refresh(true);
       onClose();
     } catch (err) {
@@ -270,24 +497,24 @@ function CycleAmountSheet({ goal, onClose }: { goal: OperatingGoal; onClose: () 
     }
   }
   return (
-    <Sheet open title={`${goal.name} · kỳ này`} onClose={onClose}>
+    <Sheet open title={`${goal.name} · tháng này`} onClose={onClose}>
       <div class="field">
-        <label for="cycle-amount">Số kỳ này</label>
-        <AmountInput id="cycle-amount" value={amount ?? 0} onChange={(n, valid) => setAmount(valid || n === 0 ? n : null)} />
+        <label for="month-amount">Số tháng này</label>
+        <AmountInput id="month-amount" value={amount ?? 0} onChange={(n, valid) => setAmount(valid || n === 0 ? n : null)} />
       </div>
       <div class="field">
-        <label for="cycle-note">Lý do</label>
-        <input id="cycle-note" class="ctl" maxLength={80} value={note} placeholder="Không bắt buộc" onInput={(e) => setNote(e.currentTarget.value)} />
+        <label for="month-note">Lý do</label>
+        <input id="month-note" class="ctl" maxLength={80} value={note} placeholder="Không bắt buộc" onInput={(e) => setNote(e.currentTarget.value)} />
       </div>
       <p class="fhint">
-        Mỗi tháng <Money value={goal.monthly} />. Chỉ đổi kỳ này, 0 = kỳ này không trả.
+        Mỗi tháng <Money value={goal.monthly} />. Chỉ đổi tháng này, 0 = tháng này không trả.
       </p>
-      <div class="pad">
+      <div class="sheet-foot">
         <button type="button" class="btn btn-primary btn-wide" disabled={busy || amount === null} onClick={() => void save(amount)}>
           Lưu
         </button>
         {custom && (
-          <button type="button" class="btn btn-wide" style={{ marginTop: "8px" }} disabled={busy} onClick={() => void save(null)}>
+          <button type="button" class="btn btn-wide month-amount-reset" disabled={busy} onClick={() => void save(null)}>
             Về số mỗi tháng
           </button>
         )}
@@ -296,125 +523,4 @@ function CycleAmountSheet({ goal, onClose }: { goal: OperatingGoal; onClose: () 
   );
 }
 
-/** Thẻ Tích luỹ (ADR-122): tiền thật ở ngăn, thay đổi kỳ này / kỳ trước, % trích. Bản lưu chưa có `pockets` thì không hiện. */
-export function SavingsCard({ snap }: { snap: Snapshot }) {
-  const v = savingsCard(snap.pockets, snap.payCycle);
-  if (!v) return null;
-  const open = () => go("wallets", { walletsTab: "wealth-building" });
-  return (
-    <section class="card pocket pocket-savings" onClick={v.empty ? undefined : open}>
-      <button type="button" class="pocket-h" onClick={v.empty ? toPockets : undefined}>
-        <h2>Tích luỹ</h2>
-        <span class="link-more">
-          {v.empty ? "Ba ngăn" : "Xem"} <Icon name="chevron-right" size={14} />
-        </span>
-      </button>
-      {v.empty ? (
-        <button type="button" class="link pocket-empty" style={{ textAlign: "left" }} onClick={toPockets}>
-          {NO_SAVINGS_ACCOUNT}
-        </button>
-      ) : (
-        <>
-          <div class="pocket-total">{v.total}</div>
-          <ul class="hero-parts">
-            {v.lines.map((l) => (
-              <li key={l.label}>
-                <span>{l.label}</span>
-                <span>{l.value}</span>
-              </li>
-            ))}
-          </ul>
-          <div class="pocket-meta">
-            <p>{v.change}</p>
-            <p>{v.prev}</p>
-            <p>{v.pct}</p>
-            {v.done && <p class={v.doneWarn ? "pocket-warn" : undefined}>{v.done}</p>}
-          </div>
-        </>
-      )}
-    </section>
-  );
-}
 
-/** Thẻ Dự phòng (ADR-122, ADR-132): mục tiêu theo nhóm tài khoản (UC-702 bước 7), rồi phần an tâm đo bằng tháng vận hành, Ví Thưởng. */
-export function ReserveCard({ snap }: { snap: Snapshot }) {
-  const v = reserveCard(snap.pockets);
-  if (!v) return null;
-  return (
-    <section class="card pocket pocket-reserve">
-      <button type="button" class="pocket-h" onClick={v.empty ? toPockets : toPocketGoals}>
-        <h2>Dự phòng</h2>
-        <span class="link-more">
-          {v.empty ? "Xếp tài khoản vào ngăn" : "Mục tiêu"} <Icon name="chevron-right" size={14} />
-        </span>
-      </button>
-      {v.empty ? (
-        <p class="pocket-empty">Chưa có tài khoản nào ở ngăn Dự phòng.</p>
-      ) : (
-        <>
-          <div class="pocket-total">{v.total}</div>
-          {v.groups.map((grp) => (
-            <div class={grp.head ? "goal-group" : undefined} key={grp.key}>
-              {grp.head && (
-                <div class="goal-group-h">
-                  <span>{grp.head.title}</span>
-                  <span class={`chip ${grp.head.tone}`}>{grp.head.chip}</span>
-                </div>
-              )}
-              {grp.goals.map((g) => (
-                <div class="tier" key={g.id}>
-                  <div class="nm">
-                    {g.name}
-                    {g.full && <span class="chip ok">đủ</span>}
-                  </div>
-                  <div class="amt">{g.pct !== null ? `${g.pct}%` : ""}</div>
-                  <div class={g.over ? "tsub bad" : "tsub"}>
-                    <span>{g.amount}</span>
-                  </div>
-                  {g.spent && (
-                    <div class="tsub">
-                      <span>{g.spent}</span>
-                    </div>
-                  )}
-                  {g.pct !== null && <Bar pct={g.pct} tone="ok" />}
-                  {g.sub && (
-                    <div class="tsub">
-                      <span>{g.sub}</span>
-                    </div>
-                  )}
-                  {g.needsAccount && (
-                    <button type="button" class="link" onClick={toPocketGoals}>
-                      Mở tài khoản thật ›
-                    </button>
-                  )}
-                </div>
-              ))}
-              {grp.interest && <p class="goal-group-note">{grp.interest}</p>}
-              {grp.note && <p class="goal-group-note">{grp.note}</p>}
-            </div>
-          ))}
-          <div class="tier">
-            <div class={v.peace.bad ? "nm bad" : "nm"}>{v.peace.title}</div>
-            <div class="amt">{v.peace.pct !== null ? `${v.peace.pct}%` : ""}</div>
-            {v.peace.months && (
-              <div class="tsub">
-                <span>{v.peace.months}</span>
-              </div>
-            )}
-            {v.peace.pct !== null && <Bar pct={v.peace.pct} tone="ok" />}
-            {v.peace.note && (
-              <div class="tsub">
-                <span>{v.peace.note}</span>
-              </div>
-            )}
-          </div>
-          {v.reward && (
-            <div class="tier">
-              <div class="nm">{v.reward}</div>
-            </div>
-          )}
-        </>
-      )}
-    </section>
-  );
-}

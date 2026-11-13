@@ -10,8 +10,9 @@ import {
   convertTitle,
   type ConversionStatus,
   type ConversionStep,
-  cycleStreamsNote,
-  cycleSwitchStreams,
+  SALARY_STEP_TITLE,
+  salaryStepReady,
+  salarySwitchStreams,
   type GoalAccountResult,
   type GoalChoice,
   goalAccountRequest,
@@ -28,7 +29,6 @@ import {
   isConversionStep,
   NO_RESERVE_ACCOUNT,
   OPERATING_CHOICE_LABEL,
-  payCycleReady,
   rewardRowAccounts,
   SAVINGS_GAP_EXPLAIN,
   savingsGapLines,
@@ -39,7 +39,7 @@ import {
 } from "../lib/convert";
 import { formatVnd } from "../lib/money";
 import { groupAccountsByPocket, unconfirmedChip } from "../lib/pockets";
-import { OPENS_CYCLE_HINT, OPERATING_HINT, parseInteger, sliderPct } from "../lib/settings";
+import { OPERATING_HINT, parseInteger, SALARY_STREAM_HINT, sliderPct } from "../lib/settings";
 import type { Rental, SettingsData } from "../lib/types";
 import { useResource } from "../state/resource";
 import { go, refresh, toast, useApp, viewSnapshot } from "../state/store";
@@ -150,7 +150,7 @@ export function Convert() {
       {step === "pockets" && <PocketsStep {...props} />}
       {step === "goals" && <GoalsStep {...props} />}
       {step === "savings_gap" && <SavingsGapStep {...props} status={status} />}
-      {step === "pay_cycle" && <PayCycleStep {...props} />}
+      {step === "salary" && <SalaryStep {...props} />}
       {step === "savings_pct" && <SavingsPctStep {...props} />}
     </>
   );
@@ -213,7 +213,7 @@ function PocketsStep({ data, offline, postStep, reloadSettings }: StepProps) {
             <span class="srow-t">
               {counts} {chip && <span class="chip warn">{chip}</span>}
             </span>
-            <span class="srow-s">App đã điền sẵn ngăn đề xuất cho từng tài khoản; xem lại rồi Xác nhận.</span>
+            <span class="srow-s">App đã gợi ý sẵn ngăn cho từng tài khoản, xem lại rồi bấm Xác nhận.</span>
           </span>
         </div>
         <StepFooter label="Xem và xác nhận ngăn" busy={false} error={null} disabled={false} offline={offline} onClick={() => setOpen(true)} />
@@ -337,7 +337,7 @@ function GoalsStep({ data, offline, postStep, reloadSettings }: StepProps) {
             ))}
           </select>
         </div>
-        <Hint>Ví Thưởng nhận phần dư kỳ trước; là một tài khoản Dự phòng không gắn mục tiêu.</Hint>
+        <Hint>Ví Thưởng nhận phần dư cuối tháng, là tài khoản Dự phòng không gắn mục tiêu.</Hint>
         <div class="pad">
           <button type="button" class="btn" disabled={offline} onClick={() => setAdding(true)}>
             <Icon name="plus" size={16} />
@@ -422,23 +422,22 @@ function SavingsGapStep({ offline, postStep, status }: StepProps & { status: Con
   );
 }
 
-// ── Bước 4: bật "Mở kỳ lương" ───────────────────────────────────────
+// ── Bước 4: "Nguồn lương" (khoá bước `salary`, UC-1208 AC-15) ─────────
 
-function PayCycleStep({ data, offline, postStep, reloadSettings }: StepProps) {
+function SalaryStep({ data, offline, postStep, reloadSettings }: StepProps) {
   const { busy, error, send } = useSend();
   const rental = useResource<Rental>("/v1/rental");
   const [noSalary, setNoSalary] = useState(false);
   const [toggling, setToggling] = useState<string | null>(null);
   const [toggleError, setToggleError] = useState<string | null>(null);
-  const streams = cycleSwitchStreams(data.incomeStreams ?? [], rental.data?.incomeStreamId);
-  const on = streams.filter((s) => s.opens_cycle).length;
-  const note = cycleStreamsNote(on);
+  const streams = salarySwitchStreams(data.incomeStreams ?? [], rental.data?.incomeStreamId);
+  const on = streams.filter((s) => s.is_salary).length;
 
-  async function toggle(id: string, opens_cycle: boolean) {
+  async function toggle(id: string, is_salary: boolean) {
     setToggling(id);
     setToggleError(null);
     try {
-      await api.patch(`/v1/settings/income-streams/${encodeURIComponent(id)}`, { opens_cycle });
+      await api.patch(`/v1/settings/income-streams/${encodeURIComponent(id)}`, { is_salary });
       await reloadSettings();
     } catch (err) {
       setToggleError(errorText(err));
@@ -448,32 +447,31 @@ function PayCycleStep({ data, offline, postStep, reloadSettings }: StepProps) {
   }
 
   return (
-    <Card title="Bật “Mở kỳ lương”" flush>
+    <Card title={SALARY_STEP_TITLE} flush>
       {streams.length === 0 && <p class="empty">Chưa có nguồn thu nào đang dùng.</p>}
       {streams.map((s) => (
-        <Check key={s.id} id={`cv-stream-${s.id}`} label={s.name} checked={s.opens_cycle ?? false} disabled={offline || toggling !== null} onChange={(v) => void toggle(s.id, v)} />
+        <Check key={s.id} id={`cv-stream-${s.id}`} label={s.name} checked={s.is_salary} disabled={offline || toggling !== null} onChange={(v) => void toggle(s.id, v)} />
       ))}
       {toggleError && (
         <p class="err" role="alert" style={{ margin: "8px 16px" }}>
           {toggleError}
         </p>
       )}
-      <Hint>{OPENS_CYCLE_HINT}</Hint>
-      {note && <Hint>{note}</Hint>}
+      <Hint>{SALARY_STREAM_HINT}</Hint>
       <Check id="cv-no-salary" label="Nhà mình không có lương cố định" checked={noSalary} disabled={offline} onChange={setNoSalary} />
       <StepFooter
         label="Tiếp"
         busy={busy}
         error={error}
-        disabled={!payCycleReady(on, noSalary) || toggling !== null}
+        disabled={!salaryStepReady(on, noSalary) || toggling !== null}
         offline={offline}
-        onClick={() => void send(() => postStep("pay_cycle", on === 0 && noSalary ? { no_salary: true } : {}))}
+        onClick={() => void send(() => postStep("salary", on === 0 && noSalary ? { no_salary: true } : {}))}
       />
     </Card>
   );
 }
 
-// ── Bước 5: % Tích luỹ mỗi kỳ lương ─────────────────────────────────
+// ── Bước 5: % Tích luỹ khi lương về ─────────────────────────────────
 
 function SavingsPctStep({ data, offline, postStep }: StepProps) {
   const { busy, error, send } = useSend();
@@ -483,7 +481,7 @@ function SavingsPctStep({ data, offline, postStep }: StepProps) {
   const pct = parseInteger(text, 1, 100);
   const lines = savingsPctLines(pct);
   return (
-    <Card title="% Tích luỹ mỗi kỳ lương" flush>
+    <Card title="% Tích luỹ khi lương về" flush>
       <div class="field">
         <label class="k" for="cv-savings-pct">
           % Tích luỹ

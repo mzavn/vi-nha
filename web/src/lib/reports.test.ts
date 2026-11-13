@@ -101,16 +101,16 @@ describe("lưu chuyển tiền: card tóm tắt và chú", () => {
     expect(rows.find((r) => r.key === "closed")).toMatchObject({ label: "Tài khoản tắt trong kỳ", value: -3_000_000 });
   });
 
-  it("UC-1105 AC-6: thẻ tín dụng âm → chú \"Gồm −3.000.000 ₫ thẻ tín dụng — ở bảng cân đối nằm ở Nợ ngắn hạn\"", () => {
+  it("UC-1105 AC-6: thẻ tín dụng âm → chú \"Gồm −3.000.000 ₫ thẻ tín dụng, bên Cân đối tính vào Nợ ngắn hạn\"", () => {
     expect(closingNotes({ to: "2026-11-15", creditCardDebt: 3_000_000 })).toEqual([
       "= Σ sổ tài khoản ngày 15/11/2026",
-      vnd("Gồm −3.000.000 ₫ thẻ tín dụng — ở bảng cân đối nằm ở Nợ ngắn hạn"),
+      vnd("Gồm −3.000.000 ₫ thẻ tín dụng, bên Cân đối tính vào Nợ ngắn hạn"),
     ]);
   });
 
   it("UC-1105 AC-4: lô mua ở màn tài sản chỉ là ghi chú dưới Đầu tư, không cộng vào tổng", () => {
-    expect(lotNoteText({ bought: 10_200_000, sold: 0 })).toBe(vnd("Lô mua 10.200.000 ₫ ghi ở màn tài sản — không cộng vào tổng"));
-    expect(lotNoteText({ bought: 0, sold: 5_300_000 })).toBe(vnd("Lô bán 5.300.000 ₫ ghi ở màn tài sản — không cộng vào tổng"));
+    expect(lotNoteText({ bought: 10_200_000, sold: 0 })).toBe(vnd("Lô mua 10.200.000 ₫ ghi bên tài sản, không cộng vào tổng"));
+    expect(lotNoteText({ bought: 0, sold: 5_300_000 })).toBe(vnd("Lô bán 5.300.000 ₫ ghi bên tài sản, không cộng vào tổng"));
     expect(lotNoteText({ bought: 0, sold: 0 })).toBeNull();
   });
 
@@ -124,7 +124,7 @@ describe("phân loại lại một giao dịch", () => {
   it("UC-1105 AC-2: xếp khoản thu 50.000.000 vào Tài chính / về mặc định — toast nói chỉ đổi báo cáo, số dư và ngăn giữ nguyên; \"Thu nhập thụ động\" chỉ có ở khoản thu; dòng có khoản đã xếp lại ghi rõ", () => {
     expect(classOptions("income")).toEqual(["operating", "passive_income", "investing", "financing"]);
     expect(classOptions("spend")).toEqual(["operating", "investing", "financing"]);
-    expect(reclassToast(50_000_000, "financing")).toBe(vnd("Đã xếp khoản 50.000.000 ₫ vào Tài chính — chỉ đổi báo cáo, số dư và ngăn giữ nguyên."));
+    expect(reclassToast(50_000_000, "financing")).toBe(vnd("Đã xếp khoản 50.000.000 ₫ vào Tài chính. Chỉ đổi báo cáo, số dư và ngăn giữ nguyên."));
     expect(reclassToast(-50_000_000, null)).toBe(vnd("Đã đưa khoản 50.000.000 ₫ về nhóm mặc định."));
     expect(lineSub({ count: 1, reclassified: 1 })).toBe("1 giao dịch, 1 đã xếp lại");
     expect(lineSub({ count: 3, reclassified: 0 })).toBe("3 giao dịch");
@@ -144,15 +144,15 @@ describe("phân loại lại một giao dịch", () => {
 describe("kết quả thu chi", () => {
   const line = (l: string, total: number, children?: StatementLine[]): StatementLine => ({ line: l, label: l, total, ...(children ? { children } : {}) });
 
-  it("UC-1106 AC-1: tỷ lệ để dành 50,3%; chân \"Không tính: trả nợ gốc 5.000.000 ₫, mua tài sản 6.000.000 ₫, phân loại lại Tài chính 50.000.000 ₫, điều chỉnh −100.000 ₫\"", () => {
-    expect(savingsRateText(50.3)).toBe("tỷ lệ 50,3%");
-    expect(savingsRateText(null)).toBe("tỷ lệ —");
+  it("UC-1106 AC-1: tỷ lệ để dành 50,3%; chân \"Không tính: trả nợ gốc 5.000.000 ₫, mua tài sản 6.000.000 ₫, xếp lại Tài chính 50.000.000 ₫, điều chỉnh −100.000 ₫\"", () => {
+    expect(savingsRateText(50.3)).toBe("tỉ lệ 50,3%");
+    expect(savingsRateText(null)).toBe("tỉ lệ —");
     expect(excludedText({ debtPrincipal: 5_000_000, buyAsset: 6_000_000, reclassifiedInvesting: 0, reclassifiedFinancing: 50_000_000, adjust: -100_000 })).toBe(
-      vnd("Không tính: trả nợ gốc 5.000.000 ₫, mua tài sản 6.000.000 ₫, phân loại lại Tài chính 50.000.000 ₫, điều chỉnh −100.000 ₫ — xem Lưu chuyển tiền."),
+      vnd("Không tính: trả nợ gốc 5.000.000 ₫, mua tài sản 6.000.000 ₫, xếp lại Tài chính 50.000.000 ₫, điều chỉnh −100.000 ₫. Xem ở Dòng tiền."),
     );
     expect(excludedText({ debtPrincipal: 0, buyAsset: 0, reclassifiedInvesting: 0, reclassifiedFinancing: 0, adjust: 0 })).toBeNull();
     expect(statementMonthSub({ month: "2026-10", income: 33_200_000, expense: 16_500_000, savings: 16_700_000, savingsRate: 50.3 })).toBe(
-      vnd("thu 33.200.000 ₫ · chi 16.500.000 ₫ · tỷ lệ 50,3%"),
+      vnd("thu 33.200.000 ₫ · chi 16.500.000 ₫ · tỉ lệ 50,3%"),
     );
   });
 

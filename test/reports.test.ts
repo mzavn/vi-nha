@@ -11,6 +11,7 @@ import type { ReportTransactions, Snapshot } from "../web/src/lib/types";
 import { asD1 } from "./helpers/d1-sqlite";
 import { client } from "./helpers/household-c";
 import { D_NOW, householdD } from "./helpers/household-d";
+import { householdShared, SHARED_NOW } from "./helpers/household-shared";
 import { legacyEmptyDb, upgradingD1 } from "./helpers/legacy";
 
 let raw: DatabaseSync;
@@ -385,7 +386,7 @@ describe("ledger UC-102, access UC-506: phân loại lại theo khoản sửa; n
     expect([bad.status, bad.json.error?.code, bad.json.error?.message]).toEqual([
       409,
       "opening_after_entries",
-      "Tài khoản đã có giao dịch từ 15/9/2026 — huỷ hoặc sửa các giao dịch trước 1/10/2026 trước, hoặc chọn ngày mở sổ từ 15/9/2026 trở về trước.",
+      "Tài khoản đã có giao dịch từ 15/9/2026: huỷ hoặc sửa giao dịch trước 1/10/2026, hoặc chọn ngày mở sổ từ 15/9/2026 trở về trước.",
     ]);
     expect((raw.prepare("SELECT opened_at FROM accounts WHERE id = 'vcb'").get() as { opened_at: string }).opened_at).toBe("2026-09-01");
     for (const d of ["2026-09-15", "2026-08-01", null]) expect((await patch(d)).json.data.opened_at, String(d)).toBe(d);
@@ -410,5 +411,33 @@ describe("lãi tiền gửi ở Kết quả thu chi (261018-lai-tien-gui)", () =
         { line: "passive_income", label: "Thu nhập thụ động", total: 155 },
       ],
     });
+  });
+});
+
+describe("đổi phân loại khoản lương sang thu nhập thụ động (pocket UC-1205)", () => {
+  it("UC-1205 AC-6: khoản lương 20.000.000 có nhắc trích 2.000.000 → PUT report-class passive_income → nhắc void, is_salary 0; xếp lại financing không đụng nhắc", async () => {
+    vi.setSystemTime(SHARED_NOW);
+    raw = householdShared({ cycle: false });
+    raw.exec("INSERT INTO config (k, v) VALUES ('savings_pct', '10') ON CONFLICT (k) DO UPDATE SET v = excluded.v");
+    env = { DB: asD1(raw), API_TOKEN: "tok" } as Env;
+    const add = async () => {
+      const r = await call<{ tx: { id: number } }>("POST", "/v1/transactions", { meaning: "income", amount: 20_000_000, account_id: "cash-husband", income_stream_id: "salary-husband" });
+      expect(r.status).toBe(201);
+      return r.json.data.tx.id;
+    };
+    const state = (id: number) => [
+      raw.prepare("SELECT is_salary FROM transactions WHERE id = ?").get(id),
+      raw.prepare("SELECT amount, status FROM month_tasks WHERE kind = 'savings' AND income_tx_id = ?").all(id),
+    ];
+
+    const salary = await add();
+    expect(state(salary)).toEqual([{ is_salary: 1 }, [{ amount: 2_000_000, status: "open" }]]);
+    expect((await reclassify(salary, "passive_income")).status).toBe(200);
+    expect(state(salary)).toEqual([{ is_salary: 0 }, [{ amount: 2_000_000, status: "void" }]]);
+    expect(raw.prepare("SELECT report_class FROM transaction_report_classes WHERE transaction_id = ?").get(salary)).toEqual({ report_class: "passive_income" });
+
+    const other = await add();
+    expect((await reclassify(other, "financing")).status).toBe(200);
+    expect(state(other)).toEqual([{ is_salary: 1 }, [{ amount: 2_000_000, status: "open" }]]);
   });
 });

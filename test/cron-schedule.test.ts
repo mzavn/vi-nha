@@ -225,7 +225,7 @@ describe("giờ yên lặng & bật/tắt báo giao dịch chưa gán", () => {
     expect(pendingTexts()).toEqual([]);
     await tick("2026-09-23T06:30:00");
     expect(pendingTexts()).toHaveLength(2); // một tin cho mỗi người
-    expect(pendingTexts()[0]).toContain("2 giao dịch chưa gán");
+    expect(pendingTexts()[0]).toContain("2 khoản chưa gán");
     await tick("2026-09-23T06:45:00");
     expect(pendingTexts()).toHaveLength(2);
   });
@@ -279,7 +279,7 @@ describe("báo giao dịch chưa gán: log của tài khoản riêng tư (notify
     const texts = () => fetchMock.mock.calls.map(([, opts]) => (JSON.parse((opts as RequestInit).body as string) as { text: string }).text);
 
     await notifyPendingLogs(penv, P_NOW);
-    expect(texts()).toEqual(Array(2).fill("⚠️ 3 giao dịch chưa gán:\n+50.000 ₫ — VCB (chính)\n2 khoản của tài khoản riêng tư"));
+    expect(texts()).toEqual(Array(2).fill("3 khoản chưa gán:\n+50.000 ₫ · VCB (chính)\n2 khoản của tài khoản riêng tư"));
     expect(db.prepare("SELECT day_key FROM notifications WHERE kind = 'pending_log' AND ok = 1 AND day_key IN ('L1', 'L4', 'L5') ORDER BY day_key").all()).toEqual([
       { day_key: "L1" },
       { day_key: "L4" },
@@ -290,6 +290,6 @@ describe("báo giao dịch chưa gán: log của tài khoản riêng tư (notify
     db.exec("UPDATE members SET active = 0 WHERE id = 'wife'");
     db.prepare("INSERT INTO bank_logs (id, at, amount, direction, account_id, content, status, received_at) VALUES ('L6', ?, 70000, 'in', 'vcb-wife', 'CK', 'pending', ?)").run(P_NOW.toISOString(), at(5));
     await notifyPendingLogs(penv, new Date(P_NOW.getTime() + 15 * 60_000));
-    expect(texts()).toEqual(["⚠️ 1 giao dịch chưa gán:\n+70.000 ₫ — VCB (vợ)"]);
+    expect(texts()).toEqual(["1 khoản chưa gán:\n+70.000 ₫ · VCB (vợ)"]);
   });
 });

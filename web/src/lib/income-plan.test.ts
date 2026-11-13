@@ -32,9 +32,9 @@ const y2026: IncomePlanYear = {
 };
 
 describe("Kế hoạch thu nhập theo năm", () => {
-  it("UC-1104 AC-1: \"Cả nhà 43.500.000 / 45.000.000 ₫ mỗi tháng · 96,6%\"; \"Đầu năm 50.000.000 ₫ (87,0%) · cả năm 8,0% · tính trên 1 tháng đã kết thúc\"; \"sửa 1 lần, lần cuối 1/7\"", () => {
+  it("UC-1104 AC-1: \"Cả nhà 43.500.000 / 45.000.000 ₫ mỗi tháng · 96,6%\"; \"Đầu năm 50.000.000 ₫ (87,0%) · cả năm 8,0% · tính trên 1 tháng đã qua\"; \"sửa 1 lần, lần cuối 1/7\"", () => {
     expect(planHeadline(y2026)).toBe(vnd("Cả nhà 43.500.000 / 45.000.000 ₫ mỗi tháng · 96,6%"));
-    expect(planSub(y2026)).toBe(vnd("Đầu năm 50.000.000 ₫ (87,0%) · cả năm 8,0% · tính trên 1 tháng đã kết thúc"));
+    expect(planSub(y2026)).toBe(vnd("Đầu năm 50.000.000 ₫ (87,0%) · cả năm 8,0% · tính trên 1 tháng đã qua"));
     expect(editedText(y2026)).toBe("sửa 1 lần, lần cuối 1/7");
   });
 
@@ -45,7 +45,7 @@ describe("Kế hoạch thu nhập theo năm", () => {
     // Chưa có tháng nào kết thúc trong sổ: không hiện số 0 hay "(—)".
     const empty = { ...y2026, actual: { monthsCounted: 0, total: 0, monthlyAverage: null, pctOfCurrent: null, pctOfFirst: null, pctOfYear: null } };
     expect(planHeadline(empty)).toBe(vnd("Cả nhà chưa có số / 45.000.000 ₫ mỗi tháng"));
-    expect(planSub(empty)).toBe(vnd("Đầu năm 50.000.000 ₫ · chưa có tháng nào kết thúc trong sổ"));
+    expect(planSub(empty)).toBe(vnd("Đầu năm 50.000.000 ₫ · chưa có tháng nào đã qua trong sổ"));
     expect(memberPlanText(y2026.byMember![0]!, false)).toBe(vnd("chưa có số / 30.000.000 ₫"));
   });
 

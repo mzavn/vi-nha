@@ -5,7 +5,7 @@ import { amountText, evalAmount, formatTypedVnd, groupExpr, isAmountExpr, nextAm
 import type { AccountRef, CategoryRef } from "../lib/types";
 
 /** Dòng dưới ô số tiền khi đang tính: kết quả, hoặc vì sao chưa tính được. Số đang gõ — không che (pwa UC-718). */
-export const amountExprHint = (result: number | null): string => (result === null ? "Sai: kết quả phải trên 0, tối đa 1.000 tỷ" : `= ${formatTypedVnd(result)}`);
+export const amountExprHint = (result: number | null): string => (result === null ? "Số tiền phải trên 0, tối đa 1.000 tỷ" : `= ${formatTypedVnd(result)}`);
 
 /** Ô số tiền có phép tính (UC-703): gõ `24+55` thì ô giữ nguyên phép tính, số tiền là kết quả (sai thì 0, `valid` false);
  *  rời ô / Enter (`commit`) thì ô thành kết quả. Không có dấu phép tính thì như cũ: nhóm chấm khi gõ, vượt trần giữ số trước. */
@@ -83,7 +83,7 @@ export function AmountInput(props: { id: string; value: number; onChange: (n: nu
 
 export function AccountSelect(props: { id: string; accounts: AccountRef[]; value: string | null; onChange: (id: string) => void; allowNone?: string }) {
   if (props.accounts.length === 0 && !props.allowNone) {
-    return <p class="hint">Mọi tài khoản đã nối ngân hàng: khoản này sẽ tự về, gán nó ở màn Gán.</p>;
+    return <p class="hint">Mọi tài khoản đã nối ngân hàng: khoản này sẽ tự về, gán ở màn Gán.</p>;
   }
   return (
     <select id={props.id} class="ctl" value={props.value ?? ""} onChange={(e) => props.onChange(e.currentTarget.value)}>

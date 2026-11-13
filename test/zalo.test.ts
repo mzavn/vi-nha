@@ -108,7 +108,7 @@ describe("webhook Zalo", () => {
     expect(sent[0]).toEqual({ url: `https://bot-api.zaloplatforms.com/bot${TOKEN}/sendMessage`, body: { chat_id: "chat-wife-2", text: "Đã nối Zalo cho Vợ. Ví nhà sẽ báo tin ở đây." } });
     // Kênh mới → cảnh báo mọi kênh của cả nhà (ở đây chỉ có chính Zalo vừa nối), nói rõ ai tạo mã.
     expect(sent).toHaveLength(2);
-    expect(sent[1]!.body).toEqual({ chat_id: "chat-wife-2", text: "⚠️ Chồng (qua API token) vừa nối Zalo nhận tin cho Vợ — nếu không phải người nhà làm, vào Cài đặt gỡ ngay." });
+    expect(sent[1]!.body).toEqual({ chat_id: "chat-wife-2", text: "Cảnh báo: Chồng (qua API token) vừa nối Zalo nhận tin cho Vợ. Nếu không phải người nhà làm, vào Cài đặt gỡ ngay." });
     expect(auditRows()).toEqual([
       { member_id: "husband", via: "token", action: "member.zalo_code", target: "member:wife", detail: null },
       { member_id: "husband", via: "token", action: "member.zalo_link", target: "member:wife", detail: null },
@@ -188,7 +188,7 @@ describe("mã nối Zalo", () => {
     expect(res.status).toBe(200);
     expect(res.json.data.zalo_chat_id).toBeNull();
     expect(zaloChat("husband")).toBeNull();
-    const text = "⚠️ Chồng (qua API token) vừa bỏ nối Zalo của Chồng — nếu không phải người nhà làm, vào Cài đặt gỡ ngay.";
+    const text = "Cảnh báo: Chồng (qua API token) vừa bỏ nối Zalo của Chồng. Nếu không phải người nhà làm, vào Cài đặt gỡ ngay.";
     expect(sent.map((s) => s.body).sort((a, b) => String(a.chat_id).localeCompare(String(b.chat_id)))).toEqual([
       { chat_id: "chat-husband", text },
       { chat_id: "chat-wife", text },
@@ -233,7 +233,7 @@ describe("mã nối Zalo", () => {
 });
 
 describe("gửi tin qua Zalo", () => {
-  const message = { full: "⚠️ 1 giao dịch chưa gán:\n+50.000 ₫ — A &amp; B &lt;x&gt;", push: { title: "1 chưa gán", body: "+50.000 ₫ A & B <x>" } };
+  const message = { full: "1 giao dịch chưa gán:\n+50.000 ₫ — A &amp; B &lt;x&gt;", push: { title: "1 chưa gán", body: "+50.000 ₫ A & B <x>" } };
 
   it("notifyMembers gửi bản đầy đủ dạng chữ thường cho người đã nối Zalo, chống gửi trùng, đếm vào số đã gửi", async () => {
     setSecrets();
@@ -243,8 +243,8 @@ describe("gửi tin qua Zalo", () => {
     expect(await notifyMembers(env, "pending_batch", "2026-10-03T03:00:00.000Z", message)).toBe(2);
     expect(sent.map((s) => s.url)).toEqual([`https://bot-api.zaloplatforms.com/bot${TOKEN}/sendMessage`, `https://bot-api.zaloplatforms.com/bot${TOKEN}/sendMessage`]);
     expect(sent.map((s) => s.body).sort((a, b) => String(a.chat_id).localeCompare(String(b.chat_id)))).toEqual([
-      { chat_id: "z-husband", text: "⚠️ 1 giao dịch chưa gán:\n+50.000 ₫ — A & B <x>" },
-      { chat_id: "z-wife", text: "⚠️ 1 giao dịch chưa gán:\n+50.000 ₫ — A & B <x>" },
+      { chat_id: "z-husband", text: "1 giao dịch chưa gán:\n+50.000 ₫ — A & B <x>" },
+      { chat_id: "z-wife", text: "1 giao dịch chưa gán:\n+50.000 ₫ — A & B <x>" },
     ]);
     expect(raw.prepare("SELECT chat_id, ok FROM notifications WHERE kind = 'pending_batch' ORDER BY chat_id").all()).toEqual([
       { chat_id: "zalo:z-husband", ok: 1 },
@@ -344,7 +344,7 @@ describe("cài đặt Zalo", () => {
     expect((await testZalo(env, "husband", okFetch)).error).toMatch(/bot token/);
     setSecrets();
     expect(await testZalo(env, "husband", okFetch)).toEqual({ sent: true });
-    expect(sent.at(-1)!.body).toEqual({ chat_id: "z-husband", text: "✅ Ví nhà đã nối Zalo cho Chồng." });
+    expect(sent.at(-1)!.body).toEqual({ chat_id: "z-husband", text: "Ví nhà đã nối Zalo cho Chồng." });
     const res = await call("POST", "/v1/settings/test/zalo", { member_id: "husband" });
     expect(res.json.data).toEqual({ sent: true });
   });

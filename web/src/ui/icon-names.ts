@@ -6,6 +6,7 @@ export const ICON_NAMES = [
   "help", "filter", "chevron-down", "chevron-up", "check", "grid", "cloud-off", "eye", "eye-off", "basket", "utensils", "zap",
   "fuel", "car", "wrench", "laptop", "pill", "dumbbell", "heart", "gift", "sprout", "swap", "receipt", "bag", "plane", "coffee",
   "film", "tag", "wifi", "building", "bus", "map-pin", "book", "credit-card", "more", "percent", "trending-up",
+  "grip-vertical", "arrow-up", "arrow-down", "sun", "moon", "monitor",
 ] as const;
 export type IconName = (typeof ICON_NAMES)[number];
 

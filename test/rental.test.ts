@@ -127,7 +127,7 @@ describe("domain rental", () => {
       "· Trừ: An đi chợ: −150.000 ₫",
       "Tổng tháng 10: 4.220.000 ₫ (tháng 9: 4.180.000 ₫, nhiều hơn 40.000 ₫)",
       "Chuyển khoản: MB Bank · 0123456789 · nội dung TIEN NHA T10 AN",
-      "Các tháng trước: còn nợ 50.000 ₫ (chưa gồm trong số trên)",
+      "Các tháng trước còn nợ 50.000 ₫ (chưa tính ở trên)",
     ]);
   });
 });
@@ -294,7 +294,7 @@ describe("UC-806 lập và sửa bản tính tháng", () => {
     const oct = await issued("2026-10", OCT, "2026-11-02T03:00:00.000Z");
     payment("an", 4_100_000, "2026-11-05T03:00:00.000Z");
     const nov = await issued("2026-11", SEPT, "2026-12-01T03:00:00.000Z");
-    expect(nov.text).toContain("Các tháng trước: còn nợ 120.000 ₫ (chưa gồm trong số trên)");
+    expect(nov.text).toContain("Các tháng trước còn nợ 120.000 ₫ (chưa tính ở trên)");
     const sheet = async (date: string) =>
       ((await call("GET", `/v1/balance-sheet?date=${date}`)).json.data.assets as any[]).flatMap((s) => s.rows).find((r: any) => r.key === "tenants")?.value ?? 0;
     at("2026-12-03T03:00:00.000Z");
@@ -305,7 +305,7 @@ describe("UC-806 lập và sửa bản tính tháng", () => {
     expect(billLines(oct.bill.id).filter((l) => l.status === "active")).toEqual([
       { kind: "bill", amount: 4_270_000, status: "active", at: "2026-11-02T03:00:00.000Z", month_key: "2026-10" },
     ]);
-    expect((await call("GET", "/v1/rental/tenants/an/bills/2026-11")).json.data.text).toContain("Các tháng trước: còn nợ 170.000 ₫");
+    expect((await call("GET", "/v1/rental/tenants/an/bills/2026-11")).json.data.text).toContain("Các tháng trước còn nợ 170.000 ₫");
     expect([await sheet("2026-10-31"), await sheet("2026-11-30"), await sheet("2026-12-03")]).toEqual([before[0], before[1] + 50_000, before[2] + 50_000]);
   });
 
@@ -336,7 +336,7 @@ describe("UC-807 gửi bản tổng cộng kèm QR", () => {
     const v = await issued("2026-10", OCT, "2026-11-02T03:00:00.000Z");
     expect(v.text).toContain("Tổng tháng 10: 4.220.000 ₫ (tháng 9: 4.180.000 ₫, nhiều hơn 40.000 ₫)");
     expect(v.text).toContain("Chuyển khoản: MB Bank · 0123456789 · nội dung TIEN NHA T10 AN");
-    expect(v.text).toContain("Các tháng trước: còn nợ 50.000 ₫ (chưa gồm trong số trên)");
+    expect(v.text).toContain("Các tháng trước còn nợ 50.000 ₫ (chưa tính ở trên)");
     expect([v.qrAmount, v.previousBalance]).toEqual([4_220_000, 50_000]);
     expect(v.qr).toMatchObject({ memo: "TIEN NHA T10 AN", payload: vietQrPayload({ bin: "970422", accountNo: "0123456789", amount: 4_220_000, memo: "TIEN NHA T10 AN" }) });
   });
@@ -345,7 +345,7 @@ describe("UC-807 gửi bản tổng cộng kèm QR", () => {
     await anWithSeptember();
     payment("an", 130_000, "2026-10-20T03:00:00.000Z"); // 50.000 → −80.000
     const v = await issued("2026-10", OCT, "2026-11-02T03:00:00.000Z");
-    expect(v.text).toContain("Các tháng trước: trả dư 80.000 ₫");
+    expect(v.text).toContain("Các tháng trước trả dư 80.000 ₫");
     expect(v.qrAmount).toBe(4_220_000);
     const neg = await issued("2026-11", [{ name: "Trả lại tiền cọc", category: "fixed", amount: -200_000 }], "2026-11-12T03:00:00.000Z");
     expect([neg.qrAmount, neg.qr]).toEqual([0, null]);
@@ -354,13 +354,13 @@ describe("UC-807 gửi bản tổng cộng kèm QR", () => {
 
   it("UC-807 AC-4: chưa có tài khoản nhận / tài khoản vừa bật riêng tư → không QR, có lý do; tin không có dòng chuyển khoản", async () => {
     const none = await issued("2026-10", OCT, "2026-11-02T03:00:00.000Z", null);
-    expect(none.qr).toEqual({ reason: "Chưa có mã QR — chọn tài khoản nhận trên bản tính." });
+    expect(none.qr).toEqual({ reason: "Chưa có mã QR: chọn tài khoản nhận trên bản tính." });
     expect(none.text).not.toContain("Chuyển khoản");
     raw.exec("INSERT INTO tenants (id, name) VALUES ('binh', 'Bình')");
     await issued("2026-10", OCT, "2026-11-02T03:00:00.000Z", "mb-household", "binh");
     raw.exec("UPDATE accounts SET private = 1 WHERE id = 'mb-household'");
     const v = (await call("GET", "/v1/rental/tenants/binh/bills/2026-10")).json.data;
-    expect(v.qr).toEqual({ reason: "Chưa có mã QR — chọn tài khoản nhận trên bản tính." });
+    expect(v.qr).toEqual({ reason: "Chưa có mã QR: chọn tài khoản nhận trên bản tính." });
     expect(v.text).not.toContain("Chuyển khoản");
   });
 
@@ -372,7 +372,7 @@ describe("UC-807 gửi bản tổng cộng kèm QR", () => {
     expect(v.payments).toEqual([{ transactionId: tx, at: "2026-11-03T03:00:00.000Z", amount: 4_220_000 }]);
     expect(v.balance).toBe(50_000);
     expect(v.previousBalance).toBe(50_000);
-    expect(v.text).toContain("Các tháng trước: còn nợ 50.000 ₫");
+    expect(v.text).toContain("Các tháng trước còn nợ 50.000 ₫");
   });
 
   it("UC-807 AC-6: gửi lại sau khi sửa — dòng đầu (đã sửa d/m — thay tin trước), QR theo tổng mới", async () => {
@@ -380,7 +380,7 @@ describe("UC-807 gửi bản tổng cộng kèm QR", () => {
     const oct = await issued("2026-10", OCT, "2026-11-02T03:00:00.000Z");
     at("2026-11-05T03:00:00.000Z");
     const v = (await save(oct.bill, OCT.map((i) => (i.name === "Tiền điện" ? { ...i, amount: 470_000 } : i)))).json.data;
-    expect(v.text.split("\n")[0]).toBe("(đã sửa 5/11 — thay tin trước)");
+    expect(v.text.split("\n")[0]).toBe("(đã sửa 5/11, thay tin trước)");
     expect(v.text).toContain("Tổng tháng 10: 4.270.000 ₫");
     expect(v.qrAmount).toBe(4_270_000);
   });
@@ -394,7 +394,7 @@ describe("UC-807 gửi bản tổng cộng kèm QR", () => {
     const o = (await issue(octSaved.bill)).json.data;
     expect(o.text).not.toContain("Các tháng trước");
     const n = (await call("GET", "/v1/rental/tenants/an/bills/2026-11")).json.data;
-    expect(n.text).toContain("Các tháng trước: còn nợ 4.220.000 ₫");
+    expect(n.text).toContain("Các tháng trước còn nợ 4.220.000 ₫");
     expect(await balance()).toBe(8_520_000);
   });
 
@@ -413,7 +413,7 @@ describe("UC-801 thiết lập người thuê sau v2.2", () => {
     at("2026-10-02T05:00:00.000Z");
     await create("2026-09", "binh");
     const v = (await call("GET", "/v1/rental/tenants/binh/bills/2026-09")).json.data;
-    expect(v.text).toContain("Các tháng trước: còn nợ 7.075.000 ₫");
+    expect(v.text).toContain("Các tháng trước còn nợ 7.075.000 ₫");
     expect(await balance("binh")).toBe(7_075_000);
   });
 
@@ -468,20 +468,20 @@ describe("/v1/rental", () => {
       const res = await assignTenant("thue-1", 5_000_000);
       expect(res.status).toBe(201);
       expect(res.json.data.transactions[0]).toMatchObject({ meaning: "income", tenant_id: "tenant-binh", income_stream_id: "rental", counter_account_id: "vcb-husband" });
-      expect(res.json.data.effects).toEqual({ cycle: null, tasksDone: [] });
+      expect(res.json.data.effects).toEqual({ savings: null, tasksDone: [] });
       expect(await balance("tenant-binh")).toBe(0);
       expect(book("vcb-husband")).toBe(5_000_000);
       expect(raw.prepare("SELECT COUNT(*) n FROM transactions WHERE meaning = 'fund'").get()).toEqual({ n: 0 });
     });
 
-    it("UC-805 AC-9: người thuê nợ 4.000.000, tiền về tài khoản ngăn Tích luỹ → số dư người thuê 0, Tích luỹ +4.000.000, không lệnh chuyển, không kỳ, không việc", async () => {
+    it("UC-805 AC-9: người thuê nợ 4.000.000, tiền về tài khoản ngăn Tích luỹ → số dư người thuê 0, Tích luỹ +4.000.000, không lệnh chuyển, không nhắc trích", async () => {
       raw.prepare("UPDATE accounts SET pocket = 'savings' WHERE id = 'tcb-husband'").run();
       expect((await call("POST", "/v1/rental/tenants", { id: "tenant-binh", name: "Anh Bình", opening_balance: 4_000_000 })).status).toBe(201);
       pendingLog("thue-2", "tcb-husband", 4_000_000);
       expect((await assignTenant("thue-2", 4_000_000)).status).toBe(201);
       expect(await balance("tenant-binh")).toBe(0);
       expect(book("tcb-husband")).toBe(4_000_000);
-      expect(raw.prepare("SELECT (SELECT COUNT(*) FROM pay_cycles) + (SELECT COUNT(*) FROM pay_cycle_tasks) AS n").get()).toEqual({ n: 0 });
+      expect(raw.prepare("SELECT COUNT(*) AS n FROM month_tasks").get()).toEqual({ n: 0 });
     });
 
     it("UC-805 AC-4: huỷ khoản tiền trả thì số dư người thuê trở lại, không cần huỷ gì ở sổ người thuê", async () => {

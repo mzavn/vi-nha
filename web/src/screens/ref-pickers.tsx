@@ -70,7 +70,7 @@ export function InterestCheck({ shown, checked, onChange }: { shown: boolean; ch
 }
 
 /**
- * Ô "Trả lại cho khoản chi" (`kind="spend"`) / "Trả cho khoản cho vay" (`kind="lend"`): mục đầu "không chỉ khoản nào", rồi
+ * Ô "Trả lại cho khoản chi" (`kind="spend"`) / "Trả cho khoản cho vay" (`kind="lend"`): mục đầu "không chọn khoản nào", rồi
  * tối đa 20 khoản gốc còn hiệu lực (khoản chi 30 ngày, khoản cho vay 180 ngày) — khoản của người `receivableId` trước, gần
  * `amount` nhất lên trước. Chọn một khoản → `onPick(id, khoản)`; khoản đang nối mà không còn trong danh sách (sửa khoản cũ)
  * vẫn giữ được, `onPick(id, null)`. Chưa chọn: gợi ý gán khoản gốc còn chờ trước. Không mạng thì không hiện.
@@ -113,7 +113,7 @@ export function LinkSourcePicker({
             onPick(v, list.find((c) => c.id === v) ?? null);
           }}
         >
-          <option value="">không chỉ khoản nào</option>
+          <option value="">không chọn khoản nào</option>
           {value !== null && !chosen && <option value={String(value)}>{kind === "lend" ? "khoản cho vay đang nối" : "khoản chi đang nối"}</option>}
           {ranked.map((c) => (
             <option key={c.id} value={String(c.id)}>

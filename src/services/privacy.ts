@@ -56,21 +56,21 @@ export function assertTxChangeable(tx: TxSides, hidden: string[]): void {
   const v = txVisibility(tx, hidden);
   if (v === "hidden") throw txNotFound();
   if (v === "touches") {
-    throw new DomainError("private_account", "Khoản này liên quan tài khoản riêng tư của người khác — chỉ chủ tài khoản sửa được.", 403);
+    throw new DomainError("private_account", "Khoản này liên quan Tài khoản riêng tư của người khác, chỉ chủ tài khoản sửa được.", 403);
   }
 }
 
 /** Log chờ của tài khoản riêng tư bị giấu: chỉ chủ gán / nối / ghép / bỏ qua → 403 `private_account`. */
 export function assertLogChangeable(log: { account_id?: unknown }, hidden: string[]): void {
   if (log.account_id !== null && log.account_id !== undefined && hidden.includes(String(log.account_id))) {
-    throw new DomainError("private_account", "Khoản này thuộc tài khoản riêng tư của người khác — chỉ chủ tài khoản xử lý được.", 403);
+    throw new DomainError("private_account", "Khoản này thuộc Tài khoản riêng tư của người khác, chỉ chủ tài khoản xử lý được.", 403);
   }
 }
 
 /** Ghi khoản (hoặc mẫu tự gán) có một phía là tài khoản riêng tư bị giấu với người ghi → 403 `private_account` (ADR-133 (3)). */
 export function assertRowWritable(row: TxSides, hidden: string[]): void {
   if (txVisibility(row, hidden) !== "clear") {
-    throw new DomainError("private_account", "Tài khoản riêng tư của người khác — chỉ chủ tài khoản ghi được khoản vào tài khoản này.", 403);
+    throw new DomainError("private_account", "Tài khoản riêng tư của người khác, chỉ chủ tài khoản mới ghi được vào đây.", 403);
   }
 }
 
@@ -86,6 +86,6 @@ export function assertTenantAccount(
   if (row.meaning !== "income" || !row.tenant_id) return;
   const sides = [row.account_id, row.counter_account_id].filter((a) => a !== null && a !== undefined).map(String);
   if (refs.accounts.some((a) => a.private && sides.includes(a.id))) {
-    throw new DomainError("tenant_private_account", "Tiền thuê không ghi vào tài khoản riêng tư — chọn tài khoản khác.", 400);
+    throw new DomainError("tenant_private_account", "Tiền thuê không ghi vào Tài khoản riêng tư. Chọn tài khoản khác.", 400);
   }
 }

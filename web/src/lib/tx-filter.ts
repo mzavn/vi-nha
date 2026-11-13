@@ -1,9 +1,7 @@
 // Bộ lọc màn Sổ giao dịch (pwa UC-716): bộ lọc ↔ query string của GET /v1/transactions(/summary) (ledger UC-111),
 // bộ lọc → chip bỏ được, đi tháng, ngày mặc định khi ghi thêm, nhóm dòng theo ngày, bộ lọc ↔ địa chỉ `#ledger?…`. Thuần, không đụng DOM.
 
-import type { CycleRef } from "../../../src/domain/look-back";
 import { isDayKey } from "./hash-route";
-import { cycleSpan, spanText } from "./look-back";
 import { formatVnd } from "./money";
 import { dayHeading, dayKey, monthKey, nextMonth, previousMonth } from "./period";
 import type { Bootstrap, TxRow, TxSummary } from "./types";
@@ -23,21 +21,11 @@ export const BOOK_MEANINGS: { value: string; label: string }[] = [
   { value: "adjust", label: "Điều chỉnh" },
 ];
 
-/** Kỳ lương mở từ Nhìn lại (pwa UC-707): ngày lương gửi lên server, ngày đầu / ngày cuối (VN) chỉ để ghi chip. */
-export interface BookCycle {
-  payday: string;
-  from: string;
-  /** null = kỳ đang chạy. */
-  to: string | null;
-}
-
 export interface BookFilter {
-  /** `YYYY-MM`; null = cả sổ, hoặc xem theo khoảng ngày / theo kỳ. */
+  /** `YYYY-MM`; null = cả sổ, hoặc xem theo khoảng ngày. */
   month: string | null;
   fromDate?: string | null;
   toDate?: string | null;
-  /** Đúng mốc giờ của một kỳ lương (ledger UC-111 `cycle`): ghi đè tháng và khoảng ngày. */
-  cycle: BookCycle | null;
   meanings: string[];
   categoryId: string | null;
   accountId: string | null;
@@ -49,16 +37,13 @@ export interface BookFilter {
 }
 
 export function defaultFilter(now: Date): BookFilter {
-  return { month: monthKey(now), fromDate: null, toDate: null, cycle: null, meanings: [], categoryId: null, accountId: null, memberId: null, source: null, q: "", showVoid: false };
+  return { month: monthKey(now), fromDate: null, toDate: null, meanings: [], categoryId: null, accountId: null, memberId: null, source: null, q: "", showVoid: false };
 }
 
-/** Chạm một danh mục ở Nhìn lại (pwa UC-707 AC-35, UC-716 AC-9): sổ lọc danh mục đó trong đúng kỳ, Chi bằng số của Nhìn lại. */
-export function cycleFilter(ref: Pick<CycleRef, "payday" | "start" | "end">, categoryId: string | null, now: Date): BookFilter {
-  return { ...defaultFilter(now), month: null, cycle: { payday: ref.payday, ...cycleSpan(ref) }, categoryId };
+/** Chạm một danh mục ở Nhìn lại (pwa UC-707 AC-40, UC-716 AC-9): sổ lọc danh mục đó trong đúng tháng, Chi bằng số của Nhìn lại. */
+export function monthFilter(month: string, categoryId: string | null, now: Date): BookFilter {
+  return { ...defaultFilter(now), month, categoryId };
 }
-
-/** Chip / nhãn đầu màn của kỳ: "Kỳ từ 10/11" (đang chạy), "Kỳ 10/10 – 9/11" (đã kết thúc). */
-export const cycleLabel = (c: BookCycle): string => (c.to ? `Kỳ ${spanText(c)}` : spanText(c));
 
 /** Dòng đầu khi lọc theo tài khoản riêng tư của người khác (UC-716 AC-22): chỉ thấy chuyển khoản vào / ra, không thấy từng khoản chi. */
 export function privateAccountLine(f: Pick<BookFilter, "accountId">, boot: Pick<Bootstrap, "accounts"> | null): string | null {
@@ -91,9 +76,7 @@ export function filterQuery(f: BookFilter): string {
   const p = new URLSearchParams();
   const hasRange = Boolean(f.fromDate || f.toDate);
   const validRange = !f.fromDate || !f.toDate || f.fromDate <= f.toDate;
-  if (f.cycle) {
-    p.set("cycle", f.cycle.payday);
-  } else if (hasRange && validRange) {
+  if (hasRange && validRange) {
     if (f.fromDate) p.set("from_date", f.fromDate);
     if (f.toDate) p.set("to_date", f.toDate);
   } else if (f.month) {
@@ -121,7 +104,7 @@ export function summaryPath(f: BookFilter): string {
   return `/v1/transactions/summary${q ? `?${q}` : ""}`;
 }
 
-export type ChipKey = "cycle" | "dateRange" | "meaning" | "categoryId" | "accountId" | "memberId" | "source" | "showVoid";
+export type ChipKey = "dateRange" | "meaning" | "categoryId" | "accountId" | "memberId" | "source" | "showVoid";
 export interface Chip {
   key: ChipKey;
   /** Loại cụ thể khi `key = "meaning"` (mỗi loại một chip). */
@@ -132,8 +115,7 @@ export interface Chip {
 /** Bộ lọc đang bật thành chip (tháng và chữ tìm có chỗ riêng ở đầu màn, không thành chip). */
 export function filterChips(f: BookFilter, boot: Bootstrap | null): Chip[] {
   const chips: Chip[] = [];
-  if (f.cycle) chips.push({ key: "cycle", label: cycleLabel(f.cycle) });
-  const range = f.cycle ? null : dateRangeLabel(f.fromDate, f.toDate);
+  const range = dateRangeLabel(f.fromDate, f.toDate);
   if (range) chips.push({ key: "dateRange", label: range });
   const name = <T extends { id: string; name: string }>(list: T[] | undefined, id: string) => list?.find((x) => x.id === id)?.name ?? id;
   chips.push(...f.meanings.map((m) => ({ key: "meaning" as const, value: m, label: BOOK_MEANINGS.find((x) => x.value === m)?.label ?? m })));
@@ -145,9 +127,8 @@ export function filterChips(f: BookFilter, boot: Bootstrap | null): Chip[] {
   return chips;
 }
 
-/** Chạm × trên một chip: bỏ đúng bộ lọc đó; bỏ kỳ hay khoảng ngày thì về tháng hiện tại. */
+/** Chạm × trên một chip: bỏ đúng bộ lọc đó; bỏ khoảng ngày thì về tháng hiện tại. */
 export function removeChip(f: BookFilter, chip: Chip, now = new Date()): BookFilter {
-  if (chip.key === "cycle") return { ...f, cycle: null, month: monthKey(now) };
   if (chip.key === "dateRange") return { ...f, fromDate: null, toDate: null, month: monthKey(now) };
   if (chip.key === "meaning") return { ...f, meanings: f.meanings.filter((m) => m !== chip.value) };
   if (chip.key === "showVoid") return { ...f, showVoid: false };
@@ -160,10 +141,10 @@ export function toggleMeaning(f: BookFilter, meaning: string): BookFilter {
   return { ...f, meanings: BOOK_MEANINGS.map((x) => x.value).filter((m) => on.includes(m)) };
 }
 
-/** Bỏ mọi bộ lọc trong sheet Lọc, giữ tháng (hoặc về tháng này nếu đang lọc khoảng ngày / kỳ) và chữ tìm. */
+/** Bỏ mọi bộ lọc trong sheet Lọc, giữ tháng (hoặc về tháng này nếu đang lọc khoảng ngày) và chữ tìm. */
 export function clearFilters(f: BookFilter, now = new Date()): BookFilter {
-  const hadRange = Boolean(f.fromDate || f.toDate || f.cycle);
-  return { ...f, month: hadRange ? monthKey(now) : f.month, fromDate: null, toDate: null, cycle: null, meanings: [], categoryId: null, accountId: null, memberId: null, source: null, showVoid: false };
+  const hadRange = Boolean(f.fromDate || f.toDate);
+  return { ...f, month: hadRange ? monthKey(now) : f.month, fromDate: null, toDate: null, meanings: [], categoryId: null, accountId: null, memberId: null, source: null, showVoid: false };
 }
 
 /**
@@ -178,13 +159,13 @@ export function stepMonth(month: string | null, delta: -1 | 1, now: Date): strin
 }
 
 /**
- * Ngày điền sẵn khi ghi thêm từ sổ: đang xem một tháng đã qua → ngày cuối tháng đó (đổi được); kỳ lương / khoảng ngày đã qua →
- * ngày cuối; tháng hiện tại hay cả sổ → hôm nay. Giờ ghi tính bằng `atForDay` như mọi lần chọn ngày lùi lại.
+ * Ngày điền sẵn khi ghi thêm từ sổ: đang xem một tháng đã qua → ngày cuối tháng đó (đổi được); khoảng ngày đã qua → ngày cuối;
+ * tháng hiện tại hay cả sổ → hôm nay. Giờ ghi tính bằng `atForDay` như mọi lần chọn ngày lùi lại.
  */
 export function entryDay(monthOrFilter: BookFilter | string | null, now: Date): string {
   const today = dayKey(now);
   if (typeof monthOrFilter === "object" && monthOrFilter !== null) {
-    const last = monthOrFilter.cycle ? monthOrFilter.cycle.to : monthOrFilter.fromDate || monthOrFilter.toDate ? (monthOrFilter.toDate ?? null) : undefined;
+    const last = monthOrFilter.fromDate || monthOrFilter.toDate ? (monthOrFilter.toDate ?? null) : undefined;
     if (last !== undefined) return last && last < today ? last : today;
     return entryDay(monthOrFilter.month, now);
   }
@@ -195,30 +176,31 @@ export function entryDay(monthOrFilter: BookFilter | string | null, now: Date): 
 }
 
 /**
- * Bộ lọc → query trên địa chỉ `#ledger?…` (UC-716 AC-23: F5 giữ bộ lọc, kể cả kỳ lương). Chỉ ghi ô khác mặc định; đọc lại bằng
- * `bookFromHashQuery` ra đúng bộ lọc. Tháng chỉ ghi khi không lọc kỳ / khoảng ngày: `month=all` là cả sổ.
+ * Bộ lọc → query trên địa chỉ `#ledger?…` (UC-716 AC-23: F5 giữ bộ lọc). Chỉ ghi ô khác mặc định; đọc lại bằng `bookFromHashQuery`
+ * ra đúng bộ lọc. Tháng đứng đầu, ghi khi không lọc khoảng ngày mà tháng khác tháng này hoặc có bộ lọc khác (`month=2026-11&category=…`,
+ * UC-716 AC-25): `month=all` là cả sổ.
  */
 export function bookHashQuery(f: BookFilter, now: Date): string {
   const p = new URLSearchParams();
-  if (!f.cycle && !f.fromDate && !f.toDate && f.month !== monthKey(now)) p.set("month", f.month ?? "all");
-  if (!f.cycle && f.fromDate) p.set("from_date", f.fromDate);
-  if (!f.cycle && f.toDate) p.set("to_date", f.toDate);
+  if (f.fromDate) p.set("from_date", f.fromDate);
+  if (f.toDate) p.set("to_date", f.toDate);
   if (f.meanings.length) p.set("meaning", f.meanings.join(","));
-  if (f.categoryId) p.set("category_id", f.categoryId);
+  if (f.categoryId) p.set("category", f.categoryId);
   if (f.accountId) p.set("account_id", f.accountId);
   if (f.memberId) p.set("member_id", f.memberId);
   if (f.source) p.set("source", f.source);
   if (f.q) p.set("q", f.q);
   if (f.showVoid) p.set("include_void", "1");
-  if (f.cycle) {
-    p.set("cycle", f.cycle.payday);
-    p.set("cycle_from", f.cycle.from);
-    if (f.cycle.to) p.set("cycle_to", f.cycle.to);
-  }
-  return p.toString();
+  const rest = p.toString();
+  if (f.fromDate || f.toDate || (f.month === monthKey(now) && rest === "")) return rest;
+  const month = new URLSearchParams({ month: f.month ?? "all" }).toString();
+  return rest ? `${month}&${rest}` : month;
 }
 
-/** Địa chỉ `#ledger?…` → bộ lọc. Ô sai dạng (tháng, ngày, nguồn, loại lạ) bị bỏ qua như không có. */
+/**
+ * Địa chỉ `#ledger?…` → bộ lọc. Ô sai dạng (tháng, ngày, nguồn, loại lạ) bị bỏ qua như không có. Địa chỉ cũ theo kỳ lương
+ * (`cycle=2026-11-10`, UC-716 AC-25) → tháng của ngày đó; `category_id` cũ đọc như `category`.
+ */
 export function bookFromHashQuery(query: string, now: Date): BookFilter {
   const p = new URLSearchParams(query);
   const day = (k: string) => {
@@ -226,15 +208,10 @@ export function bookFromHashQuery(query: string, now: Date): BookFilter {
     return v && isDayKey(v) ? v : null;
   };
   const f = defaultFilter(now);
-  const payday = day("cycle");
-  if (payday) {
-    const to = day("cycle_to");
-    return { ...f, ...rest(), month: null, cycle: { payday, from: day("cycle_from") ?? payday, to } };
-  }
   const fromDate = day("from_date");
   const toDate = day("to_date");
   if (fromDate || toDate) return { ...f, ...rest(), month: null, fromDate, toDate };
-  const month = p.get("month");
+  const month = p.get("month") ?? day("cycle")?.slice(0, 7) ?? null;
   return { ...f, ...rest(), month: month === "all" ? null : month && /^\d{4}-(0[1-9]|1[0-2])$/.test(month) ? month : f.month };
 
   function rest(): Pick<BookFilter, "meanings" | "categoryId" | "accountId" | "memberId" | "source" | "q" | "showVoid"> {
@@ -243,7 +220,7 @@ export function bookFromHashQuery(query: string, now: Date): BookFilter {
     const source = p.get("source");
     return {
       meanings: known.filter((m) => picked.includes(m)),
-      categoryId: p.get("category_id") || null,
+      categoryId: p.get("category") || p.get("category_id") || null,
       accountId: p.get("account_id") || null,
       memberId: p.get("member_id") || null,
       source: source === "manual" || source === "bank" ? source : null,
@@ -260,7 +237,7 @@ export function netSpend(rows: TxRow[]): number {
 
 export interface DayGroup {
   day: string;
-  /** "Thứ Hai 5/10 · chi 312.000 ₫" — không có khoản chi thì chỉ có ngày. */
+  /** "T2 5/10 · chi 312.000 ₫" — không có khoản chi thì chỉ có ngày. */
   heading: string;
   rows: TxRow[];
 }

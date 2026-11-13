@@ -55,7 +55,7 @@ export function newMemberPayload(f: { name: string; password: string }, members:
   const bad = nameError(name);
   const clash = bad ? null : clashWith(name, members);
   if (bad) errors.name = bad;
-  else if (clash) errors.name = `Trùng với ${clash} (cả người đã tắt).`;
+  else if (clash) errors.name = `Trùng với ${clash} (kể cả người đã tắt).`;
   const pw = passwordError(f.password, true);
   if (pw) errors.password = pw;
   return done(errors, () => ({ name, ...(f.password ? { password: f.password } : {}) }));
@@ -91,5 +91,5 @@ export function memberSubmitError(err: unknown): { field: string | null; message
   if (err.code === "duplicate") return { field: "name", message: err.message };
   if (err.code === "wrong_password" || err.field === "current" || err.field === "household_password") return { field: "proof", message: err.message };
   if (err.field === "name" || err.field === "password") return { field: err.field, message: err.message };
-  return { field: null, message: err.offline ? "Không có mạng. Việc này cần mạng." : err.message };
+  return { field: null, message: err.offline ? "Đang mất mạng, cần mạng để làm tiếp." : err.message };
 }

@@ -1,0 +1,27 @@
+@layer components {
+.field.cv-goal-row {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+.field.cv-goal-row > .k {
+    flex: 1 1 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+.cv-goal-row > select.ctl {
+    flex: 1 1 100%;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    text-overflow: ellipsis;
+  }
+
+.cv-goal-shared,
+  .cv-goal-group {
+    flex: 1 1 100%;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+}

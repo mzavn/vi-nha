@@ -132,7 +132,7 @@ describe("cảnh báo cả nhà khi kênh báo tin hay khoá đổi", () => {
   it("đặt/đổi khoá webhook, token SePay hay tắt kết nối → mọi kênh được báo; chỉ đổi tên thì không", async () => {
     telegramReady();
     await call("PATCH", "/v1/settings/sepay/connections/default", { webhook_key: "sepay-webhook-key-cua-ke-gian" }, "wife");
-    const text = "⚠️ Vợ (qua API token) vừa đặt khoá webhook kết nối SePay “SePay chính” — nếu không phải người nhà làm, vào Cài đặt gỡ ngay.";
+    const text = "Cảnh báo: Vợ (qua API token) vừa đặt khoá webhook kết nối SePay “SePay chính”. Nếu không phải người nhà làm, vào Cài đặt gỡ ngay.";
     expect(telegram).toEqual([
       { token: TG_TOKEN, chat_id: "1001", text },
       { token: TG_TOKEN, chat_id: "2002", text },
@@ -168,7 +168,7 @@ describe("cảnh báo cả nhà khi kênh báo tin hay khoá đổi", () => {
     const res = await call("PATCH", "/v1/settings/members/wife", { tg_chat_id: "9999" });
     expect(res.status).toBe(200);
     expect(chats()).toEqual(["1001", "2002", "9999"]);
-    expect(new Set(telegram.map((t) => t.text))).toEqual(new Set(["⚠️ Chồng (qua API token) vừa đổi chat Telegram nhận tin của Vợ — nếu không phải người nhà làm, vào Cài đặt gỡ ngay."]));
+    expect(new Set(telegram.map((t) => t.text))).toEqual(new Set(["Cảnh báo: Chồng (qua API token) vừa đổi chat Telegram nhận tin của Vợ. Nếu không phải người nhà làm, vào Cài đặt gỡ ngay."]));
 
     telegram = [];
     await call("PATCH", "/v1/settings/members/wife", { tg_chat_id: "9999", name: "Vợ" });
@@ -190,7 +190,7 @@ describe("cảnh báo cả nhà khi kênh báo tin hay khoá đổi", () => {
         opening_balance: { from: 0, to: 500_000 },
       },
     });
-    const text = "⚠️ Vợ (qua API token) vừa đổi mốc theo dõi SePay của VCB (chính): ngày số dư đầu → 22:25:00 15/10/2026 — nếu không phải người nhà làm, vào Cài đặt gỡ ngay.";
+    const text = "Cảnh báo: Vợ (qua API token) vừa đổi mốc theo dõi SePay của VCB (chính): ngày số dư đầu → 22:25:00 15/10/2026. Nếu không phải người nhà làm, vào Cài đặt gỡ ngay.";
     expect(telegram).toEqual([
       { token: TG_TOKEN, chat_id: "1001", text },
       { token: TG_TOKEN, chat_id: "2002", text },
@@ -219,20 +219,22 @@ describe("nhật ký nguồn thu, bỏ qua log, danh mục (hộ mẫu P)", () =
   });
   afterEach(() => vi.useRealTimers());
 
-  it("UC-506 AC-32: tạo nguồn thu ghi income_stream.create { fields }; đổi Mở kỳ lương ghi changes.opens_cycle cũ → mới; đổi tên chỉ fields; nguồn cho thuê bật mở kỳ → 400 cannot_open_cycle, không có dòng", async () => {
-    expect((await api("POST", "/v1/settings/income-streams", { name: "Lương vợ", opens_cycle: true })).status).toBe(201);
-    expect((await api("PATCH", "/v1/settings/income-streams/salary-husband", { opens_cycle: false })).status).toBe(200);
+  it("UC-506 AC-32: tạo nguồn thu ghi income_stream.create { fields }; đổi Nguồn lương ghi changes.is_salary cũ → mới; đổi tên chỉ fields; nguồn cho thuê bật is_salary → 400 cannot_be_salary, gửi opens_cycle → 400 model_changed, không có dòng", async () => {
+    expect((await api("POST", "/v1/settings/income-streams", { name: "Lương vợ", is_salary: true })).status).toBe(201);
+    expect((await api("PATCH", "/v1/settings/income-streams/salary-husband", { is_salary: false })).status).toBe(200);
     expect((await api("PATCH", "/v1/settings/income-streams/salary-husband", { name: "Lương chồng mới" })).status).toBe(200);
-    const rental = await api("PATCH", "/v1/settings/income-streams/rental", { opens_cycle: true });
-    expect([rental.status, rental.json.error?.code]).toEqual([400, "cannot_open_cycle"]);
+    const rental = await api("PATCH", "/v1/settings/income-streams/rental", { is_salary: true });
+    expect([rental.status, rental.json.error?.code]).toEqual([400, "cannot_be_salary"]);
+    const old = await api("PATCH", "/v1/settings/income-streams/salary-husband", { opens_cycle: true });
+    expect([old.status, old.json.error?.code]).toEqual([400, "model_changed"]);
     expect(rows()).toEqual([
-      { member_id: "husband", via: "token", action: "income_stream.create", target: "income_stream:luong-vo", detail: { fields: ["name", "opens_cycle"] } },
+      { member_id: "husband", via: "token", action: "income_stream.create", target: "income_stream:luong-vo", detail: { fields: ["is_salary", "name"] } },
       {
         member_id: "husband",
         via: "token",
         action: "income_stream.update",
         target: "income_stream:salary-husband",
-        detail: { fields: ["opens_cycle"], changes: { opens_cycle: { from: true, to: false } } },
+        detail: { fields: ["is_salary"], changes: { is_salary: { from: true, to: false } } },
       },
       { member_id: "husband", via: "token", action: "income_stream.update", target: "income_stream:salary-husband", detail: { fields: ["name"] } },
     ]);

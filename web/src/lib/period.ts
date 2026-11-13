@@ -5,7 +5,7 @@ import { dayKey, weekKey } from "../../../src/domain/period";
 
 const VN_OFFSET_MS = 7 * 3600_000;
 const EN_DASH = "–";
-const WEEKDAYS = ["Chủ nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy"];
+const WEEKDAYS = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
 
 const parts = (day: string) => {
   const [y, m, d] = day.split("-").map(Number);
@@ -37,7 +37,7 @@ export function weekRange(at: Date | string): { key: string; start: string; end:
   return { key: weekKey(at), start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
 }
 
-/** `2026-09-22` → `Thứ Ba 22/9` */
+/** `2026-09-22` → `T3 22/9` */
 export function dayHeading(day: string): string {
   const { y, m, d } = parts(day);
   const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();

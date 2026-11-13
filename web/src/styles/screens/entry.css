@@ -1,0 +1,120 @@
+@layer components {
+.pocket .tier .amt.bad,
+  .pocket .tier .nm.bad {
+    color: var(--neg);
+  }
+
+.tier .amt {
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    font-weight: 500;
+    text-align: right;
+  }
+
+.tier.accounts-total .nm,
+  .tier.accounts-total .amt {
+    font-weight: 600;
+  }
+
+/* Danh sách hàng tầng trên điện thoại (Nhìn lại, báo cáo, tài sản): nhóm là dải nền như header bảng. */
+
+.blist .tier .amt {
+    font-size: var(--text-md); line-height: var(--leading-md);
+  }
+
+.amt-in {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    max-width: 64%;
+    min-width: 0;
+  }
+
+.amt-in > .ctl {
+    max-width: 100%;
+  }
+
+.amt-eq {
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    color: var(--fg-2);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+/* Ô mã/số tài khoản dùng .num cho dễ dò từng ký tự, nhưng chữ gợi ý vẫn là chữ thường. */
+
+.catgrid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--s2);
+    padding: 0 var(--s3) var(--s3);
+  }
+
+/* Ô danh mục: không khung (K-009) — vòng icon 40px nền --surface-2 (DESIGN §4.7) + tên. Chọn thì vòng nền --fg, tên --fg 600. */
+.cat {
+    border: 0;
+    background: none;
+    border-radius: var(--r-inner);
+    padding: var(--s2) var(--s1);
+    min-height: 64px;
+    text-align: center;
+    display: grid;
+    gap: var(--s1);
+    justify-items: center;
+    align-content: start;
+  }
+
+.cat:active {
+    background: var(--surface-2);
+  }
+
+.cat .t {
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    color: var(--fg-2);
+  }
+
+.cat svg {
+    box-sizing: content-box;
+    padding: 9px;
+    border-radius: var(--r-pill);
+    background: var(--surface-2);
+    color: var(--fg-2);
+  }
+
+.cat[aria-pressed="true"] svg {
+    background: var(--fg);
+    color: var(--bg);
+  }
+
+.cat[aria-pressed="true"] .t {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+.quick {
+    display: flex;
+    gap: var(--s2);
+    padding: var(--s1) var(--s3) var(--s2);
+  }
+
+.quick button {
+    flex: 1;
+    min-height: 44px;
+    padding: 0 var(--s1);
+    border-radius: var(--r-pill);
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+  }
+
+.bill-row .ctl,
+  .bill-row .amt-in {
+    max-width: none;
+    width: 100%;
+    min-width: 0;
+  }
+
+@media (min-width: 520px) {
+    .catgrid {
+      grid-template-columns: repeat(6, 1fr);
+    }
+  }
+}

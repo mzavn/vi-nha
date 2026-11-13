@@ -62,25 +62,25 @@ export function nextDueDate(dueDay: number | null, today: string): string {
 export interface GroupForm {
   name: string;
   essential: boolean;
-  /** Hạn mức mỗi kỳ lương; 0 (ô trống) = không đặt. */
-  cycle_limit: number;
+  /** Hạn mức mỗi tháng; 0 (ô trống) = không đặt. */
+  monthly_limit: number;
   active: boolean;
 }
 
-export const groupToForm = (g: CategoryGroup | null): GroupForm => ({ name: g?.name ?? "", essential: g?.essential ?? false, cycle_limit: g?.cycle_limit ?? 0, active: g?.active ?? true });
+export const groupToForm = (g: CategoryGroup | null): GroupForm => ({ name: g?.name ?? "", essential: g?.essential ?? false, monthly_limit: g?.monthly_limit ?? 0, active: g?.active ?? true });
 
 /** Thân POST / PATCH nhóm danh mục; hạn mức để trống → null (không đặt). */
-export function groupPayload(f: GroupForm, existing: CategoryGroup | null): Result<{ name: string; essential: boolean; cycle_limit: number | null; active?: boolean }> {
+export function groupPayload(f: GroupForm, existing: CategoryGroup | null): Result<{ name: string; essential: boolean; monthly_limit: number | null; active?: boolean }> {
   const errors: Errors = {};
   const name = f.name.trim();
   if (!name) errors.name = "Nhập tên nhóm.";
   else if (name.length > 60) errors.name = "Tên tối đa 60 ký tự.";
-  return done(errors, () => ({ name, essential: f.essential, cycle_limit: f.cycle_limit > 0 ? f.cycle_limit : null, ...(existing ? { active: f.active } : {}) }));
+  return done(errors, () => ({ name, essential: f.essential, monthly_limit: f.monthly_limit > 0 ? f.monthly_limit : null, ...(existing ? { active: f.active } : {}) }));
 }
 
-/** "Thiết yếu · 7.000.000 mỗi kỳ lương · 3 danh mục" · "Mong muốn · không đặt hạn mức · chưa có danh mục" (pocket UC-1204 bước 1). */
+/** "Thiết yếu · 7.000.000 mỗi tháng · 3 danh mục" · "Mong muốn · không đặt hạn mức · chưa có danh mục" (pocket UC-1204 bước 1). */
 export function groupSummary(g: CategoryGroup, categories: number): string {
-  return [g.essential ? "Thiết yếu" : "Mong muốn", g.cycle_limit !== null ? `${moneyDigits(g.cycle_limit)} mỗi kỳ lương` : "không đặt hạn mức", categories ? `${categories} danh mục` : "chưa có danh mục"]
+  return [g.essential ? "Thiết yếu" : "Mong muốn", g.monthly_limit !== null ? `${moneyDigits(g.monthly_limit)} mỗi tháng` : "không đặt hạn mức", categories ? `${categories} danh mục` : "chưa có danh mục"]
     .filter(Boolean)
     .join(" · ");
 }

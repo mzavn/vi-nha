@@ -38,11 +38,11 @@ async function doGoals() {
   db.exec(`UPDATE reserve_goals SET account_id = '${E_ACCOUNTS.deposit}' WHERE id = 'hoc-phi'`);
   expect((await step("goals")).status).toBe(200);
 }
-async function throughPayCycle() {
+async function throughSalary() {
   await doPockets();
   await doGoals();
   expect((await step("savings_gap")).status).toBe(200);
-  expect((await step("pay_cycle")).status).toBe(200);
+  expect((await step("salary")).status).toBe(200);
 }
 
 beforeEach(() => {
@@ -122,7 +122,7 @@ describe("chuyển sang ba ngăn (UC-1208)", () => {
     await doGoals();
     const before = (await call("GET", "/v1/conversion")).json.data;
     expect(before.savingsGap).toEqual({ legacyCash: 7_000_000, legacyAssets: 2_000_000, realSavings: 6_000_000, diff: -1_000_000, hasSavingsAccount: true });
-    expect((await step("savings_gap")).json.data).toMatchObject({ steps: ["pockets", "goals", "savings_gap"], next: "pay_cycle" });
+    expect((await step("savings_gap")).json.data).toMatchObject({ steps: ["pockets", "goals", "savings_gap"], next: "salary" });
 
     const single = openLegacyDb((d) =>
       d.exec(`
@@ -145,33 +145,47 @@ describe("chuyển sang ba ngăn (UC-1208)", () => {
     expect([snap.savings.total, snap.reserve.total, snap.operating.total]).toEqual([0, 0, 12_000_000]);
   });
 
-  it("UC-1208 AC-5: tắt Lương, POST pay_cycle không thân → 409 step_incomplete; { no_salary: true } → 200, nhật ký có no_salary, paySetup.hasCycleStream false; nhánh khác: bật hai nguồn → 200", async () => {
+  it("UC-1208 AC-5: tắt Nguồn lương, POST salary không thân → 409 step_incomplete; { no_salary: true } → 200, nhật ký có no_salary; nhánh khác: bật hai nguồn → 200", async () => {
     await doPockets();
     await doGoals();
     await step("savings_gap");
-    db.exec("UPDATE income_streams SET opens_cycle = 0");
-    const none = await step("pay_cycle");
+    db.exec("UPDATE income_streams SET is_salary = 0");
+    const none = await step("salary");
     expect(none.status).toBe(409);
-    expect(none.json).toMatchObject({ error: { code: "step_incomplete" }, next: "pay_cycle" });
-    const ok = await step("pay_cycle", { no_salary: true });
+    expect(none.json).toMatchObject({ error: { code: "step_incomplete" }, next: "salary" });
+    const ok = await step("salary", { no_salary: true });
     expect(ok.status).toBe(200);
     expect(ok.json.data.next).toBe("savings_pct");
-    expect(audits(db, "conversion.step").at(-1)).toEqual({ target: "conversion:pay_cycle", detail: JSON.stringify({ step: "pay_cycle", no_salary: true }) });
-    expect((await call("GET", "/v1/snapshot")).json.data.paySetup).toEqual({ hasCycleStream: false });
+    expect(audits(db, "conversion.step").at(-1)).toEqual({ target: "conversion:salary", detail: JSON.stringify({ step: "salary", no_salary: true }) });
 
     db = householdE();
     call = client(asD1(db));
     await doPockets();
     await doGoals();
     await step("savings_gap");
-    db.exec("UPDATE income_streams SET opens_cycle = 1 WHERE id IN ('luong-chong', 'luong-vo')");
-    const two = await step("pay_cycle");
+    db.exec("UPDATE income_streams SET is_salary = 1 WHERE id IN ('luong-chong', 'luong-vo')");
+    const two = await step("salary");
     expect(two.status).toBe(200);
-    expect(audits(db, "conversion.step").at(-1)).toEqual({ target: "conversion:pay_cycle", detail: JSON.stringify({ step: "pay_cycle" }) });
+    expect(audits(db, "conversion.step").at(-1)).toEqual({ target: "conversion:salary", detail: JSON.stringify({ step: "salary" }) });
+  });
+
+  it("UC-1208 AC-15: bước 4 có khoá salary — snapshot conversion next salary; POST pay_cycle → 404; nguồn is_salary đang dùng → POST salary 200, claim step 'salary'; nguồn lương đã tắt không tính", async () => {
+    await doPockets();
+    await doGoals();
+    await step("savings_gap");
+    expect((await call("GET", "/v1/snapshot")).json.data.conversion).toEqual({ done: 3, total: 5, next: "salary" });
+    expect((await step("pay_cycle")).status).toBe(404);
+    db.exec("UPDATE income_streams SET is_salary = 1, active = 0 WHERE id = 'luong-chong'; UPDATE income_streams SET is_salary = 0 WHERE id <> 'luong-chong'");
+    expect((await step("salary")).json).toMatchObject({ error: { code: "step_incomplete" }, next: "salary" });
+    db.exec("UPDATE income_streams SET active = 1 WHERE id = 'luong-chong'");
+    const ok = await step("salary");
+    expect([ok.status, ok.json.data.steps]).toEqual([200, ["pockets", "goals", "savings_gap", "salary"]]);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM conversion_claims WHERE step = 'salary'").get()).toEqual({ n: 1 });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM conversion_claims WHERE step = 'pay_cycle'").get()).toEqual({ n: 0 });
   });
 
   it("UC-1208 AC-6: savings_pct 0 → 400 chưa kết thúc; 15 → savings_pct '15', done, conversion_done_at, nhật ký conversion.done; snapshot conversion null; GET state done còn savingsGap; POST bất kỳ → 409 conversion_not_pending", async () => {
-    await throughPayCycle();
+    await throughSalary();
     const zero = await step("savings_pct", { savings_pct: 0 });
     expect([zero.status, zero.json.error?.code, zero.json.error?.field]).toEqual([400, "invalid_input", "savings_pct"]);
     expect(config(db, "conversion_state")).toBe("pending");
@@ -179,7 +193,7 @@ describe("chuyển sang ba ngăn (UC-1208)", () => {
 
     const done = await step("savings_pct", { savings_pct: 15 });
     expect(done.status).toBe(200);
-    expect(done.json.data).toMatchObject({ state: "done", steps: ["pockets", "goals", "savings_gap", "pay_cycle", "savings_pct"], next: null });
+    expect(done.json.data).toMatchObject({ state: "done", steps: ["pockets", "goals", "savings_gap", "salary", "savings_pct"], next: null });
     expect([config(db, "savings_pct"), config(db, "conversion_state"), config(db, "conversion_done_at")]).toEqual(["15", "done", "2026-12-01T02:00:00.000Z"]);
     expect(audits(db, "conversion.done")).toHaveLength(1);
     expect((await call("GET", "/v1/snapshot")).json.data.conversion).toBeNull();
@@ -202,7 +216,7 @@ describe("chuyển sang ba ngăn (UC-1208)", () => {
     expect(audits(db, "conversion.step").filter((a) => a.target === "conversion:goals")).toHaveLength(1);
 
     expect((await step("savings_gap")).status).toBe(200);
-    expect((await step("pay_cycle")).status).toBe(200);
+    expect((await step("salary")).status).toBe(200);
     const [a, b] = await Promise.all([step("savings_pct", { savings_pct: 15 }), step("savings_pct", { savings_pct: 20 })]);
     expect([a!.status, b!.status].sort()).toEqual([200, 409]);
     const loser = a!.status === 409 ? a! : b!;
@@ -214,7 +228,7 @@ describe("chuyển sang ba ngăn (UC-1208)", () => {
   });
 
   it("UC-1208 AC-10: batch bước 5 lỗi vì trigger khác → 500 Lỗi hệ thống (không phải step_order), không claim, vẫn pending, không nhật ký; gỡ trigger rồi gửi lại → 200; lần ba → 409 conversion_not_pending", async () => {
-    await throughPayCycle();
+    await throughSalary();
     db.exec(`
       CREATE TRIGGER trg_test_done_insert BEFORE INSERT ON config WHEN NEW.k = 'conversion_done_at' BEGIN SELECT RAISE(ABORT, 'CHECK constraint failed: test'); END;
       CREATE TRIGGER trg_test_done_update BEFORE UPDATE ON config WHEN NEW.k = 'conversion_done_at' BEGIN SELECT RAISE(ABORT, 'CHECK constraint failed: test'); END;
@@ -222,7 +236,7 @@ describe("chuyển sang ba ngăn (UC-1208)", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const failed = await step("savings_pct", { savings_pct: 10 });
     error.mockRestore();
-    expect([failed.status, failed.json.error?.code, failed.json.error?.message]).toEqual([500, "internal", "Lỗi hệ thống. Thử lại sau."]);
+    expect([failed.status, failed.json.error?.code, failed.json.error?.message]).toEqual([500, "internal", "Có lỗi rồi. Thử lại sau."]);
     expect(db.prepare("SELECT COUNT(*) AS n FROM conversion_claims WHERE step = 'savings_pct'").get()).toEqual({ n: 0 });
     expect(config(db, "conversion_state")).toBe("pending");
     expect([audits(db, "conversion.done"), audits(db, "conversion.step").filter((a) => a.target === "conversion:savings_pct")]).toEqual([[], []]);

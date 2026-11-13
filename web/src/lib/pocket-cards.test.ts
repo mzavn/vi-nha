@@ -3,7 +3,7 @@ import { pocketsView } from "../../../src/domain/pockets";
 import { pocketsB, pocketsShared, pocketsV23 } from "./household-b.fixture";
 import { setAmountsHidden } from "./money";
 import { NO_SAVINGS_ACCOUNT, reserveCard, savingsCard, SHARED_GROUP_NOTE, type ReserveCardView } from "./pocket-cards";
-import type { PayCycleView } from "./types";
+import type { MonthView } from "./types";
 
 const NBSP = "\u00a0";
 const vnd = (s: string) => `${s}${NBSP}₫`;
@@ -23,14 +23,14 @@ function pocketsE(accounts: { id: string; name: string; pocket: "savings" | "res
     rewardAccountId,
     debts: [],
     savingsPct: 30,
-    history: { since: "2026-11-10", prevSince: "2026-10-10", accounts: [] },
-    operatingSpend: { cycles: [], dataStart: null },
+    history: { since: "2026-11-01", prevSince: "2026-10-01", accounts: [] },
+    operatingSpend: { months: [], dataStart: null },
     peaceTarget: 6,
   });
 }
 
 describe("thẻ Tích luỹ (ADR-122)", () => {
-  it("UC-702 AC-18: hộ mẫu B → Tích luỹ 6.500.000 ₫, mỗi tài khoản ngăn Tích luỹ, không dòng giữ riêng, kỳ này / kỳ trước có dấu, % trích", () => {
+  it("UC-702 AC-18: hộ mẫu B → Tích luỹ 6.500.000 ₫, mỗi tài khoản ngăn Tích luỹ, không dòng giữ riêng, tháng này (từ 1/11) / tháng trước có dấu, % trích; không chữ kỳ", () => {
     expect(savingsCard(pocketsB())).toEqual({
       total: vnd("6.500.000"),
       empty: false,
@@ -38,52 +38,54 @@ describe("thẻ Tích luỹ (ADR-122)", () => {
         { label: "tài khoản tích luỹ", value: vnd("6.000.000") },
         { label: "heo đất", value: vnd("500.000") },
       ],
-      change: `Kỳ này (từ 10/11): ${vnd("+800.000")}`,
-      prev: `Kỳ trước: ${vnd("+700.000")}`,
-      pct: "Trích 10% mỗi kỳ lương",
+      change: `Tháng này (từ 1/11): ${vnd("+800.000")}`,
+      prev: `Tháng trước: ${vnd("+700.000")}`,
+      pct: "Trích 10% mỗi khoản lương",
       done: null,
       doneWarn: false,
     });
-    expect(JSON.stringify(savingsCard(pocketsB()))).not.toMatch(/giữ riêng|để riêng/i);
+    expect(JSON.stringify(savingsCard(pocketsB()))).not.toMatch(/giữ riêng|để riêng|kỳ/i);
   });
 
-  it("UC-702 AC-18: kỳ này giảm 150.000 → −150.000 ₫, 0 → 0 ₫; không tài khoản Tích luỹ → rỗng, câu 'Chưa có tài khoản Tích luỹ — mở một tài khoản thật rồi xếp vào ngăn Tích luỹ ›'", () => {
+  it("UC-702 AC-18: tháng này giảm 150.000 → −150.000 ₫, 0 → 0 ₫; không tài khoản Tích luỹ → rỗng, câu 'Chưa có tài khoản Tích luỹ — mở một tài khoản thật rồi xếp vào ngăn Tích luỹ ›'", () => {
     const p = pocketsB();
     expect(savingsCard({ ...p, savings: { ...p.savings, change: { ...p.savings.change, amount: -150_000, prevAmount: 0 } } })).toMatchObject({
-      change: `Kỳ này (từ 10/11): ${vnd("−150.000")}`,
-      prev: `Kỳ trước: ${vnd("0")}`,
+      change: `Tháng này (từ 1/11): ${vnd("−150.000")}`,
+      prev: `Tháng trước: ${vnd("0")}`,
     });
     expect(savingsCard({ ...p, savings: { ...p.savings, total: 0, accounts: [] } })).toMatchObject({ empty: true, lines: [] });
-    expect(NO_SAVINGS_ACCOUNT).toBe("Chưa có tài khoản Tích luỹ — mở một tài khoản thật rồi xếp vào ngăn Tích luỹ ›");
+    expect(NO_SAVINGS_ACCOUNT).toBe("Chưa có tài khoản Tích luỹ. Mở tài khoản thật rồi xếp vào ngăn Tích luỹ ›");
   });
 
   it("UC-702 AC-18: che số → mọi số bị che, 10% giữ nguyên", () => {
     setAmountsHidden(true);
     const v = savingsCard(pocketsB())!;
-    expect([v.total, v.change, v.prev, v.pct]).toEqual([vnd("••••"), `Kỳ này (từ 10/11): ${vnd("+••••")}`, `Kỳ trước: ${vnd("+••••")}`, "Trích 10% mỗi kỳ lương"]);
-    expect(v.lines.every((l) => l.value === vnd("••••"))).toBe(true);
+    expect([v.total, v.change, v.prev, v.pct]).toEqual([vnd("•••••"), `Tháng này (từ 1/11): ${vnd("+•••••")}`, `Tháng trước: ${vnd("+•••••")}`, "Trích 10% mỗi khoản lương"]);
+    expect(v.lines.every((l) => l.value === vnd("•••••"))).toBe(true);
   });
 
   it("UC-707 AC-32: không có pockets → không có card Tích luỹ", () => {
     expect(savingsCard(undefined)).toBeNull();
   });
 
-  it("UC-702 AC-23: kỳ lương có ① → 'Kỳ này chưa trích (10% = 2.000.000 ₫)' rồi 'Kỳ này đã trích ✓ 2.000.000 ₫ (10%)'; mốc kỳ là ISO của kỳ → hiện theo ngày VN", () => {
+  it("UC-702 AC-40: 12/12, Tích luỹ tháng 12 đã trích 3.500.000 / 35.000.000 → 'Tháng 12 đã trích 3.500.000 ₫ · 10% lương · mức 10–30%', 'Tháng này (từ 1/12)', 'Tháng trước'; dưới 1% → vàng; không có month → không dòng", () => {
     const p = pocketsB();
-    const withIso = { ...p, savings: { ...p.savings, change: { ...p.savings.change, since: "2026-11-10T01:00:00.000Z" } } };
-    const cycle = {
-      savingsDone: { amount: 0, base: 20_000_000, pct: 0, level: null },
-      tasks: [{ kind: "savings", status: "open", amount: 2_000_000 }],
-    } as unknown as PayCycleView;
-    expect(savingsCard(withIso, cycle)).toMatchObject({ change: `Kỳ này (từ 10/11): ${vnd("+800.000")}`, done: `Kỳ này chưa trích (10% = ${vnd("2.000.000")})` });
-    expect(savingsCard(p, { ...cycle, savingsDone: { amount: 2_000_000, base: 20_000_000, pct: 10, level: "10to30" } })!.done).toBe(`Kỳ này đã trích ✓ ${vnd("2.000.000")} (10%) · đạt mức 10–30%`);
-    expect(savingsCard(p, { ...cycle, savingsDone: { amount: 100_000, base: 20_000_000, pct: 0, level: "below1" } })!.doneWarn).toBe(true);
+    const dec = { ...p, savings: { ...p.savings, change: { since: "2026-12-01", amount: 3_500_000, prevSince: "2026-11-01", prevAmount: 800_000 } } };
+    const month = { key: "2026-12", tasks: [], openCount: 0, savings: { amount: 3_500_000, base: 35_000_000, pct: 10, level: "10to30" }, goalHint: null } as MonthView;
+    expect(savingsCard(dec, month)).toMatchObject({
+      change: `Tháng này (từ 1/12): ${vnd("+3.500.000")}`,
+      prev: `Tháng trước: ${vnd("+800.000")}`,
+      done: `Tháng 12 đã trích ${vnd("3.500.000")} · 10% lương · mức 10–30%`,
+      doneWarn: false,
+    });
+    expect(savingsCard(p, { ...month, savings: { amount: 100_000, base: 20_000_000, pct: 0, level: "below1" } })!.doneWarn).toBe(true);
     expect(savingsCard(p, null)!.done).toBeNull();
+    expect(savingsCard(p)!.done).toBeNull();
   });
 });
 
 describe("thẻ Dự phòng (ADR-122, ADR-132)", () => {
-  it("UC-702 AC-19: hộ mẫu B → tổng, mục tiêu theo thứ tự server ('đã có A / B trong {tài khoản}', thanh, chip đủ, hạn, lặp), Thuế theo %, phần an tâm đủ 3,1 / 6 tháng", () => {
+  it("UC-702 AC-19: hộ mẫu B → tổng, mục tiêu theo thứ tự server ('đã có A / B trong {tài khoản}', thanh, chip đủ, hạn, lặp), Thuế theo %, phần an tâm đủ 3,1 / 6 tháng, 'chi vận hành trung bình 10.000.000 ₫/tháng (3 tháng trọn)'", () => {
     const v = reserveCard(pocketsB())!;
     expect(v.groups.map((g) => [g.head, g.note])).toEqual([[null, null], [null, null], [null, null], [null, null]]);
     expect({ ...v, groups: rowsOf(v) }).toEqual({
@@ -99,30 +101,30 @@ describe("thẻ Dự phòng (ADR-122, ADR-132)", () => {
         title: `Phần an tâm ${vnd("31.500.000")}`,
         months: "đủ 3,1 / 6 tháng vận hành",
         pct: 51,
-        note: `chi vận hành trung bình ${vnd("10.000.000")}/kỳ (3 kỳ gần nhất)`,
+        note: `chi vận hành trung bình ${vnd("10.000.000")}/tháng (3 tháng trọn)`,
         bad: false,
       },
       reward: null,
     });
   });
 
-  it("UC-702 AC-19: 2 kỳ đủ dữ liệu → 3,0 / 6, thanh 50; phần an tâm âm → đỏ; 0 → mọi tiền đã có hẹn; covered null → chưa đủ một kỳ; mục tiêu chưa có tài khoản → 'chưa có tài khoản' + Mở tài khoản thật", () => {
-    const cycles = pocketsB().reserve.peaceMonths;
-    const two = pocketsB({ operatingSpend: { cycles: [{ start: "2026-09-10", amount: 10_500_000, days: 30 }, { start: "2026-10-10", amount: 10_500_000, days: 30 }], dataStart: "2026-08-15" } });
+  it("UC-702 AC-19: dữ liệu từ 15/8 → tháng 8 bị bỏ, 2 tháng trọn → 3,0 / 6, thanh 50; phần an tâm âm → đỏ; 0 → mọi tiền đã có hẹn; covered null → chưa đủ một tháng trọn; mục tiêu chưa có tài khoản → 'chưa có tài khoản' + Mở tài khoản thật", () => {
+    const months = pocketsB().reserve.peaceMonths;
+    const two = pocketsB({ operatingSpend: { months: [{ start: "2026-08-01", amount: 9_000_000, days: 30 }, { start: "2026-09-01", amount: 10_500_000, days: 30 }, { start: "2026-10-01", amount: 10_500_000, days: 30 }], dataStart: "2026-08-15" } });
     expect(reserveCard(two)!.peace).toEqual({
       title: `Phần an tâm ${vnd("31.500.000")}`,
       months: "đủ 3,0 / 6 tháng vận hành",
       pct: 50,
-      note: `chi vận hành trung bình ${vnd("10.500.000")}/kỳ (2 kỳ gần nhất)`,
+      note: `chi vận hành trung bình ${vnd("10.500.000")}/tháng (2 tháng trọn)`,
       bad: false,
     });
     const p = pocketsB();
     expect(reserveCard({ ...p, reserve: { ...p.reserve, peace: -1_000_000 } })!.peace).toMatchObject({ title: `Phần an tâm âm ${vnd("1.000.000")}`, months: null, pct: null, bad: true });
-    expect(reserveCard({ ...p, reserve: { ...p.reserve, peace: 0 } })!.peace).toMatchObject({ title: `Phần an tâm ${vnd("0")} — mọi tiền Dự phòng đã có hẹn`, months: null, pct: null, bad: false });
-    expect(reserveCard({ ...p, reserve: { ...p.reserve, peaceMonths: { ...cycles, covered: null, monthly: null, cycles: 0 } } })!.peace).toMatchObject({
+    expect(reserveCard({ ...p, reserve: { ...p.reserve, peace: 0 } })!.peace).toMatchObject({ title: `Phần an tâm ${vnd("0")}, tiền Dự phòng đều đã có hẹn`, months: null, pct: null, bad: false });
+    expect(reserveCard({ ...p, reserve: { ...p.reserve, peaceMonths: { ...months, covered: null, monthly: null, months: 0 } } })!.peace).toMatchObject({
       months: null,
       pct: null,
-      note: "Chưa đủ một kỳ lương trọn để đo số tháng",
+      note: "Chưa đủ một tháng trọn để đo số tháng",
     });
     const noAccount = { ...p, reserve: { ...p.reserve, goals: p.reserve.goals.map((g) => (g.id === "car" ? { ...g, accountId: null, held: null, need: null, short: null } : g)), groups: p.reserve.groups.filter((g) => g.accountId !== "car-acc") } };
     expect(rowsOf(reserveCard(noAccount)!)[2]).toEqual({ id: "car", name: "Bảo dưỡng xe", amount: "chưa có tài khoản", pct: null, full: false, over: false, spent: null, sub: "hạn 31/03/2027", needsAccount: true });
@@ -134,9 +136,9 @@ describe("thẻ Dự phòng (ADR-122, ADR-132)", () => {
   it("UC-702 AC-19: che số → mọi số tiền bị che; %, số tháng và hạn giữ nguyên", () => {
     setAmountsHidden(true);
     const v = reserveCard(pocketsB())!;
-    expect(v.total).toBe(vnd("••••"));
-    expect(rowsOf(v)[1]).toMatchObject({ amount: `đã có ${vnd("••••")} / ${vnd("••••")} trong tài khoản học phí`, pct: 66, sub: `hạn 15/01/2027 · ${vnd("••••")}/tháng, 3 tháng một lần` });
-    expect(v.peace).toMatchObject({ title: `Phần an tâm ${vnd("••••")}`, months: "đủ 3,1 / 6 tháng vận hành", pct: 51, note: `chi vận hành trung bình ${vnd("••••")}/kỳ (3 kỳ gần nhất)` });
+    expect(v.total).toBe(vnd("•••••"));
+    expect(rowsOf(v)[1]).toMatchObject({ amount: `đã có ${vnd("•••••")} / ${vnd("•••••")} trong tài khoản học phí`, pct: 66, sub: `hạn 15/01/2027 · ${vnd("•••••")}/tháng, 3 tháng một lần` });
+    expect(v.peace).toMatchObject({ title: `Phần an tâm ${vnd("•••••")}`, months: "đủ 3,1 / 6 tháng vận hành", pct: 51, note: `chi vận hành trung bình ${vnd("•••••")}/tháng (3 tháng trọn)` });
   });
 
   it("UC-702 AC-28: hộ mẫu E sau chuyển đổi → 'Học phí · đã có 10.000.000 ₫ / 2.000.000 ₫ trong tài khoản tiết kiệm', 'Hoá đơn · đã có 0 ₫ / 1.300.000 ₫ trong tài khoản hoá đơn', 'Phần an tâm 5.000.000 ₫' (không gồm Ví Thưởng), 'Ví Thưởng 4.000.000 ₫'; nhà một tài khoản → thẻ Tích luỹ rỗng, không 'giữ riêng' / 'để riêng'; che số", () => {
@@ -167,16 +169,16 @@ describe("thẻ Dự phòng (ADR-122, ADR-132)", () => {
     setAmountsHidden(true);
     const hidden = reserveCard(p)!;
     expect(JSON.stringify([hidden, savingsCard(p)])).not.toMatch(/\d\.\d{3}/);
-    expect(hidden.reward).toBe(`Ví Thưởng ${vnd("••••")}`);
+    expect(hidden.reward).toBe(`Ví Thưởng ${vnd("•••••")}`);
   });
 
-  it("UC-702 AC-29: nhóm tài khoản chung — dòng nhóm '{tài khoản} · {số dư} cho {n} mục tiêu' + chip thiếu, từng mục tiêu 'đã có A / B' (không 'trong …'), câu chân nhóm; Thuế một mình giữ dòng cũ; che số giữ %, số mục tiêu", () => {
+  it("UC-702 AC-29: nhóm tài khoản chung — dòng nhóm nhãn – số (tên tài khoản trái, số dư phải, dòng phụ '{n} mục tiêu · thiếu X' vàng), từng mục tiêu 'đã có A / B' (không 'trong …'), câu chân nhóm; Thuế một mình giữ dòng cũ; che số giữ %, số mục tiêu", () => {
     const v = reserveCard(pocketsShared())!;
     expect(v.total).toBe(vnd("27.500.000"));
     const view = v.groups.map((g) => ({ head: g.head, note: g.note, rows: g.goals.map((r) => [r.name, r.amount, r.pct, r.full]) }));
     expect(view).toEqual([
       {
-        head: { title: `VCB chung · ${vnd("9.000.000")} cho 3 mục tiêu`, chip: `thiếu ${vnd("800.000")}`, tone: "warn" },
+        head: { name: "VCB chung", balance: vnd("9.000.000"), meta: `3 mục tiêu · thiếu ${vnd("800.000")}`, tone: "warn" },
         note: SHARED_GROUP_NOTE,
         rows: [
           ["Hoá đơn", `đã có ${vnd("2.000.000")} / ${vnd("2.000.000")}`, 100, true],
@@ -185,7 +187,7 @@ describe("thẻ Dự phòng (ADR-122, ADR-132)", () => {
         ],
       },
       {
-        head: { title: `MB tiết kiệm · ${vnd("12.000.000")} cho 2 mục tiêu`, chip: `thiếu ${vnd("1.500.000")}`, tone: "warn" },
+        head: { name: "MB tiết kiệm", balance: vnd("12.000.000"), meta: `2 mục tiêu · thiếu ${vnd("1.500.000")}`, tone: "warn" },
         note: SHARED_GROUP_NOTE,
         rows: [
           ["Nhà ở", `đã có ${vnd("7.500.000")} / ${vnd("7.500.000")}`, 100, true],
@@ -194,36 +196,36 @@ describe("thẻ Dự phòng (ADR-122, ADR-132)", () => {
       },
       { head: null, note: null, rows: [["Thuế · 10% thu chịu thuế", `đã có ${vnd("1.500.000")} trong TK thuế`, null, false]] },
     ]);
-    expect(SHARED_GROUP_NOTE).toBe("Chia theo thứ tự ưu tiên — khoản chi không chọn mục tiêu làm mục tiêu cuối thiếu trước.");
+    expect(SHARED_GROUP_NOTE).toBe("Chia theo thứ tự ưu tiên: chi không chọn mục tiêu làm mục tiêu cuối thiếu trước.");
     expect(v.peace.title).toBe(`Phần an tâm ${vnd("5.000.000")}`);
-    expect(reserveCard(pocketsShared({ saving: 15_000_000 }))!.groups[1]!.head).toEqual({ title: `MB tiết kiệm · ${vnd("15.000.000")} cho 2 mục tiêu`, chip: `dư ${vnd("1.500.000")}`, tone: "ok" });
-    expect(reserveCard(pocketsShared({ saving: 13_500_000 }))!.groups[1]!.head!.chip).toBe("đủ");
+    expect(reserveCard(pocketsShared({ saving: 15_000_000 }))!.groups[1]!.head).toEqual({ name: "MB tiết kiệm", balance: vnd("15.000.000"), meta: `2 mục tiêu · dư ${vnd("1.500.000")}`, tone: "ok" });
+    expect(reserveCard(pocketsShared({ saving: 13_500_000 }))!.groups[1]!.head!.meta).toBe("2 mục tiêu · đủ");
     setAmountsHidden(true);
     const hidden = reserveCard(pocketsShared())!;
-    expect(hidden.groups[0]!.head).toEqual({ title: `VCB chung · ${vnd("••••")} cho 3 mục tiêu`, chip: `thiếu ${vnd("••••")}`, tone: "warn" });
-    expect(hidden.groups[0]!.goals[2]).toMatchObject({ amount: `đã có ${vnd("••••")} / ${vnd("••••")}`, pct: 73 });
+    expect(hidden.groups[0]!.head).toEqual({ name: "VCB chung", balance: vnd("•••••"), meta: `3 mục tiêu · thiếu ${vnd("•••••")}`, tone: "warn" });
+    expect(hidden.groups[0]!.goals[2]).toMatchObject({ amount: `đã có ${vnd("•••••")} / ${vnd("•••••")}`, pct: 73 });
     expect(JSON.stringify(hidden)).not.toMatch(/\d\.\d{3}/);
   });
 
-  it("UC-702 AC-31: đã chi trong kỳ — 'đã chi X kỳ này', thanh và chip đủ theo đã có + đã chi; đã có âm → 'chi vượt phần X' đỏ; che số", () => {
+  it("UC-702 AC-31: đã chi trong tháng — 'đã chi X tháng này', thanh và chip đủ theo đã có + đã chi; đã có âm → 'chi vượt phần X' đỏ; che số", () => {
     const paid = reserveCard(pocketsShared({ saving: 4_500_000, spent: { "nha-o": 7_500_000 } }))!;
     const group = paid.groups[1]!;
-    expect(group.head).toEqual({ title: `MB tiết kiệm · ${vnd("4.500.000")} cho 2 mục tiêu`, chip: `thiếu ${vnd("1.500.000")}`, tone: "warn" });
-    expect(group.goals[0]).toMatchObject({ name: "Nhà ở", amount: `đã có ${vnd("0")} / ${vnd("7.500.000")}`, spent: `đã chi ${vnd("7.500.000")} kỳ này`, pct: 100, full: true, over: false });
+    expect(group.head).toEqual({ name: "MB tiết kiệm", balance: vnd("4.500.000"), meta: `2 mục tiêu · thiếu ${vnd("1.500.000")}`, tone: "warn" });
+    expect(group.goals[0]).toMatchObject({ name: "Nhà ở", amount: `đã có ${vnd("0")} / ${vnd("7.500.000")}`, spent: `đã chi ${vnd("7.500.000")} tháng này`, pct: 100, full: true, over: false });
     expect(group.goals[1]).toMatchObject({ name: "Học tập", amount: `đã có ${vnd("4.500.000")} / ${vnd("6.000.000")}`, spent: null, pct: 75, full: false });
     const over = reserveCard(pocketsShared({ saving: 0, spent: { "hoc-tap": 6_000_000 } }))!.groups[1]!.goals[1]!;
-    expect(over).toMatchObject({ name: "Học tập", amount: `chi vượt phần ${vnd("6.000.000")}`, spent: `đã chi ${vnd("6.000.000")} kỳ này`, over: true, full: false });
+    expect(over).toMatchObject({ name: "Học tập", amount: `chi vượt phần ${vnd("6.000.000")}`, spent: `đã chi ${vnd("6.000.000")} tháng này`, over: true, full: false });
     setAmountsHidden(true);
     const hidden = reserveCard(pocketsShared({ saving: 0, spent: { "hoc-tap": 6_000_000 } }))!;
-    expect(hidden.groups[1]!.goals[1]).toMatchObject({ amount: `chi vượt phần ${vnd("••••")}`, spent: `đã chi ${vnd("••••")} kỳ này` });
+    expect(hidden.groups[1]!.goals[1]).toMatchObject({ amount: `chi vượt phần ${vnd("•••••")}`, spent: `đã chi ${vnd("•••••")} tháng này` });
     expect(JSON.stringify(hidden)).not.toMatch(/\d\.\d{3}/);
   });
 
-  it("UC-702 AC-34: MB tiết kiệm có khoản gửi → nhóm 'MB tiết kiệm · 105.000.000 ₫ (gồm 100.000.000 ₫ gửi kỳ hạn) cho 3 mục tiêu', ba mục tiêu như AC-16; sau đáo hạn 'Tiền lãi 3.000.000 ₫ (không tính vào mục tiêu)', Tập luyện vẫn 15.000.000; không mục tiêu trả từ tiền chi tiêu; che số", () => {
+  it("UC-702 AC-34: MB tiết kiệm có khoản gửi → nhóm 'MB tiết kiệm' số dư gộp 105.000.000 ₫ (gồm khoản gửi kỳ hạn), dòng phụ '3 mục tiêu · …', ba mục tiêu như AC-16; sau đáo hạn 'Tiền lãi 3.000.000 ₫ (không tính vào mục tiêu)', Tập luyện vẫn 15.000.000; không mục tiêu trả từ tiền chi tiêu; che số", () => {
     const rows = (v: ReserveCardView) => rowsOf(v).map((r) => `${r.name} · ${r.amount}`);
     const before = reserveCard(pocketsV23())!;
     const group = before.groups.find((g) => g.key === "tk-tiet-kiem")!;
-    expect(group.head!.title).toBe(`MB tiết kiệm · ${vnd("105.000.000")} (gồm ${vnd("100.000.000")} gửi kỳ hạn) cho 3 mục tiêu`);
+    expect(group.head).toEqual({ name: "MB tiết kiệm", balance: vnd("105.000.000"), meta: `3 mục tiêu · dư ${vnd("5.000.000")}`, tone: "ok" });
     expect(group.interest).toBeNull();
     expect(rows(before)).toEqual([
       `Nhà ở · đã có ${vnd("60.000.000")} / ${vnd("60.000.000")}`,
@@ -232,16 +234,16 @@ describe("thẻ Dự phòng (ADR-122, ADR-132)", () => {
     ]);
     const after = reserveCard(pocketsV23({ matured: true }))!;
     const matured = after.groups.find((g) => g.key === "tk-tiet-kiem")!;
-    expect(matured.head!.title).toBe(`MB tiết kiệm · ${vnd("108.000.000")} cho 3 mục tiêu`);
+    expect(matured.head).toEqual({ name: "MB tiết kiệm", balance: vnd("108.000.000"), meta: `3 mục tiêu · dư ${vnd("5.000.000")}`, tone: "ok" });
     expect(matured.interest).toBe(`Tiền lãi ${vnd("3.000.000")} (không tính vào mục tiêu)`);
     expect(rows(after)[2]).toBe(`Tập luyện · đã có ${vnd("15.000.000")} / ${vnd("10.000.000")}`);
     expect(JSON.stringify([before, after])).not.toMatch(/Điện nước|Thuốc|Thiện phước|Về quê/);
     // Một mục tiêu ở tài khoản có khoản gửi vẫn có dòng nhóm (số dư gộp).
     const one = reserveCard({ ...pocketsV23(), reserve: { ...pocketsV23().reserve, goals: pocketsV23().reserve.goals.slice(0, 1), groups: pocketsV23().reserve.groups.map((g) => ({ ...g, goalIds: ["nha-o"] })) } })!;
-    expect(one.groups[0]!.head!.title).toBe(`MB tiết kiệm · ${vnd("105.000.000")} (gồm ${vnd("100.000.000")} gửi kỳ hạn)`);
+    expect(one.groups[0]!.head).toEqual({ name: "MB tiết kiệm", balance: vnd("105.000.000"), meta: `dư ${vnd("5.000.000")}`, tone: "ok" });
     setAmountsHidden(true);
     const hidden = reserveCard(pocketsV23({ matured: true }))!;
-    expect(hidden.groups.find((g) => g.key === "tk-tiet-kiem")!.interest).toBe(`Tiền lãi ${vnd("••••")} (không tính vào mục tiêu)`);
+    expect(hidden.groups.find((g) => g.key === "tk-tiet-kiem")!.interest).toBe(`Tiền lãi ${vnd("•••••")} (không tính vào mục tiêu)`);
     expect(JSON.stringify(reserveCard(pocketsV23()))).not.toMatch(/\d\.\d{3}/);
   });
 });

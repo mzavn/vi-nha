@@ -1,12 +1,12 @@
-// Khung app: 4 tab cố định (không router), FAB "+" ở mọi màn trừ Nhập, Cài đặt, Sổ giao dịch, Tài sản & tự do và màn chuyển đổi, toast đáy màn.
-// Cài đặt (#settings), Sổ giao dịch (#ledger), Tài sản & tự do (#net-worth) và "Chuyển sang ba ngăn" (#convert, pwa UC-711 AC-28) là màn
-// phụ mở từ màn khác, không chiếm tab thứ năm. Màn chuyển đổi tự mở một lần trên mỗi máy khi snapshot còn `conversion` (pocket UC-1208).
-// Hướng dẫn không phải màn trong app: mục thanh bên và nút ở Cài đặt › Máy này mở GitBook ở tab mới (UC-711 AC-26).
-// Máy tính (≥1024px): thanh bên thay thanh dưới và FAB, phím N mở màn Nhập, Hôm nay thành bảng điều khiển.
+// Khung app: 4 tab cố định (không router), FAB "+" ở Hôm nay, Gán, Tài khoản (pwa UC-711 AC-3, AC-30…AC-34).
+// Cài đặt (#settings), Sổ giao dịch (#ledger), Báo cáo (#net-worth) và "Chuyển sang ba ngăn" (#convert) là màn phụ.
+// Hướng dẫn mở GitBook ở tab mới. Máy tính (≥1024px): thanh bên thay thanh dưới và FAB, phím N mở Ghi khoản.
 
 import { useEffect, useRef } from "preact/hooks";
 import { markInvited, shouldInvite } from "./lib/convert";
+import { bottomNav, ENTRY_LABEL, hasFab, showsBottomNav } from "./lib/nav";
 import { deviceStorage } from "./lib/pin";
+import { toastDuration } from "./lib/toast";
 import { Assign } from "./screens/assign";
 import { Convert } from "./screens/convert";
 import { Entry } from "./screens/entry";
@@ -20,19 +20,10 @@ import { Today } from "./screens/today";
 import { TodayDesk } from "./screens/today-desktop";
 import { TxSheet } from "./screens/tx-sheet";
 import { Wallets } from "./screens/wallets";
-import { getState, go, setState, useApp, type Tab } from "./state/store";
+import { getState, go, setState, useApp } from "./state/store";
 import { applyUpdate } from "./state/sw-update";
 import { Icon } from "./ui/icons";
 import { Sidebar, useQuickEntryKey, useWide } from "./ui/shell";
-
-const NAV: { tab: Tab; label: string; icon: string }[] = [
-  { tab: "today", label: "Hôm nay", icon: "home" },
-  { tab: "entry", label: "Nhập", icon: "plus-circle" },
-  { tab: "assign", label: "Gán", icon: "inbox" },
-  { tab: "wallets", label: "Ví & quỹ", icon: "wallet" },
-];
-/** Màn không có FAB "+" trên điện thoại (Cài đặt riêng: thêm `app-wide`). Màn chuyển đổi ẩn cả thanh dưới. */
-const SUB_SCREENS: Tab[] = ["entry", "ledger", "net-worth", "convert"];
 
 export function App() {
   const app = useApp();
@@ -40,7 +31,7 @@ export function App() {
   const wide = useWide();
 
   // Đổi tab: đưa focus về tiêu đề trang cho trình đọc màn hình (không cuộn, không vẽ viền khi chạm).
-  // Màn Nhập tự đưa focus vào ô số tiền — nhãn của ô đã nói đây là màn nào.
+  // Màn Ghi khoản tự đưa focus vào ô số tiền — nhãn của ô đã nói đây là màn nào.
   useEffect(() => {
     if (first.current) {
       first.current = false;
@@ -86,15 +77,19 @@ export function App() {
   if (app.locked) return <Lock />;
   if (wide) return <DesktopApp />;
 
-  const badges: Partial<Record<Tab, number>> = {
-    assign: app.snap?.attention.pendingLogs ?? 0,
-    entry: app.queue.filter((q) => q.memberId === app.member?.id).length,
-  };
+  const unposted = app.queue.filter((q) => q.memberId === app.member?.id).length;
+  const pendingLogs = app.snap?.attention.pendingLogs ?? 0;
+
+  const mainCls = [
+    "app",
+    app.tab === "settings" ? "app-wide" : "",
+    hasFab(app.tab) ? "has-fab" : "",
+  ].filter(Boolean).join(" ");
 
   return (
     <>
       <UpdateBar />
-      <main class={app.tab === "settings" ? "app app-wide" : SUB_SCREENS.includes(app.tab) ? "app" : "app has-fab"} id="main">
+      <main class={mainCls} id="main">
         {app.tab === "today" && <Today />}
         {app.tab === "entry" && <Entry />}
         {app.tab === "assign" && <Assign />}
@@ -105,27 +100,37 @@ export function App() {
         {app.tab === "convert" && <Convert />}
       </main>
 
-      {app.tab !== "settings" && !SUB_SCREENS.includes(app.tab) && (
-        <button type="button" class="fab" aria-label="Nhập khoản chi" onClick={() => go("entry")}>
-          <Icon name="plus" size={26} />
+      {hasFab(app.tab) && (
+        <button
+          type="button"
+          class="fab"
+          aria-label={unposted > 0 ? `${ENTRY_LABEL}, ${unposted} chưa lên sổ` : ENTRY_LABEL}
+          onClick={() => go("entry")}
+        >
+          <Icon name="plus" size={24} />
+          {unposted > 0 && (
+            <span class="badge" aria-label={`${unposted} chưa lên sổ`}>
+              {unposted}
+            </span>
+          )}
         </button>
       )}
 
-      {app.tab !== "convert" && (
+      {showsBottomNav(app.tab) && (
         <nav class="nav" aria-label="Màn chính">
           <div class="nav-inner">
-            {NAV.map((n) => (
+            {bottomNav(app.compact).map((n) => (
               <button
                 type="button"
                 key={n.tab}
                 aria-current={app.tab === n.tab ? "page" : undefined}
                 onClick={() => go(n.tab)}
               >
-                <Icon name={n.icon} size={22} />
-                {n.label}
-                {!!badges[n.tab] && (
-                  <span class="badge" aria-label={n.tab === "assign" ? `${badges[n.tab]} chưa gán` : `${badges[n.tab]} chưa lên sổ`}>
-                    {badges[n.tab]}
+                <Icon name={n.icon} size={20} />
+                <span>{n.label}</span>
+                {n.tab === "assign" && pendingLogs > 0 && (
+                  <span class="badge" aria-label={`${pendingLogs} chưa gán`}>
+                    {pendingLogs}
                   </span>
                 )}
               </button>
@@ -169,7 +174,7 @@ function UpdateBar() {
   if (!updateReady) return null;
   return (
     <div class="update-bar" role="status">
-      <span>Đã có bản mới của Ví nhà.</span>
+      <span>Ví nhà có bản mới.</span>
       <button type="button" class="btn" onClick={applyUpdate}>
         Tải bản mới
       </button>
@@ -178,21 +183,34 @@ function UpdateBar() {
 }
 
 /**
- * Viên thuốc đen ở đáy (DESIGN.md §4). Câu ngắn tắt sau 2,2s; câu dài (phản hồi ngân sách, lỗi) ở lâu hơn — ~60ms mỗi ký tự,
- * tối đa 8s — để kịp đọc. Không lấy focus; trình đọc màn hình nghe qua aria-live.
+ * Viên thuốc nền --fg, chữ --bg ở đáy màn (DESIGN.md §4.14, pwa UC-711 AC-34).
+ * Có chỗ cho nút hành động (vd Hoàn tác) cao ≥ 44px, bấm là chạy run() và tắt toast.
  */
 function Toast() {
   const { toast } = useApp();
   useEffect(() => {
     if (!toast) return;
-    const t = setTimeout(() => setState({ toast: null }), Math.min(8000, Math.max(2200, toast.text.length * 60)));
+    const dur = toastDuration(toast.text, !!toast.action);
+    const t = setTimeout(() => setState({ toast: null }), dur);
     return () => clearTimeout(t);
   }, [toast?.id]);
   return (
     <div aria-live="polite" role="status">
       {toast && (
         <div class="toast" key={toast.id}>
-          {toast.text}
+          <span>{toast.text}</span>
+          {toast.action && (
+            <button
+              type="button"
+              class="toast-act"
+              onClick={() => {
+                toast.action?.run();
+                setState({ toast: null });
+              }}
+            >
+              {toast.action.label}
+            </button>
+          )}
         </div>
       )}
     </div>

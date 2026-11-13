@@ -59,16 +59,16 @@ export function CountSheet({ accountId: initial, onClose }: { accountId?: string
         {diff === null ? <span style={{ color: "var(--fg-3)" }}>—</span> : <Money value={diff} signed class="font-semibold" />}
       </div>
       <div class="note">
-        Thật khác sổ thì app ghi một khoản điều chỉnh vào tài khoản này. Sai thì ghi lại lần đếm mới, không sửa đè.
+        Tiền thật khác sổ thì app tự ghi khoản điều chỉnh. Nếu sai thì ghi lần đếm mới, không sửa đè.
       </div>
-      <div class="pad">
+      <div class="sheet-foot">
         {error && (
           <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
             {error}
           </p>
         )}
         <button type="button" class="btn btn-primary btn-wide" disabled={!online || busy || counted === null || book === null} onClick={() => void submit()}>
-          {busy ? "Đang ghi…" : diff === 0 ? "Ghi lần đếm — khớp sổ" : "Ghi chênh lệch"}
+          {busy ? "Đang ghi…" : diff === 0 ? "Ghi lần đếm, khớp sổ" : "Ghi chênh lệch"}
         </button>
         {!online && <NeedsNetwork what="Đếm số dư" />}
       </div>

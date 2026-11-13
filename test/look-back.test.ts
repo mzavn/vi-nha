@@ -1,4 +1,4 @@
-// Nhìn lại theo kỳ lương — hàm thuần (pocket UC-1204, ledger UC-108, notify UC-402 dòng 🔎, notify UC-406 số mỗi ngày).
+// Nhìn lại theo tháng — hàm thuần (pocket UC-1204, ledger UC-108, notify UC-402 dòng Chi tiêu tháng này, notify UC-406 số mỗi ngày).
 // Số của hộ mẫu D (proposal 261112-ba-ngan-nhin-lai).
 import { describe, expect, it } from "vitest";
 import { groupSpend, limitFigures, limitNudges, weeklyRhythm, type CategoryGroupRef } from "../src/domain/look-back";
@@ -23,7 +23,7 @@ const fig = (g: { limit: number | null; spent: number; pct: number | null; left:
 
 describe("hạn mức mềm theo nhóm danh mục: không âm, không bù", () => {
   it("UC-1204 AC-3: Ăn uống 83% còn 500.000, Đi lại 56%, Mua sắm 120% vượt 200.000, Học phí không hạn mức", () => {
-    const { groups: g, ungrouped } = groupSpend(rowsD, groups, true);
+    const { groups: g, ungrouped } = groupSpend(rowsD, groups);
     expect(g.map((x) => x.name)).toEqual(["Ăn uống", "Đi lại", "Học phí", "Mua sắm"]);
     expect(fig(g[0]!)).toEqual({ limit: 3_000_000, spent: 2_500_000, pct: 83, left: 500_000, over: 0 });
     expect(fig(g[1]!)).toEqual({ limit: 800_000, spent: 450_000, pct: 56, left: 350_000, over: 0 });
@@ -37,27 +37,23 @@ describe("hạn mức mềm theo nhóm danh mục: không âm, không bù", () =
     expect(ungrouped).toMatchObject({ spent: 500_000, previousSpent: 0 });
     expect(ungrouped.categories.map((c) => c.categoryId)).toEqual(["gifts"]);
     for (const x of g) for (const v of [x.pct, x.left, x.over]) expect(v === null || v >= 0).toBe(true);
-    // Sửa hạn mức "Mua sắm" thành 1.500.000: kỳ này 80%, kỳ 10/10 (600.000) 40%.
+    // Sửa hạn mức "Mua sắm" thành 1.500.000: tháng này 80%, tháng 10 (600.000) 40%.
     expect(limitFigures(1_500_000, 1_200_000)).toEqual({ pct: 80, left: 300_000, over: 0 });
     expect(limitFigures(1_500_000, 600_000).pct).toBe(40);
   });
 
   it("UC-1204 AC-4: theo cấu hình hiện tại — Quà tặng vào Mua sắm (170%), Đi lại âm vẫn 0% còn đủ 800.000", () => {
     const moved = rowsD.map((r) => (r.categoryId === "gifts" ? { ...r, groupId: "d-shopping" } : r.categoryId === "fuel-parking" ? { ...r, spent: -1_700_000 } : r));
-    const { groups: g, ungrouped } = groupSpend(moved, groups, true);
+    const { groups: g, ungrouped } = groupSpend(moved, groups);
     expect(fig(g[3]!)).toEqual({ limit: 1_000_000, spent: 1_700_000, pct: 170, left: 0, over: 700_000 });
     expect(ungrouped.categories).toEqual([]);
     expect(fig(g[1]!)).toEqual({ limit: 800_000, spent: -1_550_000, pct: 0, left: 800_000, over: 0 });
   });
 
-  it("UC-108 bước 6: tháng lịch không so hạn mức — mọi limit / pct / left / over null", () => {
-    const { groups: g } = groupSpend(rowsD, groups, false);
-    for (const x of g) expect(fig(x)).toMatchObject({ limit: null, pct: null, left: null, over: null });
-  });
 });
 
-describe("dòng 🔎 của tin sáng", () => {
-  const { groups: g } = groupSpend(rowsD, groups, true);
+describe("dòng Chi tiêu tháng này của tin sáng", () => {
+  const { groups: g } = groupSpend(rowsD, groups);
 
   it("UC-402 AC-6: ngày 16 / 30 → Mua sắm vượt 200.000 trước, rồi Ăn uống 83%; ngày 28 / 30 → chỉ nhóm vượt", () => {
     expect(limitNudges(g, { days: 30, daysElapsed: 16 })).toEqual([
@@ -68,9 +64,9 @@ describe("dòng 🔎 của tin sáng", () => {
   });
 
   it("UC-402 AC-38: không hạn mức, mọi nhóm < 80%, hoặc 85% vào ngày 28 / 30 → không có nhóm nào", () => {
-    expect(limitNudges(groupSpend(rowsD, groups.map((x) => ({ ...x, limit: null })), true).groups, { days: 30, daysElapsed: 16 })).toEqual([]);
-    expect(limitNudges(groupSpend([row("groceries", "d-food", 2_000_000)], groups, true).groups, { days: 30, daysElapsed: 16 })).toEqual([]);
-    expect(limitNudges(groupSpend([row("groceries", "d-food", 2_550_000)], groups, true).groups, { days: 30, daysElapsed: 28 })).toEqual([]);
+    expect(limitNudges(groupSpend(rowsD, groups.map((x) => ({ ...x, limit: null }))).groups, { days: 30, daysElapsed: 16 })).toEqual([]);
+    expect(limitNudges(groupSpend([row("groceries", "d-food", 2_000_000)], groups).groups, { days: 30, daysElapsed: 16 })).toEqual([]);
+    expect(limitNudges(groupSpend([row("groceries", "d-food", 2_550_000)], groups).groups, { days: 30, daysElapsed: 28 })).toEqual([]);
   });
 
   it("UC-402 AC-6: nhiều nhóm vượt — vượt nhiều trước, cùng % thì theo thứ tự nhóm", () => {

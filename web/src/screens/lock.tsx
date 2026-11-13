@@ -83,7 +83,7 @@ export function Lock() {
       {confirmForget ? (
         <div class="lock-forget" role="alert">
           <p>
-            Đăng xuất máy này? Đăng nhập lại bằng mật khẩu rồi đặt PIN mới. Khoản chưa gửi vẫn giữ.
+            Đăng xuất máy này? Đăng nhập lại bằng mật khẩu rồi đặt PIN mới. Khoản chưa gửi không mất.
             {!online && " Đang không có mạng: đăng nhập lại cần mạng."}
           </p>
           <div class="flex items-center gap-1">

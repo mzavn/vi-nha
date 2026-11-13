@@ -2,7 +2,7 @@
 // `pocketsView` / `nearSpend` của server. Hôm nay 11/11/2026, ngày lương 10. Chỉ test dùng.
 
 import { pocketsView, type PocketGoalInput, type PocketsInput, type PocketsView } from "../../../src/domain/pockets";
-import { nearSpend, type NearSpend, type NearSpendCycle, type SnapshotData } from "../../../src/domain/snapshot";
+import { nearSpend, type NearSpend, type NearSpendContext, type SnapshotData } from "../../../src/domain/snapshot";
 
 const goal = (id: string, name: string, accountId: string | null, o: Partial<PocketGoalInput> = {}): PocketGoalInput => ({
   id, name, accountId, target: null, targetPct: null, monthly: null, repeatMonths: null, dueDate: null, debtId: null, sort: 100, spent: 0, ...o,
@@ -54,20 +54,20 @@ export function pocketsB(over: Partial<PocketsInput> = {}): PocketsView {
     ],
     savingsPct: 10,
     history: {
-      since: "2026-11-10",
-      prevSince: "2026-10-10",
+      since: "2026-11-01",
+      prevSince: "2026-10-01",
       accounts: [
         { id: "wealth", pocket: "savings", since: 5_200_000, prevSince: 4_500_000 },
         { id: "piggy", pocket: "savings", since: 500_000, prevSince: 500_000 },
         { id: "saving", pocket: "reserve", since: 31_500_000, prevSince: 31_500_000 },
       ],
     },
-    // Kỳ 30 ngày: tháng vận hành chuẩn hoá theo ngày (UC-1203 bước 11) bằng đúng trung bình theo kỳ.
+    // Ba tháng trọn gần nhất, ghi 30 ngày mỗi tháng cho gọn số: tháng vận hành chuẩn hoá theo ngày (UC-1203) bằng đúng trung bình.
     operatingSpend: {
-      cycles: [
-        { start: "2026-08-10", amount: 9_000_000, days: 30 },
-        { start: "2026-09-10", amount: 10_500_000, days: 30 },
-        { start: "2026-10-10", amount: 10_500_000, days: 30 },
+      months: [
+        { start: "2026-08-01", amount: 9_000_000, days: 30 },
+        { start: "2026-09-01", amount: 10_500_000, days: 30 },
+        { start: "2026-10-01", amount: 10_500_000, days: 30 },
       ],
       dataStart: "2026-07-01",
     },
@@ -76,8 +76,8 @@ export function pocketsB(over: Partial<PocketsInput> = {}): PocketsView {
   });
 }
 
-export function nearSpendB(pockets: PocketsView = pocketsB(), today = "2026-11-11", cycle: NearSpendCycle = { cyclePayday: null, pendingTasks: 0 }): NearSpend {
-  return nearSpend(pockets.operating, B_ACCOUNTS, today, 10, cycle);
+export function nearSpendB(pockets: PocketsView = pocketsB(), today = "2026-11-11", ctx: NearSpendContext = { salaryPayday: null, pendingTasks: 0 }): NearSpend {
+  return nearSpend(pockets.operating, B_ACCOUNTS, today, 10, ctx);
 }
 
 /** Dữ liệu giả của pocket UC-1203 AC-11 / UC-1209 AC-8: hai tài khoản chung (VCB chung, MB tiết kiệm), TK thuế riêng, phao. */
@@ -98,7 +98,7 @@ export const sharedGoals = (spent: Record<string, number> = {}): PocketGoalInput
     goal("thue", "Thuế", "tk-thue", { targetPct: 10, sort: 60 }),
   ].map((g) => ({ ...g, spent: spent[g.id] ?? 0 }));
 
-/** Ba ngăn của dữ liệu giả UC-1203 AC-11; `saving` = số dư MB tiết kiệm, `spent` = đã chi trong kỳ theo mục tiêu. */
+/** Ba ngăn của dữ liệu giả UC-1203 AC-11; `saving` = số dư MB tiết kiệm, `spent` = đã chi trong tháng theo mục tiêu. */
 export function pocketsShared({ saving = 12_000_000, spent = {} }: { saving?: number; spent?: Record<string, number> } = {}): PocketsView {
   return pocketsView({
     accounts: SHARED_ACCOUNTS.map((a) => ({ id: a.id, name: a.name, pocket: "reserve", confirmed: true, balance: a.id === "tk-tiet-kiem" ? saving : a.balance })),
@@ -106,22 +106,22 @@ export function pocketsShared({ saving = 12_000_000, spent = {} }: { saving?: nu
     rewardAccountId: null,
     debts: [],
     savingsPct: 10,
-    history: { since: "2026-11-10", prevSince: "2026-10-10", accounts: [] },
-    operatingSpend: { cycles: [], dataStart: null },
+    history: { since: "2026-11-01", prevSince: "2026-10-01", accounts: [] },
+    operatingSpend: { months: [], dataStart: null },
     peaceTarget: 6,
   });
 }
 
 // ── v2.3 (proposal 261112-tai-khoan-me-va-quy-chi-chung): tài khoản con, mục tiêu trả từ tiền chi tiêu, nhắc chuyển thêm ──
 
-/** Bốn khoản trả từ tiền chi tiêu (cộng 4.500.000), Điện nước đã trả 1.000.000 → R 3.500.000 (UC-103 AC-24); `cycle` = số kỳ này. */
-export const operatingGoalsV23 = (spent: Record<string, number> = { "dien-nuoc": 1_000_000 }, cycle: Record<string, { amount: number; note: string | null }> = {}): PocketGoalInput[] =>
+/** Bốn khoản trả từ tiền chi tiêu (cộng 4.500.000), Điện nước đã trả 1.000.000 → R 3.500.000 (UC-103 AC-24); `month` = số riêng tháng này. */
+export const operatingGoalsV23 = (spent: Record<string, number> = { "dien-nuoc": 1_000_000 }, month: Record<string, { amount: number; note: string | null }> = {}): PocketGoalInput[] =>
   [
     goal("dien-nuoc", "Điện nước", null, { target: 2_000_000, monthly: 2_000_000, repeatMonths: 1, sort: 110, paysFrom: "operating" }),
     goal("thuoc", "Thuốc", null, { target: 500_000, monthly: 500_000, repeatMonths: 1, sort: 120, paysFrom: "operating" }),
     goal("thien-phuoc", "Thiện phước", null, { target: 1_000_000, monthly: 1_000_000, repeatMonths: 1, sort: 130, paysFrom: "operating" }),
     goal("ve-que", "Về quê", null, { target: 1_000_000, monthly: 1_000_000, repeatMonths: 1, sort: 140, paysFrom: "operating" }),
-  ].map((g) => ({ ...g, spent: spent[g.id] ?? 0, ...(cycle[g.id] ? { cycleAmount: cycle[g.id]!.amount, cycleNote: cycle[g.id]!.note } : {}) }));
+  ].map((g) => ({ ...g, spent: spent[g.id] ?? 0, ...(month[g.id] ? { monthAmount: month[g.id]!.amount, monthNote: month[g.id]!.note } : {}) }));
 
 /** Nhà ở / Học tập / Tập luyện gắn MB tiết kiệm (UC-1209 AC-16). */
 export const depositGoalsV23 = (): PocketGoalInput[] => [
@@ -139,20 +139,20 @@ export const OPERATING_V23 = [
 
 /**
  * Hộ v2.3: Ví Thưởng BIDV 2.000.000; Phao 4.000.000 có con "Gửi 3 tháng" 20.000.000; MB tiết kiệm 5.000.000 có con "Gửi 6 tháng"
- * 100.000.000 (`matured`: con đã tắt, MB tiết kiệm 108.000.000, lãi 3.000.000); tích luỹ 50.000.000; chi vận hành 13.500.000 / kỳ.
+ * 100.000.000 (`matured`: con đã tắt, MB tiết kiệm 108.000.000, lãi 3.000.000); tích luỹ 50.000.000; chi vận hành 13.500.000 / tháng.
  */
 export function pocketsV23({
   operating = OPERATING_V23,
   matured = false,
   spent,
-  cycle,
-  spendCycles = [{ start: "2026-10-10", amount: 13_500_000, days: 30 }],
+  month,
+  spendMonths = [{ start: "2026-10-01", amount: 13_500_000, days: 30 }],
 }: {
   operating?: { id: string; name: string; balance: number }[];
   matured?: boolean;
   spent?: Record<string, number>;
-  cycle?: Record<string, { amount: number; note: string | null }>;
-  spendCycles?: { start: string; amount: number; days: number }[];
+  month?: Record<string, { amount: number; note: string | null }>;
+  spendMonths?: { start: string; amount: number; days: number }[];
 } = {}): PocketsView {
   const acc = (id: string, name: string, pocket: "savings" | "reserve" | "operating", balance: number, parentId: string | null = null) => ({ id, name, pocket, confirmed: true, balance, parentId });
   return pocketsView({
@@ -164,12 +164,12 @@ export function pocketsV23({
       ...(matured ? [acc("tk-tiet-kiem", "MB tiết kiệm", "reserve", 108_000_000)] : [acc("tk-tiet-kiem", "MB tiết kiệm", "reserve", 5_000_000), acc("gui-6-thang", "Gửi 6 tháng", "reserve", 100_000_000, "tk-tiet-kiem")]),
       acc("tich-luy", "tài khoản tích luỹ", "savings", 50_000_000),
     ],
-    goals: [...depositGoalsV23(), ...operatingGoalsV23(spent, cycle)],
+    goals: [...depositGoalsV23(), ...operatingGoalsV23(spent, month)],
     rewardAccountId: "tk-bidv",
     debts: [],
     savingsPct: 10,
-    history: { since: "2026-11-10", prevSince: "2026-10-10", accounts: [] },
-    operatingSpend: { cycles: spendCycles, dataStart: spendCycles.length ? "2026-10-01" : null },
+    history: { since: "2026-11-01", prevSince: "2026-10-01", accounts: [] },
+    operatingSpend: { months: spendMonths, dataStart: spendMonths.length ? "2026-10-01" : null },
     peaceTarget: 6,
     interest: matured ? { "tk-tiet-kiem": 3_000_000 } : {},
   });
@@ -179,7 +179,7 @@ export function pocketsV23({
 export const TOP_UP_TARGET = { accountId: "tk-chi-tieu-chong", name: "MB chi tiêu chồng", bank: "MBBank", accountNo: "0123456789", subAccount: null };
 
 /** `nearSpend` của hộ v2.3 (ngày lương 10) — R từ `operating.remaining` như `buildSnapshot`. */
-export function nearSpendV23(pockets: PocketsView, today = "2026-11-20", cycle: Omit<NearSpendCycle, "goalRemaining"> = { cyclePayday: null, pendingTasks: 0 }): NearSpend {
+export function nearSpendV23(pockets: PocketsView, today = "2026-11-20", ctx: Omit<NearSpendContext, "goalRemaining"> = { salaryPayday: null, pendingTasks: 0 }): NearSpend {
   const accounts = pockets.operating.accounts.map((a) => ({ id: a.id, name: a.name, pocket: "operating" as const }));
-  return nearSpend(pockets.operating, accounts, today, 10, { ...cycle, goalRemaining: pockets.operating.remaining });
+  return nearSpend(pockets.operating, accounts, today, 10, { ...ctx, goalRemaining: pockets.operating.remaining });
 }

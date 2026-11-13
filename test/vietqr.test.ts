@@ -51,10 +51,10 @@ describe("mã QR chuyển tiền (VietQR)", () => {
   it("UC-707 AC-28: không đủ điều kiện → lý do (hoặc không gì với tiền mặt / ví / thẻ)", () => {
     expect(transferQr({ ...order, to_kind: "cash", to_bank: null, to_account_no: null })).toEqual({ reason: null });
     expect(transferQr({ ...order, to_kind: "credit" })).toEqual({ reason: null });
-    expect(transferQr({ ...order, to_account_no: null })).toEqual({ reason: "Chưa có mã QR — thêm số tài khoản cho MB tiết kiệm ở Cài đặt › Tài khoản." });
-    expect(transferQr({ ...order, to_account_no: "01234567890123456789" })).toEqual({ reason: "Chưa có mã QR — số tài khoản của MB tiết kiệm không hợp lệ cho mã QR (chỉ chữ và số, tối đa 19 ký tự)." });
+    expect(transferQr({ ...order, to_account_no: null })).toEqual({ reason: "Chưa có mã QR. Thêm số tài khoản cho MB tiết kiệm ở Cài đặt › Tài khoản." });
+    expect(transferQr({ ...order, to_account_no: "01234567890123456789" })).toEqual({ reason: "Chưa có mã QR. Số tài khoản của MB tiết kiệm không hợp lệ (chỉ chữ và số, tối đa 19 ký tự)." });
     expect(transferQr({ ...order, to_bank: "Khac" })).toEqual({ reason: "Ngân hàng của MB tiết kiệm chưa có mã QR." });
     expect(transferQr({ ...order, to_bank: null })).toEqual({ reason: "Ngân hàng của MB tiết kiệm chưa có mã QR." });
-    expect(transferQr({ ...order, memo: "Chuyển Nhà ở" })).toEqual({ reason: "Nội dung chuyển khoản có ký tự mã QR không giữ được — chép nội dung để chuyển." });
+    expect(transferQr({ ...order, memo: "Chuyển Nhà ở" })).toEqual({ reason: "Nội dung chuyển khoản có ký tự mã QR không giữ được. Chép nội dung để chuyển." });
   });
 });

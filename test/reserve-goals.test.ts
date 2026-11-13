@@ -5,10 +5,9 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import { app } from "../src/index";
-import { payCycleView } from "../src/services/pay-cycles";
 import { asD1, openDb } from "./helpers/d1-sqlite";
 import { householdE } from "./helpers/household-e";
-import { householdShared, SHARED_NOW, sharedTx, vnAt } from "./helpers/household-shared";
+import { householdShared, SHARED_NOW, sharedTx } from "./helpers/household-shared";
 
 let env: Env;
 let raw: DatabaseSync;
@@ -207,7 +206,7 @@ describe("mục tiêu Dự phòng là một tài khoản thật (UC-1209)", () =
     racing(/^UPDATE reserve_goals SET name/, () => setReward("phao"));
     const patched = await call("PATCH", "/v1/settings/goals/car-service", { account_id: "phao" });
     expect([...err(patched), patched.json.error?.field]).toEqual([409, "account_is_reward", "account_id"]);
-    expect(patched.json.error?.message).toContain("là tài khoản Ví Thưởng");
+    expect(patched.json.error?.message).toContain("là Ví Thưởng");
     expect([reward(), goalAccount()]).toEqual(["phao", null]);
 
     setReward("mb-reward");
@@ -295,7 +294,7 @@ describe("nhiều mục tiêu dùng chung một tài khoản (UC-1209 bước 9,
     expect(err(await call("PATCH", "/v1/settings/goals/hieu-hi", { account_id: "tk-thue" }))).toEqual([409, "tax_account_shared"]);
     const pct = await call("PATCH", "/v1/settings/goals/hoc-tap", { target_pct: 5, target_amount: null });
     expect(err(pct)).toEqual([409, "tax_account_shared"]);
-    expect(pct.json.error?.message).toBe("Thuế cần tài khoản riêng: thuế đã nộp đếm mọi khoản chi từ tài khoản này.");
+    expect(pct.json.error?.message).toBe("Thuế cần tài khoản riêng: thuế đã nộp tính mọi khoản chi từ tài khoản này.");
     expect(snapshotRows()).toEqual(before);
 
     // Hai máy: cả hai đã qua bước kiểm ở code; câu ghi của máy kia chen vào ngay trước câu ghi.
@@ -483,7 +482,7 @@ describe("mục tiêu trả thẳng từ tiền chi tiêu và tài khoản con (
     );
   const dienNuoc = { name: "Điện nước", monthly_amount: 2_000_000, repeat_months: 1, pays_from: "operating" };
 
-  it("UC-1209 AC-17: tạo mục tiêu trả từ tiền chi tiêu → 201, account_id null; lặp 3 tháng → 400 operating_goal_monthly; Thuế % → 409 tax_account_shared; kèm account_id → 400 invalid_input; không có việc ② nào cho Điện nước khi kỳ mở", async () => {
+  it("UC-1209 AC-17: tạo mục tiêu trả từ tiền chi tiêu → 201, account_id null; lặp 3 tháng → 400 operating_goal_monthly; Thuế % → 409 tax_account_shared; kèm account_id → 400 invalid_input", async () => {
     raw = householdShared({ cycle: false });
     env = { DB: asD1(raw), API_TOKEN: "tok" } as Env;
     const created = await call<{ goal: SettingsGoal }>("POST", "/v1/settings/goals", dienNuoc);
@@ -494,32 +493,19 @@ describe("mục tiêu trả thẳng từ tiền chi tiêu và tài khoản con (
     expect(err(await call("POST", "/v1/settings/goals", { ...dienNuoc, name: "Internet", account_id: "phao" }))).toEqual([400, "invalid_input"]);
     expect(err(await call("POST", "/v1/settings/goals", { ...dienNuoc, name: "Internet", pays_from: "quy" }))).toEqual([400, "invalid_input"]);
     expect(raw.prepare("SELECT id FROM reserve_goals WHERE pays_from = 'operating'").all()).toEqual([{ id: "dien-nuoc" }]);
-
-    const income = await call("POST", "/v1/transactions", { meaning: "income", amount: 20_000_000, account_id: "cash-husband", income_stream_id: "salary-husband", at: vnAt("2026-11-10 08:00") });
-    expect(income.status).toBe(201);
-    const goalTasks = (raw.prepare("SELECT goal_id FROM pay_cycle_tasks WHERE kind = 'goal'").all() as { goal_id: string }[]).map((t) => t.goal_id);
-    expect(goalTasks).toContain("hoc-tap");
-    expect(goalTasks).not.toContain("dien-nuoc");
   });
 
-  it("UC-1209 AC-20: đổi Hoá đơn (gắn tk-chung, ② 2.000.000 đang mở, đã chi 300.000 từ tk-chung) sang trả từ tiền chi tiêu → account_id null, ② void có lý do + nhật ký pay_cycle_task.void, pendingTasks 0, còn phải trả 2.000.000; kèm account_id → 400 invalid_input", async () => {
+  it("UC-1209 AC-20: đổi Hoá đơn (gắn tk-chung, đã chi 300.000 từ tk-chung) sang trả từ tiền chi tiêu → account_id null, nhật ký goal.update, không nhật ký pay_cycle_task.void, còn phải trả 2.000.000; kèm account_id → 400 invalid_input", async () => {
     sharedTx(raw, { at: "2026-11-11 09:00", meaning: "spend", amount: 300_000, from: "tk-chung", goal: "hoa-don" });
-    const cycleId = (raw.prepare("SELECT id FROM pay_cycles").get() as { id: number }).id;
-    const taskId = Number(raw.prepare("INSERT INTO pay_cycle_tasks (cycle_id, kind, goal_id, suggested, amount) VALUES (?, 'goal', 'hoa-don', 2000000, 2000000)").run(cycleId).lastInsertRowid);
-    expect((await payCycleView(asD1(raw), "2026-11-12", "husband")).pendingTasks).toBe(2_000_000);
-
     const patched = await call<{ goal: SettingsGoal }>("PATCH", "/v1/settings/goals/hoa-don", { pays_from: "operating" });
     expect(patched.status).toBe(200);
     expect(patched.json.data.goal).toMatchObject({ account_id: null, pays_from: "operating", held: null, spent: 0, remaining: 2_000_000 });
-    expect(raw.prepare("SELECT status, reason FROM pay_cycle_tasks WHERE id = ?").get(taskId)).toEqual({ status: "void", reason: "Mục tiêu chuyển sang trả từ tiền chi tiêu" });
     expect(auditOf("goal.update")).toEqual([
       { target: "goal:hoa-don", detail: { fields: ["pays_from"], changes: { account_id: { from: "tk-chung", to: null }, pays_from: { from: "account", to: "operating" } } } },
     ]);
-    expect(auditOf("pay_cycle_task.void")).toEqual([{ target: `pay_cycle_task:${taskId}`, detail: { reason: "Mục tiêu chuyển sang trả từ tiền chi tiêu", goal_id: "hoa-don" } }]);
-    expect((await payCycleView(asD1(raw), "2026-11-12", "husband")).pendingTasks).toBe(0);
-    // Chốt hai lớp: ② còn sót của mục tiêu trả từ tiền chi tiêu không vào phần chưa làm.
-    raw.prepare("INSERT INTO pay_cycle_tasks (cycle_id, kind, goal_id, suggested, amount) VALUES (?, 'goal', 'hoa-don', 2000000, 2000000)").run(cycleId);
-    expect((await payCycleView(asD1(raw), "2026-11-12", "husband")).pendingTasks).toBe(0);
+    expect(auditOf("pay_cycle_task.void")).toEqual([]);
+    const operating = (await call<{ pockets: { operating: { goals: { id: string; remaining: number }[] } } }>("GET", "/v1/snapshot")).json.data.pockets.operating;
+    expect(operating.goals.find((g) => g.id === "hoa-don")).toMatchObject({ remaining: 2_000_000 });
 
     const before = raw.prepare("SELECT * FROM reserve_goals WHERE id = 'hoa-don'").get();
     expect(err(await call("PATCH", "/v1/settings/goals/hoa-don", { pays_from: "operating", account_id: "tk-chung" }))).toEqual([400, "invalid_input"]);

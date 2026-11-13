@@ -105,7 +105,7 @@ export function createHint(month: string, previous: BillView["previous"]): strin
 }
 
 /** Hỏi trước khi lưu bản đã gửi (UC-806 bước 6). */
-export const resendConfirm = (from: number, to: number, tenantName: string): string => `Tổng đổi từ ${formatVnd(from)} thành ${formatVnd(to)} — gửi lại tin cho ${tenantName}.`;
+export const resendConfirm = (from: number, to: number, tenantName: string): string => `Tổng đổi từ ${formatVnd(from)} sang ${formatVnd(to)}, gửi lại tin cho ${tenantName}.`;
 
 // ── Dấu "đã gửi" trên máy này ───────────────────────────────────────
 
@@ -127,7 +127,7 @@ export function markSent(storage: SentStorage | null, billId: number, revision: 
   try {
     storage?.setItem(SENT_KEY, JSON.stringify({ ...sentRevisions(storage), [billId]: revision }));
   } catch {
-    // không ghi được: chip "Đã sửa — gửi lại" còn hiện, không hại gì
+    // không ghi được: chip "Đã sửa, gửi lại" còn hiện, không hại gì
   }
 }
 
@@ -141,7 +141,7 @@ export type BillChip = { text: string; tone: "" | "warn" | "ok" | "bad" };
 export function billChip(bill: TenantBillSummary | null, sent: Record<string, number>): BillChip {
   if (!bill) return { text: "Chưa lập", tone: "bad" };
   if (bill.status === "draft") return { text: "Nháp", tone: "warn" };
-  if (needsResend(bill, sent)) return { text: "Đã sửa — gửi lại", tone: "warn" };
+  if (needsResend(bill, sent)) return { text: "Đã sửa, gửi lại", tone: "warn" };
   return { text: "Đã gửi", tone: "ok" };
 }
 

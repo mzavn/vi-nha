@@ -83,7 +83,7 @@ export function cashFlowSummary(cf: Pick<CashFlow, "opening" | "openedAccounts" 
 export function closingNotes(cf: Pick<CashFlow, "to" | "creditCardDebt">): string[] {
   return [
     `= Σ sổ tài khoản ngày ${dateText(cf.to)}`,
-    ...(cf.creditCardDebt > 0 ? [`Gồm ${formatVnd(-cf.creditCardDebt)} thẻ tín dụng — ở bảng cân đối nằm ở Nợ ngắn hạn`] : []),
+    ...(cf.creditCardDebt > 0 ? [`Gồm ${formatVnd(-cf.creditCardDebt)} thẻ tín dụng, bên Cân đối tính vào Nợ ngắn hạn`] : []),
   ];
 }
 
@@ -92,7 +92,7 @@ export function lotNoteText(n: CashFlow["lotNote"]): string | null {
   const parts = [n.bought > 0 ? `lô mua ${formatVnd(n.bought)}` : null, n.sold > 0 ? `lô bán ${formatVnd(n.sold)}` : null].filter((x): x is string => x !== null);
   if (parts.length === 0) return null;
   const text = parts.join(", ");
-  return `${text[0]!.toUpperCase()}${text.slice(1)} ghi ở màn tài sản — không cộng vào tổng`;
+  return `${text[0]!.toUpperCase()}${text.slice(1)} ghi bên tài sản, không cộng vào tổng`;
 }
 
 /** Dòng phụ của một dòng nhóm: "3 giao dịch" · "3 giao dịch, 1 đã xếp lại". */
@@ -128,7 +128,7 @@ export const reportTxSub = (t: ReportTx): string => [shortDate(t.at), t.accountN
 /** Toast sau khi xếp lại: "Đã xếp khoản 50.000.000 ₫ vào Tài chính — chỉ đổi báo cáo, số dư và ngăn giữ nguyên." */
 export const reclassToast = (amount: number, cls: ReportClass | null): string =>
   cls
-    ? `Đã xếp khoản ${formatVnd(Math.abs(amount))} vào ${CLASS_LABEL[cls]} — chỉ đổi báo cáo, số dư và ngăn giữ nguyên.`
+    ? `Đã xếp khoản ${formatVnd(Math.abs(amount))} vào ${CLASS_LABEL[cls]}. Chỉ đổi báo cáo, số dư và ngăn giữ nguyên.`
     : `Đã đưa khoản ${formatVnd(Math.abs(amount))} về nhóm mặc định.`;
 
 // ── Kết quả thu chi ────────────────────────────────────────────────
@@ -138,18 +138,18 @@ export const shownExpenseLines = (lines: StatementLine[]): StatementLine[] =>
   lines.filter((l) => l.total !== 0).map((l) => (l.children ? { ...l, children: l.children.filter((c) => c.total !== 0) } : l));
 
 /** "tỷ lệ 50,3%"; thu nhập 0 → "tỷ lệ —". */
-export const savingsRateText = (rate: number | null): string => `tỷ lệ ${pctText(rate)}`;
+export const savingsRateText = (rate: number | null): string => `tỉ lệ ${pctText(rate)}`;
 
 /** Chân: "Không tính: trả nợ gốc 5.000.000 ₫, mua tài sản 6.000.000 ₫, phân loại lại Tài chính 50.000.000 ₫, điều chỉnh −100.000 ₫ — xem Lưu chuyển tiền." */
 export function excludedText(x: IncomeStatement["excluded"]): string | null {
   const parts = [
     x.debtPrincipal ? `trả nợ gốc ${formatVnd(x.debtPrincipal)}` : null,
     x.buyAsset ? `mua tài sản ${formatVnd(x.buyAsset)}` : null,
-    x.reclassifiedInvesting ? `phân loại lại Đầu tư ${formatVnd(x.reclassifiedInvesting)}` : null,
-    x.reclassifiedFinancing ? `phân loại lại Tài chính ${formatVnd(x.reclassifiedFinancing)}` : null,
+    x.reclassifiedInvesting ? `xếp lại Đầu tư ${formatVnd(x.reclassifiedInvesting)}` : null,
+    x.reclassifiedFinancing ? `xếp lại Tài chính ${formatVnd(x.reclassifiedFinancing)}` : null,
     x.adjust ? `điều chỉnh ${formatVnd(x.adjust)}` : null,
   ].filter(Boolean);
-  return parts.length > 0 ? `Không tính: ${parts.join(", ")} — xem Lưu chuyển tiền.` : null;
+  return parts.length > 0 ? `Không tính: ${parts.join(", ")}. Xem ở Dòng tiền.` : null;
 }
 
 /** Hàng "Từng tháng" của Thu chi: "thu 33.200.000 ₫ · chi 16.500.000 ₫ · tỷ lệ 50,3%". */

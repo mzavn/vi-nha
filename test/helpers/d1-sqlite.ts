@@ -31,19 +31,28 @@ export function migratedDb(until = "9999"): DatabaseSync {
   applyMigrations(db, until);
   return db;
 }
-
 /**
- * Thêm các cột / bảng mà code hiện tại đọc (0044: tài khoản con, nơi để tiền của mục tiêu, rút từ tiền lãi; 0045: số kỳ này và
- * danh mục của khoản phải trả) vào DB còn ở schema cũ — để test migration cũ đo số bằng service hiện tại trước / sau migration
- * của nó. Không thêm trigger, không đổi schema_version.
+ * Thêm các cột / bảng mà code hiện tại đọc (0044: tài khoản con, nơi để tiền của mục tiêu, rút từ tiền lãi; 0045: danh mục
+ * của khoản phải trả; 0046: lương theo khoản, việc tháng, chia dư, số riêng theo tháng, cột đổi tên) vào DB còn ở schema cũ —
+ * để test migration cũ đo số bằng service hiện tại trước / sau migration của nó. Không thêm trigger, không đổi schema_version.
  */
 export function addCurrentColumns(db: DatabaseSync): void {
   db.exec(`
     ALTER TABLE accounts ADD COLUMN parent_account_id TEXT REFERENCES accounts(id);
     ALTER TABLE reserve_goals ADD COLUMN pays_from TEXT NOT NULL DEFAULT 'account';
     ALTER TABLE transactions ADD COLUMN from_interest INTEGER NOT NULL DEFAULT 0;
-    CREATE TABLE goal_cycle_amounts (goal_id TEXT NOT NULL, cycle_key TEXT NOT NULL, amount INTEGER NOT NULL, note TEXT, PRIMARY KEY (goal_id, cycle_key));
+    ALTER TABLE transactions ADD COLUMN is_salary INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE income_streams RENAME COLUMN opens_cycle TO is_salary;
+    ALTER TABLE category_groups RENAME COLUMN cycle_limit TO monthly_limit;
     CREATE TABLE reserve_goal_categories (category_id TEXT PRIMARY KEY, goal_id TEXT NOT NULL);
+    CREATE TABLE month_tasks (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, month_key TEXT NOT NULL, income_tx_id INTEGER, to_pocket TEXT, to_account_id TEXT,
+      amount INTEGER NOT NULL, pct INTEGER, status TEXT NOT NULL DEFAULT 'open', reason TEXT, by_member_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), code TEXT);
+    CREATE TABLE month_task_tx (task_id INTEGER NOT NULL, tx_id INTEGER NOT NULL, amount INTEGER NOT NULL, created_at TEXT, by_code INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (task_id, tx_id));
+    CREATE TABLE month_surplus (month_key TEXT PRIMARY KEY, operating_end INTEGER NOT NULL, pending_at_end INTEGER NOT NULL, early_salary INTEGER NOT NULL,
+      held_payables INTEGER NOT NULL, held_to_payday INTEGER NOT NULL, surplus INTEGER NOT NULL, savings_pct INTEGER NOT NULL, status TEXT NOT NULL,
+      note TEXT, by_member_id TEXT, at TEXT NOT NULL);
+    CREATE TABLE goal_month_amounts (goal_id TEXT NOT NULL, month_key TEXT NOT NULL, amount INTEGER NOT NULL, note TEXT, updated_at TEXT, PRIMARY KEY (goal_id, month_key));
   `);
 }
 

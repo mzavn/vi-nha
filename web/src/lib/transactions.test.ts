@@ -39,7 +39,7 @@ describe("việc làm được với một giao dịch", () => {
   });
 
   it("hệ thống (chốt tháng, nạp ví của lần chia): chỉ xem, nói vì sao", () => {
-    expect(txActions(tx({ source: "system", meaning: "transfer" }), open)).toMatchObject({ edit: false, remove: false, reassign: false, note: expect.stringContaining("hệ thống") });
+    expect(txActions(tx({ source: "system", meaning: "transfer" }), open)).toMatchObject({ edit: false, remove: false, reassign: false, note: expect.stringContaining("tự ghi") });
     expect(txActions(tx({ source: "system", meaning: "fund" }), open).note).toContain("xoá khoản thu");
   });
 
@@ -57,7 +57,7 @@ describe("việc làm được với một giao dịch", () => {
     expect(txLabel(walletMove)).toBe("Chuyển ngân sách");
   });
 
-  it("UC-715 AC-16: chồng mở sheet #102 (chuyển Tiền mặt (chồng) → Tiền mặt (vợ), hộ mẫu P) → không Sửa / Xoá / Gỡ gán, có dòng 'Liên quan tài khoản riêng tư của Vợ — chỉ chủ tài khoản sửa được'; vợ mở → đủ nút như thường", () => {
+  it("UC-715 AC-16: chồng mở sheet #102 (chuyển Tiền mặt (chồng) → Tiền mặt (vợ), hộ mẫu P) → không Sửa / Xoá / Gỡ gán, có dòng 'Thuộc tài khoản riêng tư của Vợ, chỉ chủ tài khoản sửa được'; vợ mở → đủ nút như thường", () => {
     const t102 = tx({ id: 102, meaning: "transfer", amount: 1_000_000, account_id: "cash-husband", counter_account_id: "cash-wife", category_id: null, category_name: null });
     const members = [
       { id: "husband", name: "Chồng" },
@@ -66,7 +66,7 @@ describe("việc làm được với một giao dịch", () => {
     const account = (id: string, owner: string, hiddenFromMe: boolean) => ({ id, name: id, ownerMemberId: owner, private: owner === "wife", hiddenFromMe }) as Bootstrap["accounts"][number];
     const husband = { members, accounts: [account("cash-husband", "husband", false), account("cash-wife", "wife", true)] };
     const wife = { members, accounts: [account("cash-husband", "husband", false), account("cash-wife", "wife", false)] };
-    expect(txActions(t102, husband)).toEqual({ edit: false, remove: false, reassign: false, note: "Liên quan tài khoản riêng tư của Vợ — chỉ chủ tài khoản sửa được" });
+    expect(txActions(t102, husband)).toEqual({ edit: false, remove: false, reassign: false, note: "Thuộc tài khoản riêng tư của Vợ, chỉ chủ tài khoản sửa được" });
     // Giao dịch ngân hàng chạm tài khoản đó cũng không gỡ gán được.
     expect(txActions({ ...t102, source: "sepay", log_id: "L7" }, husband)).toMatchObject({ edit: false, remove: false, reassign: false });
     expect(txActions(t102, wife)).toEqual({ edit: true, remove: true, reassign: false, note: null });
@@ -176,8 +176,8 @@ describe("câu xác nhận và toast sau khi sửa / xoá", () => {
     expect(voidToast(tx(), null)).toBe(`Đã xoá 45.000${NBSP}₫ Đi chợ.`);
   });
 
-  it("xoá khoản thu: hỏi lại có nói kỳ lương / việc sinh từ khoản này cũng bị huỷ; khoản cũ đã chia nói phần nạp ví cũ được gỡ", () => {
-    expect(voidConfirm(tx({ meaning: "income", allocated: 0 }))).toBe("Xoá hẳn khoản này? Kỳ lương và việc ngày lương sinh từ khoản này (nếu có) cũng bị huỷ.");
+  it("xoá khoản thu: hỏi lại có nói nhắc trích Tích luỹ sinh từ khoản này cũng bị huỷ; khoản cũ đã chia nói phần nạp ví cũ được gỡ", () => {
+    expect(voidConfirm(tx({ meaning: "income", allocated: 0 }))).toBe("Xoá hẳn khoản này? Nhắc trích Tích luỹ từ khoản này (nếu có) cũng bị huỷ.");
     expect(voidConfirm(tx({ meaning: "income", allocated: 1 }))).toContain("phần đã nạp vào ví theo cách tính cũ được gỡ");
     expect(voidConfirm(tx())).toBe("Xoá hẳn khoản này?");
   });

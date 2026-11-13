@@ -1,12 +1,12 @@
 // Khoản chưa đồng bộ vẫn phải hiện trong số "còn lại" (D12): trừ tạm vào ba ngăn và tiền vận hành đang hiển thị.
 // Chỉ điều chỉnh theo đúng công thức của domain cho những tài khoản bị ảnh hưởng — không tính lại cả màn. Không ví (Đợt C):
-// khoản chuyển trong hàng đợi không tự tick việc ngày lương, phần chưa làm (`pendingTasks`) không trừ tạm (chỉ server tick).
+// khoản chuyển trong hàng đợi không tự tick nhắc trích Tích luỹ, phần chưa chuyển (`pendingTasks`) không trừ tạm (chỉ server tick).
 
 import { goalGroups, peaceMonthsView, type PocketAccountLine, type PocketsView } from "../../../src/domain/pockets";
 import { nearSpendView, topUpView } from "../../../src/domain/snapshot";
 import type { QueuedEntry } from "../offline/queue";
 import { formatVnd, moneyDigits } from "./money";
-import { nearSpendCycle } from "./near-spend";
+import { nearSpendContext } from "./near-spend";
 import type { EntryNearSpend, Snapshot } from "./types";
 
 /** Tác động của các khoản trong hàng đợi lên số dư từng tài khoản: chi trừ, hoàn cộng, chuyển nội bộ trừ bên gửi cộng bên nhận. */
@@ -69,7 +69,7 @@ function refillGoals(r: PocketsView["reserve"], accounts: PocketAccountLine[], i
 
 /**
  * Mục tiêu trả từ tiền chi tiêu sau trừ tạm (ADR-141, ADR-143): khoản xếp hàng từ tài khoản Vận hành gắn mục tiêu đó, hoặc không
- * gắn mục tiêu mà thuộc danh mục của nó (khoản chi), cộng vào đã trả; R tính lại theo số kỳ này.
+ * gắn mục tiêu mà thuộc danh mục của nó (khoản chi), cộng vào đã trả; R tính lại theo số tháng này.
  */
 function shiftOperatingGoals(o: PocketsView["operating"], items: QueuedEntry[]): Pick<PocketsView["operating"], "goals" | "remaining"> {
   const ids = new Set(o.accounts.map((a) => a.id));
@@ -82,7 +82,7 @@ function shiftOperatingGoals(o: PocketsView["operating"], items: QueuedEntry[]):
   }
   const goals = (o.goals ?? []).map((g) => {
     const spent = g.spent + (paid.get(g.id) ?? 0);
-    return spent === g.spent ? g : { ...g, spent, remaining: Math.max(0, (g.cycleAmount ?? g.monthly) - spent) };
+    return spent === g.spent ? g : { ...g, spent, remaining: Math.max(0, (g.monthAmount ?? g.monthly) - spent) };
   });
   return { goals, remaining: goals.reduce((s, g) => s + g.remaining, 0) };
 }
@@ -93,8 +93,8 @@ function shiftOperatingGoals(o: PocketsView["operating"], items: QueuedEntry[]):
  * bằng `nearSpendView`; phần an tâm đổi đúng bằng khoản trên tài khoản Dự phòng không gắn mục tiêu, không phải Ví Thưởng, không phải
  * con của tài khoản có mục tiêu hay của Ví Thưởng; đã có (A) của mục tiêu chia lại bằng `goalGroups`; số tháng tính lại bằng
  * `peaceMonthsView`; nhắc chuyển thêm tính lại bằng `topUpView` (giữ đích QR của server; không gợi ý tài khoản riêng tư của người
- * khác — `hidden`, từ `accounts[].hiddenFromMe` ở bootstrap, access UC-504). Số đo theo kỳ (`savings.change`, `monthly`, `cycles`)
- * và việc ngày lương không trừ tạm.
+ * khác — `hidden`, từ `accounts[].hiddenFromMe` ở bootstrap, access UC-504). Số đo theo tháng (`savings.change`, `monthly`, `months`)
+ * và việc tháng (nhắc trích, chia dư — `pendingTasks`) không trừ tạm.
  */
 export function applyQueue(s: Snapshot, items: QueuedEntry[], hidden: readonly string[] = []): Snapshot {
   if (items.length === 0) return s;
@@ -135,8 +135,8 @@ export function applyQueue(s: Snapshot, items: QueuedEntry[], hidden: readonly s
     },
   };
   const ns = s.nearSpend;
-  const cycle = { ...nearSpendCycle(ns), goalRemaining: operating.remaining };
-  const view = nearSpendView(operating.total, s.day, ns.paydayDay, cycle);
+  const ctx = { ...nearSpendContext(ns), goalRemaining: operating.remaining };
+  const view = nearSpendView(operating.total, s.day, ns.paydayDay, ctx);
   const nearSpend = {
     ...ns,
     ...view,
@@ -145,8 +145,8 @@ export function applyQueue(s: Snapshot, items: QueuedEntry[], hidden: readonly s
   };
   const topUp = topUpView({
     amount: operating.total,
-    pendingTasks: cycle.pendingTasks,
-    payCycle: s.payCycle,
+    pendingTasks: ctx.pendingTasks,
+    month: s.month,
     goalRemaining: operating.remaining,
     pockets,
     // Đích của server đã bỏ tài khoản bị giấu; giữ lại phép thử phòng bản lưu cũ trên máy (access UC-504 AC-19).
@@ -169,7 +169,7 @@ export function queuedLineAfter(queue: QueuedEntry[], watch: { clientId: string;
 
 /** Toast luôn nói kết quả kèm hệ quả (UC-703): "Đã ghi · Vận hành còn 21.000.000 ₫ ≈ 700.000/ngày". */
 export function entryToast(ns: EntryNearSpend | null, queued: boolean): string {
-  const head = queued ? "Đã ghi, chờ đồng bộ" : "Đã ghi";
+  const head = queued ? "Đã ghi, chờ gửi" : "Đã ghi";
   if (!ns) return `${head}.`;
   return `${head} · Vận hành còn ${formatVnd(ns.amount)}${ns.perDay !== null ? ` ≈ ${moneyDigits(ns.perDay)}/ngày` : ""}`;
 }

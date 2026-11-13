@@ -61,14 +61,15 @@ function fail(err: unknown): CallToolResult {
 
 /**
  * Đăng ký cả 16 tool lên một McpServer mới dựng riêng cho request hiện tại; `memberId` = người đã uỷ quyền kết nối.
- * `onCycleOpened(payday)`: tool ghi vừa mở kỳ lương — người gọi báo kỳ lương mới sau khi trả lời (notify UC-412), không chặn kết quả tool.
+ * `onSalary(txId)`: tool ghi vừa ghi một khoản lương có nhắc ① trích Tích luỹ — người gọi báo lương về sau khi trả lời (notify
+ * UC-412), không chặn kết quả tool.
  */
 export async function registerTools(
   server: McpServer,
   db: D1Database,
   memberId: string,
   now: () => Date,
-  onCycleOpened: (payday: string) => void,
+  onSalary: (txId: number) => void,
 ): Promise<void> {
   const members = rows<{ id: string; name: string; role: string }>(
     await db.prepare("SELECT id, name, role FROM members WHERE active = 1 ORDER BY role = 'owner' DESC, name").all(),
@@ -82,20 +83,23 @@ export async function registerTools(
     {
       description:
         "Numbers behind the 'Today' screen, three cards. pockets: real money per pocket (each pocket is a group of real accounts: " +
-        "savings / reserve / operating / outside), savings change this / previous pay cycle (savings.change), reserve goals (each goal sits in " +
+        "savings / reserve / operating / outside), savings change this / previous calendar month (savings.change, since = 1st of the month), reserve goals (each goal sits in " +
         "a real reserve account and several goals can share one account; held = what the goal has after splitting the account balance by " +
-        "priority order, counting spent = what was spent for the goal this pay cycle; null = no account yet; target or % of taxable income; " +
+        "priority order, counting spent = what was spent for the goal this calendar month; null = no account yet; target or % of taxable income; " +
         "sorted by priority), reserve.groups = per account with goals: balance (the account plus its term deposits), interest (deposit interest " +
         "kept out of the goals; the goals split balance − interest), childIds, need, spent, short / extra; accounts[].goalIds = goals of each " +
         "account; accounts[].parentId = the parent account of a term deposit (child account, same pocket); peace-of-mind amount " +
         "(reserve accounts without a goal) and months of operating spend it covers (reserve.peace, reserve.peaceMonths), reward account " +
         "(reserve.reward), short-term debts (shortDebt, reminder only — not subtracted). operating.goals = goals paid straight from spending " +
-        "money each month ({ id, name, monthly, cycleAmount (own amount for this pay cycle, null = monthly), note, categoryIds (spending in these categories counts as paid), spent, remaining }), operating.remaining = what is still to pay for them this pay cycle. " +
-        "nearSpend: the operating pocket counted until the next payday, per day / per meal / per market trip, minus payday tasks not done yet " +
-        "(pendingTasks) and minus what goals paid from spending money still need this cycle (goalRemaining). topUp: spending money will not " +
+        "money each month ({ id, name, monthly, monthAmount (own amount for this month, null = monthly), note, categoryIds (spending in these categories counts as paid), spent, remaining }), operating.remaining = what is still to pay for them this month. " +
+        "nearSpend: the operating pocket counted until the next payday, per day / per meal / per market trip, minus month tasks not done yet " +
+        "(pendingTasks) and minus what goals paid from spending money still need this month (goalRemaining); nearSpend.salaryPayday = the upcoming payday when salary already arrived early (then days count to the payday after), else null. topUp: spending money will not " +
         "last until payday — { amount, sources: [{ accountId, name, amount }] (reward account first, then peace-of-mind accounts), toAccountId, " +
         "target (QR destination; null = cash only) }; null = enough. " +
-        "payCycle: current pay cycle (opened by salary) and its payday checklist — savings transfer, reserve goal funding, moves, last cycle surplus. " +
+        "month: month tasks — the savings reminder of each salary (transfer savings % to the savings pocket) and the month-end surplus split tasks — " +
+        "{ key, tasks, openCount, savings (saved this month: amount, base, pct, level), goalHint (one optional reserve goal still short) }. " +
+        "monthClose: surplus of the month just ended ({ month, operatingEnd, pendingAtEnd, earlySalary, heldPayables, heldToPayday, surplus, savingsAmount, rewardAmount, status: ask | split | skipped }); null = none. " +
+        "moneyAge: how many days ago the money now being spent from the operating pocket came in ({ days, sample, buffered }; null = fewer than 10 spends). " +
         "Also items needing attention (unassigned bank logs, reconciliation drift). " +
         "conversion: one-time switch to pockets still pending ({ done, total: 5, next }; null when done). " +
         "No parameters. All amounts are integer VND.",
@@ -114,11 +118,11 @@ export async function registerTools(
     "get_goals",
     {
       description:
-        "Savings pocket total and change per pay cycle, savings % and done this cycle, reserve goals vs target (several goals can share one " +
-        "account; held = what the goal has after splitting the account balance by priority, counting spent this pay cycle; null = no account yet), " +
+        "Savings pocket total and change per calendar month, savings % and saved this month (savingsDone), reserve goals vs target (several goals can share one " +
+        "account; held = what the goal has after splitting the account balance by priority, counting spent this month; null = no account yet), " +
         "groups per account (balance incl. term deposits, interest kept out of the goals, childIds, need, spent, short / extra), peace-of-mind " +
         "amount (reserve accounts without a goal) and months, short-term debts, and operating.goals = goals paid straight from spending money " +
-        "each month ({ id, name, monthly, cycleAmount (own amount for this pay cycle, null = monthly), note, categoryIds (spending in these categories counts as paid), spent, remaining }) with operating.remaining. Same numbers as get_snapshot pockets. No parameters.",
+        "each month ({ id, name, monthly, monthAmount (own amount for this month, null = monthly), note, categoryIds (spending in these categories counts as paid), spent, remaining }) with operating.remaining. Same numbers as get_snapshot pockets. No parameters.",
     },
     async () => {
       try {
@@ -156,9 +160,9 @@ export async function registerTools(
         "Bank deposit interest (suggestion.interest from list_pending_logs) is ONE split { meaning: income, interest: true } (is_interest: true " +
         "is the same): it records the income in the receiving account, reported as passive income, and for an account with goals or its term " +
         "deposit it is kept out of the goals. " +
-        "income: opens_cycle overrides whether this income opens a new pay cycle (default: the income stream's setting, e.g. salary). " +
+        "income: is_salary = 'this is salary' (default: the income stream is a salary stream, or no stream and at least the salary reminder threshold); salary gets one savings reminder, result effects.savings = { amount, pct } (null = none); interest and rent are never salary (cannot_be_salary). " +
         `spend / outgoing transfer: goal_id = ${GOAL_ID_HINT} from_interest: see add_transaction. ` +
-        "There are no wallets: sending wallet_id, from_wallet_id, wealth_move, earmark_id or transfer_order_id is an error (model_changed).",
+        "There are no wallets or pay cycles: sending wallet_id, from_wallet_id, wealth_move, earmark_id, transfer_order_id or opens_cycle is an error (model_changed).",
       inputSchema: z.looseObject({
         log_id: z.string().min(1),
         splits: z
@@ -180,7 +184,7 @@ export async function registerTools(
               is_interest: z.boolean().optional(),
               from_interest: z.boolean().optional(),
               note: z.string().optional(),
-              opens_cycle: z.boolean().optional(),
+              is_salary: z.boolean().optional(),
               goal_id: z.string().optional(),
             }),
           )
@@ -206,16 +210,14 @@ export async function registerTools(
           asset_kind: s.asset_kind ?? null,
           interest: s.interest === true || s.is_interest === true,
           note: s.note ?? null,
-          opens_cycle: s.opens_cycle,
+          is_salary: s.is_salary,
           goal_id: s.goal_id ?? null,
           from_interest: s.from_interest === true,
         }));
         const result = await ingest.assignLog(db, args.log_id, splits, memberId, now());
         await audit(db, actor, "log.assign", `log:${args.log_id}`, { splits: splits.length });
-        if (result.effects.cycle?.opened) {
-          const income = result.transactions.find((t) => t.meaning === "income");
-          await audit(db, actor, "pay_cycle.open", `tx:${income?.id}`, { income_tx_id: Number(income?.id), payday: result.effects.cycle.payday });
-          onCycleOpened(result.effects.cycle.payday);
+        if (result.effects.savings) {
+          for (const t of result.transactions) if (t.meaning === "income" && Number(t.is_salary) === 1) onSalary(Number(t.id));
         }
         return ok(result);
       } catch (err) {
@@ -234,12 +236,12 @@ export async function registerTools(
         "— do not use refund for repaid loans). " +
         "amount is a positive integer VND. by_member_id (who is recording this) is optional and defaults to the member who authorized this connection — valid ids: " +
         `${memberHint}. A missing account_id is the recorder's cash account, exactly as the REST API does. ` +
-        "transfer needs account_id (source) + to_account_id (destination); a transfer into the savings account counts toward the payday savings task. " +
-        "There are no wallets: sending wallet_id, from_wallet_id, wealth_move or earmark_id is an error (model_changed). " +
+        "transfer needs account_id (source) + to_account_id (destination); a transfer into the savings account counts toward the open savings reminder. " +
+        "There are no wallets or pay cycles: sending wallet_id, from_wallet_id, wealth_move, earmark_id or opens_cycle is an error (model_changed). " +
         "Accounts marked private by another member cannot be written to (error private_account). " +
         "income: income_stream_id = income stream, tenant_id = rent paid by a tenant (id from list_tenants; " +
-        "without a stream the rental stream is used); opens_cycle overrides whether this income opens a new pay cycle " +
-        "(default: the stream's setting, e.g. salary) — the result's effects.cycle tells whether a cycle opened and how many payday tasks it has. " +
+        "without a stream the rental stream is used); is_salary = 'this is salary' (default: the stream is a salary stream, or no stream and at least " +
+        "the salary reminder threshold) — salary gets one 'transfer savings %' reminder, the result's effects.savings = { amount, pct } (null = none); interest and rent are never salary (cannot_be_salary). " +
         "spend: money paid from a reserve goal's account lowers what the goals of that account hold; " +
         `goal_id (spend / outgoing transfer) = ${GOAL_ID_HINT} ${INTEREST_HINT} ` +
         "debt_id = a debt repayment of PRINCIPAL (id from get_debts; without category_id the debt-repayment category is used); " +
@@ -268,7 +270,7 @@ export async function registerTools(
         interest_debt_id: z.string().optional(),
         receivable_id: z.string().optional(),
         confirm_duplicate: z.boolean().optional(),
-        opens_cycle: z.boolean().optional(),
+        is_salary: z.boolean().optional(),
         goal_id: z.string().optional(),
         is_interest: z.boolean().optional(),
         from_interest: z.boolean().optional(),
@@ -298,7 +300,7 @@ export async function registerTools(
           interest_debt_id: args.interest_debt_id ?? null,
           receivable_id: args.receivable_id ?? null,
           confirm_duplicate: args.confirm_duplicate === true,
-          opens_cycle: args.opens_cycle,
+          is_salary: args.is_salary,
           goal_id: args.goal_id ?? null,
           is_interest: args.is_interest === true,
           from_interest: args.from_interest === true,
@@ -310,10 +312,7 @@ export async function registerTools(
           const id = result.tx!.id;
           const goalId = result.tx!.goal_id ?? null;
           await audit(db, actor, "tx.create", `tx:${id}`, { meaning: args.meaning, by_member_id: by, ...(goalId ? { goal_id: goalId } : {}) });
-          if (result.effects.cycle?.opened) {
-            await audit(db, actor, "pay_cycle.open", `tx:${id}`, { income_tx_id: Number(id), payday: result.effects.cycle.payday });
-            onCycleOpened(result.effects.cycle.payday);
-          }
+          if (result.effects.savings) onSalary(Number(id));
         }
         return ok(result, result.duplicate ? "Giao dịch này đã được ghi trước đó (trùng client_id)." : "Đã ghi giao dịch.");
       } catch (err) {
@@ -342,14 +341,16 @@ export async function registerTools(
     "get_spending_by_category",
     {
       description:
-        "Look back over a pay cycle: spending by category group vs the soft limit (never negative, no top-up), vs the previous cycle, " +
-        "loan interest expected vs paid; period=YYYY-MM for a calendar month. cycle is the payday 'YYYY-MM-DD' that starts a pay cycle " +
-        "(e.g. '2026-11-10'); omit both for the current cycle; never send cycle and period together. Amounts are integer VND.",
-      inputSchema: { cycle: z.string().optional(), period: z.string().optional() },
+        "Look back over a calendar month (VN, 1st to month end): spending by category group vs the monthly soft limit (never negative, no top-up), " +
+        "vs the previous month, loan interest expected vs paid, days / daysElapsed of the month and savings done that month (from the salary " +
+        "savings reminders; null = no salary). period=YYYY-MM; omit for the current month. There are no pay cycles: sending cycle is an error " +
+        "(model_changed). Amounts are integer VND.",
+      inputSchema: z.looseObject({ period: z.string().optional() }),
     },
     async (args) => {
       try {
-        return ok(await ledger.spendByCategory(db, { cycle: args.cycle ?? null, period: args.period ?? null }, now()));
+        ledger.rejectCycleParam(args.cycle);
+        return ok(await ledger.spendByCategory(db, { period: args.period ?? null }, now()));
       } catch (err) {
         return fail(err);
       }
@@ -478,7 +479,7 @@ export async function registerTools(
     "get_balance_sheet",
     {
       description:
-        "Household balance sheet (same numbers as the app's 'Tài sản & tự do' screen): A short-term / B long-term assets by section, " +
+        "Household balance sheet (same numbers as the app's 'Báo cáo' screen): A short-term / B long-term assets by section, " +
         "C liabilities by term (short|long) × interest group (none|normal|high, with interestPerYear and interestThisMonth), equity = assets − liabilities, " +
         "% of total and % of equity per row, the asset pyramid, real cash flow per month (cashflowMonthly) and after inflation (netCashflowMonthly), " +
         "and every manually tracked item with its lots, profit/loss, take-profit / stop-loss distance, status and CAGR. " +

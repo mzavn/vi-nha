@@ -161,9 +161,9 @@ export function debtTermsPayload(f: DebtTermsForm): Result<DebtTermsBody> {
   const errors: Record<string, string> = {};
   const t = f.rate.trim().replace("%", "").replace(",", ".").trim();
   const rate = t === "" ? 0 : /^\d+(\.\d{1,2})?$/.test(t) ? Number(t) : null;
-  if (rate === null || rate > 100) errors.rate = "Lãi suất là số từ 0 đến 100 (%/năm).";
+  if (rate === null || rate > 100) errors.rate = "Lãi suất từ 0 đến 100 (%/năm).";
   const day = f.dueDay.trim() === "" ? null : /^\d+$/.test(f.dueDay.trim()) ? Number(f.dueDay.trim()) : NaN;
-  if (day !== null && !(day >= 1 && day <= 28)) errors.dueDay = "Ngày trả là số từ 1 đến 28.";
+  if (day !== null && !(day >= 1 && day <= 28)) errors.dueDay = "Ngày trả từ 1 đến 28.";
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   return { ok: true, value: { interest_rate: rate!, term: f.term, monthly_payment: f.monthlyPayment > 0 ? f.monthlyPayment : null, due_day: day } };
 }

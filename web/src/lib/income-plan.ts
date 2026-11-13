@@ -22,7 +22,7 @@ export function planSub(y: IncomePlanYear): string {
   return [
     changed ? `Đầu năm ${formatVnd(y.first!.householdMonthly)}${y.actual.pctOfFirst === null ? "" : ` (${pct1(y.actual.pctOfFirst)})`}` : null,
     y.actual.monthlyAverage === null ? null : `cả năm ${pct1(y.actual.pctOfYear)}`,
-    y.actual.monthsCounted > 0 ? `tính trên ${y.actual.monthsCounted} tháng đã kết thúc` : "chưa có tháng nào kết thúc trong sổ",
+    y.actual.monthsCounted > 0 ? `tính trên ${y.actual.monthsCounted} tháng đã qua` : "chưa có tháng nào đã qua trong sổ",
   ]
     .filter(Boolean)
     .join(" · ");

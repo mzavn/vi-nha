@@ -187,7 +187,7 @@ describe("hàng đợi nhập offline", () => {
     for (const k of ["wallet_id", "counter_wallet_id", "wealth_move", "allocate"]) expect(sent).not.toHaveProperty(k);
     expect(server.calls).not.toContain("c-wallet-move");
     expect(await store.list()).toEqual([
-      expect.objectContaining({ clientId: "c-wallet-move", status: "rejected", error: { code: "model_changed", message: "Chuyển giữa hai ví không còn ở bản mới — xoá khoản này" } }),
+      expect.objectContaining({ clientId: "c-wallet-move", status: "rejected", error: { code: "model_changed", message: "Bản mới không còn chuyển giữa hai ví, hãy xoá khoản này" } }),
     ]);
     await syncer.discard("c-wallet-move");
     expect(await store.list()).toEqual([]);
@@ -196,7 +196,21 @@ describe("hàng đợi nhập offline", () => {
     await syncer.enqueue(kept, "wife");
     server.failNextWith({ status: 400, payload: { ok: false, error: { code: "model_changed", message: "Trường ví đã bỏ.", fields: ["wallet_id"] } } });
     await syncer.flush();
-    expect(await store.list()).toEqual([expect.objectContaining({ clientId: kept.client_id, status: "rejected", error: { code: "model_changed", message: "Bản mới đã bỏ ví — mở lại app để gửi lại" } })]);
+    expect(await store.list()).toEqual([expect.objectContaining({ clientId: kept.client_id, status: "rejected", error: { code: "model_changed", message: "Bản mới đã bỏ ví, mở lại app để gửi lại" } })]);
+  });
+
+  it("UC-705 AC-39: hàng đợi cũ — khoản thu mang opens_cycle: true → gửi is_salary: true; opens_cycle: false → bỏ trường (server tự quyết theo Q1-B), không thành is_salary: false", async () => {
+    const { server, syncer } = setup();
+    const income = (amount: number, opens: boolean) => ({ meaning: "income", amount, at: "2026-11-10T03:00:00.000Z", client_id: `c-in-${amount}`, account_id: "main", opens_cycle: opens }) as unknown as EntryBody;
+    await syncer.enqueue(income(20_000_000, true), "wife");
+    await syncer.enqueue(income(1_200_000, false), "wife");
+    await syncer.flush();
+    const on = server.rows.get("c-in-20000000") as unknown as Record<string, unknown>;
+    const off = server.rows.get("c-in-1200000") as unknown as Record<string, unknown>;
+    expect(on).toMatchObject({ amount: 20_000_000, is_salary: true });
+    expect(on).not.toHaveProperty("opens_cycle");
+    expect(off).not.toHaveProperty("opens_cycle");
+    expect(off).not.toHaveProperty("is_salary");
   });
 
   it("lỗi 5xx: giữ lại để thử sau nhưng không chặn khoản phía sau; mất mạng thì dừng cả loạt", async () => {

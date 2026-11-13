@@ -1,5 +1,6 @@
-// Tin sáng, gửi vào giờ cả nhà chọn ở Cài đặt (mặc định 07:00 VN, src/cron/schedule.ts). Gộp luôn: dòng 🔎 nhìn lại kỳ này,
-// việc ngày lương còn mở, nhắc đếm tiền mặt Chủ nhật, nhắc lập bản tính tháng trước cho người thuê ngày 1 — xem specs/notify/UC-402.
+// Tin sáng, gửi vào giờ cả nhà chọn ở Cài đặt (mặc định 07:00 VN, src/cron/schedule.ts). Gộp luôn: dòng Chi tiêu tháng này,
+// nhắc trích Tích luỹ còn thiếu, mời chia dư tháng trước, nhắc đếm tiền mặt Chủ nhật, nhắc lập bản tính tháng trước cho người
+// thuê ngày 1 — xem specs/notify/UC-402.
 
 import { limitNudges } from "../domain/look-back";
 import { dayKey, isoWeekday, monthKey, previousMonth } from "../domain/period";
@@ -28,9 +29,17 @@ export async function daily(env: Env, now: Date): Promise<void> {
 
   const snapshot = await getSnapshot(db, null, now);
 
-  // 🔎 Nhìn lại kỳ này (UC-402 bước 4): nhóm có hạn mức của kỳ lương hiện tại, mọi tài khoản (tài khoản riêng tư cộng vào tổng).
+  // Chi tiêu tháng này (UC-402 bước 4): nhóm có hạn mức của tháng hiện tại, mọi tài khoản (tài khoản riêng tư cộng vào tổng).
   const lookBack = await spendByCategory(db, {}, now);
-  const nudges = lookBack.kind === "cycle" ? limitNudges(lookBack.groups, lookBack.cycle) : [];
+  const nudges = limitNudges(lookBack.groups, lookBack);
+
+  // Nhắc ① đang mở (pocket UC-1206): khoản lương về tài khoản riêng tư (nguồn bị giấu với tin cả nhà) chỉ được đếm, không số
+  // (ADR-133) — số trích lộ ra số lương.
+  const openSavings = snapshot.month.tasks.filter((t) => t.kind === "savings" && t.status === "open");
+  const savingsDue = {
+    missing: openSavings.reduce((s, t) => (t.source && "hidden" in t.source ? s : s + t.missing), 0),
+    privateCount: openSavings.filter((t) => t.source && "hidden" in t.source).length,
+  };
 
   const recon = (await reconcile(db)) as unknown as ReconcileRow[];
   const driftAccounts = recon
@@ -118,7 +127,8 @@ export async function daily(env: Env, now: Date): Promise<void> {
     shortDebt: snapshot.pockets.shortDebt,
     day: today,
     driftAccounts,
-    payTasksOpen: snapshot.payCycle?.openCount ?? 0,
+    savingsDue,
+    monthClose: snapshot.monthClose,
     pairedTransfersYesterday,
     backfillAddedLastNight,
     backfillScope,

@@ -1,7 +1,7 @@
 // Thang Tích luỹ 1 · 10 · 30% (ADR-142) — chữ và phép tính dùng chung cho sheet "Trích Tích luỹ", Tham số, Thiết lập, bước 5
 // màn chuyển đổi, thẻ Tích luỹ và Nhìn lại.
 
-import { savingsAmount, type SavingsLevel } from "../../../src/domain/pay-cycle";
+import { savingsAmount, type SavingsLevel } from "../../../src/domain/month-tasks";
 import { formatVnd } from "./money";
 
 /** Vạch trên thanh 1–100% và nhãn của từng vạch. */
@@ -12,7 +12,7 @@ export const SAVINGS_MARKS = [
 ] as const;
 
 export const SAVINGS_SCALE_TEXT =
-  "Thang của nhà: tối thiểu 1% · thường 10% · hướng tới 30%. Kỳ nào không trích được thì bỏ qua việc trích ở Hôm nay và ghi lý do.";
+  "Thang của nhà: tối thiểu 1% · thường 10% · hướng tới 30%. Kỳ nào không trích được, cứ bỏ qua ở Hôm nay và ghi lý do.";
 
 /** Kéo thanh: số tiền = khoản lương × % ÷ 100, làm tròn lên 1.000 (như ①). */
 export const amountOfPct = (income: number, pct: number): number => savingsAmount(income, pct);
@@ -25,7 +25,7 @@ export function belowMinText(amount: number, income: number): string | null {
   return amount > 0 && amount * 100 < income ? `Dưới mức tối thiểu 1% (${formatVnd(amountOfPct(income, 1))})` : null;
 }
 
-/** "đạt mức …" của kỳ; `zero` kèm lý do bỏ qua. null khi chưa có mức. */
+/** "đạt mức …" của tháng; `zero` kèm lý do bỏ qua. null khi chưa có mức. */
 export function levelText(level: SavingsLevel, reason: string | null = null): string | null {
   switch (level) {
     case "below1":

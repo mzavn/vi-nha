@@ -47,12 +47,12 @@ export function Login() {
   return (
     <main class="app" style={{ paddingBottom: "32px" }}>
       <div style={{ padding: "calc(40px + var(--safe-top)) 4px 20px" }}>
-        <h1 style={{ fontSize: "24px", fontWeight: 650, letterSpacing: "-0.02em" }}>Ví nhà</h1>
-        <p style={{ color: "var(--fg-2)", margin: "4px 0 0" }}>Sổ tiền của nhà. Biết ngay mỗi ngày chi khoảng bao nhiêu tới kỳ lương.</p>
+        <h1 style={{ fontSize: "var(--text-title)", fontWeight: 600, letterSpacing: "-0.02em" }}>Ví nhà</h1>
+        <p style={{ color: "var(--fg-2)", margin: "4px 0 0" }}>Sổ tiền của nhà. Biết ngay mỗi ngày chi khoảng bao nhiêu tới ngày lương.</p>
       </div>
       <form class="card" onSubmit={submit}>
         <fieldset style={{ border: 0, margin: 0, padding: "14px 14px 6px" }}>
-          <legend style={{ fontSize: "14px", fontWeight: 600, padding: 0, marginBottom: "10px" }}>Ai đang dùng máy này</legend>
+          <legend style={{ fontSize: "var(--text-md)", fontWeight: 600, padding: 0, marginBottom: "10px" }}>Ai đang dùng máy này</legend>
           {members === null && !listError && <div class="skeleton" style={{ height: "44px" }} />}
           {listError && (
             <p class="err" role="alert" style={{ margin: 0 }}>
@@ -97,8 +97,8 @@ export function Login() {
             {busy ? "Đang vào…" : "Vào sổ"}
           </button>
         </div>
-        <div class="note" style={{ borderTop: "1px solid var(--border)" }}>
-          Chọn người để app biết ai ghi khoản nào và tự điền tài khoản, tiền mặt của người đó. Đổi người thì đăng xuất (Cài đặt › Máy này) rồi chọn lại.
+        <div class="note" style={{ borderTop: "1px solid var(--line)" }}>
+          Chọn người để app biết ai ghi và tự điền tài khoản, tiền mặt. Đổi người thì vào Cài đặt › Máy này, đăng xuất rồi chọn lại.
         </div>
       </form>
     </main>

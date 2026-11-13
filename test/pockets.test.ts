@@ -1,9 +1,8 @@
 // Ba ngăn (pocket UC-1203, UC-1209, ADR-119, ADR-132): tổng ngăn = Σ sổ tài khoản theo ngăn, mục tiêu Dự phòng = tài khoản
-// thật (A = số dư), phần an tâm, Ví Thưởng, nợ ngắn hạn, Tích luỹ theo kỳ, tháng vận hành — hàm thuần.
+// thật (A = số dư), phần an tâm, Ví Thưởng, nợ ngắn hạn, Tích luỹ theo tháng, tháng vận hành — hàm thuần.
 import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { blessingFor, fillGoals, goalOrder, groupInterest, peaceMonthsView, pocketsView, type PocketAccount, type PocketDebt, type PocketGoalInput, type PocketsInput, type PocketsView } from "../src/domain/pockets";
-import { cycleRanges } from "../src/domain/pay-cycle";
 import type { Env } from "../src/env";
 import { app } from "../src/index";
 import { asD1, openDb } from "./helpers/d1-sqlite";
@@ -17,16 +16,16 @@ const total = (v: PocketsView) => v.savings.total + v.reserve.total + v.operatin
 const view = (input: Pick<PocketsInput, "accounts" | "goals" | "debts" | "savingsPct"> & Partial<PocketsInput>) =>
   pocketsView({
     rewardAccountId: null,
-    history: { since: "2026-11-10", prevSince: "2026-10-10", accounts: [] },
-    operatingSpend: { cycles: [], dataStart: null },
+    history: { since: "2026-11-01", prevSince: "2026-10-01", accounts: [] },
+    operatingSpend: { months: [], dataStart: null },
     peaceTarget: 6,
     ...input,
   });
-/** Ba kỳ lương trọn trước kỳ 10/11 (cũ trước): 31 + 30 + 31 = 92 ngày. */
-const cycles = (a: number, b: number, c: number) => [
-  { start: "2026-08-10", amount: a, days: 31 },
-  { start: "2026-09-10", amount: b, days: 30 },
-  { start: "2026-10-10", amount: c, days: 31 },
+/** Ba tháng dương lịch trọn trước tháng 11 (cũ trước): 31 + 30 + 31 = 92 ngày. */
+const months = (a: number, b: number, c: number) => [
+  { start: "2026-08-01", amount: a, days: 31 },
+  { start: "2026-09-01", amount: b, days: 30 },
+  { start: "2026-10-01", amount: c, days: 31 },
 ];
 
 describe("pocketsView", () => {
@@ -81,11 +80,11 @@ describe("pocketsView", () => {
     expect(view({ accounts, goals: [], debts: [], savingsPct: 10 }).shortDebt).toEqual({ total: 0, count: 0, items: [] });
   });
 
-  it("UC-1203 AC-5: Tích luỹ theo kỳ — bây giờ 6.500.000, đầu kỳ 5.700.000, đầu kỳ trước 5.000.000 → +800.000 / +700.000; tài khoản tắt sau mốc vẫn tính ở mốc", () => {
+  it("UC-1203 AC-5: Tích luỹ theo tháng — bây giờ 6.500.000, đầu tháng 5.700.000, đầu tháng trước 5.000.000 → +800.000 / +700.000; tài khoản tắt sau mốc vẫn tính ở mốc", () => {
     const accounts = [acct("main", "operating", 3_000_000), acct("saving", "reserve", 40_000_000), acct("wealth", "savings", 6_000_000), acct("piggy", "savings", 500_000)];
     const history: PocketsInput["history"] = {
-      since: "2026-11-10",
-      prevSince: "2026-10-10",
+      since: "2026-11-01",
+      prevSince: "2026-10-01",
       accounts: [
         { id: "main", pocket: "operating", since: 3_800_000, prevSince: 4_500_000 },
         { id: "saving", pocket: "reserve", since: 40_000_000, prevSince: 40_000_000 },
@@ -95,17 +94,17 @@ describe("pocketsView", () => {
     };
     const v = view({ accounts, goals: [], debts: [], savingsPct: 10, history });
     expect(v.savings.total).toBe(6_500_000);
-    expect(v.savings.change).toEqual({ since: "2026-11-10", amount: 800_000, prevSince: "2026-10-10", prevAmount: 700_000 });
+    expect(v.savings.change).toEqual({ since: "2026-11-01", amount: 800_000, prevSince: "2026-10-01", prevAmount: 700_000 });
 
     // Tài khoản Tích luỹ thứ hai có 1.000.000 ở cả hai mốc, hôm nay chuyển hết rồi tắt (không còn trong `accounts`).
     const closed = view({ accounts, goals: [], debts: [], savingsPct: 10, history: { ...history, accounts: [...history.accounts, { id: "old", pocket: "savings", since: 1_000_000, prevSince: 1_000_000 }] } });
     expect(closed.savings.change).toMatchObject({ amount: -200_000, prevAmount: 700_000 });
-    // Tắt trước đầu kỳ này (sau đầu kỳ trước): chỉ tính ở đầu kỳ trước.
+    // Tắt trước đầu tháng này (sau đầu tháng trước): chỉ tính ở đầu tháng trước.
     const closedEarlier = view({ accounts, goals: [], debts: [], savingsPct: 10, history: { ...history, accounts: [...history.accounts, { id: "old", pocket: "savings", since: null, prevSince: 1_000_000 }] } });
     expect(closedEarlier.savings.change).toMatchObject({ amount: 800_000, prevAmount: -300_000 });
   });
 
-  it("UC-1203 AC-6: phần an tâm = tài khoản Dự phòng không gắn mục tiêu (31.500.000); tháng vận hành chuẩn hoá theo ngày — Σ chi × 30 ÷ Σ ngày của kỳ trọn đủ dữ liệu có chi > 0; 0 / 1 / 2 / 3 kỳ; phần an tâm âm → 0", () => {
+  it("UC-1203 AC-6: phần an tâm = tài khoản Dự phòng không gắn mục tiêu (31.500.000); tháng vận hành chuẩn hoá theo ngày — Σ chi × 30 ÷ Σ ngày của tháng trọn đủ dữ liệu có chi > 0; 0 / 1 / 2 / 3 tháng; phần an tâm âm → 0", () => {
     const at = (spend: PocketsInput["operatingSpend"], peaceBalance = 31_500_000) =>
       view({
         accounts: [acct("buffer", "reserve", peaceBalance), acct("tuition-acc", "reserve", 6_500_000)],
@@ -114,18 +113,42 @@ describe("pocketsView", () => {
         savingsPct: 10,
         operatingSpend: spend,
       }).reserve;
-    expect(at({ cycles: cycles(9_000_000, 10_500_000, 10_500_000), dataStart: "2026-07-01" })).toMatchObject({
+    expect(at({ months: months(9_000_000, 10_500_000, 10_500_000), dataStart: "2026-07-01" })).toMatchObject({
       total: 38_000_000,
       peace: 31_500_000,
-      peaceMonths: { covered: 3.2, target: 6, monthly: 9_782_608, cycles: 3 },
+      peaceMonths: { covered: 3.2, target: 6, monthly: 9_782_608, months: 3 },
     });
-    // Ngày bắt đầu dữ liệu 15/8 → kỳ 10/8–9/9 bị bỏ dù có chi: 21.000.000 × 30 ÷ 61.
-    expect(at({ cycles: cycles(9_000_000, 10_500_000, 10_500_000), dataStart: "2026-08-15" }).peaceMonths).toEqual({ covered: 3, target: 6, monthly: 10_327_868, cycles: 2 });
-    expect(at({ cycles: cycles(0, 0, 6_000_000), dataStart: "2026-07-01" }).peaceMonths).toEqual({ covered: 5.4, target: 6, monthly: 5_806_451, cycles: 1 });
-    expect(at({ cycles: cycles(9_000_000, 10_500_000, 10_500_000), dataStart: "2026-10-20" }).peaceMonths).toEqual({ covered: null, target: 6, monthly: null, cycles: 0 });
-    expect(at({ cycles: [], dataStart: null }).peaceMonths).toEqual({ covered: null, target: 6, monthly: null, cycles: 0 });
-    const short = at({ cycles: cycles(9_000_000, 10_500_000, 10_500_000), dataStart: "2026-07-01" }, -1_000_000);
+    // Ngày bắt đầu dữ liệu 15/8 → tháng 8 bị bỏ dù có chi: 21.000.000 × 30 ÷ 61.
+    expect(at({ months: months(9_000_000, 10_500_000, 10_500_000), dataStart: "2026-08-15" }).peaceMonths).toEqual({ covered: 3, target: 6, monthly: 10_327_868, months: 2 });
+    expect(at({ months: months(0, 0, 6_000_000), dataStart: "2026-07-01" }).peaceMonths).toEqual({ covered: 5.4, target: 6, monthly: 5_806_451, months: 1 });
+    expect(at({ months: months(9_000_000, 10_500_000, 10_500_000), dataStart: "2026-10-20" }).peaceMonths).toEqual({ covered: null, target: 6, monthly: null, months: 0 });
+    expect(at({ months: [], dataStart: null }).peaceMonths).toEqual({ covered: null, target: 6, monthly: null, months: 0 });
+    const short = at({ months: months(9_000_000, 10_500_000, 10_500_000), dataStart: "2026-07-01" }, -1_000_000);
     expect([short.peace, short.peaceMonths.covered]).toEqual([-1_000_000, 0]);
+  });
+
+  it("UC-1203 AC-15: hộ mẫu B ngày 11/11 — Tích luỹ 8.500.000, tại 1/11 7.700.000, tại 1/10 7.000.000 → +800.000 / +700.000 với mốc ngày 1; chi vận hành tháng 8 / 9 / 10 là 11 / 9 / 10 triệu, dữ liệu từ 1/8 → 3 tháng, 9.782.608; dữ liệu từ 15/8 → bỏ tháng 8, 2 tháng; ngày 1/12 tháng 11 vào cửa sổ, tháng 8 ra", () => {
+    const accounts = [acct("main", "operating", 3_000_000), acct("wealth", "savings", 8_500_000)];
+    const history: PocketsInput["history"] = {
+      since: "2026-11-01",
+      prevSince: "2026-10-01",
+      accounts: [
+        { id: "main", pocket: "operating", since: 3_000_000, prevSince: 3_000_000 },
+        { id: "wealth", pocket: "savings", since: 7_700_000, prevSince: 7_000_000 },
+      ],
+    };
+    const at = (operatingSpend: PocketsInput["operatingSpend"], h = history) => view({ accounts, goals: [], debts: [], savingsPct: 10, history: h, operatingSpend });
+    const nov = at({ months: months(11_000_000, 9_000_000, 10_000_000), dataStart: "2026-08-01" });
+    expect(nov.savings.change).toEqual({ since: "2026-11-01", amount: 800_000, prevSince: "2026-10-01", prevAmount: 700_000 });
+    expect(nov.reserve.peaceMonths).toMatchObject({ monthly: 9_782_608, months: 3 });
+    expect(at({ months: months(11_000_000, 9_000_000, 10_000_000), dataStart: "2026-08-15" }).reserve.peaceMonths).toMatchObject({ monthly: 9_344_262, months: 2 });
+
+    const dec = at(
+      { months: [{ start: "2026-09-01", amount: 9_000_000, days: 30 }, { start: "2026-10-01", amount: 10_000_000, days: 31 }, { start: "2026-11-01", amount: 9_000_000, days: 30 }], dataStart: "2026-08-15" },
+      { since: "2026-12-01", prevSince: "2026-11-01", accounts: [{ id: "main", pocket: "operating", since: 3_000_000, prevSince: 3_000_000 }, { id: "wealth", pocket: "savings", since: 8_500_000, prevSince: 7_700_000 }] },
+    );
+    expect(dec.savings.change).toEqual({ since: "2026-12-01", amount: 0, prevSince: "2026-11-01", prevAmount: 800_000 });
+    expect(dec.reserve.peaceMonths).toMatchObject({ monthly: 9_230_769, months: 3 });
   });
 
   it("UC-1203 AC-6: peaceMonthsView — số nguyên phần mười: 23.000.000 / 10.000.000, đích 5 → 2,3 và thanh 46 (không phải 45); 31.300.000 → 3,1 / 51; monthly null → null", () => {
@@ -210,7 +233,7 @@ describe("pocketsView", () => {
     expect(savingGroup(zero)).toMatchObject({ short: 13_500_000, extra: 0 });
   });
 
-  it("UC-1203 AC-13: phần đã chi trong kỳ — chi gắn mục tiêu không làm hụt mục tiêu trước; chi vượt số cần lấy vào phần sau; Σ held = số dư; tổng ngăn và phần an tâm không đổi", () => {
+  it("UC-1203 AC-13: phần đã chi trong tháng — chi gắn mục tiêu không làm hụt mục tiêu trước; chi vượt số cần lấy vào phần sau; Σ held = số dư; tổng ngăn và phần an tâm không đổi", () => {
     const at = (saving: number, spent: Record<string, number>) => view({ accounts: sharedAccounts(saving), goals: sharedGoals(spent), debts: [], savingsPct: 10 });
     const goalOf = (v: PocketsView, id: string) => v.reserve.goals.find((g) => g.id === id)!;
     const paid = at(4_500_000, { "nha-o": 7_500_000 });
@@ -307,10 +330,10 @@ describe("pocketsView", () => {
     ];
     const v = view({ accounts: [acct("tk-chi-tieu-chong", "operating", 15_000_000), acct("tk-tiet-kiem", "reserve", 5_000_000), acct("phao", "reserve", 1_000_000)], goals, debts: [], savingsPct: 10 });
     expect(v.operating.goals).toEqual([
-      { id: "dien-nuoc", name: "dien-nuoc", monthly: 2_000_000, cycleAmount: null, note: null, categoryIds: [], spent: 1_000_000, remaining: 1_000_000 },
-      { id: "thuoc", name: "thuoc", monthly: 500_000, cycleAmount: null, note: null, categoryIds: [], spent: 300_000, remaining: 200_000 },
-      { id: "thien-phuoc", name: "thien-phuoc", monthly: 1_000_000, cycleAmount: null, note: null, categoryIds: [], spent: 0, remaining: 1_000_000 },
-      { id: "ve-que", name: "ve-que", monthly: 1_000_000, cycleAmount: null, note: null, categoryIds: [], spent: 1_500_000, remaining: 0 },
+      { id: "dien-nuoc", name: "dien-nuoc", monthly: 2_000_000, monthAmount: null, note: null, categoryIds: [], spent: 1_000_000, remaining: 1_000_000 },
+      { id: "thuoc", name: "thuoc", monthly: 500_000, monthAmount: null, note: null, categoryIds: [], spent: 300_000, remaining: 200_000 },
+      { id: "thien-phuoc", name: "thien-phuoc", monthly: 1_000_000, monthAmount: null, note: null, categoryIds: [], spent: 0, remaining: 1_000_000 },
+      { id: "ve-que", name: "ve-que", monthly: 1_000_000, monthAmount: null, note: null, categoryIds: [], spent: 1_500_000, remaining: 0 },
     ]);
     expect(v.operating.remaining).toBe(2_200_000);
     expect(v.reserve.goals.map((g) => g.id)).toEqual(["hoc-tap"]);
@@ -367,25 +390,14 @@ describe("tiền lãi của nhóm (groupInterest, pocket UC-1209 bước 9)", ()
   });
 });
 
-describe("đầu kỳ lương khi chưa có kỳ lưu (cycleRanges)", () => {
-  const starts = (today: string, paydayDay: number, since: string) =>
-    cycleRanges([], paydayDay, new Date(`${today}T10:00:00+07:00`), new Date(`${since}T00:00:00+07:00`).toISOString()).map((r) => r.payday).reverse();
-  it("UC-1203 AC-5: đầu kỳ = ngày lương gần nhất ≤ hôm nay, kẹp cuối tháng — 11/11 → 10/11, 10/10; đúng ngày lương 10/12 → 10/12, 10/11; ngày lương 31, 5/3/2027 → 28/2", () => {
-    expect(starts("2026-11-11", 10, "2026-08-10")).toEqual(["2026-11-10", "2026-10-10", "2026-09-10", "2026-08-10"]);
-    expect(starts("2026-12-10", 10, "2026-11-10")).toEqual(["2026-12-10", "2026-11-10"]);
-    expect(starts("2027-03-05", 31, "2027-01-01")).toEqual(["2027-02-28", "2027-01-31", "2026-12-31"]);
-    expect(starts("2027-01-05", 10, "2026-11-10")).toEqual(["2026-12-10", "2026-11-10"]);
-  });
-});
-
 describe("lời chúc khi hết nợ ngắn hạn (blessingFor)", () => {
   it("UC-702 AC-17: 11/11 → câu 1, 12/11 → câu 2, 13/11 → câu 3, 14/11 → câu 4, 15/11 lại câu 1", () => {
     expect(["2026-11-11", "2026-11-12", "2026-11-13", "2026-11-14", "2026-11-15"].map(blessingFor)).toEqual([
-      "Không còn nợ ngắn hạn 🎉 — tiền vận hành là của mình trọn vẹn",
+      "Không còn nợ ngắn hạn — tiền vận hành là của mình trọn vẹn",
       "Sạch nợ ngắn hạn — mỗi đồng chi hôm nay là tiền của mình",
-      "Không nợ ngắn hạn nào. Giữ nhịp này nhé 👏",
+      "Không nợ ngắn hạn nào. Giữ nhịp này nhé",
       "Hết nợ ngắn hạn — tháng này nhẹ hẳn",
-      "Không còn nợ ngắn hạn 🎉 — tiền vận hành là của mình trọn vẹn",
+      "Không còn nợ ngắn hạn — tiền vận hành là của mình trọn vẹn",
     ]);
   });
 });

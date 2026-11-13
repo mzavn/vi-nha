@@ -16,14 +16,13 @@ import {
   clearSecretPayload,
   connectionPicker,
   configPayload,
-  cycleStreamReminder,
   debtGoalSuggestions,
   feedFromSuggestion,
   followsCodeConvention,
   GOAL_POCKET_LOCK,
   goalAccountNote,
   goalAccountOptions,
-  goalLineText,
+  goalRowView,
   goalListGroups,
   goalOrderError,
   goalOrderPayload,
@@ -34,11 +33,12 @@ import {
   ORDER_CHANGED,
   TAX_ACCOUNT_SHARED,
   type GoalAccountOption,
+  type GoalRowView,
   isoFromVnInput,
   memberPayload,
   normalizePattern,
   notifyPayload,
-  OPENS_CYCLE_HINT,
+  SALARY_STREAM_HINT,
   rewardAccountOptions,
   rulePayload,
   ruleToForm,
@@ -64,7 +64,7 @@ import {
   OPERATING_HINT,
   OPERATING_MONTHLY_ONLY,
   operatingChoice,
-  operatingGoalLines,
+  operatingGoalRows,
   PARENT_REWARD,
   PARENT_SEPAY,
   parentPocketText,
@@ -119,18 +119,18 @@ describe("nhật ký thay đổi", () => {
   it("UC-508: nối / gỡ ứng dụng AI và việc ghi qua Claude có tên dễ đọc", () => {
     const entry = (patch: Partial<AuditEntry>): AuditEntry => ({ id: 1, at: "2026-10-06 02:05:00", memberId: "husband", memberName: "Chồng", via: "session", action: "mcp.connect", target: "client:claude.ai", detail: null, ...patch });
     expect(auditView(entry({ detail: { member_id: "husband", scopes: ["mcp:read", "mcp:write"] } }))).toEqual({
-      title: "Nối ứng dụng AI: claude.ai",
+      title: "Nối Trợ lý AI: claude.ai",
       sub: "Chồng · 09:05 6/10",
       fields: null,
     });
-    expect(auditView(entry({ action: "mcp.revoke" })).title).toBe("Gỡ kết nối ứng dụng AI: claude.ai");
+    expect(auditView(entry({ action: "mcp.revoke" })).title).toBe("Gỡ kết nối Trợ lý AI: claude.ai");
     expect(auditView(entry({ action: "tx.create", target: "tx:40", via: "mcp" }))).toMatchObject({ title: "Ghi giao dịch #40", sub: "Chồng · qua Claude · 09:05 6/10" });
     expect(auditView(entry({ action: "log.assign", target: "log:7", via: "mcp" })).title).toBe("Gán giao dịch ngân hàng #7");
     // UC-207: chốt tháng ghi nhật ký với target "month:YYYY-MM".
     expect(auditView(entry({ action: "month.close", target: "month:2026-10", detail: { wealth_pct: 50 } })).title).toBe("Chốt tháng 2026-10");
     // Nhật ký mới của audit v2 (access UC-505): nguồn thu, bỏ qua log, danh mục.
     expect(auditView(entry({ action: "income_stream.create", target: "income_stream:luong-vo" })).title).toBe("Thêm nguồn thu luong-vo");
-    expect(auditView(entry({ action: "income_stream.update", target: "income_stream:luong", detail: { fields: ["opens_cycle"] } }))).toMatchObject({ title: "Sửa nguồn thu luong", fields: "đổi: opens_cycle" });
+    expect(auditView(entry({ action: "income_stream.update", target: "income_stream:luong", detail: { fields: ["is_salary"] } }))).toMatchObject({ title: "Sửa nguồn thu luong", fields: "đổi: is_salary" });
     expect(auditView(entry({ action: "log.ignore", target: "log:L4" })).title).toBe("Bỏ qua giao dịch ngân hàng #L4");
     expect(auditView(entry({ action: "category.create", target: "category:qua-tang" })).title).toBe("Thêm danh mục qua-tang");
     expect(auditView(entry({ action: "category.update", target: "category:qua-tang" })).title).toBe("Sửa danh mục qua-tang");
@@ -145,6 +145,14 @@ describe("nhật ký thay đổi", () => {
     expect(auditView(entry("goal.order", "goal:*")).title).toBe("Đổi thứ tự mục tiêu *");
     expect(AUDIT_ACTION["income.allocate"]).toBe("Chia khoản thu");
     expect(AUDIT_ACTION["month.close"]).toBe("Chốt tháng");
+    // v2.5 (ADR-144): nhãn mới; nhãn kỳ lương cũ giữ để đọc nhật ký cũ.
+    expect(AUDIT_ACTION["month_task.done"]).toBe("Đã chuyển theo nhắc trích Tích luỹ");
+    expect(AUDIT_ACTION["month_close.split"]).toBe("Chia dư cuối tháng");
+    expect(AUDIT_ACTION["month_close.skip"]).toBe("Để dư cuối tháng lại Vận hành");
+    expect(AUDIT_ACTION["goal.month_amount"]).toBe("Đặt số tháng này cho khoản phải trả");
+    expect(AUDIT_ACTION["tx.salary"]).toBe("Đổi 'Đây là lương' của khoản thu");
+    expect(AUDIT_ACTION["pay_cycle.open"]).toBe("Mở kỳ lương");
+    expect(auditView(entry("month_close.split", "month:2026-11")).title).toBe("Chia dư cuối tháng 2026-11");
   });
 });
 
@@ -280,9 +288,9 @@ describe("tài khoản", () => {
   });
 
   it("gợi ý khả năng SePay theo ngân hàng: chỉ tiền vào, cả hai chiều, chưa hỗ trợ, bắt buộc VA", () => {
-    expect(bankHint("MBBank")).toBe("SePay: báo tiền vào, chưa báo tiền ra — khoản chi từ tài khoản này nhập tay.");
+    expect(bankHint("MBBank")).toBe("SePay: báo tiền vào, chưa báo tiền ra, khoản chi từ tài khoản này nhập tay.");
     expect(bankHint("Sacombank")).toBe("SePay: báo cả tiền vào lẫn tiền ra.");
-    expect(bankHint("Techcombank")).toBe("SePay chưa hỗ trợ — ghi tay.");
+    expect(bankHint("Techcombank")).toBe("SePay chưa hỗ trợ, ghi tay.");
     expect(bankHint("BIDV")).toContain("SePay chỉ nhận qua tài khoản ảo (VA)");
     expect(bankHint("")).toBeNull();
   });
@@ -355,7 +363,7 @@ describe("tài khoản", () => {
     const base = { from: "2026-10-01", to: "2026-10-17", added: 2, duplicates: 5, beforeOpening: 0, beforeFeed: 0, perConnection: [], errors: [] };
     expect(sepaySyncText(base)).toBe("Đã lấy thêm 2 giao dịch, 5 đã có sẵn.");
     expect(sepaySyncText({ ...base, beforeOpening: 1, beforeFeed: 3, errors: ["SePay chính: lỗi"] })).toBe(
-      "Đã lấy thêm 2 giao dịch, 5 đã có sẵn. 1 giao dịch trước ngày mở sổ — đã có trong số dư đầu, không ghi lại. 3 giao dịch trước mốc theo dõi SePay — đã có trong sổ, không ghi lại. Có chỗ chưa lấy được — xem lý do dưới nút Đồng bộ.",
+      "Đã lấy thêm 2 giao dịch, 5 đã có sẵn. 1 giao dịch trước ngày mở sổ, đã có trong số dư đầu, không ghi lại. 3 giao dịch trước mốc theo dõi SePay, đã có trong sổ, không ghi lại. Có chỗ chưa lấy được, xem lý do dưới nút Đồng bộ.",
     );
   });
 });
@@ -439,6 +447,15 @@ describe("thành viên, tham số", () => {
       expect(configPayload({ ...config, payday_day: bad })).toEqual({ ok: false, errors: { payday_day: "Ngày lương là số nguyên từ 1 đến 31." } });
     }
   });
+
+  it("UC-709 AC-55: Tham số có 'Ngưỡng nhắc trích Tích luỹ' (salary_reminder_min) đứng riêng 'Ngưỡng tự nhận lương' (salary_min_amount): đặt 3.000.000 → gửi salary_reminder_min 3000000, salary_min_amount không đổi; âm / lẻ → lỗi ở ô của nó; bản cài đặt cũ chưa có → không gửi", () => {
+    expect(configPayload({ ...config, salary_min_amount: 1_000_000, salary_reminder_min: 3_000_000 })).toMatchObject({ ok: true, value: { salary_min_amount: 1_000_000, salary_reminder_min: 3_000_000 } });
+    expect(configPayload({ ...config, salary_reminder_min: 0 })).toMatchObject({ ok: true, value: { salary_reminder_min: 0 } });
+    expect(configPayload({ ...config, salary_reminder_min: -1 })).toEqual({ ok: false, errors: { salary_reminder_min: "Ngưỡng là số nguyên không âm." } });
+    expect(configPayload({ ...config, salary_reminder_min: 1.5 })).toEqual({ ok: false, errors: { salary_reminder_min: "Ngưỡng là số nguyên không âm." } });
+    const old = configPayload(config);
+    expect(old.ok && "salary_reminder_min" in old.value).toBe(false);
+  });
 });
 
 describe("giờ nhắc", () => {
@@ -467,32 +484,31 @@ describe("giờ nhắc", () => {
     expect(scheduleRows(schedule()).map((r) => r.value)).toEqual(["07:00", "Thứ Hai 08:00", "Bật", "22:00–06:30"]);
     const off = scheduleRows(schedule({ dailyEnabled: false, weeklyEnabled: false, quietStart: "00:00", quietEnd: "00:00" }));
     expect(off.map((r) => r.value)).toEqual(["Tắt", "Tắt", "Bật", "Không đặt"]);
-    expect(off[0]!.sub).toBe("Đang tắt — mở Hôm nay để xem việc cần làm");
+    expect(off[0]!.sub).toBe("Đang tắt");
     const on = scheduleRows(schedule());
-    expect(on[0]!.sub).toBe("Chi khoảng mỗi ngày tới kỳ lương, nhóm gần hạn mức, đối soát, việc cần làm");
-    expect(on[1]!.sub).toBe("Chi tuần và chi từ Vận hành, nhóm có hạn mức, top 5 danh mục");
+    expect(on[0]!.sub).toBe("Chi mỗi ngày, hạn mức, việc cần làm");
+    expect(on[1]!.sub).toBe("Chi tuần, hạn mức, top 5 danh mục");
   });
 });
 
-describe("nguồn thu: Mở kỳ lương (UC-709)", () => {
-  const salary = { id: "salary-husband", name: "Lương", sort: 10, active: true, pocket: null, opens_cycle: false };
+describe("nguồn thu: Nguồn lương (UC-709)", () => {
+  const salary = { id: "salary-husband", name: "Lương", sort: 10, active: true, pocket: null, is_salary: false };
 
-  it("UC-709 AC-42: bật 'Mở kỳ lương' cho nguồn Lương, lưu → gửi opens_cycle: true; có câu dặn nhà hai người; không còn phần khoá", () => {
-    const f = { ...streamToForm(salary), opens_cycle: true };
-    expect(streamPayload(f, false)).toEqual({ ok: true, value: { name: "Lương", active: true, pocket: null, opens_cycle: true } });
-    expect(OPENS_CYCLE_HINT).toBe("Lương về từ nguồn này mở kỳ lương mới và danh sách việc. Nhà hai người lương khác ngày: chỉ bật cho một nguồn.");
-    expect(streamToForm({ ...salary, opens_cycle: true }).opens_cycle).toBe(true);
-    expect(JSON.stringify(streamToForm(salary))).not.toMatch(/locks/);
-    expect(streamSummary({ ...salary, opens_cycle: true })).toBe("Mở kỳ lương");
+  it("UC-709 AC-42: bật 'Nguồn lương' cho nguồn Lương, lưu → gửi is_salary: true (không opens_cycle); gợi ý 'Lương về từ nguồn này có nhắc trích Tích luỹ.' không câu dặn 'chỉ bật một nguồn'; dòng phụ 'Nguồn lương'", () => {
+    const f = { ...streamToForm(salary), is_salary: true };
+    expect(streamPayload(f, false)).toEqual({ ok: true, value: { name: "Lương", active: true, pocket: null, is_salary: true } });
+    expect(SALARY_STREAM_HINT).toBe("Lương về từ nguồn này có nhắc trích Tích luỹ.");
+    expect(streamToForm({ ...salary, is_salary: true }).is_salary).toBe(true);
+    expect(JSON.stringify(streamToForm(salary))).not.toMatch(/locks|opens_cycle/);
+    expect(streamSummary({ ...salary, is_salary: true })).toBe("Nguồn lương");
+    expect(streamSummary(salary)).toBe("");
     expect(streamPayload({ ...f, name: " " }, true).ok).toBe(false);
   });
 
-  it("UC-709 AC-45: không nguồn nào bật Mở kỳ lương → dòng nhắc; bật một nguồn → mất; nguồn cho thuê không gửi opens_cycle", () => {
+  it("UC-709 AC-45: hai nguồn cùng bật Nguồn lương lưu được (không câu dặn, không dòng nhắc 'chưa có nguồn'); nguồn cho thuê không có công tắc, không gửi is_salary", () => {
     const rent = { ...salary, id: "rental", name: "Cho thuê" };
-    expect(cycleStreamReminder([salary, rent])).toBe("Chưa có nguồn nào mở kỳ lương: bật cho nguồn lương chính để lương về có danh sách việc.");
-    expect(cycleStreamReminder([{ ...salary, opens_cycle: true }, rent])).toBeNull();
-    expect(cycleStreamReminder([{ ...salary, opens_cycle: undefined }])).toBeNull();
-    expect(streamPayload({ ...streamToForm(rent), opens_cycle: true }, false, true)).toEqual({ ok: true, value: { name: "Cho thuê", active: true, pocket: null } });
+    expect(streamPayload({ ...streamToForm({ ...salary, id: "salary-wife", name: "Lương vợ" }), is_salary: true }, false)).toMatchObject({ ok: true, value: { is_salary: true } });
+    expect(streamPayload({ ...streamToForm(rent), is_salary: true }, false, true)).toEqual({ ok: true, value: { name: "Cho thuê", active: true, pocket: null } });
   });
 });
 
@@ -622,27 +638,29 @@ describe("Ba ngăn (UC-709 AC-35…39)", () => {
     expect(outside.ok && outside.value.pocket).toBeNull();
   });
 
-  const names = [account({ id: "bidv", name: "BIDV" }), account({ id: "mb", name: "MB chính" })];
+  const rowOf = (v: GoalRowView) => [v.name, v.amount, v.chip && `${v.chip.tone}:${v.chip.text}`, v.pct === null ? null : Math.round(v.pct), v.sub, v.needsAccount];
 
-  it("UC-709 AC-36: dòng danh sách '{tên} · đã có {held} / {B} · trong {tài khoản} · hạn … · cách lặp'; chưa gắn → 'chưa có tài khoản'", () => {
-    expect(goalLineText(goal(), names)).toBe("Học phí · đã có 4.000.000 / 6.000.000 · trong BIDV · hạn 15/01/2027 · 2.000.000/tháng, 3 tháng một lần");
-    expect(goalLineText(goal({ id: "thue", name: "Thuế", account_id: "mb", target_amount: null, monthly_amount: null, repeat_months: null, due_date: null, target_pct: 10, held: 1_200_000 }), names)).toBe(
-      "Thuế · đã có 1.200.000 · trong MB chính · 10% thu chịu thuế",
-    );
-    expect(goalLineText(goal({ name: "Bảo dưỡng xe", account_id: null, held: null, target_amount: 4_800_000, monthly_amount: null, repeat_months: null, due_date: "2027-03-31" }), names)).toBe(
-      "Bảo dưỡng xe · chưa có tài khoản · hạn 31/03/2027",
-    );
-    expect(goalLineText(goal({ name: "Điện nước", target_amount: 1_300_000, monthly_amount: 1_300_000, repeat_months: 1, due_date: null, held: 0 }), names)).toBe(
-      "Điện nước · đã có 0 / 1.300.000 · trong BIDV · 1.300.000/tháng",
-    );
-    expect(goalLineText(goal(), names)).not.toMatch(/để riêng|giữ riêng/);
-    expect(goalLineText(goal({ held: 6_000_000, short: 0 }), names)).toBe("Học phí · đã có 6.000.000 / 6.000.000 · trong BIDV · đủ · hạn 15/01/2027 · 2.000.000/tháng, 3 tháng một lần");
+  it("UC-709 AC-36: hàng mục tiêu — tên, đã có bên phải, chip Đủ / Thiếu, thanh tiến độ, một dòng phụ ngắn 'hạn …' (chip Thiếu thay 'cần'; cách lặp, tài khoản chỉ ở sheet); chưa gắn → 'cần … · hạn …', 'Mở tài khoản thật'", () => {
+    expect(rowOf(goalRowView(goal()))).toEqual(["Học phí", `4.000.000${NBSP}₫`, "warn:Thiếu 2.000.000", 67, "hạn 15/01/2027", false]);
+    expect(rowOf(goalRowView(goal({ id: "thue", name: "Thuế", account_id: "mb", target_amount: null, monthly_amount: null, repeat_months: null, due_date: null, target_pct: 10, held: 1_200_000 })))).toEqual([
+      "Thuế", `1.200.000${NBSP}₫`, null, null, "10% thu chịu thuế", false,
+    ]);
+    expect(rowOf(goalRowView(goal({ name: "Bảo dưỡng xe", account_id: null, held: null, target_amount: 4_800_000, monthly_amount: null, repeat_months: null, due_date: "2027-03-31" })))).toEqual([
+      "Bảo dưỡng xe", null, null, null, "cần 4.800.000 · hạn 31/03/2027", true,
+    ]);
+    expect(rowOf(goalRowView(goal({ name: "Điện nước", target_amount: 1_300_000, monthly_amount: 1_300_000, repeat_months: 1, due_date: null, held: 0 })))).toEqual([
+      "Điện nước", `0${NBSP}₫`, "warn:Thiếu 1.300.000", 0, null, false,
+    ]);
+    // Đủ / Thiếu: không có "cần" (chip đã nói); đã có quá B hiện bằng B (phần dư chỉ ở dòng nhóm).
+    expect(rowOf(goalRowView(goal({ held: 6_000_000, short: 0 })))).toEqual(["Học phí", `6.000.000${NBSP}₫`, "ok:Đủ", 100, "hạn 15/01/2027", false]);
+    expect(rowOf(goalRowView(goal({ held: 9_000_000, short: 0 }))).slice(1, 4)).toEqual([`6.000.000${NBSP}₫`, "ok:Đủ", 100]);
   });
 
-  it("UC-709 AC-36 (UC-718): đang che số tiền thì mọi số tiền trên dòng thành ••••, số tháng và % giữ nguyên", () => {
+  it("UC-709 AC-36 (UC-718): đang che số tiền thì mọi số tiền trên hàng thành •••••, số tháng và % giữ nguyên", () => {
     setAmountsHidden(true);
     try {
-      expect(goalLineText(goal(), names)).toBe("Học phí · đã có •••• / •••• · trong BIDV · hạn 15/01/2027 · ••••/tháng, 3 tháng một lần");
+      expect(rowOf(goalRowView(goal()))).toEqual(["Học phí", `•••••${NBSP}₫`, "warn:Thiếu •••••", 67, "hạn 15/01/2027", false]);
+      expect(goalRowView(goal({ account_id: null, held: null })).sub).toBe("cần ••••• · hạn 15/01/2027");
     } finally {
       setAmountsHidden(false);
     }
@@ -683,7 +701,7 @@ describe("Ba ngăn (UC-709 AC-35…39)", () => {
     expect(errs({ monthly_amount: 0 }).monthly_amount).toBe("Nhập số mỗi tháng.");
     expect(errs({ repeat_months: "13" }).repeat_months).toBe("Số tháng là số nguyên từ 1 đến 12.");
     expect(errs({ repeat_months: "0" }).repeat_months).toBeTruthy();
-    expect(errs({ monthly_amount: 500_000_000_000, repeat_months: "3" }).monthly_amount).toBe("Số cần không quá 1.000.000.000.000.");
+    expect(errs({ monthly_amount: 500_000_000_000, repeat_months: "3" }).monthly_amount).toBe("Số cần tối đa 1.000.000.000.000.");
     expect(errs({ mode: "once", target_amount: 0 }).target_amount).toBe("Nhập số cần.");
     expect(errs({ mode: "pct", target_pct: "0" }).target_pct).toBe("% là số nguyên từ 1 đến 100.");
     expect(errs({ mode: "pct", target_pct: "101" }).target_pct).toBeTruthy();
@@ -753,36 +771,37 @@ describe("Ba ngăn (UC-709 AC-35…39)", () => {
     } as SettingsData;
   }
 
-  it("UC-709 AC-36: dòng của mục tiêu trong nhóm chung bỏ 'trong {tài khoản}'; đã chi > 0 thêm 'đã chi X kỳ này' và 'đủ' theo đã có + đã chi; mục tiêu một mình giữ dòng cũ", () => {
+  it("UC-709 AC-36: hàng mục tiêu trong nhóm chung và mục tiêu một mình cùng một dòng phụ ngắn, không 'trong {tài khoản}'; đã chi > 0 không vào dòng phụ, Đủ theo đã có + đã chi", () => {
     const d = sharedSettings();
     const of = (s: SettingsData, id: string) => s.goals.find((g) => g.id === id)!;
-    expect(goalLineText(of(d, "nha-o"), d.accounts, true)).toBe("Nhà ở · đã có 7.500.000 / 7.500.000 · đủ · hạn 05/12/2026 · 7.500.000/tháng");
-    expect(goalLineText(of(d, "hoc-tap"), d.accounts, true)).toBe("Học tập · đã có 4.500.000 / 6.000.000 · hạn 15/01/2027");
-    expect(goalLineText(of(d, "thue"), d.accounts)).toBe("Thuế · đã có 1.500.000 · trong TK thuế · 10% thu chịu thuế");
+    expect(rowOf(goalRowView(of(d, "nha-o")))).toEqual(["Nhà ở", `7.500.000${NBSP}₫`, "ok:Đủ", 100, "hạn 05/12/2026", false]);
+    expect(rowOf(goalRowView(of(d, "hoc-tap")))).toEqual(["Học tập", `4.500.000${NBSP}₫`, "warn:Thiếu 1.500.000", 75, "hạn 15/01/2027", false]);
+    expect(goalRowView(of(d, "thue")).sub).toBe("10% thu chịu thuế");
     const paid = sharedSettings({ saving: 4_500_000, spent: { "nha-o": 7_500_000 } });
-    expect(goalLineText(of(paid, "nha-o"), paid.accounts, true)).toBe("Nhà ở · đã có 0 / 7.500.000 · đã chi 7.500.000 kỳ này · đủ · hạn 05/12/2026 · 7.500.000/tháng");
-    expect(goalOrderPreview(paid, "tk-tiet-kiem", ["nha-o", "hoc-tap"]).map((r) => `${r.name} · ${r.text}`)).toEqual(["Nhà ở · đã có 0 / 7.500.000 · đã chi 7.500.000 kỳ này · đủ", "Học tập · đã có 4.500.000 / 6.000.000"]);
+    expect(rowOf(goalRowView(of(paid, "nha-o")))).toEqual(["Nhà ở", `0${NBSP}₫`, "ok:Đủ", 100, "hạn 05/12/2026", false]);
+    expect(goalOrderPreview(paid, "tk-tiet-kiem", ["nha-o", "hoc-tap"]).map((r) => `${r.name} · ${r.text}`)).toEqual(["Nhà ở · đã có 0 / 7.500.000 · đã chi 7.500.000 tháng này · đủ", "Học tập · đã có 4.500.000 / 6.000.000"]);
   });
 
-  it("UC-709 AC-48: danh sách nhóm theo tài khoản ('MB tiết kiệm · 12.000.000 ₫ · 2 mục tiêu · thiếu 1.500.000 ₫'), 'Chưa có tài khoản' cuối; đổi thứ tự xem trước bằng fillGoals; Lưu gửi một PUT với mọi mã đang dùng, VCB chung giữ thứ tự; 400 invalid_order → câu tải lại", () => {
+  it("UC-709 AC-48: danh sách nhóm theo tài khoản (đầu nhóm 'MB tiết kiệm' · 12.000.000 ₫ · '2 mục tiêu · thiếu 1.500.000 ₫'), 'Chưa có tài khoản' cuối; đổi thứ tự xem trước bằng fillGoals; Lưu gửi một PUT với mọi mã đang dùng, VCB chung giữ thứ tự; 400 invalid_order → câu tải lại", () => {
     const d = sharedSettings();
-    expect(goalListGroups(d).map((g) => [g.title, g.reorder, g.goals.map((x) => x.id)])).toEqual([
-      [`VCB chung · 9.000.000${NBSP}₫ · 3 mục tiêu · thiếu 800.000${NBSP}₫`, true, ["hoa-don", "bao-duong-xe", "hieu-hi"]],
-      [`MB tiết kiệm · 12.000.000${NBSP}₫ · 2 mục tiêu · thiếu 1.500.000${NBSP}₫`, true, ["nha-o", "hoc-tap"]],
-      [null, false, ["thue"]],
-      ["Chưa có tài khoản", false, ["du-lich"]],
-      [null, false, ["cu"]],
+    expect(goalListGroups(d).map((g) => [g.key, g.head, g.reorder, g.goals.map((x) => x.id)])).toEqual([
+      ["tk-chung", { name: "VCB chung", balance: `9.000.000${NBSP}₫`, meta: `3 mục tiêu · thiếu 800.000${NBSP}₫` }, true, ["hoa-don", "bao-duong-xe", "hieu-hi"]],
+      ["tk-tiet-kiem", { name: "MB tiết kiệm", balance: `12.000.000${NBSP}₫`, meta: `2 mục tiêu · thiếu 1.500.000${NBSP}₫` }, true, ["nha-o", "hoc-tap"]],
+      ["tk-thue", null, false, ["thue"]],
+      ["+none", null, false, ["du-lich"]],
+      ["+off", null, false, ["cu"]],
     ]);
+    expect(GOAL_SECTION_LABEL.none).toBe("Chưa có tài khoản");
     expect(goalOrderPreview(d, "tk-tiet-kiem", ["hoc-tap", "nha-o"]).map((r) => `${r.name} · ${r.text}`)).toEqual(["Học tập · đã có 6.000.000 / 6.000.000 · đủ", "Nhà ở · đã có 6.000.000 / 7.500.000"]);
     const six = { ...d, goals: d.goals.filter((g) => g.account_id !== null) };
     expect(goalOrderPayload(six.goals, "tk-tiet-kiem", ["hoc-tap", "nha-o"])).toEqual({ ids: ["hoa-don", "hoc-tap", "nha-o", "bao-duong-xe", "hieu-hi", "thue"] });
     expect(goalOrderPayload(d.goals, "tk-chung", ["hieu-hi", "hoa-don", "bao-duong-xe"])).toEqual({ ids: ["hieu-hi", "nha-o", "hoc-tap", "hoa-don", "bao-duong-xe", "thue", "du-lich"] });
     expect(goalOrderError(new ApiError(400, "invalid_order", "ids sai"))).toEqual({ message: ORDER_CHANGED, reload: true });
-    expect(ORDER_CHANGED).toBe("Danh sách mục tiêu vừa đổi ở máy khác — tải lại.");
+    expect(ORDER_CHANGED).toBe("Danh sách mục tiêu vừa đổi ở máy khác, tải lại.");
     expect(goalOrderError(new ApiError(500, "server_error", "Lỗi máy chủ."))).toEqual({ message: "Lỗi máy chủ.", reload: false });
     setAmountsHidden(true);
     try {
-      expect(goalListGroups(d)[1]!.title).toBe(`MB tiết kiệm · ••••${NBSP}₫ · 2 mục tiêu · thiếu ••••${NBSP}₫`);
+      expect(goalListGroups(d)[1]!.head).toEqual({ name: "MB tiết kiệm", balance: `•••••${NBSP}₫`, meta: `2 mục tiêu · thiếu •••••${NBSP}₫` });
     } finally {
       setAmountsHidden(false);
     }
@@ -817,7 +836,7 @@ describe("Ba ngăn (UC-709 AC-35…39)", () => {
     expect(rewardAccountOptions(houseE, goalsE.map((g) => ({ ...g, active: g.id !== "hoc-phi" }))).map((a) => a.id)).toEqual(["tiet-kiem", "phao", "du-phong"]);
   });
 
-  it("UC-709 AC-37: % Tích luỹ mỗi kỳ lương là số nguyên 1–100; bản cài đặt cũ chưa có thì không gửi", () => {
+  it("UC-709 AC-37: % Tích luỹ khi lương về là số nguyên 1–100; bản cài đặt cũ chưa có thì không gửi", () => {
     const config = { salary_min_amount: 0, interest_max_amount: 10_000, safety_fund_months: "6", payday_day: "10" };
     expect(configPayload({ ...config, savings_pct: "20" })).toMatchObject({ ok: true, value: { savings_pct: 20 } });
     expect(configPayload({ ...config, savings_pct: "100" })).toMatchObject({ ok: true, value: { savings_pct: 100 } });
@@ -828,25 +847,25 @@ describe("Ba ngăn (UC-709 AC-35…39)", () => {
     expect(old.ok && "savings_pct" in old.value).toBe(false);
   });
 
-  it("UC-709 AC-38: nguồn thu có ô Ngăn của tiền về — mặc định Theo tài khoản nhận (null), chọn ngăn thì gửi ngăn", () => {
+  it("UC-709 AC-38: nguồn thu có ô Ngăn nhận tiền — mặc định Theo tài khoản nhận (null), chọn ngăn thì gửi ngăn", () => {
     expect(streamToForm(null).pocket).toBeNull();
-    expect(streamToForm({ id: "rent", name: "Cho thuê", sort: 30, active: true, pocket: "savings" }).pocket).toBe("savings");
-    expect(streamToForm({ id: "rent", name: "Cho thuê", sort: 30, active: true }).pocket).toBeNull();
+    expect(streamToForm({ id: "rent", name: "Cho thuê", sort: 30, active: true, pocket: "savings", is_salary: false }).pocket).toBe("savings");
+    expect(streamToForm({ id: "rent", name: "Cho thuê", sort: 30, active: true, is_salary: false }).pocket).toBeNull();
     const f = { ...streamToForm(null), name: "Cho thuê" };
-    expect(streamPayload(f, true)).toEqual({ ok: true, value: { name: "Cho thuê", pocket: null, opens_cycle: false } });
+    expect(streamPayload(f, true)).toEqual({ ok: true, value: { name: "Cho thuê", pocket: null, is_salary: false } });
     expect(streamPayload({ ...f, pocket: "savings" }, true)).toMatchObject({ ok: true, value: { pocket: "savings" } });
   });
 
-  const group = (over: Partial<CategoryGroup> = {}): CategoryGroup => ({ id: "food", name: "Ăn uống", essential: true, cycle_limit: 7_000_000, sort: 10, active: true, ...over });
+  const group = (over: Partial<CategoryGroup> = {}): CategoryGroup => ({ id: "food", name: "Ăn uống", essential: true, monthly_limit: 7_000_000, sort: 10, active: true, ...over });
 
-  it("UC-709 AC-39: nhóm danh mục — hạn mức mỗi kỳ lương để trống = không đặt (null), cờ Thiết yếu, tên bắt buộc", () => {
-    expect(groupPayload({ name: " Ăn uống ", essential: true, cycle_limit: 7_000_000, active: true }, null)).toEqual({ ok: true, value: { name: "Ăn uống", essential: true, cycle_limit: 7_000_000 } });
-    expect(groupPayload({ name: "Giải trí", essential: false, cycle_limit: 0, active: true }, null)).toEqual({ ok: true, value: { name: "Giải trí", essential: false, cycle_limit: null } });
-    expect(groupPayload({ name: "Ăn uống", essential: true, cycle_limit: 0, active: false }, group())).toEqual({ ok: true, value: { name: "Ăn uống", essential: true, cycle_limit: null, active: false } });
-    expect(groupPayload({ name: "", essential: false, cycle_limit: 0, active: true }, null)).toEqual({ ok: false, errors: { name: "Nhập tên nhóm." } });
-    expect(groupSummary(group(), 3)).toBe("Thiết yếu · 7.000.000 mỗi kỳ lương · 3 danh mục");
+  it("UC-709 AC-39: nhóm danh mục — hạn mức mỗi tháng (monthly_limit) để trống = không đặt (null), cờ Thiết yếu, tên bắt buộc; không gửi cycle_limit", () => {
+    expect(groupPayload({ name: " Ăn uống ", essential: true, monthly_limit: 7_000_000, active: true }, null)).toEqual({ ok: true, value: { name: "Ăn uống", essential: true, monthly_limit: 7_000_000 } });
+    expect(groupPayload({ name: "Giải trí", essential: false, monthly_limit: 0, active: true }, null)).toEqual({ ok: true, value: { name: "Giải trí", essential: false, monthly_limit: null } });
+    expect(groupPayload({ name: "Ăn uống", essential: true, monthly_limit: 0, active: false }, group())).toEqual({ ok: true, value: { name: "Ăn uống", essential: true, monthly_limit: null, active: false } });
+    expect(groupPayload({ name: "", essential: false, monthly_limit: 0, active: true }, null)).toEqual({ ok: false, errors: { name: "Nhập tên nhóm." } });
+    expect(groupSummary(group(), 3)).toBe("Thiết yếu · 7.000.000 mỗi tháng · 3 danh mục");
     // Nhóm không có cờ Thiết yếu gọi "Mong muốn" ở mọi chỗ (pocket UC-1204 bước 1, Đợt D).
-    expect(groupSummary(group({ essential: false, cycle_limit: null }), 0)).toBe("Mong muốn · không đặt hạn mức · chưa có danh mục");
+    expect(groupSummary(group({ essential: false, monthly_limit: null }), 0)).toBe("Mong muốn · không đặt hạn mức · chưa có danh mục");
   });
 
   const debt = (over: Partial<Debt> = {}): Debt =>
@@ -1037,21 +1056,24 @@ describe("tài khoản con, mục tiêu trả từ tiền chi tiêu, thang Tích
     } as unknown as SettingsData;
   }
 
-  it("UC-709 AC-53: danh sách mục tiêu hai phần — 'Để dành ở tài khoản' nhóm 'MB tiết kiệm · 105.000.000 ₫' (Đổi thứ tự cùng dòng tiêu đề, không lặp 'trong MB tiết kiệm'), 'Trả từ tiền chi tiêu mỗi tháng' bốn dòng '{tên} · {số}/tháng · còn … kỳ này'; xem trước thứ tự chia số dư gộp − tiền lãi", () => {
+  it("UC-709 AC-53: danh sách mục tiêu hai phần — 'Để dành ở tài khoản' đầu nhóm 'MB tiết kiệm' · 105.000.000 ₫ (Đổi thứ tự trong đầu nhóm, không lặp 'trong MB tiết kiệm', Tập luyện dư hiện bằng B), 'Trả từ tiền chi tiêu mỗi tháng' bốn hàng '{tên}' · 'còn … tháng này' · '{số}/tháng' (+ 'tháng này đặt X' khi có số riêng; tháng này đặt 0 → 'Tháng này: 0 ₫', dòng phụ chỉ '{số}/tháng'); xem trước thứ tự chia số dư gộp − tiền lãi", () => {
     const d = deposits();
-    expect(GOAL_SECTION_LABEL).toEqual({ account: "Để dành ở tài khoản", operating: "Trả từ tiền chi tiêu mỗi tháng" });
+    expect(GOAL_SECTION_LABEL).toEqual({ account: "Để dành ở tài khoản", none: "Chưa có tài khoản", operating: "Trả từ tiền chi tiêu mỗi tháng" });
     const groups = goalListGroups(d);
-    expect(groups.map((g) => [g.title, g.reorder, g.goals.map((x) => x.id)])).toEqual([[`MB tiết kiệm · 105.000.000${NBSP}₫ · 3 mục tiêu · dư 5.000.000${NBSP}₫`, true, ["nha-o", "hoc-tap", "tap-luyen"]]]);
-    for (const g of groups[0]!.goals) expect(goalLineText(g, d.accounts, groups[0]!.shared)).not.toContain("trong MB tiết kiệm");
-    expect(operatingGoalLines(d.goals).map((l) => l.text)).toEqual([
-      "Điện nước · 2.000.000/tháng · còn 1.000.000 kỳ này",
-      "Thuốc · 500.000/tháng · còn 500.000 kỳ này",
-      "Thiện phước · 1.000.000/tháng · còn 1.000.000 kỳ này",
-      "Về quê · 1.000.000/tháng · còn 1.000.000 kỳ này",
+    expect(groups.map((g) => [g.head, g.reorder, g.goals.map((x) => x.id)])).toEqual([
+      [{ name: "MB tiết kiệm", balance: `105.000.000${NBSP}₫`, meta: `3 mục tiêu · dư 5.000.000${NBSP}₫` }, true, ["nha-o", "hoc-tap", "tap-luyen"]],
+    ]);
+    for (const g of groups[0]!.goals) expect(goalRowView(g).sub ?? "").not.toContain("trong MB tiết kiệm");
+    expect(goalRowView(groups[0]!.goals[2]!)).toMatchObject({ amount: `10.000.000${NBSP}₫`, chip: { text: "Đủ", tone: "ok" }, pct: 100 });
+    expect(operatingGoalRows(d.goals, new Map([["thuoc", 0]])).map((r) => [r.goal.name, r.amount, r.sub])).toEqual([
+      ["Điện nước", "còn 1.000.000 tháng này", "2.000.000/tháng"],
+      ["Thuốc", "Tháng này: 0 ₫", "500.000/tháng"],
+      ["Thiện phước", "còn 1.000.000 tháng này", "1.000.000/tháng"],
+      ["Về quê", "còn 1.000.000 tháng này", "1.000.000/tháng"],
     ]);
     // Mục tiêu trả từ tiền chi tiêu đã tắt nằm cuối như mọi mục tiêu ngừng dùng, không ở phần mỗi tháng.
     const off = { ...d, goals: d.goals.map((g) => (g.id === "ve-que" ? { ...g, active: false } : g)) };
-    expect(operatingGoalLines(off.goals).map((l) => l.goal.id)).toEqual(["dien-nuoc", "thuoc", "thien-phuoc"]);
+    expect(operatingGoalRows(off.goals).map((r) => r.goal.id)).toEqual(["dien-nuoc", "thuoc", "thien-phuoc"]);
     expect(goalListGroups(off).at(-1)!.goals.map((g) => g.id)).toEqual(["ve-que"]);
     // Sau đáo hạn: số dư gộp 108.000.000, tiền lãi 3.000.000 → Tập luyện vẫn 15.000.000; nhóm ghi tiền lãi.
     const after = deposits(true);
@@ -1060,8 +1082,9 @@ describe("tài khoản con, mục tiêu trả từ tiền chi tiêu, thang Tích
       "đã có 30.000.000 / 30.000.000 · đủ",
       "đã có 15.000.000 / 10.000.000 · đủ",
     ]);
+    expect(goalListGroups(after)[0]!.head!.meta).toBe(`3 mục tiêu · dư 5.000.000${NBSP}₫`);
     expect(goalListGroups(after)[0]!.note).toBe(`Tiền lãi 3.000.000${NBSP}₫ (không tính vào mục tiêu)`);
-    expect(goalListGroups(d)[0]!.note).toBeNull();
+    expect(goalListGroups(d)[0]!.head!.meta).not.toContain("tiền lãi");
   });
 
   it("UC-709 AC-37 (MODIFIED): % Tích luỹ ở Tham số dùng thanh 1–100% vạch 1 · 10 · 30 và câu thang; ô gõ sai thì thanh đứng ở 10; vẫn gửi số nguyên 1–100", () => {
@@ -1070,7 +1093,7 @@ describe("tài khoản con, mục tiêu trả từ tiền chi tiêu, thang Tích
       [10, "thường"],
       [30, "hướng tới"],
     ]);
-    expect(SAVINGS_SCALE_TEXT).toBe("Thang của nhà: tối thiểu 1% · thường 10% · hướng tới 30%. Kỳ nào không trích được thì bỏ qua việc trích ở Hôm nay và ghi lý do.");
+    expect(SAVINGS_SCALE_TEXT).toBe("Thang của nhà: tối thiểu 1% · thường 10% · hướng tới 30%. Kỳ nào không trích được, cứ bỏ qua ở Hôm nay và ghi lý do.");
     expect(sliderPct("30")).toBe(30);
     expect(sliderPct("abc")).toBe(10);
     expect(sliderPct("0")).toBe(10);

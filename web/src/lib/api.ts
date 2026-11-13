@@ -80,7 +80,7 @@ async function send<T>(path: string, method: string, body: unknown, noCache: boo
   if (res.status === 401 && payload?.error?.code !== "wrong_password" && !path.startsWith("/v1/session")) onUnauthorized();
   if (!res.ok || !payload?.ok) {
     const field = typeof payload?.error?.field === "string" ? payload.error.field : undefined;
-    throw new ApiError(res.status, payload?.error?.code ?? `http_${res.status}`, payload?.error?.message ?? `Máy chủ trả mã ${res.status}.`, field, payload ?? undefined);
+    throw new ApiError(res.status, payload?.error?.code ?? `http_${res.status}`, payload?.error?.message ?? `Máy chủ báo lỗi ${res.status}.`, field, payload ?? undefined);
   }
   return { data: payload.data as T, cachedAt: res.headers.get(SW_CACHED_AT) };
 }

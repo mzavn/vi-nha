@@ -1,5 +1,5 @@
 // Khoản chi / chuyển ra cho mục tiêu (pocket UC-1209 bước 11, QĐ3, ADR nháp C): `transactions.goal_id` tuỳ chọn; phần đã chi
-// cho G trong kỳ lương hiện tại là G đã dùng phần của mình, không làm hụt mục tiêu đứng trước. Dữ liệu giả: hộ mẫu chung tài
+// cho G trong tháng VN hiện tại là G đã dùng phần của mình, không làm hụt mục tiêu đứng trước. Dữ liệu giả: hộ mẫu chung tài
 // khoản (test/helpers/household-shared.ts).
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -142,40 +142,26 @@ describe("sửa khoản có goal_id (UC-102 AC-28)", () => {
   });
 });
 
-describe("cửa sổ là kỳ lương hiện tại (UC-1209 AC-15)", () => {
-  it("UC-1209 AC-15: khoản chi kỳ trước không tính; khoản trong kỳ tính; sang kỳ mới spent về 0 và việc ② theo đã có; chưa có kỳ lưu → đầu kỳ = ngày lương danh nghĩa gần nhất", async () => {
-    sharedTx(raw, { at: "2026-11-09 12:00", meaning: "spend", amount: 7_500_000, from: "tk-tiet-kiem", goal: "nha-o" });
+describe("cửa sổ là tháng hiện tại (UC-1209 AC-15)", () => {
+  it("UC-1209 AC-15: khoản chi 7.500.000 gắn Nhà ở lúc 31/10 không tính khi xem 12/11; khoản lúc 1/11 tính; sang 1/12 spent về 0", async () => {
+    sharedTx(raw, { at: "2026-10-31 23:30", meaning: "spend", amount: 7_500_000, from: "tk-tiet-kiem", goal: "nha-o" });
     let r = await reserve();
     expect(goalIn(r, "nha-o")).toMatchObject({ held: 4_500_000, spent: 0 });
     expect(goalIn(r, "hoc-tap").held).toBe(0);
 
     raw = householdShared();
     env = { DB: asD1(raw), API_TOKEN: "tok" } as Env;
-    sharedTx(raw, { at: "2026-11-12 09:00", meaning: "spend", amount: 7_500_000, from: "tk-tiet-kiem", goal: "nha-o" });
+    sharedTx(raw, { at: "2026-11-01 00:30", meaning: "spend", amount: 7_500_000, from: "tk-tiet-kiem", goal: "nha-o" });
     r = await reserve();
     expect(goalIn(r, "nha-o")).toMatchObject({ held: 0, spent: 7_500_000, short: 0 });
     expect(goalIn(r, "hoc-tap").held).toBe(4_500_000);
+    const settings = await call<{ goals: { id: string; spent: number }[] }>("GET", "/v1/settings");
+    expect(settings.json.data.goals.find((g) => g.id === "nha-o")!.spent).toBe(7_500_000);
 
-    // Lương 20.000.000 về 10/12 mở kỳ mới (nguồn Lương chồng mở kỳ).
-    vi.setSystemTime(new Date(vnAt("2026-12-10 09:00")));
-    const salary = await call("POST", "/v1/transactions", { meaning: "income", amount: 20_000_000, account_id: "cash-husband", income_stream_id: "salary-husband", at: vnAt("2026-12-10 08:00") });
-    expect(salary.status).toBe(201);
+    vi.setSystemTime(new Date(vnAt("2026-12-01 09:00")));
     r = await reserve();
     expect(goalIn(r, "nha-o")).toMatchObject({ held: 4_500_000, spent: 0 });
     expect(goalIn(r, "hoc-tap").held).toBe(0);
-    const tasks = (await call<{ payCycle: { tasks: { kind: string; goal: { id: string } | null; amount: number }[] } }>("GET", "/v1/snapshot")).json.data.payCycle.tasks.filter((t) => t.kind === "goal");
-    expect(tasks.map((t) => [t.goal?.id, t.amount]).filter(([id]) => id === "nha-o" || id === "hoc-tap")).toEqual([
-      ["nha-o", 3_000_000],
-      ["hoc-tap", 3_000_000],
-    ]);
-
-    // Chưa có kỳ lưu: đầu kỳ = ngày lương danh nghĩa gần nhất ≤ hôm nay (10/11).
-    vi.setSystemTime(SHARED_NOW);
-    raw = householdShared({ cycle: false });
-    env = { DB: asD1(raw), API_TOKEN: "tok" } as Env;
-    sharedTx(raw, { at: "2026-11-09 12:00", meaning: "spend", amount: 1_000_000, from: "tk-tiet-kiem", goal: "nha-o" });
-    sharedTx(raw, { at: "2026-11-10 06:00", meaning: "spend", amount: 2_000_000, from: "tk-tiet-kiem", goal: "nha-o" });
-    expect(goalIn(await reserve(), "nha-o").spent).toBe(2_000_000);
   });
 });
 
@@ -328,7 +314,7 @@ describe("chi gắn mục tiêu trả từ tiền chi tiêu (UC-1209 AC-18)", ()
   });
   const remaining = async () => (await call<{ pockets: { operating: { remaining: number } } }>("GET", "/v1/snapshot")).json.data.pockets.operating.remaining;
 
-  it("UC-1209 AC-18: remaining 4.500.000 → 3.500.000 (Điện nước từ tk-chi-tieu-vo) → 3.200.000 (Thuốc từ tiền mặt); chi không goal_id lưu null, không tự gắn; goal_id từ tk-tiet-kiem → 400 invalid_goal; kỳ mới → 4.500.000", async () => {
+  it("UC-1209 AC-18: remaining 4.500.000 → 3.500.000 (Điện nước từ tk-chi-tieu-vo) → 3.200.000 (Thuốc từ tiền mặt); chi không goal_id lưu null, không tự gắn; goal_id từ tk-tiet-kiem → 400 invalid_goal; sang tháng mới → 4.500.000", async () => {
     expect(await remaining()).toBe(4_500_000);
     expect((await spend("tk-chi-tieu-vo", 1_000_000, { goal_id: "dien-nuoc" })).json.data.tx.goal_id).toBe("dien-nuoc");
     expect(await remaining()).toBe(3_500_000);
@@ -338,16 +324,14 @@ describe("chi gắn mục tiêu trả từ tiền chi tiêu (UC-1209 AC-18)", ()
     expect(await remaining()).toBe(3_200_000);
     expect(err(await spend("tk-tiet-kiem", 100_000, { goal_id: "thuoc" }))).toEqual([400, "invalid_goal"]);
 
-    vi.setSystemTime(new Date(vnAt("2026-12-10 09:00")));
-    const salary = await call("POST", "/v1/transactions", { meaning: "income", amount: 20_000_000, account_id: "tk-chi-tieu-chong", income_stream_id: "salary-husband", at: vnAt("2026-12-10 08:00") });
-    expect(salary.status).toBe(201);
+    vi.setSystemTime(new Date(vnAt("2026-12-01 09:00")));
     expect(await remaining()).toBe(4_500_000);
   });
 });
 
-// Số kỳ này và danh mục tự tính là đã trả cho khoản phải trả (change 261112-khoan-phai-tra-ky-nay).
-describe("số kỳ này và danh mục của khoản phải trả (UC-1209 AC-21, AC-22)", () => {
-  type OpGoal = { id: string; monthly: number; cycleAmount: number | null; spent: number; remaining: number; note: string | null; categoryIds: string[] };
+// Số tháng này và danh mục tự tính là đã trả cho khoản phải trả (ADR-143, ADR-144).
+describe("số tháng này và danh mục của khoản phải trả (UC-1209 AC-22, AC-23)", () => {
+  type OpGoal = { id: string; monthly: number; monthAmount: number | null; spent: number; remaining: number; note: string | null; categoryIds: string[] };
   beforeEach(() => {
     vi.setSystemTime(PARENT_NOW);
     raw = householdParent({ operatingGoals: true });
@@ -355,37 +339,59 @@ describe("số kỳ này và danh mục của khoản phải trả (UC-1209 AC-2
   });
   const operating = async () => (await call<{ pockets: { operating: { goals: OpGoal[]; remaining: number } } }>("GET", "/v1/snapshot")).json.data.pockets.operating;
   const op = async (id: string) => (await operating()).goals.find((g) => g.id === id)!;
-  const setAmount = (id: string, body: unknown) => call<{ goal: OpGoal }>("PUT", `/v1/pay-cycle/goal-amounts/${id}`, body);
+  const setAmount = (id: string, body: unknown) => call<{ goal: OpGoal }>("PUT", `/v1/goal-month-amounts/${id}`, body);
+  const monthLogs = () =>
+    (raw.prepare("SELECT target, detail FROM audit_log WHERE action = 'goal.month_amount' ORDER BY id").all() as { target: string; detail: string }[]).map((l) => [l.target, JSON.parse(l.detail)]);
 
-  it("UC-1209 AC-21: Điện nước kỳ này 500.000 'Tháng này ít', Về quê 0 → remaining 500.000 / 0, R 2.000.000, nhật ký goal.cycle_amount; null về 2.000.000; mục tiêu tài khoản 409, số âm 400; kỳ mới về số mỗi tháng", async () => {
+  it("UC-1209 AC-23: PUT /v1/goal-month-amounts — Điện nước tháng này 500.000 'Tháng này ít', Về quê 0 → remaining 500.000 / 0, R 2.000.000, nhật ký goal.month_amount { month }; null về 2.000.000; mục tiêu tài khoản 409, số âm 400; tháng mới về số mỗi tháng; đường cũ /v1/pay-cycle/goal-amounts → 404", async () => {
     const saved = await setAmount("dien-nuoc", { amount: 500_000, note: "Tháng này ít" });
     expect(saved.status).toBe(200);
-    expect(saved.json.data.goal).toMatchObject({ id: "dien-nuoc", monthly: 2_000_000, cycleAmount: 500_000, remaining: 500_000, note: "Tháng này ít" });
+    expect(saved.json.data.goal).toMatchObject({ id: "dien-nuoc", monthly: 2_000_000, monthAmount: 500_000, remaining: 500_000, note: "Tháng này ít" });
     expect((await setAmount("ve-que", { amount: 0 })).status).toBe(200);
     let o = await operating();
-    expect(o.goals.find((g) => g.id === "dien-nuoc")).toMatchObject({ cycleAmount: 500_000, remaining: 500_000, note: "Tháng này ít" });
-    expect(o.goals.find((g) => g.id === "ve-que")).toMatchObject({ cycleAmount: 0, remaining: 0, note: null });
+    expect(o.goals.find((g) => g.id === "dien-nuoc")).toMatchObject({ monthAmount: 500_000, remaining: 500_000, note: "Tháng này ít" });
+    expect(o.goals.find((g) => g.id === "ve-que")).toMatchObject({ monthAmount: 0, remaining: 0, note: null });
     expect(o.remaining).toBe(2_000_000);
-    const logs = raw.prepare("SELECT target, detail FROM audit_log WHERE action = 'goal.cycle_amount' ORDER BY id").all() as { target: string; detail: string }[];
-    expect(logs.map((l) => [l.target, JSON.parse(l.detail)])).toEqual([
-      ["goal:dien-nuoc", { cycle: expect.any(String), amount: { from: 2_000_000, to: 500_000 } }],
-      ["goal:ve-que", { cycle: expect.any(String), amount: { from: 1_000_000, to: 0 } }],
+    expect(monthLogs()).toEqual([
+      ["goal:dien-nuoc", { month: "2026-11", amount: { from: 2_000_000, to: 500_000 } }],
+      ["goal:ve-que", { month: "2026-11", amount: { from: 1_000_000, to: 0 } }],
+    ]);
+    expect(raw.prepare("SELECT goal_id, month_key, amount, note FROM goal_month_amounts ORDER BY goal_id").all()).toEqual([
+      { goal_id: "dien-nuoc", month_key: "2026-11", amount: 500_000, note: "Tháng này ít" },
+      { goal_id: "ve-que", month_key: "2026-11", amount: 0, note: null },
     ]);
 
-    expect((await setAmount("dien-nuoc", { amount: null })).json.data.goal).toMatchObject({ cycleAmount: null, remaining: 2_000_000, note: null });
+    expect((await setAmount("dien-nuoc", { amount: null })).json.data.goal).toMatchObject({ monthAmount: null, remaining: 2_000_000, note: null });
     expect(err(await setAmount("nha-o", { amount: 0 }))).toEqual([409, "not_operating_goal"]);
     expect(err(await setAmount("dien-nuoc", { amount: -1 }))).toEqual([400, "invalid_input"]);
     expect(err(await setAmount("dien-nuoc", { amount: 1, note: "x".repeat(81) }))).toEqual([400, "invalid_input"]);
     expect(err(await setAmount("khong-co", { amount: 1 }))).toEqual([404, "not_found"]);
+    expect((await call("PUT", "/v1/pay-cycle/goal-amounts/dien-nuoc", { amount: 1 })).status).toBe(404);
 
     await setAmount("dien-nuoc", { amount: 500_000 });
-    vi.setSystemTime(new Date(vnAt("2026-12-10 09:00")));
-    const salary = await call("POST", "/v1/transactions", { meaning: "income", amount: 20_000_000, account_id: "tk-chi-tieu-chong", income_stream_id: "salary-husband", at: vnAt("2026-12-10 08:00") });
-    expect(salary.status).toBe(201);
+    vi.setSystemTime(new Date(vnAt("2026-12-01 09:00")));
     o = await operating();
-    expect(o.goals.find((g) => g.id === "dien-nuoc")).toMatchObject({ cycleAmount: null, remaining: 2_000_000 });
-    expect(o.goals.find((g) => g.id === "ve-que")).toMatchObject({ cycleAmount: null, remaining: 1_000_000 });
+    expect(o.goals.find((g) => g.id === "dien-nuoc")).toMatchObject({ monthAmount: null, remaining: 2_000_000 });
+    expect(o.goals.find((g) => g.id === "ve-que")).toMatchObject({ monthAmount: null, remaining: 1_000_000 });
     expect(o.remaining).toBe(4_500_000);
+  });
+
+  it("UC-1209 AC-23: ngày 5/12, Điện nước 2.000.000/tháng danh mục Tiện ích — chi 800.000 ngày 3/12 và 600.000 ngày 28/11 → spent 800.000; PUT { 500000, 'Tháng này ít' } → monthAmount 500.000, remaining 0, nhật ký { month: '2026-12' }; ngày 1/1 về 2.000.000", async () => {
+    vi.setSystemTime(new Date(vnAt("2026-12-05 10:00")));
+    expect((await call("PATCH", "/v1/settings/goals/dien-nuoc", { category_ids: ["utilities"] })).status).toBe(200);
+    const util = (at: string, amount: number) => spend("tk-chi-tieu-vo", amount, { category_id: "utilities", at: vnAt(at) });
+    expect((await util("2026-11-28 09:00", 600_000)).status).toBe(201);
+    expect((await util("2026-12-03 09:00", 800_000)).status).toBe(201);
+    expect(await op("dien-nuoc")).toMatchObject({ spent: 800_000, monthAmount: null, remaining: 1_200_000 });
+
+    const saved = await setAmount("dien-nuoc", { amount: 500_000, note: "Tháng này ít" });
+    expect(saved.status).toBe(200);
+    expect(saved.json.data.goal).toMatchObject({ monthAmount: 500_000, spent: 800_000, remaining: 0, note: "Tháng này ít" });
+    expect(saved.json.data.goal).not.toHaveProperty("cycleAmount");
+    expect(monthLogs()).toEqual([["goal:dien-nuoc", { month: "2026-12", amount: { from: 2_000_000, to: 500_000 } }]]);
+
+    vi.setSystemTime(new Date(vnAt("2027-01-01 09:00")));
+    expect(await op("dien-nuoc")).toMatchObject({ spent: 0, monthAmount: null, remaining: 2_000_000 });
   });
 
   it("UC-1209 AC-22: Điện nước gắn danh mục utilities — chi Vận hành không goal_id 800.000 + gắn Điện nước 500.000 − hoàn 200.000 → spent 1.100.000, remaining 900.000; chi từ Dự phòng và khoản gắn Thuốc không tính; danh mục trùng 409, mục tiêu tài khoản 400, danh mục lạ 400; GET /v1/settings có category_ids", async () => {

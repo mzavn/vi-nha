@@ -8,7 +8,7 @@ import { rejectOldFields } from "../domain/entry";
 import { INTEREST_MAX_AMOUNT_LIMIT } from "../domain/interest-deposit";
 import { clockMinutes, NOTIFY_CONFIG_KEYS, parseNotifySchedule, type NotifySchedule } from "../domain/notify-schedule";
 import { dayKey } from "../domain/period";
-import { DEFAULT_SURPLUS_SAVINGS_PCT } from "../domain/pay-cycle";
+import { DEFAULT_SALARY_REMINDER_MIN, DEFAULT_SURPLUS_SAVINGS_PCT } from "../domain/month-tasks";
 import { DEFAULT_PAYDAY_DAY } from "../domain/snapshot";
 import { DomainError } from "../domain/types";
 import type { Env } from "../env";
@@ -191,14 +191,14 @@ function rejectOldAccountFields(b: Input): void {
 
 const toRule = (r: Row) => ({ ...r, is_salary: Boolean(r.is_salary), active: Boolean(r.active), incomeStreamId: r.income_stream_id ?? null });
 
-const STREAM_COLS = "id, name, sort, active, pocket, opens_cycle";
+const STREAM_COLS = "id, name, sort, active, pocket, is_salary";
 const toStream = (s: Row) => ({
   id: s.id as string,
   name: s.name as string,
   sort: Number(s.sort),
   active: Boolean(s.active),
   pocket: (s.pocket as Pocket | null) ?? null,
-  opens_cycle: Boolean(s.opens_cycle),
+  is_salary: Boolean(s.is_salary),
 });
 
 /** Giờ nhắc của cả nhà, một câu SELECT; khoá thiếu/hỏng thì lấy mặc định (cùng cách cron đọc). */
@@ -293,7 +293,7 @@ function sepayFields(
   const turningOn = enabled && !current.sepay_enabled;
   const touched = (f.bank !== undefined && f.bank !== current.bank) || (f.kind != null && f.kind !== current.kind);
   if (touched && !bankOk(kind, bank)) {
-    fail("invalid_bank", "Ngân hàng phải chọn trong danh sách.");
+    fail("invalid_bank", "Chọn ngân hàng trong danh sách.");
   }
   const sepay = bankByCode(bank)?.sepay ?? null;
   if (enabled && (turningOn || touched) && (kind !== "bank" || !sepay)) {
@@ -425,7 +425,7 @@ export async function updateAccount(db: D1Database, id: string, b: Input, now: D
       const vi = (d: string) => `${Number(d.slice(8, 10))}/${Number(d.slice(5, 7))}/${d.slice(0, 4)}`;
       fail(
         "opening_after_entries",
-        `Tài khoản đã có giao dịch từ ${vi(first.d)} — huỷ hoặc sửa các giao dịch trước ${vi(f.opened_at)} trước, hoặc chọn ngày mở sổ từ ${vi(first.d)} trở về trước.`,
+        `Tài khoản đã có giao dịch từ ${vi(first.d)}: huỷ hoặc sửa giao dịch trước ${vi(f.opened_at)}, hoặc chọn ngày mở sổ từ ${vi(first.d)} trở về trước.`,
         409,
         "opened_at",
       );
@@ -472,7 +472,7 @@ export async function updateAccount(db: D1Database, id: string, b: Input, now: D
       .prepare("SELECT 1 FROM bank_logs WHERE account_id = ? AND status IN ('pending', 'assigned') AND source <> 'webhook' AND julianday(at) < julianday(?) LIMIT 1")
       .bind(id, feed_from)
       .first();
-    if (crossed) fail("feed_from_after_logs", "Đã có giao dịch ngân hàng của tài khoản này trước mốc này — chọn mốc sớm hơn.", 409, "feed_from");
+    if (crossed) fail("feed_from_after_logs", "Đã có giao dịch ngân hàng của tài khoản này trước mốc này: chọn mốc sớm hơn.", 409, "feed_from");
   }
   // Bật "báo cả tiền ra" trên tài khoản đã nối: khoản chi trước lúc đó nhập tay, log ra cũ SePay gửi lại không tự gán.
   // Vừa bật SePay thì mốc theo dõi đã lo phần trước đó.
@@ -569,7 +569,7 @@ export function memberPassword(v: unknown, field: string): string | null {
 
 /** Chèn có điều kiện: chỉ khi còn dưới 6 người đang hoạt động — hai yêu cầu cùng lúc không vượt được giới hạn. */
 const UNDER_LIMIT = `(SELECT COUNT(*) FROM members WHERE active = 1) < ${MAX_ACTIVE_MEMBERS}`;
-const tooMany = () => fail("too_many_members", `Nhà tối đa ${MAX_ACTIVE_MEMBERS} người đang dùng — tắt bớt một người trước.`, 409);
+const tooMany = () => fail("too_many_members", `Nhà tối đa ${MAX_ACTIVE_MEMBERS} người đang dùng: tắt bớt một người trước.`, 409);
 
 /**
  * Thêm người (UC-507): vai `adult`, đang hoạt động, mã sinh từ tên. Trùng tên hoặc trùng mã với bất kỳ ai (kể cả người đã
@@ -667,7 +667,7 @@ export async function updateRule(db: D1Database, id: number, b: Input, actor: st
   return toRule((await db.prepare("SELECT * FROM rules WHERE id = ?").bind(id).first<Row>())!);
 }
 
-// ── Nguồn thu: ngăn của tiền về, mở kỳ lương ───────────────────────
+// ── Nguồn thu: ngăn của tiền về, nguồn lương ────────────────────────
 /** Một nguồn thu như màn Cài đặt thấy; không có → 404. */
 export async function getStream(db: D1Database, id: string) {
   const row = await db.prepare(`SELECT ${STREAM_COLS} FROM income_streams WHERE id = ?`).bind(id).first<Row>();
@@ -675,42 +675,44 @@ export async function getStream(db: D1Database, id: string) {
 }
 
 /**
- * "Mở kỳ lương" gửi lên (pocket UC-1205): thiếu → undefined; không phải boolean → 400 invalid_input; nguồn cho thuê
- * (`config.rental_income_stream_id`) không bật được → 400 cannot_open_cycle. Phần khoá đã bỏ → 400 model_changed.
+ * "Nguồn lương" gửi lên (pocket UC-1205, UC-709): thiếu → undefined; không phải boolean → 400 invalid_input; nguồn cho thuê
+ * (`config.rental_income_stream_id`) không bật được → 400 cannot_be_salary. Phần khoá đã bỏ, `opens_cycle` của mô hình kỳ
+ * lương (ADR-144) → 400 model_changed.
  */
-async function streamOpensCycle(db: D1Database, streamId: string, b: Input): Promise<boolean | undefined> {
+async function streamIsSalary(db: D1Database, streamId: string, b: Input): Promise<boolean | undefined> {
   rejectOldFields(b, ["locks"]);
-  if (!has(b, "opens_cycle")) return undefined;
-  if (typeof b.opens_cycle !== "boolean") return fail("invalid_input", "opens_cycle phải là true hoặc false.", 400, "opens_cycle");
-  if (b.opens_cycle) {
+  if (has(b, "opens_cycle")) throw new DomainError("model_changed", "Ví nhà v2.5 đã bỏ kỳ lương: gửi is_salary, bỏ trường opens_cycle.", 400, undefined, ["opens_cycle"]);
+  if (!has(b, "is_salary")) return undefined;
+  if (typeof b.is_salary !== "boolean") return fail("invalid_input", "is_salary phải là true hoặc false.", 400, "is_salary");
+  if (b.is_salary) {
     const rental = await db.prepare("SELECT v FROM config WHERE k = 'rental_income_stream_id'").first<{ v: string }>();
-    if (rental?.v === streamId) fail("cannot_open_cycle", "Tiền cho thuê không mở kỳ lương.", 400, "opens_cycle");
+    if (rental?.v === streamId) fail("cannot_be_salary", "Tiền cho thuê không phải lương.", 400, "is_salary");
   }
-  return b.opens_cycle;
+  return b.is_salary;
 }
 
 export async function createIncomeStream(db: D1Database, b: Input) {
   const name = text(b, "name", { required: true, max: 60 })!;
   const id = newId(b, name);
-  const opensCycle = await streamOpensCycle(db, id, b);
+  const isSalary = await streamIsSalary(db, id, b);
   if (await exists(db, "income_streams", id)) fail("duplicate", "Đã có nguồn thu với mã này.", 409);
   await db
-    .prepare("INSERT INTO income_streams (id, name, sort, pocket, opens_cycle) VALUES (?, ?, ?, ?, ?)")
-    .bind(id, name, integer(b, "sort", { min: 0, max: 10000 }) ?? 100, has(b, "pocket") ? pocketValue(b.pocket) : null, opensCycle ? 1 : 0)
+    .prepare("INSERT INTO income_streams (id, name, sort, pocket, is_salary) VALUES (?, ?, ?, ?, ?)")
+    .bind(id, name, integer(b, "sort", { min: 0, max: 10000 }) ?? 100, has(b, "pocket") ? pocketValue(b.pocket) : null, isSalary ? 1 : 0)
     .run();
   return getStream(db, id);
 }
 
 export async function updateIncomeStream(db: D1Database, id: string, b: Input) {
   await getStream(db, id);
-  const opensCycle = await streamOpensCycle(db, id, b);
+  const isSalary = await streamIsSalary(db, id, b);
   await patchRow(db, "income_streams", id, {
     name: has(b, "name") ? text(b, "name", { required: true, max: 60 }) : undefined,
     sort: has(b, "sort") ? integer(b, "sort", { min: 0, max: 10000 }) : undefined,
     active: has(b, "active") ? bool(b, "active") : undefined,
     // Ngăn của tiền về (UC-506): null = theo tài khoản nhận.
     pocket: has(b, "pocket") ? pocketValue(b.pocket) : undefined,
-    opens_cycle: opensCycle,
+    is_salary: isSalary,
   });
   return getStream(db, id);
 }
@@ -748,13 +750,14 @@ async function readConfig(db: D1Database) {
   const reward = await db.prepare("SELECT v FROM config WHERE k = 'surplus_reward_account'").first<{ v: string }>();
   return {
     salary_min_amount: await configNumber(db, "salary_min_amount", 1_000_000),
+    salary_reminder_min: await configNumber(db, "salary_reminder_min", DEFAULT_SALARY_REMINDER_MIN),
     interest_max_amount: await interestMaxAmount(db),
     safety_fund_months: await configNumber(db, "safety_fund_months", 6),
     payday_day: await configNumber(db, "payday_day", DEFAULT_PAYDAY_DAY),
     ...(await readFiConfig(db)),
     savings_pct: await configNumber(db, "savings_pct", DEFAULT_SAVINGS_PCT),
     surplus_savings_pct: await configNumber(db, "surplus_savings_pct", DEFAULT_SURPLUS_SAVINGS_PCT),
-    // Giá trị đã lưu, không lọc tài khoản đã tắt / đổi ngăn — để Cài đặt vẫn thấy đã chọn gì; kỳ lương tự coi là chưa chọn.
+    // Giá trị đã lưu, không lọc tài khoản đã tắt / đổi ngăn — để Cài đặt vẫn thấy đã chọn gì; chia dư tự coi là chưa chọn.
     surplus_reward_account: reward?.v || null,
   };
 }
@@ -765,7 +768,7 @@ const MONTH_CLOSE_KEYS = ["month_close_wealth_pct", "month_close_reward_wallet"]
 const REWARD_ACCOUNT_TEXT = "Ví Thưởng phải là một tài khoản đang dùng ở ngăn Dự phòng, không gắn mục tiêu nào, không là khoản gửi của tài khoản khác.";
 
 /**
- * Dư kỳ trước (pocket UC-1207, UC-1209 bước 4): `surplus_savings_pct` số nguyên 0–100 → 400 invalid_input;
+ * Dư cuối tháng (pocket UC-1207, UC-1209 bước 4): `surplus_savings_pct` số nguyên 0–100 → 400 invalid_input;
  * `surplus_reward_account` là tài khoản đang dùng, ngăn Dự phòng, không gắn mục tiêu đang dùng, không là tài khoản con
  * (khoản gửi kỳ hạn) → không thì 400 invalid_account; null / "" = bỏ chọn.
  */
@@ -775,7 +778,7 @@ async function surplusConfigWrites(db: D1Database, b: Input): Promise<D1Prepared
   if (has(b, "surplus_savings_pct")) {
     const v = b.surplus_savings_pct;
     if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > 100) {
-      fail("invalid_input", "Phần dư kỳ trước vào Tích luỹ là số nguyên từ 0 đến 100.", 400, "surplus_savings_pct");
+      fail("invalid_input", "Phần dư cuối tháng vào Tích luỹ là số nguyên từ 0 đến 100.", 400, "surplus_savings_pct");
     }
     out.push(upsert("surplus_savings_pct", String(v)));
   }
@@ -843,12 +846,13 @@ async function fiConfigWrites(db: D1Database, b: Input, now: Date): Promise<D1Pr
 export async function updateConfig(db: D1Database, b: Input, now: Date = new Date()) {
   const old = MONTH_CLOSE_KEYS.filter((k) => has(b, k));
   if (old.length) {
-    throw new DomainError("model_changed", `Ví nhà v2 đã bỏ chốt tháng: dư kỳ trước chia theo surplus_savings_pct / surplus_reward_account — bỏ trường ${old.join(", ")}.`, 400, undefined, [...old]);
+    throw new DomainError("model_changed", `Ví nhà v2 đã bỏ chốt tháng kiểu cũ: dư cuối tháng chia theo surplus_savings_pct / surplus_reward_account, bỏ trường ${old.join(", ")}.`, 400, undefined, [...old]);
   }
   if (has(b, "surplus_reward_earmark")) {
-    throw new DomainError("model_changed", "Ví nhà v2: Ví Thưởng là một tài khoản Dự phòng — gửi surplus_reward_account, bỏ trường surplus_reward_earmark.", 400, undefined, ["surplus_reward_earmark"]);
+    throw new DomainError("model_changed", "Ví nhà v2: Ví Thưởng là một tài khoản Dự phòng, gửi surplus_reward_account, bỏ trường surplus_reward_earmark.", 400, undefined, ["surplus_reward_earmark"]);
   }
   const salary = integer(b, "salary_min_amount", { min: 0, max: 1e12 });
+  const reminder = integer(b, "salary_reminder_min", { min: 0, max: 1e12 });
   const months = integer(b, "safety_fund_months", { min: 1, max: 36 });
   const payday = integer(b, "payday_day", { min: 1, max: 31 });
   const savingsPct = b.savings_pct;
@@ -862,6 +866,7 @@ export async function updateConfig(db: D1Database, b: Input, now: Date = new Dat
   const upsert = (k: string, v: number) => db.prepare("INSERT INTO config (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v").bind(k, String(v));
   const statements = [
     ...(salary !== null ? [upsert("salary_min_amount", salary)] : []),
+    ...(reminder !== null ? [upsert("salary_reminder_min", reminder)] : []),
     ...(has(b, "interest_max_amount") ? [upsert("interest_max_amount", interest as number)] : []),
     ...(months !== null ? [upsert("safety_fund_months", months)] : []),
     ...(payday !== null ? [upsert("payday_day", payday)] : []),
@@ -919,10 +924,10 @@ function secretValue(b: Input, k: string): string | null | undefined {
   const v = b[k];
   if (v !== null && typeof v !== "string") fail("invalid_input", `${k} phải là chuỗi hoặc null.`);
   const trimmed = typeof v === "string" ? v.trim() : "";
-  if (trimmed && trimmed.length < 8) fail("invalid_input", "Khoá quá ngắn — dán đủ khoá từ SePay / BotFather / Zalo Bot Creator.");
+  if (trimmed && trimmed.length < 8) fail("invalid_input", "Khoá quá ngắn. Dán đủ khoá từ SePay / BotFather / Zalo Bot Creator.");
   // Khoá webhook SePay mới phải đủ dài để không dò được (ADR-89); khoá đã lưu trước đó vẫn dùng được — chỉ kiểm khi đặt.
   if (trimmed && k === "webhook_key" && trimmed.length < 24) {
-    fail("invalid_input", "Khoá webhook SePay cần ít nhất 24 ký tự — đặt khoá dài, ngẫu nhiên trong SePay rồi dán vào đây.");
+    fail("invalid_input", "Khoá webhook SePay cần ít nhất 24 ký tự. Đặt khoá dài, ngẫu nhiên trong SePay rồi dán vào đây.");
   }
   // Khoá webhook Zalo đi trong header X-Bot-Api-Secret-Token: 8–256 ký tự, chỉ chữ, số, - và _.
   if (trimmed && k === "zalo_webhook_secret" && !/^[A-Za-z0-9_-]{8,256}$/.test(trimmed)) {
@@ -962,7 +967,7 @@ async function readConnection(env: Env, id: string) {
 async function webhookKeyFree(env: Env, key: string | null | undefined, ownId: string | null) {
   if (!key) return;
   if ((await loadSepayConnections(env)).some((c) => c.id !== ownId && c.webhookKey === key)) {
-    fail("duplicate_key", "Khoá webhook này đang dùng cho kết nối khác — mỗi tài khoản SePay đặt một khoá riêng.", 409);
+    fail("duplicate_key", "Khoá webhook này đang dùng cho kết nối khác. Mỗi tài khoản SePay đặt một khoá riêng.", 409);
   }
 }
 
@@ -996,8 +1001,8 @@ export async function testTelegram(env: Env, memberId: string, fetchImpl: typeof
   if (!m!.tg_chat_id) return { sent: false, error: "Chưa có chat_id Telegram của người này." };
   const token = await getSecret(env, "telegram_bot_token");
   if (!token) return { sent: false, error: "Chưa đặt bot token Telegram." };
-  const r = await sendTelegram(token, m!.tg_chat_id, `✅ Ví nhà đã nối Telegram cho ${escapeHtml(m!.name)}.`, fetchImpl);
-  return r.ok ? { sent: true } : { sent: false, error: `Telegram từ chối (${r.error}). Kiểm tra token và chat_id, và đã nhắn /start cho bot chưa.` };
+  const r = await sendTelegram(token, m!.tg_chat_id, `Ví nhà đã nối Telegram cho ${escapeHtml(m!.name)}.`, fetchImpl);
+  return r.ok ? { sent: true } : { sent: false, error: `Telegram từ chối (${r.error}). Kiểm tra token, chat_id và xem đã nhắn /start cho bot chưa.` };
 }
 
 /**
@@ -1057,8 +1062,8 @@ export async function syncSepayRange(env: Env, b: Input, now: Date, fetchImpl: t
   const to = calendarDay(b.to);
   if (from === null || to === null) return fail("invalid_range", "Ngày phải có dạng YYYY-MM-DD (vd 2026-10-01).");
   if (from > to) fail("invalid_range", "Từ ngày phải trước hoặc bằng Đến ngày.");
-  if (to > calendarDay(dayKey(now))!) fail("invalid_range", "Không đồng bộ được ngày trong tương lai.");
-  if ((to - from) / 86_400_000 + 1 > SYNC_MAX_DAYS) fail("invalid_range", `Mỗi lần đồng bộ tối đa ${SYNC_MAX_DAYS} ngày.`);
+  if (to > calendarDay(dayKey(now))!) fail("invalid_range", "Không lấy được ngày trong tương lai.");
+  if ((to - from) / 86_400_000 + 1 > SYNC_MAX_DAYS) fail("invalid_range", `Mỗi lần chỉ lấy tối đa ${SYNC_MAX_DAYS} ngày.`);
   const connectionId = text(b, "connection_id", { max: 40 }) ?? undefined;
   if (connectionId && !(await loadSepayConnections(env, { activeOnly: true })).some((c) => c.id === connectionId)) {
     fail("not_found", "Không có kết nối SePay này, hoặc kết nối đang tắt.", 404);

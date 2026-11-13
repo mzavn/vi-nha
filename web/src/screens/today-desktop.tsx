@@ -1,7 +1,7 @@
 // Hôm nay trên máy tính (≥1024px): cùng ba thẻ ngăn (Vận hành, Tích luỹ, Dự phòng — ADR-122), thêm mọi thứ cần để quyết định
 // mà không phải bấm sang màn khác — việc cần làm dạng danh sách, giao dịch gần đây.
-// Không có card phong bì: chi theo nhóm xem ở Ví & quỹ › Nhìn lại (pwa UC-702 alt 6a, UC-707). Chỉ dùng số /v1 đã trả: snapshot (kỳ lương,
-// việc ngày lương), logs chưa gán, giao dịch.
+// Không có card phong bì: chi theo nhóm xem ở Ví & quỹ › Nhìn lại (pwa UC-702 alt 6a, UC-707). Chỉ dùng số /v1 đã trả: snapshot (việc
+// tháng, tháng dư), logs chưa gán, giao dịch.
 
 import { useEffect, useState } from "preact/hooks";
 import { conversionBanner } from "../lib/convert";
@@ -15,11 +15,12 @@ import { useResource } from "../state/resource";
 import { go, openTx, refresh, useApp, viewSnapshot } from "../state/store";
 import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
-import { Card, Empty, FirstLoadFailed, PageHeader, Skeleton } from "../ui/parts";
+import { Card, Banner, Empty, FirstLoadFailed, PageHeader, Skeleton } from "../ui/parts";
 import { LogRow } from "./assign";
-import { PayCycleCard } from "./pay-cycle-card";
+import { MonthCloseCard } from "./month-close-card";
+import { SavingsTaskCard } from "./savings-card";
 import { OtherEntrySheet } from "./other-entry-sheet";
-import { NearSpendCard, ReserveCard, SavingsCard } from "./today";
+import { FreshnessRow, NearSpendCard, NearStatusCard } from "./today";
 
 export function TodayDesk() {
   const app = useApp();
@@ -38,7 +39,7 @@ export function TodayDesk() {
         sub={sub}
         action={
           <button type="button" class="btn btn-primary" onClick={() => setIncome(true)}>
-            Tiền vào
+            Ghi tiền vào
           </button>
         }
       />
@@ -46,33 +47,41 @@ export function TodayDesk() {
         <Card>
           {app.loadFailed ? <FirstLoadFailed online={app.online} onRetry={() => void refresh(true)} /> : <Skeleton rows={6} />}
         </Card>
-      ) : (
-        <>
-          {/* Hai chồng: chính (thẻ Vận hành, giao dịch) và phụ (việc cần làm, thẻ Tích luỹ, thẻ Dự phòng).
-              ≥1280px hai chồng đứng cạnh nhau; 1024–1279px các card xếp thành lưới hai cột (xem .dash trong CSS). */}
-          <div class={hasTodo ? "dash" : "dash no-todo"}>
-            <div class="dash-main">
-              <NearSpendCard snap={snap} />
-              <RecentTransactions title="Giao dịch gần đây" class="dash-recent" />
-            </div>
-            <div class="dash-side">
-              {/* Màn chuyển đổi còn dở: Việc cần làm lên đầu cột, dòng chuyển đổi đứng đầu (UC-702 AC-27); không thì Việc
-                  ngày lương đứng đầu cột (UC-702 AC-21). */}
-              {convert && <Todo snap={snap} rejected={rejected} convert={convert} />}
-              <PayCycleCard snap={snap} />
-              {hasTodo && !convert && <Todo snap={snap} rejected={rejected} convert={null} />}
-              <SavingsCard snap={snap} />
-              <ReserveCard snap={snap} />
-            </div>
+      ) : app.compact ? (
+        // Chế độ gọn (UC-711 AC-36): chỉ Vận hành (gọn), Gần đây, dòng trạng thái và khoản bị từ chối.
+        <div class="dash dash-one">
+          <div class="dash-main">
+            <FreshnessRow />
+            {rejected > 0 && (
+              <Banner tone="bad" mark={String(rejected)} action="Xem" onAction={() => go("entry")}>
+                <strong>{rejected} khoản nhập bị máy chủ từ chối.</strong> Nằm trong hàng đợi, chờ sửa hoặc bỏ.
+              </Banner>
+            )}
+            <NearSpendCard snap={snap} compact />
+            <RecentTransactions title="Gần đây" class="dash-recent" />
           </div>
-        </>
+        </div>
+      ) : (
+        // Lưới 8–4: cột chính (Vận hành, việc tháng này, Gần đây) và cột phụ (các hàng trạng thái Vận hành, tiết kiệm, Cần xem).
+        <div class="dash">
+          <div class="dash-main">
+            <NearSpendCard snap={snap} rowsApart />
+            <MonthCloseCard snap={snap} />
+            <SavingsTaskCard snap={snap} doneApart />
+            <RecentTransactions title="Gần đây" class="dash-recent" />
+          </div>
+          <div class="dash-side">
+            <NearStatusCard snap={snap} />
+            {hasTodo && <Todo snap={snap} rejected={rejected} convert={convert} />}
+          </div>
+        </div>
       )}
-      {income && <OtherEntrySheet kind="income" amount={0} title="Ghi thu nhập" onClose={() => setIncome(false)} />}
+      {income && <OtherEntrySheet kind="income" amount={0} title="Ghi tiền vào" onClose={() => setIncome(false)} />}
     </>
   );
 }
 
-/** Việc cần làm: mỗi việc là một hàng bấm được dẫn thẳng tới chỗ làm, không chỉ một banner đếm số. */
+/** Việc tháng này: mỗi việc là một hàng bấm được dẫn thẳng tới chỗ làm, không chỉ một banner đếm số. */
 function Todo({ snap, rejected, convert }: { snap: Snapshot; rejected: number; convert: string | null }) {
   const { boot } = useApp();
   const a = snap.attention;
@@ -85,7 +94,7 @@ function Todo({ snap, rejected, convert }: { snap: Snapshot; rejected: number; c
   const SHOW = 5;
 
   return (
-    <Card class="dash-todo-card" title="Việc cần làm" right={<span class="hint">{total} việc</span>} flush>
+    <Card class="dash-todo-card" title="Cần xem" right={<span class="hint">{total} việc</span>} flush>
       <div class="dash-todo">
         {convert && (
           <button type="button" class="srow" onClick={() => (location.hash = "#convert")}>
@@ -99,7 +108,7 @@ function Todo({ snap, rejected, convert }: { snap: Snapshot; rejected: number; c
         )}
         {rejected > 0 && (
           <>
-            <div class="set-sub">Khoản nhập bị từ chối</div>
+            <div class="set-sub">Khoản ghi bị từ chối</div>
             <button type="button" class="srow" onClick={() => go("entry")}>
               <span class="srow-main">
                 <span class="srow-t">{rejected} khoản nhập bị máy chủ từ chối</span>
@@ -170,8 +179,8 @@ function Todo({ snap, rejected, convert }: { snap: Snapshot; rejected: number; c
 
 /**
  * Giao dịch mới nhất trong sổ (GET /v1/transactions). Dùng ở Hôm nay và màn Nhập (điện thoại: dưới form).
- * Chạm một dòng mở chi tiết để sửa / xoá (UC-715). Chia trang: cỡ trang chọn được (nhớ theo máy), Trang trước /
- * Trang sau theo con trỏ `before`; giữ ngăn xếp con trỏ để lùi lại.
+ * Chạm một dòng mở chi tiết để sửa / xoá (UC-715). Chia trang: cỡ trang chọn được (nhớ theo máy), nút ‹ › theo con trỏ
+ * `before`; giữ ngăn xếp con trỏ để lùi lại.
  */
 export function RecentTransactions({ title, class: cls }: { title: string; class?: string }) {
   const { boot, online, version } = useApp();
@@ -204,20 +213,29 @@ export function RecentTransactions({ title, class: cls }: { title: string; class
           ))}
         </select>
       </span>
-      <button type="button" class="btn pager-prev" disabled={busy || cursors.length === 0} onClick={() => setCursors((c) => c.slice(0, -1))}>
-        Trang trước
-      </button>
-      <span class="pager-at" aria-live="polite">
-        {res.loading ? "Đang tải…" : `Trang ${cursors.length + 1}`}
+      <span class="pager-nav">
+        <span class="pager-at" aria-live="polite">
+          {res.loading ? "Đang tải…" : `Trang ${cursors.length + 1}`}
+        </span>
+        <button
+          type="button"
+          class="pager-btn"
+          aria-label="Trang trước"
+          disabled={busy || cursors.length === 0}
+          onClick={() => setCursors((c) => c.slice(0, -1))}
+        >
+          <Icon name="chevron-left" size={20} />
+        </button>
+        <button
+          type="button"
+          class="pager-btn"
+          aria-label="Trang sau"
+          disabled={busy || !page?.hasNext}
+          onClick={() => page && setCursors((c) => [...c, page.rows[page.rows.length - 1]!.id])}
+        >
+          <Icon name="chevron-right" size={20} />
+        </button>
       </span>
-      <button
-        type="button"
-        class="btn pager-next"
-        disabled={busy || !page?.hasNext}
-        onClick={() => page && setCursors((c) => [...c, page.rows[page.rows.length - 1]!.id])}
-      >
-        Trang sau
-      </button>
       {!online && <span class="hint pager-off">Đổi trang cần mạng.</span>}
     </div>
   );
@@ -260,30 +278,19 @@ export function RecentTransactions({ title, class: cls }: { title: string; class
                   <th scope="col" class="l">
                     Khoản
                   </th>
-                  <th scope="col">Số tiền ₫</th>
+                  <th scope="col" class="num">Số tiền ₫</th>
                 </tr>
               </thead>
               <tbody>{page.rows.map((r) => <TxLine key={r.id} r={r} boot={boot} />)}</tbody>
             </table>
             {pager}
-            <div class="pad" style={{ paddingTop: 0, paddingBottom: "12px" }}>
-              <button type="button" class="btn" style={{ width: "100%" }} onClick={() => go("ledger", { book: null })}>
-                Mở Sổ giao dịch — xem theo tháng, lọc, tìm
-              </button>
-            </div>
           </>
         )
       ) : res.loading ? (
         <Skeleton rows={5} />
       ) : (
         <>
-          <Empty title={res.error?.offline ? "Không có mạng." : "Chưa tải được giao dịch."}>
-            <div style={{ marginTop: "10px" }}>
-              <button type="button" class="btn" onClick={res.reload}>
-                Tải lại
-              </button>
-            </div>
-          </Empty>
+          <Empty title={res.error?.offline ? "Không có mạng." : "Chưa tải được giao dịch."} action="Tải lại" onAction={res.reload} />
           {cursors.length > 0 && pager}
         </>
       )}
@@ -313,6 +320,12 @@ function TxLine({ r, boot }: { r: TxRow; boot: Bootstrap | null }) {
           <>
             {" "}
             <span class="chip">đã xoá</span>
+          </>
+        )}
+        {r.rule_id != null && (
+          <>
+            {" "}
+            <span class="chip">tự gán</span>
           </>
         )}
         {(r.note || context) && <div class="sub-line">{[r.note && maskAmounts(r.note), context].filter(Boolean).join(" · ")}</div>}

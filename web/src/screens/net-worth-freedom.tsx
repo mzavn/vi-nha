@@ -15,6 +15,7 @@ import {
   safetyText,
 } from "../lib/freedom";
 import { editedText, memberPlanText, planFormFrom, planHeadline, planPayload, planSplitHint, planSub, planYearRow, type PlanForm } from "../lib/income-plan";
+import { EMPTY_STATES } from "../lib/empty-states";
 import { formatVnd } from "../lib/money";
 import { pctText } from "../lib/net-worth";
 import { formToInput, keepDraft, keptDraft, project, reachText, startToForm, type ProjectionForm, type ProjectionRow } from "../lib/projection";
@@ -68,7 +69,7 @@ function Milestones({ f, onOpen }: { f: Freedom; onOpen: (o: Open) => void }) {
       <Card
         title="Mốc an tâm"
         flush
-        note="Mất thu nhập thì cả nhà sống bình thường được bao lâu — gồm vàng và tài sản có cờ Tiền lỏng, không phải tiền chi tiêu. Khác phần an tâm ở thẻ Dự phòng (Hôm nay)."
+        note="Mất thu nhập thì cả nhà sống bình thường được bao lâu: gồm vàng và tài sản Tiền lỏng, không phải tiền chi tiêu. Khác phần an tâm ở thẻ Dự phòng (Hôm nay)."
       >
         <div class="blist">
           {f.safety.map((s) => (
@@ -155,7 +156,7 @@ function PlanCard({ plan, year, onOpen }: { plan: IncomePlanYear | null; year: n
   if (!plan?.current) {
     return (
       <Card title={`Kế hoạch thu nhập ${year}`} flush>
-        <Empty title="Chưa có kế hoạch năm nay.">Đặt mục tiêu thu nhập ròng mỗi tháng của cả nhà; chia theo người nếu muốn.</Empty>
+        <Empty state={EMPTY_STATES.reportFreedom} />
         {actions}
       </Card>
     );
@@ -253,7 +254,7 @@ function YearSheet({ year, onClose, onEdit }: { year: number; onClose: () => voi
   return (
     <Sheet open title={`Kế hoạch thu nhập ${year}`} onClose={onClose}>
       <Loadable res={res}>{(y) => (y.current ? <PlanBody plan={y} /> : <Empty title="Năm này chưa có kế hoạch." />)}</Loadable>
-      <div class="pad">
+      <div class="sheet-foot">
         <button type="button" class="btn btn-primary btn-wide" disabled={!online} onClick={onEdit}>
           Sửa kế hoạch {year}
         </button>
@@ -336,8 +337,8 @@ function PlanSheet({ year, onClose, onSaved }: { year: number; onClose: () => vo
         </button>
       </div>
       {split && <Hint>{split}</Hint>}
-      <Hint>Lưu là một bản mới — mục tiêu đầu năm vẫn giữ.</Hint>
-      <div class="pad">
+      <Hint>Lưu thành bản mới, mục tiêu đầu năm vẫn giữ.</Hint>
+      <div class="sheet-foot">
         {error && (
           <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
             {error}
@@ -385,7 +386,7 @@ function Projection({ start, year }: { start: ProjectionStart; year: number }) {
     <>
       <div class="nw-sticky-warn">
         <Banner tone="warn" mark="!" action="Đặt lại về số thật" onAction={() => setF(real)}>
-          <strong>Số thử — không lưu, không phải số thật.</strong>
+          <strong>Số thử: không lưu, không phải số thật.</strong>
         </Banner>
       </div>
 

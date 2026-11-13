@@ -78,8 +78,8 @@ function household({ interest = 0, operating = true }: { interest?: number; oper
     rewardAccountId: null,
     debts: [],
     savingsPct: 10,
-    history: { since: "2026-11-10", prevSince: "2026-10-10", accounts: [] },
-    operatingSpend: { cycles: [], dataStart: null },
+    history: { since: "2026-11-01", prevSince: "2026-10-01", accounts: [] },
+    operatingSpend: { months: [], dataStart: null },
     peaceTarget: 6,
     interest: interest ? { "tk-tiet-kiem": interest } : {},
   });
@@ -105,9 +105,9 @@ describe("ô Cho khoản phải trả (ADR-141) và tài khoản con (ADR-140)",
     // Toast offline: Vận hành 15.000.000, còn 20 ngày, R 3.500.000 → 575.000/ngày; trả Điện nước 1.000.000 không đổi số mỗi
     // ngày; khoản chợ 200.000 không gắn thì trừ vào số mỗi ngày.
     const day = "2026-11-20";
-    const ns = nearSpend(p.operating, ACCOUNTS, day, 10, { cyclePayday: "2026-11-10", pendingTasks: 0, goalRemaining: p.operating.remaining });
+    const ns = nearSpend(p.operating, ACCOUNTS, day, 10, { salaryPayday: null, pendingTasks: 0, goalRemaining: p.operating.remaining });
     expect(ns).toMatchObject({ amount: 15_000_000, daysLeft: 20, goalRemaining: 3_500_000, perDay: 575_000 });
-    const snap = { day, pockets: p, nearSpend: ns, payCycle: null } as unknown as Snapshot;
+    const snap = { day, pockets: p, nearSpend: ns, month: null } as unknown as Snapshot;
     const queued = (body: Pick<EntryBody, "meaning" | "amount"> & Partial<EntryBody>): QueuedEntry => ({
       clientId: `c-${body.amount}`,
       memberId: "husband",
@@ -117,9 +117,9 @@ describe("ô Cho khoản phải trả (ADR-141) và tài khoản con (ADR-140)",
       body: { at: `${day}T03:00:00.000Z`, client_id: `c-${body.amount}`, ...body },
     });
     const paid = applyQueue(snap, [queued({ meaning: "spend", amount: 1_000_000, category_id: "bills", account_id: "tien-mat", ...goalField("dien-nuoc", row) })]);
-    expect(entryToast(localNearSpend(paid), true)).toBe(`Đã ghi, chờ đồng bộ · Vận hành còn 14.000.000${NBSP}₫ ≈ 575.000/ngày`);
+    expect(entryToast(localNearSpend(paid), true)).toBe(`Đã ghi, chờ gửi · Vận hành còn 14.000.000${NBSP}₫ ≈ 575.000/ngày`);
     const market = applyQueue(snap, [queued({ meaning: "spend", amount: 200_000, category_id: "groceries", account_id: "tien-mat", ...goalField(null, row) })]);
-    expect(entryToast(localNearSpend(market), true)).toBe(`Đã ghi, chờ đồng bộ · Vận hành còn 14.800.000${NBSP}₫ ≈ 565.000/ngày`);
+    expect(entryToast(localNearSpend(market), true)).toBe(`Đã ghi, chờ gửi · Vận hành còn 14.800.000${NBSP}₫ ≈ 565.000/ngày`);
   });
 
   it("UC-705 AC-38: thu vào khoản gửi (con) → ô 'Đây là tiền lãi' bật sẵn; thu vào mẹ → có ô, tắt sẵn; tài khoản không thuộc nhóm có mục tiêu → không ô; chuyển ra khỏi nhóm khi có tiền lãi → chip 'Từ tiền lãi' gửi from_interest, không goal_id; chuyển sang con → không chip", () => {

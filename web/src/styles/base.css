@@ -1,0 +1,69 @@
+/* Base CSS theo docs/DESIGN.md (pwa UC-711 AC-33) */
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    background: var(--bg);
+    /* App không co giãn (KZ-UX-003): bỏ phóng to khi chạm đúp ở mọi phần tử con; chụm tay chặn ở main.tsx. */
+    touch-action: manipulation;
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-text);
+    font-size: var(--text-md);
+    line-height: var(--leading-md);
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button,
+  select,
+  input,
+  textarea {
+    font-family: inherit;
+    font-size: inherit;
+    line-height: inherit;
+    font-weight: inherit;
+    color: inherit;
+  }
+  button {
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+    border-radius: var(--s1);
+  }
+  h1,
+  h2,
+  h3 {
+    margin: 0;
+  }
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+  p a {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  /* Màn báo lỗi khi app không dựng được (main.tsx). */
+  .load-failed {
+    padding: var(--s8) var(--s4);
+    text-align: center;
+    color: var(--fg-2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}

@@ -9,11 +9,14 @@ import { payableDebts } from "../lib/debts";
 import { assignDebtRows, hasInterest } from "../lib/interest";
 import { bookRefLabel } from "../lib/memo-books";
 import { goalChoices, incomeInterest } from "../lib/goal-choices";
+import { EMPTY_STATES } from "../lib/empty-states";
+import { TOAST_UNDO_DONE } from "../lib/undo";
 import { formatVnd, moneyDigits } from "../lib/money";
-import { opensCycleDefault } from "../lib/other-entry";
+import { isSalaryDefault } from "../lib/other-entry";
 import { localNearSpend } from "../lib/pending";
 import { dayKey, shortDate, timeHM } from "../lib/period";
 import { defaultReceivableId } from "../lib/receivables";
+import { SCREEN_TITLES } from "../lib/nav";
 import { tenantChipBlock } from "../lib/rental";
 import {
   ASSIGN_CHOICES,
@@ -78,7 +81,7 @@ export function Assign() {
       {logs.loading && !logs.data ? (
         <Skeleton rows={3} />
       ) : notReady ? (
-        <Empty title="Chưa nối ngân hàng.">Khi SePay chạy, giao dịch ngân hàng chưa gán sẽ hiện ở đây. Khoản chi tiền mặt vẫn nhập ở màn Nhập.</Empty>
+        <Empty title="Chưa nối ngân hàng.">Khi SePay chạy, giao dịch chưa gán sẽ hiện ở đây. Tiền mặt thì ghi ở mục Ghi.</Empty>
       ) : logs.error && !logs.data ? (
         <Empty title={logs.error.offline ? "Không có mạng." : "Chưa tải được danh sách."}>
           {logs.error.offline ? "Gán cần mạng để đối chiếu với ngân hàng." : errorText(logs.error)}
@@ -89,7 +92,7 @@ export function Assign() {
           </div>
         </Empty>
       ) : count === 0 ? (
-        <Empty title="Không còn gì chưa gán.">Sổ khớp ngân hàng.</Empty>
+        <Empty state={EMPTY_STATES.assign} />
       ) : selected ? (
         logs.data!.map((l) => <LogRow key={l.id} log={l} boot={boot} current={l.id === selected.id} onOpen={() => setSel(l.id)} />)
       ) : (
@@ -100,8 +103,8 @@ export function Assign() {
 
   return (
     <>
-      <PageHeader title="Gán giao dịch" sub={logs.data ? (count ? `${count} chưa gán` : "Không còn gì chưa gán") : "Giao dịch ngân hàng chờ gán"} />
-      {!online && !logs.data && <NeedsNetwork what="Gán giao dịch" />}
+      <PageHeader title={SCREEN_TITLES.assign} sub={logs.data ? (count ? `${count} chưa gán` : "Không còn gì chưa gán") : "Giao dịch ngân hàng chờ gán"} />
+      {!online && !logs.data && <NeedsNetwork what="Chưa gán" />}
       {selected && boot ? (
         <div class="dk-cols">
           <div>{list}</div>
@@ -110,7 +113,7 @@ export function Assign() {
       ) : (
         list
       )}
-      {logs.cachedAt && <p class="status-row">Danh sách lúc {timeHM(logs.cachedAt)} — đang không có mạng.</p>}
+      {logs.cachedAt && <p class="status-row">Danh sách lúc {timeHM(logs.cachedAt)} , đang không có mạng.</p>}
       {open && boot && <AssignSheet log={open} boot={boot} onClose={() => setOpen(null)} onDone={done} />}
     </>
   );
@@ -130,15 +133,17 @@ export function LogRow({ log, boot, onOpen, current }: { log: BankLog; boot: Boo
   );
   return (
     <button type="button" class="log" onClick={onOpen} aria-current={current ? "true" : undefined}>
-      <span class="t">
-        {isToday ? timeHM(log.at) : `${shortDate(log.at)} ${timeHM(log.at)}`} · {acct}
-      </span>
+      <span class="c">{log.content ?? "(không có nội dung)"}</span>
       <span class={log.direction === "in" ? "a in num" : "a num"}>
         {log.direction === "in" ? "+" : "−"}
         {moneyDigits(log.amount)}
       </span>
-      <span class="c">{log.content ?? "(không có nội dung)"}</span>
-      <span class={`g ${hint.cls}`}>{hint.text}</span>
+      <span class="log-s">
+        <span class="t">
+          {isToday ? timeHM(log.at) : `${shortDate(log.at)} ${timeHM(log.at)}`} · {acct}
+        </span>
+        <span class={`g ${hint.cls}`}>{hint.text}</span>
+      </span>
     </button>
   );
 }
@@ -180,7 +185,9 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
   const interestOffer = isIn ? incomeInterest(log.account_id, snap?.pockets) : null;
   const interestOf = (r: Row) => r.is_interest ?? interestOffer?.preset ?? false;
   const rental = useResource<Rental>(isIn ? "/v1/rental" : null).data;
-  const streams = (useResource<SettingsData>(isIn ? "/v1/settings" : null).data?.incomeStreams ?? []).filter((s) => s.active);
+  const settings = useResource<SettingsData>(isIn ? "/v1/settings" : null).data;
+  const streams = (settings?.incomeStreams ?? []).filter((s) => s.active);
+  const reminderMin = settings?.config.salary_reminder_min;
   const tenants = (rental?.tenants ?? []).filter((t) => t.active);
   const debts = payableDebts(boot.debts);
   const debtCategory = boot.categories.find((c) => c.id === DEBT_CATEGORY_ID);
@@ -189,7 +196,6 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
   const [makeRule, setMakeRule] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [confirmIgnore, setConfirmIgnore] = useState(false);
   // Log của tài khoản riêng tư không gán được cho người thuê (N-1, UC-706 AC-38): chip tắt kèm câu.
   const tenantBlock = isIn ? tenantChipBlock(boot.accounts.find((a) => a.id === log.account_id)) : null;
   const options = isIn
@@ -209,7 +215,7 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
   const update = (key: number, patch: Partial<Row>) => setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
 
   function choose(r: Row, c: AssignChoice) {
-    if (c === "tenant") update(r.key, { meaning: "income", tenantMode: true, interestMode: false, tenant_id: r.tenant_id ?? tenants[0]?.id ?? null, income_stream_id: null, opens_cycle: undefined });
+    if (c === "tenant") update(r.key, { meaning: "income", tenantMode: true, interestMode: false, tenant_id: r.tenant_id ?? tenants[0]?.id ?? null, income_stream_id: null, is_salary: undefined });
     // Lãi tiền gửi luôn một dòng trọn số tiền log (không tách).
     else if (c === "interest") setRows([{ key: ++rowSeq, meaning: "income", interestMode: true, amount: log.amount, note: r.note ?? null }]);
     else
@@ -244,10 +250,10 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
         ),
       );
       await refresh();
-      if (res.attached) toast(`Đã khớp vào chuyển nội bộ đã ghi ${formatVnd(log.amount)} — không ghi thêm.`);
+      if (res.attached) toast(`Đã khớp chuyển nội bộ ${formatVnd(log.amount)}, không ghi thêm.`);
       else if (interestRow) toast(interestToast(log.amount));
       else {
-        // Toast nói hệ quả (DESIGN §4): kỳ lương / việc ngày lương từ `effects`, khoản chi thì Vận hành còn bao nhiêu (số vừa tải lại).
+        // Toast nói hệ quả (DESIGN §4): nhắc trích Tích luỹ / việc tháng từ `effects`, khoản chi thì Vận hành còn bao nhiêu (số vừa tải lại).
         const after = getState();
         const one = rows[0]!;
         toast(
@@ -269,7 +275,18 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
     setBusy(true);
     try {
       await api.post(`/v1/logs/${encodeURIComponent(log.id)}/ignore`);
-      toast("Đã bỏ qua giao dịch này. Nó không vào sổ.");
+      toast("Đã bỏ qua giao dịch này, không vào sổ.", {
+        label: "Hoàn tác",
+        run: async () => {
+          try {
+            await api.post(`/v1/logs/${encodeURIComponent(log.id)}/unignore`);
+            await refresh();
+            toast(TOAST_UNDO_DONE);
+          } catch (err: any) {
+            toast(errorText(err));
+          }
+        },
+      });
       onDone();
     } catch (err) {
       setError(errorText(err));
@@ -277,7 +294,7 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
     }
   }
 
-  // "Đã nhập tay?": gắn log vào khoản nhập tay đã ghi đúng khoản này — không tạo giao dịch, giữ nguyên ví / danh mục.
+  // "Đã ghi tay?": gắn log vào khoản nhập tay đã ghi đúng khoản này — không tạo giao dịch, giữ nguyên ví / danh mục.
   async function link(txId: number) {
     setBusy(true);
     try {
@@ -307,7 +324,7 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
       {log.suggestion?.possible_duplicate_of && (
         <div style={{ padding: "4px 16px 0" }}>
           <Banner tone="warn" mark="!">
-            Có thể <strong>trùng</strong> với một giao dịch cùng số tiền, cùng tài khoản đã ghi trong vòng 3 phút. Đúng là một thì bấm <strong>Bỏ qua</strong>; là hai khoản khác nhau thì gán như bình thường.
+            Có thể <strong>trùng</strong> với giao dịch cùng số tiền, cùng tài khoản đã ghi trong 3 phút. Đúng là một thì bấm <strong>Bỏ qua</strong>; là hai khoản khác nhau thì gán bình thường.
           </Banner>
         </div>
       )}
@@ -321,14 +338,14 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
       {log.suggestion?.attach_to_tx && (
         <div style={{ padding: "4px 16px 0" }}>
           <Banner tone="info" mark="=">
-            <strong>{log.suggestion.label ?? "Khớp chuyển nội bộ đã ghi"}</strong> từ tài khoản kia. Gán Chuyển nội bộ với đúng tài khoản đó là gắn vào giao dịch đã ghi — không ghi thêm, không đếm hai lần.
+            <strong>{log.suggestion.label ?? "Khớp chuyển nội bộ đã ghi"}</strong> từ tài khoản kia. Gán Chuyển nội bộ đúng tài khoản đó sẽ nối vào giao dịch đã ghi, không ghi thêm, không đếm hai lần.
           </Banner>
         </div>
       )}
       {log.account_id && matches.length > 0 && (
         <div style={{ padding: "4px 16px 0" }}>
           <Banner tone="info" mark="=">
-            <strong>Đã nhập tay?</strong> Có khoản nhập tay cùng số tiền, cùng chiều, cách không quá 1 ngày. Đúng là khoản này thì bấm Nối — gắn giao dịch ngân hàng vào đó, không ghi thêm. Đã ghi tay thành nhiều dòng (tách khoản) thì bấm <strong>Bỏ qua</strong> để khỏi ghi hai lần.
+            <strong>Đã ghi tay?</strong> Có khoản ghi tay cùng số tiền, cùng chiều, cách không quá 1 ngày. Đúng khoản này thì bấm Nối để gắn giao dịch vào, không ghi thêm. Đã ghi tách nhiều dòng thì bấm <strong>Bỏ qua</strong> để khỏi ghi hai lần.
           </Banner>
           {matches.map((m) => (
             <div key={m.id} class="g flex gap-2" style={{ alignItems: "center", marginTop: "6px" }}>
@@ -343,7 +360,7 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
       {log.direction === "in" && log.suggestion?.tenant_id && (
         <div style={{ padding: "4px 16px 0" }}>
           <Banner tone="info" mark="?">
-            Gợi ý: <strong>{log.suggestion.label ?? "Thu từ người thuê"}</strong>. Máy chỉ gợi ý — xem đúng người, đúng số rồi mới bấm Gán.
+            Gợi ý: <strong>{log.suggestion.label ?? "Thu từ người thuê"}</strong>. Máy chỉ gợi ý, xem đúng người, đúng số rồi mới bấm Gán.
           </Banner>
         </div>
       )}
@@ -352,7 +369,7 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
           <Banner tone="warn" mark="?">
             Tiền vào <strong>luôn phải hỏi</strong>. Máy không đoán được đây là thu nhập hay người ta trả lại tiền. Không chắc chọn loại nào?{" "}
             <a href={GUIDE_PICK_KIND_URL} target="_blank" rel="noopener noreferrer" class="font-medium underline underline-offset-2">
-              Xem bảng chọn loại trong hướng dẫn.
+              Xem bảng hướng dẫn chọn loại.
             </a>
           </Banner>
         </div>
@@ -360,13 +377,13 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
       {log.direction === "out" && (
         <div style={{ padding: "4px 16px 0" }}>
           <button type="button" class="btn" style={{ width: "100%" }} onClick={cashWithdrawal}>
-            Rút tiền mặt — chỉ đổi chỗ, không phải chi tiêu
+            Rút tiền mặt chỉ là đổi chỗ, không phải chi tiêu
           </button>
         </div>
       )}
 
       {rows.map((r, i) => (
-        <fieldset key={r.key} style={{ border: 0, margin: "12px 0 0", padding: 0, borderTop: "1px solid var(--border)", minWidth: 0 }}>
+        <fieldset key={r.key} style={{ border: 0, margin: "12px 0 0", padding: 0, borderTop: "1px solid var(--line)", minWidth: 0 }}>
           <legend class="sr-only">Dòng {i + 1}</legend>
           <div class="pad" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "8px" }}>
             <strong style={{ fontSize: "13px" }}>{rows.length > 1 ? `Dòng ${i + 1}` : "Gán thành"}</strong>
@@ -500,7 +517,7 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
                     id={`s-st-${r.key}`}
                     class="ctl"
                     value={r.income_stream_id ?? ""}
-                    onChange={(e) => update(r.key, { income_stream_id: e.currentTarget.value || null, opens_cycle: undefined })}
+                    onChange={(e) => update(r.key, { income_stream_id: e.currentTarget.value || null, is_salary: undefined })}
                   >
                     <option value="">Không chọn nguồn</option>
                     {streams.map((s) => (
@@ -511,16 +528,19 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
                   </select>
                 </div>
               )}
-              <div class="field">
-                <label class="check">
-                  <input
-                    type="checkbox"
-                    checked={r.opens_cycle ?? opensCycleDefault(streams, r.income_stream_id ?? "")}
-                    onChange={(e) => update(r.key, { opens_cycle: e.currentTarget.checked })}
-                  />
-                  Lương — mở kỳ lương
-                </label>
-              </div>
+              {/* "Đây là lương" (pocket UC-1205 Q1-B, UC-706 AC-40): mặc định theo nguồn / ngưỡng nhắc trích; tiền lãi thì không có ô. */}
+              {!(interestOffer && interestOf(r)) && (
+                <div class="field">
+                  <label class="check">
+                    <input
+                      type="checkbox"
+                      checked={r.is_salary ?? isSalaryDefault(streams, r.income_stream_id ?? "", r.amount, reminderMin)}
+                      onChange={(e) => update(r.key, { is_salary: e.currentTarget.checked })}
+                    />
+                    Đây là lương
+                  </label>
+                </div>
+              )}
               <div class="field" style={{ flexWrap: "wrap" }}>
                 <span class="k">Thuế</span>
                 <Seg
@@ -528,8 +548,8 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
                   value={r.taxable ? "yes" : "no"}
                   onChange={(v) => update(r.key, { taxable: v === "yes" })}
                   options={[
-                    { value: "no", label: "Đã khấu trừ tại nguồn" },
-                    { value: "yes", label: "Chưa — để riêng thuế" },
+                    { value: "no", label: "Đã trừ thuế rồi" },
+                    { value: "yes", label: "Chưa, để riêng thuế" },
                   ]}
                 />
               </div>
@@ -547,7 +567,7 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
               id={`s-note-${r.key}`}
               class="ctl"
               maxLength={500}
-              placeholder="mua gì, cho ai — không bắt buộc"
+              placeholder="mua gì, cho ai, không bắt buộc"
               value={r.note ?? ""}
               onInput={(e) => update(r.key, { note: e.currentTarget.value || null })}
             />
@@ -574,7 +594,7 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
         <div class="field">
           <label class="check">
             <input type="checkbox" checked={makeRule} onChange={(e) => setMakeRule(e.currentTarget.checked)} />
-            Lần sau tự gán giao dịch có nội dung giống thế này
+            Lần sau tự gán nếu nội dung giống thế này
           </label>
         </div>
       )}
@@ -588,15 +608,15 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
         <button type="button" class="btn btn-primary btn-wide" disabled={!online || busy || !check.ok || blocked} onClick={() => void submit()}>
           {busy ? "Đang gán…" : "Gán và ghi sổ"}
         </button>
-        {!online && <NeedsNetwork what="Gán giao dịch" />}
+        {!online && <NeedsNetwork what="Chưa gán" />}
         <button
           type="button"
-          class={confirmIgnore ? "btn btn-bad" : "btn btn-ghost"}
+          class="btn btn-ghost"
           style={{ width: "100%", marginTop: "8px" }}
           disabled={!online || busy}
-          onClick={() => (confirmIgnore ? void ignore() : setConfirmIgnore(true))}
+          onClick={() => void ignore()}
         >
-          {confirmIgnore ? "Bỏ qua hẳn — giao dịch này không vào sổ" : "Bỏ qua giao dịch này"}
+          Bỏ qua giao dịch này
         </button>
       </div>
     </>
@@ -605,7 +625,7 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
   if (wide) {
     return (
       <section class="card dk-panel" aria-label={`Gán: ${title}`}>
-        <div class="card-h" style={{ borderBottom: "1px solid var(--border)" }}>
+        <div class="card-h" style={{ borderBottom: "1px solid var(--line)" }}>
           <h2>{title}</h2>
           <span class="hint">gán thành một hoặc nhiều dòng</span>
         </div>

@@ -13,13 +13,13 @@ describe("GET /v1/health", () => {
   it("trả phiên bản schema, không cần token", async () => {
     const res = await app.request("/v1/health", {}, env());
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, db: "v1.45" });
+    expect(await res.json()).toEqual({ ok: true, db: "v1.48" });
   });
 
-  it("UC-509 AC-3: D1 trống áp 0030_baseline + 0031…0045, và hộ mẫu E áp 0038…0045 → cả hai v1.45", async () => {
+  it("UC-509 AC-3: D1 trống áp 0030_baseline + 0031…0048, và hộ mẫu E áp 0038…0048 → cả hai v1.48", async () => {
     for (const DB of [upgradingD1(legacyEmptyDb()), asD1(householdE())]) {
       const res = await app.request("/v1/health", {}, env({ DB }));
-      expect(await res.json()).toEqual({ ok: true, db: "v1.45" });
+      expect(await res.json()).toEqual({ ok: true, db: "v1.48" });
     }
   });
 
@@ -70,6 +70,11 @@ describe("header bảo mật (ADR-89)", () => {
     expectSecure(page);
     expect(SECURITY_HEADERS["Content-Security-Policy"]).toContain("script-src 'self';");
     expect(SECURITY_HEADERS["Content-Security-Policy"]).toContain("frame-ancestors 'none'");
+    // access UC-503 AC-6 (change 261113-giao-dien-m1-va-ten-moi): font tự host — không còn Google Fonts ở style / font / connect.
+    expect(SECURITY_HEADERS["Content-Security-Policy"]).toContain("style-src 'self';");
+    expect(SECURITY_HEADERS["Content-Security-Policy"]).toContain("font-src 'self';");
+    expect(SECURITY_HEADERS["Content-Security-Policy"]).toContain("connect-src 'self' https://api.github.com;");
+    expect(SECURITY_HEADERS["Content-Security-Policy"]).not.toMatch(/fonts\.(googleapis|gstatic)\.com/);
     // access UC-503 AC-6 (Đợt E): Hướng dẫn mở tab mới (UC-711 AC-26) nên không còn `frame-src`; trình duyệt dùng default-src 'self'.
     expect(SECURITY_HEADERS["Content-Security-Policy"]).not.toContain("frame-src");
   });

@@ -301,7 +301,7 @@ const slug = (s: string) =>
     .slice(0, 40);
 
 function section(b: Input) {
-  if (b.section === "A3") fail("use_receivable_book", "Khoản người khác nợ mình ghi ở sổ phải thu (tab Nợ).");
+  if (b.section === "A3") fail("use_receivable_book", "Khoản người khác nợ mình ghi ở tab Nợ.");
   return oneOf(b, "section", ITEM_SECTIONS);
 }
 
@@ -462,7 +462,7 @@ export async function addValue(db: D1Database, itemId: string, b: Input, memberI
 export async function voidValue(db: D1Database, id: number, now: Date): Promise<ItemView> {
   const v = await db.prepare("SELECT item_id AS itemId, status FROM balance_values WHERE id = ?").bind(id).first<{ itemId: string; status: string }>();
   if (!v) fail("not_found", "Không có dòng định giá này.", 404);
-  if (v!.status !== "active") fail("already_void", "Dòng này đã huỷ trước đó.", 409);
+  if (v!.status !== "active") fail("already_void", "Dòng này đã huỷ rồi.", 409);
   await db.prepare("UPDATE balance_values SET status = 'void' WHERE id = ?").bind(id).run();
   return getItem(db, v!.itemId, now);
 }
@@ -479,7 +479,7 @@ function quantityMilli(b: Input): number {
 export async function addLot(db: D1Database, itemId: string, b: Input, memberId: string | null, now: Date): Promise<ItemView> {
   const today = dayKey(now);
   const item = await itemRow(db, itemId);
-  if (item.measure !== "units") fail("wrong_measure", "Mục theo giá trị không có lô — cập nhật giá trị cả mục.");
+  if (item.measure !== "units") fail("wrong_measure", "Mục theo giá trị không có lô, cập nhật giá trị cả mục.");
   const boughtOn = day(b, "bought_on", today, true)!;
   const milli = quantityMilli(b);
   const unitCost = money(b, "unit_cost") ?? fail("invalid_amount", "Thiếu giá mua một đơn vị (unit_cost).");
@@ -521,7 +521,7 @@ export async function sellLot(db: D1Database, id: number, b: Input, now: Date): 
 
 export async function voidLot(db: D1Database, id: number, now: Date): Promise<ItemView> {
   const lot = await lotRow(db, id);
-  if (lot.status !== "active") fail("already_void", "Lô này đã huỷ trước đó.", 409);
+  if (lot.status !== "active") fail("already_void", "Lô này đã huỷ rồi.", 409);
   await db.prepare("UPDATE balance_lots SET status = 'void' WHERE id = ?").bind(id).run();
   return getItem(db, lot.itemId, now);
 }

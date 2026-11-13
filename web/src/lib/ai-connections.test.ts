@@ -47,8 +47,7 @@ describe("UC-508: danh sách kết nối", () => {
         key: "husband/g1",
         title: "Claude",
         domain: "claude.ai",
-        sub: "của Chồng · Xem",
-        sub2: "nối ngày 8/10",
+        sub: "của Chồng · Xem · nối ngày 8/10",
         revokePath: "/v1/settings/mcp/husband/g1",
       },
     ]);
@@ -60,7 +59,7 @@ describe("UC-508: danh sách kết nối", () => {
       NOW,
     );
     expect(rows.map((r) => r.key)).toEqual(["wife/new", "husband/old"]);
-    expect(rows[0]).toMatchObject({ title: "ChatGPT", domain: "chatgpt.com", sub: "của Vợ · Xem + Ghi" });
+    expect(rows[0]).toMatchObject({ title: "ChatGPT", domain: "chatgpt.com", sub: "của Vợ · Xem + Ghi · nối ngày 8/10" });
   });
 
   it("không có tên miền xác minh thì hiện nơi chuyển về; tên ứng dụng trùng tên miền thì không lặp", () => {

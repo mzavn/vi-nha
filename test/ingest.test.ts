@@ -5,7 +5,7 @@ import type { Env } from "../src/env";
 import { assignLog, createRule, ignoreLog, ingestLog, listPendingLogs, pairLogs, unassignTransaction, type ParsedBankLog, type Split } from "../src/services/ingest";
 import { createEntry } from "../src/services/ledger";
 import { groupInterests } from "../src/services/goal-groups";
-import { payCycleView } from "../src/services/pay-cycles";
+import { monthView } from "../src/services/month-tasks";
 import { asD1, openDb } from "./helpers/d1-sqlite";
 import { householdParent, PARENT_NOW } from "./helpers/household-parent";
 
@@ -37,8 +37,8 @@ const now = () => new Date("2026-09-22T02:00:05.000Z");
 const bankLog = (id: string) => raw.prepare("SELECT * FROM bank_logs WHERE id = ?").get(id) as Record<string, unknown> | undefined;
 const txOf = (logId: string) => raw.prepare("SELECT * FROM transactions WHERE log_id = ?").all(logId) as Record<string, unknown>[];
 const count = (sql: string, ...args: (string | number)[]) => (raw.prepare(sql).get(...args) as { n: number }).n;
-/** Việc của kỳ hiện tại như snapshot thấy (pocket UC-1206). */
-const tasks = async () => (await payCycleView(env.DB, "2026-09-22", "husband")).view?.tasks ?? [];
+/** Việc tháng như snapshot thấy (pocket UC-1206). */
+const tasks = async () => (await monthView(env.DB, now(), "husband")).view.tasks;
 
 describe("ingestLog: chống trùng", () => {
   it("gửi lại cùng id chỉ tạo một log", async () => {
@@ -89,46 +89,50 @@ describe("ingestLog: rule mã / từ khoá", () => {
     expect(bankLog("no-cat")).toMatchObject({ status: "pending" });
     expect(txOf("no-cat")).toHaveLength(0);
     const [pending] = await listPendingLogs(env.DB, 10, "husband");
-    expect(pending!.suggestion).toEqual({ meaning: "spend", note: "Khớp mã nhưng thiếu danh mục — chọn danh mục để lưu." });
+    expect(pending!.suggestion).toEqual({ meaning: "spend", note: "Khớp mã nhưng thiếu danh mục: chọn danh mục để lưu." });
   });
 });
 
-describe("ingestLog: mẫu lương — ghi đúng một lần, mở kỳ (pocket UC-1205)", () => {
+describe("ingestLog: mẫu lương — ghi đúng một lần, một nhắc trích Tích luỹ (pocket UC-1205)", () => {
   const salary = (id: string, over: Partial<ParsedBankLog> = {}) => log({ id, direction: "in", amount: 40_000_000, content: "LUONG THANG 9", accountNo: "0011xxxxxxx", ...over });
 
-  it("UC-303 AC-10: lương đủ ngưỡng → một khoản thu không ví gắn nguồn của mẫu, một kỳ; gửi lại cùng id không ghi lần hai", async () => {
-    await ingestLog(env.DB, salary("500"), "webhook", now());
+  it("UC-303 AC-10: lương đủ ngưỡng → một khoản thu không ví gắn nguồn của mẫu, là lương, một nhắc ① tháng 2026-09; gửi lại cùng id không ghi lần hai", async () => {
+    const first = await ingestLog(env.DB, salary("500"), "webhook", now());
     const income = txOf("500");
     expect(income).toHaveLength(1);
-    expect(income[0]).toMatchObject({ meaning: "income", taxable: 0, counter_account_id: "vcb-husband", income_stream_id: "salary-husband" });
-    expect(raw.prepare("SELECT income_tx_id, started_at FROM pay_cycles WHERE status = 'active'").all()).toEqual([{ income_tx_id: income[0]!.id, started_at: "2026-09-22T02:00:00.000Z" }]);
-    expect((await tasks()).map((t) => t.kind)).toContain("savings");
+    expect(income[0]).toMatchObject({ meaning: "income", taxable: 0, counter_account_id: "vcb-husband", income_stream_id: "salary-husband", is_salary: 1 });
+    expect(first.salaryTxId).toBe(income[0]!.id);
+    expect(raw.prepare("SELECT income_tx_id, month_key, status FROM month_tasks").all()).toEqual([{ income_tx_id: income[0]!.id, month_key: "2026-09", status: "open" }]);
+    expect((await tasks()).map((t) => t.kind)).toEqual(["savings"]);
 
-    await ingestLog(env.DB, salary("500"), "webhook", now()); // SePay gửi lại (retry Fibonacci)
+    const again = await ingestLog(env.DB, salary("500"), "webhook", now()); // SePay gửi lại (retry Fibonacci)
+    expect(again).toEqual({ created: false, logId: "500" });
     expect(count("SELECT COUNT(*) n FROM transactions WHERE meaning = 'income'")).toBe(1);
-    expect(count("SELECT COUNT(*) n FROM pay_cycles")).toBe(1);
+    expect(count("SELECT COUNT(*) n FROM month_tasks")).toBe(1);
     expect(count("SELECT COUNT(*) n FROM transactions WHERE meaning = 'fund'")).toBe(0);
   });
 
-  it("UC-1205 AC-1: cùng log về qua webhook rồi rà soát (khác id, cùng mã tham chiếu) → một khoản thu, một kỳ", async () => {
+  it("UC-1205 AC-5: cùng log về qua webhook rồi rà soát (khác id, cùng mã tham chiếu) → một khoản thu, một nhắc; rà soát không trả salaryTxId", async () => {
     await ingestLog(env.DB, salary("wh-1", { referenceNumber: "FT900" }), "webhook", now());
-    await ingestLog(env.DB, salary("uuid-1", { referenceNumber: "FT900" }), "backfill", now());
+    const backfill = await ingestLog(env.DB, salary("uuid-1", { referenceNumber: "FT900" }), "backfill", now());
+    expect(backfill).not.toHaveProperty("salaryTxId");
     expect(count("SELECT COUNT(*) n FROM transactions WHERE meaning = 'income'")).toBe(1);
-    expect(count("SELECT COUNT(*) n FROM pay_cycles")).toBe(1);
+    expect(count("SELECT COUNT(*) n FROM month_tasks")).toBe(1);
   });
 
-  it("UC-303 AC-10: lương nhỏ hơn ngưỡng nằm chờ; mẫu lương không gắn nguồn ghi khoản thu nhưng không mở kỳ", async () => {
+  it("UC-1205 AC-6: lương nhỏ hơn ngưỡng tự ghi nằm chờ; mẫu lương không nguồn khớp log 3.000.000 vẫn tự ghi (salary_min_amount) nhưng dưới salary_reminder_min → không phải lương, không nhắc", async () => {
     await ingestLog(env.DB, salary("small", { amount: 800_000 }), "webhook", now());
     expect(bankLog("small")).toMatchObject({ status: "pending" });
     raw.prepare("UPDATE rules SET income_stream_id = NULL WHERE is_salary = 1").run();
-    await ingestLog(env.DB, salary("nostream", { amount: 9_000_000 }), "webhook", now());
-    expect(txOf("nostream")).toEqual([expect.objectContaining({ meaning: "income", income_stream_id: null })]);
-    expect(count("SELECT COUNT(*) n FROM pay_cycles")).toBe(0);
+    const res = await ingestLog(env.DB, salary("nostream", { amount: 3_000_000 }), "webhook", now());
+    expect(res).not.toHaveProperty("salaryTxId");
+    expect(txOf("nostream")).toEqual([expect.objectContaining({ meaning: "income", income_stream_id: null, is_salary: 0 })]);
+    expect(count("SELECT COUNT(*) n FROM month_tasks")).toBe(0);
   });
 });
 
 describe("tài khoản SePay chỉ báo tiền vào (sepay_out = 0, ADR-66)", () => {
-  const NOTE = "SePay vừa báo tiền ra cho tài khoản đang để 'chỉ tiền vào'. Nếu khoản này đã nhập tay thì Bỏ qua; rồi bật 'SePay báo cả tiền ra' ở Cài đặt.";
+  const NOTE = "SePay vừa báo tiền ra cho tài khoản đang để 'chỉ tiền vào'. Nếu khoản này đã ghi tay thì Bỏ qua, rồi bật 'SePay báo cả tiền ra' ở Cài đặt.";
   const mb = (over: Partial<ParsedBankLog>) => log({ accountNo: "0888xxxxxxx", ...over }); // mb-husband
   beforeEach(() => {
     raw.prepare("UPDATE accounts SET sepay_out = 0 WHERE id = 'mb-husband'").run();
@@ -164,12 +168,12 @@ describe("tài khoản SePay chỉ báo tiền vào (sepay_out = 0, ADR-66)", ()
   });
 });
 
-describe("tự khớp không ví, tự tick việc ngày lương (ingest UC-303 AC-32, UC-306 AC-28)", () => {
+describe("tự khớp không ví, tự tick việc tháng (ingest UC-303 AC-32, UC-306 AC-28)", () => {
   beforeEach(() => {
     raw.prepare("UPDATE accounts SET pocket = 'savings' WHERE id = 'tcb-husband'").run();
   });
   const savingsTask = async () => (await tasks()).find((t) => t.kind === "savings")!;
-  /** Lương 10.000.000 mở kỳ → ① Trích Tích luỹ 30% = 3.000.000; rồi chuyển 3.000.000 VCB → TCB (ngăn Tích luỹ), hai chân. */
+  /** Lương 10.000.000 → ① Trích Tích luỹ 30% = 3.000.000; rồi chuyển 3.000.000 VCB → TCB (ngăn Tích luỹ), hai chân. */
   async function salaryThenTransfer() {
     await ingestLog(env.DB, log({ id: "sal", direction: "in", amount: 10_000_000, content: "LUONG THANG 9", at: "2026-09-22T01:00:00.000Z" }), "webhook", now());
     await ingestLog(env.DB, log({ id: "out", direction: "out", amount: 3_000_000, at: "2026-09-22T02:00:00.000Z" }), "webhook", now());
@@ -278,15 +282,13 @@ describe("gợi ý Rút tiền mặt chỉ cho log `out` trông như rút tiền
 describe("nguồn thu & người thuê (change 261001)", () => {
   const tenant = () => raw.prepare("INSERT INTO tenants (id, name) VALUES ('tenant-binh', 'Anh Bình')").run();
 
-  it("UC-303 AC-15: mẫu lương mang nguồn → khoản thu gắn nguồn; nguồn đặt ngăn Tích luỹ, tiền về Vận hành → việc ③ chuyển cả khoản", async () => {
-    // Kỳ đang có (lương chồng nhập tay), rồi mẫu lương trỏ nguồn lương vợ (không mở kỳ) đặt ngăn Tích luỹ.
-    await createEntry(env.DB, { meaning: "income", amount: 20_000_000, account_id: "cash-husband", income_stream_id: "salary-husband", at: "2026-09-22T01:00:00.000Z" }, "husband", now());
-    raw.prepare("UPDATE income_streams SET pocket = 'savings' WHERE id = 'salary-wife'").run();
+  it("UC-303 AC-15: mẫu lương mang nguồn → khoản thu gắn nguồn; nguồn đặt ngăn Tích luỹ → không nhắc trích (tiền đã ở chỗ của nó)", async () => {
+    raw.prepare("UPDATE income_streams SET pocket = 'savings', is_salary = 1 WHERE id = 'salary-wife'").run();
     raw.prepare("UPDATE rules SET income_stream_id = 'salary-wife' WHERE is_salary = 1").run();
-    await ingestLog(env.DB, log({ id: "sal", direction: "in", amount: 11_000_000, content: "LUONG THANG 9" }), "webhook", now());
-    expect(txOf("sal")[0]).toMatchObject({ meaning: "income", income_stream_id: "salary-wife" });
-    expect(count("SELECT COUNT(*) n FROM pay_cycles")).toBe(1);
-    expect((await tasks()).filter((t) => t.kind === "move")).toEqual([expect.objectContaining({ amount: 11_000_000, toPocket: "savings" })]);
+    const res = await ingestLog(env.DB, log({ id: "sal", direction: "in", amount: 11_000_000, content: "LUONG THANG 9" }), "webhook", now());
+    expect(txOf("sal")[0]).toMatchObject({ meaning: "income", income_stream_id: "salary-wife", is_salary: 1 });
+    expect(res).not.toHaveProperty("salaryTxId");
+    expect(count("SELECT COUNT(*) n FROM month_tasks")).toBe(0);
   });
 
   it("rule người thuê chỉ gợi ý 'Thu từ <tên>', không tự gán", async () => {
@@ -340,22 +342,22 @@ describe("nguồn thu & người thuê (change 261001)", () => {
     });
   });
 
-  it("UC-305 AC-11: gán tiền vào cho người thuê → nguồn cho thuê, không ví, không chia, không mở kỳ; số dư người thuê giảm", async () => {
+  it("UC-305 AC-11: gán tiền vào cho người thuê (5.191.667 ≥ ngưỡng nhắc) → nguồn cho thuê, không ví, không chia, không phải lương; số dư người thuê giảm", async () => {
     tenant();
     await ingestLog(env.DB, log({ id: "rent", direction: "in", amount: 5_191_667, content: "CK" }), "webhook", now());
     const { transactions, effects } = await assignLog(env.DB, "rent", [{ meaning: "income", amount: 5_191_667, tenant_id: "tenant-binh" }], null, now());
-    expect(transactions[0]).toMatchObject({ meaning: "income", tenant_id: "tenant-binh", income_stream_id: "rental", counter_account_id: "vcb-husband" });
-    expect(effects).toEqual({ cycle: null, tasksDone: [] });
+    expect(transactions[0]).toMatchObject({ meaning: "income", tenant_id: "tenant-binh", income_stream_id: "rental", counter_account_id: "vcb-husband", is_salary: 0 });
+    expect(effects).toEqual({ savings: null, tasksDone: [] });
     expect(count("SELECT COUNT(*) n FROM transactions WHERE meaning = 'fund'")).toBe(0);
-    expect(count("SELECT COUNT(*) n FROM pay_cycles")).toBe(0);
+    expect(count("SELECT COUNT(*) n FROM month_tasks")).toBe(0);
     expect(raw.prepare("SELECT balance FROM v_tenant_balance WHERE tenant_id = 'tenant-binh'").get()).toEqual({ balance: -5_191_667 });
   });
 
-  it("UC-305 AC-11: tiền người thuê gửi opens_cycle: true → 400 cannot_open_cycle, không ghi gì", async () => {
+  it("UC-1205 AC-6: tiền người thuê gửi is_salary: true → 400 cannot_be_salary, không ghi gì", async () => {
     tenant();
     await ingestLog(env.DB, log({ id: "rent", direction: "in", amount: 5_191_667, content: "CK" }), "webhook", now());
-    await expect(assignLog(env.DB, "rent", [{ meaning: "income", amount: 5_191_667, tenant_id: "tenant-binh", opens_cycle: true }], null, now())).rejects.toMatchObject({
-      code: "cannot_open_cycle",
+    await expect(assignLog(env.DB, "rent", [{ meaning: "income", amount: 5_191_667, tenant_id: "tenant-binh", is_salary: true }], null, now())).rejects.toMatchObject({
+      code: "cannot_be_salary",
     });
     expect(txOf("rent")).toHaveLength(0);
   });
@@ -364,26 +366,31 @@ describe("nguồn thu & người thuê (change 261001)", () => {
 describe("Gán không ví (ingest UC-305 AC-33, access UC-504 AC-7)", () => {
   const salaryLog = () => ingestLog(env.DB, log({ id: "sal", direction: "in", amount: 20_000_000, content: "CK THANG 9" }), "webhook", now());
 
-  it("UC-305 AC-33: gán thu nhập nguồn mở kỳ → khoản thu không ví, kỳ mở cùng batch, effects báo kỳ mới", async () => {
+  it("UC-305 AC-33: gán thu nhập nguồn lương → khoản thu không ví, là lương, nhắc ① cùng batch, effects.savings", async () => {
     await salaryLog();
     const res = await assignLog(env.DB, "sal", [{ meaning: "income", amount: 20_000_000, income_stream_id: "salary-husband" }], "husband", now());
-    expect(res.transactions[0]).toMatchObject({ meaning: "income", income_stream_id: "salary-husband" });
-    expect(res.effects.cycle).toMatchObject({ opened: true, startedAt: "2026-09-22T02:00:00.000Z" });
-    expect(raw.prepare("SELECT income_tx_id FROM pay_cycles WHERE status = 'active'").all()).toEqual([{ income_tx_id: res.transactions[0]!.id }]);
+    expect(res.transactions[0]).toMatchObject({ meaning: "income", income_stream_id: "salary-husband", is_salary: 1 });
+    expect(res.effects.savings).toMatchObject({ amount: expect.any(Number) });
+    expect(raw.prepare("SELECT income_tx_id FROM month_tasks WHERE status = 'open'").all()).toEqual([{ income_tx_id: res.transactions[0]!.id }]);
   });
 
-  it("UC-305 AC-33: gán với opens_cycle: false → không kỳ; dòng có wallet_id / from_wallet_id / wealth_move / allocate / earmark_id → 400 model_changed, không ghi gì", async () => {
+  it("UC-1205 AC-6: gán 20.000.000 không nguồn để mặc định → nhắc; gửi is_salary: false → không nhắc, is_salary 0; dòng có wallet_id / from_wallet_id / wealth_move / allocate / earmark_id / opens_cycle → 400 model_changed, không ghi gì", async () => {
     await salaryLog();
-    for (const old of [{ wallet_id: "income" }, { from_wallet_id: "rental-income" }, { wealth_move: "fund" }, { allocate: true }, { earmark_id: "tuition" }]) {
+    for (const old of [{ wallet_id: "income" }, { from_wallet_id: "rental-income" }, { wealth_move: "fund" }, { allocate: true }, { earmark_id: "tuition" }, { opens_cycle: false }]) {
       const split = { meaning: "income", amount: 20_000_000, ...old } as unknown as Split;
       await expect(assignLog(env.DB, "sal", [split], "husband", now())).rejects.toMatchObject({ code: "model_changed", status: 400, fields: Object.keys(old) });
     }
     expect(txOf("sal")).toHaveLength(0);
-    const res = await assignLog(env.DB, "sal", [{ meaning: "income", amount: 20_000_000, income_stream_id: "salary-husband", opens_cycle: false }], "husband", now());
-    expect(res.effects.cycle).toBeNull();
-    expect(count("SELECT COUNT(*) n FROM pay_cycles")).toBe(0);
-  });
+    const res = await assignLog(env.DB, "sal", [{ meaning: "income", amount: 20_000_000, is_salary: false }], "husband", now());
+    expect(res.effects.savings).toBeNull();
+    expect(res.transactions[0]).toMatchObject({ is_salary: 0 });
+    expect(count("SELECT COUNT(*) n FROM month_tasks")).toBe(0);
 
+    await ingestLog(env.DB, log({ id: "sal2", direction: "in", amount: 20_000_000, content: "CK THANG 9", at: "2026-09-22T03:00:00.000Z" }), "webhook", now());
+    const dflt = await assignLog(env.DB, "sal2", [{ meaning: "income", amount: 20_000_000 }], "husband", now());
+    expect(dflt.transactions[0]).toMatchObject({ is_salary: 1, income_stream_id: null });
+    expect(dflt.effects.savings).not.toBeNull();
+  });
   it("UC-504 AC-7: log chờ của tài khoản riêng tư của vợ không hiện với chồng; chồng gán → 403 private_account; vợ thấy và gán được; tắt vợ → chồng thấy", async () => {
     raw.prepare("UPDATE accounts SET private = 1 WHERE id = 'vcb-wife'").run();
     await ingestLog(env.DB, log({ id: "rieng", direction: "out", amount: 120_000, accountNo: "0011yyyyyyy", content: "linh tinh" }), "webhook", now());
@@ -482,7 +489,7 @@ describe("số dư đầu là mốc: log trước ngày mở sổ không vào s�
     ).run(BEFORE);
     await expect(assignLog(env.DB, "cu-cho", [{ meaning: "spend", amount: 100_000, category_id: "groceries" }], "husband", now())).rejects.toMatchObject({
       code: "before_opening",
-      message: "Ngày này trước ngày mở sổ của tài khoản VCB (chính) (22/9/2026) — số dư đầu đã tính khoản này.",
+      message: "Ngày này trước ngày mở sổ tài khoản VCB (chính) (22/9/2026), số dư đầu đã tính khoản này.",
     });
     await ingestLog(env.DB, log({ id: "tcb-in", at: "2026-09-21T17:02:00.000Z", direction: "in", accountNo: "1903xxxxxxx" }), "webhook", now());
     await expect(pairLogs(env.DB, "cu-cho", "tcb-in", "husband")).rejects.toMatchObject({ code: "before_opening" });
@@ -712,18 +719,18 @@ describe("lãi tiền gửi: khoản thu Thu nhập thụ động ở ngăn củ
     log({ id, direction: "in", amount, accountNo, content, at: "2026-10-17T17:07:00.000Z" });
   const reportClass = (txId: unknown) => raw.prepare("SELECT report_class, by_member_id FROM transaction_report_classes WHERE transaction_id = ?").get(txId as number);
 
-  it("UC-303 AC-25: log +37 BankAPINotify tài khoản phao → 1 khoản thu 37 không ví, Thu nhập thụ động, không fund, không việc, log đã gán", async () => {
+  it("UC-303 AC-25: log +37 BankAPINotify tài khoản phao → 1 khoản thu 37 không ví, Thu nhập thụ động, không fund, không nhắc trích, log đã gán", async () => {
     raw.prepare("UPDATE accounts SET pocket = 'reserve' WHERE id = 'mb-husband'").run();
-    // Có kỳ đang mở: lãi vẫn không sinh việc nào.
+    // Đã có nhắc ① đang mở: lãi vẫn không sinh việc nào.
     await createEntry(env.DB, { meaning: "income", amount: 20_000_000, account_id: "cash-husband", income_stream_id: "salary-husband", at: "2026-10-10T01:00:00.000Z" }, "husband", new Date("2026-10-18T00:00:00.000Z"));
-    const before = count("SELECT COUNT(*) n FROM pay_cycle_tasks");
+    const before = count("SELECT COUNT(*) n FROM month_tasks");
     await ingestLog(env.DB, interest("i1", 37, "0888xxxxxxx"), "webhook", now());
     const income = txOf("i1");
     expect(income).toEqual([expect.objectContaining({ meaning: "income", amount: 37, counter_account_id: "mb-husband", taxable: 0, status: "active", income_stream_id: null })]);
     expect(reportClass(income[0]!.id)).toEqual({ report_class: "passive_income", by_member_id: null });
     expect(count("SELECT COUNT(*) n FROM transactions WHERE meaning = 'fund'")).toBe(0);
-    expect(count("SELECT COUNT(*) n FROM pay_cycle_tasks")).toBe(before);
-    expect(count("SELECT COUNT(*) n FROM pay_cycles")).toBe(1);
+    expect(income[0]).toMatchObject({ is_salary: 0 });
+    expect(count("SELECT COUNT(*) n FROM month_tasks")).toBe(before);
     expect(bankLog("i1")).toMatchObject({ status: "assigned" });
   });
 
@@ -786,7 +793,7 @@ describe("lãi tiền gửi: khoản thu Thu nhập thụ động ở ngăn củ
     const res = await assignLog(env.DB, "p37", [{ meaning: "income", amount: 37, interest: true }], "husband", new Date("2026-10-18T00:00:00.000Z"));
     const id = res.transactions[0]!.id;
     expect(res.transactions).toEqual([expect.objectContaining({ meaning: "income", amount: 37, counter_account_id: "mb-husband", taxable: 0 })]);
-    expect(res.effects).toEqual({ cycle: null, tasksDone: [] });
+    expect(res.effects).toEqual({ savings: null, tasksDone: [] });
     expect(count("SELECT COUNT(*) n FROM transactions WHERE meaning = 'fund'")).toBe(0);
     expect(reportClass(id)).toMatchObject({ report_class: "passive_income" });
 
@@ -795,7 +802,7 @@ describe("lãi tiền gửi: khoản thu Thu nhập thụ động ở ngăn củ
     expect(bankLog("p37")).toMatchObject({ status: "pending" });
   });
 
-  it("UC-305 AC-29: dòng lãi cho log tiền ra, tách nhiều dòng hay trộn dòng khác → invalid_input; mở kỳ → cannot_open_cycle; kèm ví → model_changed; không ghi gì", async () => {
+  it("UC-305 AC-29: dòng lãi cho log tiền ra, tách nhiều dòng hay trộn dòng khác → invalid_input; is_salary true → cannot_be_salary; kèm ví → model_changed; không ghi gì", async () => {
     raw.prepare("INSERT INTO bank_logs (id, at, amount, direction, account_id, status) VALUES ('o1', '2026-10-17T17:00:00.000Z', 37, 'out', 'vcb-husband', 'pending')").run();
     raw.prepare("INSERT INTO bank_logs (id, at, amount, direction, account_id, status) VALUES ('n1', '2026-10-17T17:00:00.000Z', 37, 'in', 'vcb-husband', 'pending')").run();
     const lai = (amount: number): Split => ({ meaning: "income", amount, interest: true });
@@ -803,7 +810,7 @@ describe("lãi tiền gửi: khoản thu Thu nhập thụ động ở ngăn củ
     await expect(assignLog(env.DB, "n1", [lai(20), lai(17)], null, now())).rejects.toMatchObject({ code: "invalid_input" });
     await expect(assignLog(env.DB, "n1", [lai(20), { meaning: "income", amount: 17 }], null, now())).rejects.toMatchObject({ code: "invalid_input" });
     await expect(assignLog(env.DB, "n1", [{ ...lai(37), income_stream_id: "salary-husband" }], null, now())).rejects.toMatchObject({ code: "invalid_input" });
-    await expect(assignLog(env.DB, "n1", [{ ...lai(37), opens_cycle: true }], null, now())).rejects.toMatchObject({ code: "cannot_open_cycle" });
+    await expect(assignLog(env.DB, "n1", [{ ...lai(37), is_salary: true }], null, new Date("2026-10-18T00:00:00.000Z"))).rejects.toMatchObject({ code: "cannot_be_salary" });
     const withWallet = { ...lai(37), wallet_id: "nice-to-have" } as unknown as Split;
     await expect(assignLog(env.DB, "n1", [withWallet], null, now())).rejects.toMatchObject({ code: "model_changed" });
     expect(count("SELECT COUNT(*) n FROM transactions")).toBe(0);
@@ -811,7 +818,7 @@ describe("lãi tiền gửi: khoản thu Thu nhập thụ động ở ngăn củ
 });
 
 describe("gán khoản lãi vào khoản gửi (ingest UC-305 AC-37, ADR-140)", () => {
-  it("UC-305 AC-37: log in 3.000.000 của tài khoản con, gán thu nhập is_interest: true → khoản có phân loại passive_income, không mở kỳ, tiền lãi của nhóm +3.000.000", async () => {
+  it("UC-305 AC-37: log in 3.000.000 của tài khoản con, gán thu nhập is_interest: true → khoản có phân loại passive_income, không nhắc trích, tiền lãi của nhóm +3.000.000", async () => {
     raw = householdParent();
     env = { DB: asD1(raw) } as Env;
     expect((await groupInterests(env.DB))["tk-tiet-kiem"]).toBe(0);
@@ -819,7 +826,7 @@ describe("gán khoản lãi vào khoản gửi (ingest UC-305 AC-37, ADR-140)", 
     const r = await assignLog(env.DB, "L1", [{ meaning: "income", amount: 3_000_000, is_interest: true }], "husband", PARENT_NOW);
     const id = r.transactions[0]!.id as number;
     expect(raw.prepare("SELECT report_class FROM transaction_report_classes WHERE transaction_id = ?").get(id)).toEqual({ report_class: "passive_income" });
-    expect(r.effects.cycle).toBeNull();
+    expect(r.effects.savings).toBeNull();
     expect((await groupInterests(env.DB))["tk-tiet-kiem"]).toBe(3_000_000);
   });
 });

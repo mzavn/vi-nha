@@ -112,13 +112,15 @@ export function liabilityRowSub(r: LiabilityRow): string {
   return [`${pctText(r.pctOfTotal)} tổng`, `${pctText(r.pctOfEquity)} vốn chủ`, ...interest].filter(Boolean).join(" · ");
 }
 
+import type { WalletsTab } from "./hash-route";
+
 /** Tên dòng nợ: thẻ tín dụng còn nợ ghi rõ "Thẻ tín dụng · Thẻ VCB" (ADR nháp I). */
 export const liabilityName = (r: LiabilityRow): string => (r.kind === "credit_card" ? `Thẻ tín dụng · ${r.name}` : r.name);
 
 /** Dòng từ sổ không mở sheet sửa: chạm → màn nguồn (pwa UC-717 AC-1). */
-export type LedgerTarget = { tab: "wallets"; walletsTab: "accounts" | "debts" | "tenants" | "wealth-building" };
+export type LedgerTarget = { tab: "wallets"; walletsTab: WalletsTab };
 export function ledgerTarget(key: string): LedgerTarget {
-  if (key.startsWith("app:")) return { tab: "wallets", walletsTab: "wealth-building" };
+  if (key.startsWith("app:")) return { tab: "wallets", walletsTab: "accounts" };
   if (key === "tenants" || key === "tenants-prepaid") return { tab: "wallets", walletsTab: "tenants" };
   if (key.startsWith("receivables") || key.startsWith("debt:")) return { tab: "wallets", walletsTab: "debts" };
   return { tab: "wallets", walletsTab: "accounts" };
@@ -149,8 +151,8 @@ export function growthText(p: BalancePosition): string {
   if (p.cagrPct === null) return "CAGR —";
   const cagr = `CAGR ${pctText(p.cagrPct)}/năm`;
   if (p.cagrVsExpected === null) return cagr;
-  if (p.cagrVsExpected === 0) return `${cagr} — bằng kỳ vọng`;
-  return `${cagr} — ${p.cagrVsExpected > 0 ? "cao" : "thấp"} hơn kỳ vọng ${comma(Math.abs(p.cagrVsExpected))} điểm`;
+  if (p.cagrVsExpected === 0) return `${cagr}, đúng kỳ vọng`;
+  return `${cagr}, ${p.cagrVsExpected > 0 ? "cao" : "thấp"} hơn kỳ vọng ${comma(Math.abs(p.cagrVsExpected))} điểm`;
 }
 
 /** Một câu cho một lô / mục: lãi / lỗ · khoảng cách · trạng thái · tăng trưởng (đã chạm giá thì chỉ lãi / lỗ và trạng thái). */
@@ -302,7 +304,7 @@ export function valuePayload(f: ValueForm, measure: "value" | "units", today: st
   if (!f.day || f.day > today) errors.day = "Chọn ngày từ hôm nay trở về trước.";
   if (!Number.isInteger(f.amount) || f.amount < 0) errors.amount = "Nhập số không âm.";
   const expected = parseDecimal(f.expected);
-  if (Number.isNaN(expected) || (expected !== null && (expected < -100 || expected > 1000))) errors.expected = "Lợi suất là số từ −100 đến 1000 (%/năm).";
+  if (Number.isNaN(expected) || (expected !== null && (expected < -100 || expected > 1000))) errors.expected = "Lợi suất từ −100 đến 1000 (%/năm).";
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   return {
     ok: true,

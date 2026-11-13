@@ -43,7 +43,7 @@ async function refund(amount: number, linkId: number, categoryId: string, at: st
 const monday = new Date("2026-09-28T01:00:00Z");
 
 describe("cron 08:00 thứ Hai: tổng kết tuần vừa qua", () => {
-  it("UC-406 AC-1: không dòng phong bì; 💰 như tin sáng; 🧾 tuần qua chi 800.000 · từ Vận hành 800.000 ≈ 114.000/ngày; top 5 (spend trừ refund), loại tuần khác", async () => {
+  it("UC-406 AC-1: không dòng phong bì; Vận hành như tin sáng; tuần qua chi 800.000 · từ Vận hành 800.000 ≈ 114.000/ngày; top 5 (spend trừ refund), loại tuần khác", async () => {
     await spend(400_000, "groceries", "2026-09-23T10:00:00+07:00"); // W39
     await spend(100_000, "eating-out", "2026-09-24T10:00:00+07:00"); // W39
     await spend(150_000, "fuel-parking", "2026-09-25T10:00:00+07:00"); // W39
@@ -63,10 +63,10 @@ describe("cron 08:00 thứ Hai: tổng kết tuần vừa qua", () => {
 
     const lines = sent[0]!.text.split("\n");
     const { nearSpend } = await getSnapshot(env.DB, null, monday);
-    expect(lines.slice(0, 3)).toEqual(["📊 Tổng kết tuần T39 (21–27/9)", `💰 ${nearSpendLine(nearSpend)}`, "🧾 Tuần qua chi 800.000 ₫ · từ Vận hành 800.000 ₫ ≈ 114.000 ₫/ngày"]);
-    expect(lines[3]).toMatch(/^🔎 Kỳ từ \d+\/\d+: /);
+    expect(lines.slice(0, 3)).toEqual(["Tổng kết tuần T39 (21–27/9)", nearSpendLine(nearSpend), "Tuần qua chi 800.000 ₫ · từ Vận hành 800.000 ₫ ≈ 114.000 ₫/ngày"]);
+    expect(lines[3]).toMatch(/^Từ 1\/9: /);
     expect(lines.slice(4)).toEqual([
-      "🏆 Top 5 danh mục tiêu nhiều nhất:",
+      "Top 5 danh mục tiêu nhiều nhất:",
       "1. Đi chợ / nấu ăn — 400.000 ₫",
       "2. Xăng xe / gửi xe — 150.000 ₫",
       "3. Ăn ngoài — 100.000 ₫",
@@ -83,11 +83,11 @@ describe("cron 08:00 thứ Hai: tổng kết tuần vừa qua", () => {
   });
 });
 
-describe("tin tuần theo nhịp Vận hành, hộ mẫu D (261112-ba-ngan-nhin-lai)", () => {
+describe("tin tuần theo nhịp Vận hành, hộ mẫu D (261112-thang-thay-ky-luong)", () => {
   let d: DatabaseSync;
   const sendAt = new Date(AT("2026-11-23T08:00:00")); // thứ Hai, tổng kết W47 (16–22/11)
 
-  /** Chi kỳ 10/11 viết lại cho đúng AC-11: trước W47 Ăn uống 1.500.000, Đi lại 350.000, Mua sắm 500.000; W47 như AC-11. */
+  /** Chi tháng 11 viết lại cho đúng AC-11: trước W47 Ăn uống 1.500.000, Đi lại 350.000, Mua sắm 500.000; W47 như AC-11. */
   beforeEach(() => {
     d = householdD();
     d.exec("UPDATE members SET tg_chat_id = '111' WHERE id = 'husband'");
@@ -111,17 +111,17 @@ describe("tin tuần theo nhịp Vận hành, hộ mẫu D (261112-ba-ngan-nhin-
     expect((await getSnapshot(env.DB, null, sendAt)).nearSpend).toMatchObject({ amount, perDay: 529_000, payday: "2026-12-10", daysLeft: 17 });
   }
 
-  it("UC-406 AC-11: tin đầy đủ đúng 💰 / 🧾 / 🔎 / 🏆; không chữ \"phong bì\", \"ví\", \"bù\"", async () => {
+  it("UC-406 AC-11: tin đầy đủ đúng Vận hành / tuần qua chi / Từ 1/m / Top 5; không chữ \"phong bì\", \"ví\", \"bù\"", async () => {
     await pinNearSpend(9_000_000);
     await weekly(env, sendAt);
     const [{ text }] = sentMessages();
     expect(text).toBe(
       [
-        "📊 Tổng kết tuần T47 (16–22/11)",
-        "💰 Vận hành 9.000.000 ₫ · chi khoảng 529.000 ₫/ngày tới kỳ lương 10/12 (còn 17 ngày)",
-        "🧾 Tuần qua chi 2.100.000 ₫ · từ Vận hành 1.600.000 ₫ ≈ 228.000 ₫/ngày",
-        "🔎 Kỳ từ 10/11: Ăn uống 2.300.000 ₫ / 3.000.000 ₫ · Đi lại 450.000 ₫ / 800.000 ₫ · Mua sắm 1.200.000 ₫ / 1.000.000 ₫ (vượt 200.000 ₫)",
-        "🏆 Top 5 danh mục tiêu nhiều nhất:",
+        "Tổng kết tuần T47 (16–22/11)",
+        "Vận hành 9.000.000 ₫ · chi khoảng 529.000 ₫/ngày tới ngày lương 10/12 (còn 17 ngày)",
+        "Tuần qua chi 2.100.000 ₫ · từ Vận hành 1.600.000 ₫ ≈ 228.000 ₫/ngày",
+        "Từ 1/11: Ăn uống 2.300.000 ₫ / 3.000.000 ₫ · Đi lại 450.000 ₫ / 800.000 ₫ · Mua sắm 1.200.000 ₫ / 1.000.000 ₫ (vượt 200.000 ₫)",
+        "Top 5 danh mục tiêu nhiều nhất:",
         "1. Mua sắm — 700.000 ₫",
         "2. Đi chợ / nấu ăn — 600.000 ₫",
         "3. Quà tặng — 500.000 ₫",
@@ -138,21 +138,30 @@ describe("tin tuần theo nhịp Vận hành, hộ mẫu D (261112-ba-ngan-nhin-
     spendD(d, { at: "2026-11-18T12:00", amount: 300_000, category: "eating-out", account: "wife-private" });
     await weekly(env, sendAt);
     const lines = sentMessages()[0]!.text.split("\n");
-    expect(lines).toContain("🧾 Tuần qua chi 2.400.000 ₫ · từ Vận hành 1.900.000 ₫ ≈ 271.000 ₫/ngày");
+    expect(lines).toContain("Tuần qua chi 2.400.000 ₫ · từ Vận hành 1.900.000 ₫ ≈ 271.000 ₫/ngày");
     expect(lines.some((l) => /^[1-5]\. Ăn ngoài — 500\.000 ₫$/.test(l))).toBe(true);
     expect(pushPayload("weekly", { title: "t", body: "b" })).toMatchObject({ url: "/#wallets/analysis", tag: "weekly" });
   });
 
-  it("UC-406 AC-3: tuần không chi → tiêu đề, 💰, 🔎 dạng \"Ăn uống 0 ₫ / 3.000.000 ₫\", câu rỗng; không 🧾, không 🏆", async () => {
+  it("UC-406 AC-3: tuần không chi → tiêu đề, Vận hành, Từ 1/m dạng \"Ăn uống 0 ₫ / 3.000.000 ₫\", câu rỗng; không tuần qua chi, không Top 5", async () => {
     d.exec("UPDATE transactions SET status = 'void' WHERE meaning IN ('spend', 'refund') AND at >= '2026-11-10T01:00:00.000Z'");
     const at = new Date(AT("2026-11-16T08:00:00")); // tổng kết W46 (9–15/11)
     await weekly(env, at);
     const { nearSpend } = await getSnapshot(env.DB, null, at);
     expect(sentMessages()[0]!.text.split("\n")).toEqual([
-      "📊 Tổng kết tuần T46 (9–15/11)",
-      `💰 ${nearSpendLine(nearSpend)}`,
-      "🔎 Kỳ từ 10/11: Ăn uống 0 ₫ / 3.000.000 ₫ · Đi lại 0 ₫ / 800.000 ₫ · Mua sắm 0 ₫ / 1.000.000 ₫",
+      "Tổng kết tuần T46 (9–15/11)",
+      nearSpendLine(nearSpend),
+      "Từ 1/11: Ăn uống 0 ₫ / 3.000.000 ₫ · Đi lại 0 ₫ / 800.000 ₫ · Mua sắm 0 ₫ / 1.000.000 ₫",
       "Không có dữ liệu chi tiêu tuần này.",
     ]);
+  });
+
+  it("UC-406 AC-13: thứ Hai 7/12 tổng kết T49 (30/11–6/12) → hạn mức nhóm \"Từ 1/12: …\" chỉ tính chi từ ngày 1 tháng 12 (chi 30/11 thuộc tháng 11), không còn \"Kỳ từ\"", async () => {
+    spendD(d, { at: "2026-11-30T12:00", amount: 900_000, category: "groceries" });
+    spendD(d, { at: "2026-12-02T12:00", amount: 400_000, category: "groceries" });
+    await weekly(env, new Date(AT("2026-12-07T08:00:00")));
+    const text = sentMessages()[0]!.text;
+    expect(text.split("\n")).toContain("Từ 1/12: Ăn uống 400.000 ₫ / 3.000.000 ₫ · Đi lại 0 ₫ / 800.000 ₫ · Mua sắm 0 ₫ / 1.000.000 ₫");
+    expect(text).not.toMatch(/Kỳ từ|đầu kỳ/);
   });
 });

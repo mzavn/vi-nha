@@ -14,6 +14,7 @@ import { formatVnd, maskAmounts } from "../lib/money";
 import { shortDate, timeHM } from "../lib/period";
 import { linkOriginText, returnedText } from "../lib/refunds";
 import { editForm, isWalletOnlyTransfer, legacyRows, MEANING_LABEL, ORIGIN_LABEL, txActions, txLabel, txOrigin, voidConfirm } from "../lib/transactions";
+import { canUndoVoid, splitsFromTxs, TOAST_UNDO_DONE } from "../lib/undo";
 import type { Bootstrap, TxRow } from "../lib/types";
 import { useResource } from "../state/resource";
 import { go, openTx, refresh, setState, toast, useApp, voidEntry } from "../state/store";
@@ -97,10 +98,49 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
   // Gỡ gán: huỷ mọi dòng của log và trả log về chờ gán (ingest UC-306), rồi mở màn Gán đúng log đó.
   const reassign = () =>
     run(async () => {
-      await api.post(`/v1/logs/transactions/${tx.id}/void`);
+      const res = await api.post<{ voided: number[]; logs: string[] }>(`/v1/logs/transactions/${tx.id}/void`);
       void refresh();
-      toast(`Đã gỡ gán ${formatVnd(tx.amount)}. Chọn lại cách gán cho giao dịch này.`);
-      go("assign", { txOpen: null, assignFocus: tx.log_id ?? null });
+      const logId = tx.log_id ?? res.logs[0];
+      const wasManual = tx.source === "manual";
+      const isPair = Boolean(tx.log_id && tx.log_id_2);
+      let voidedTxs: TxRow[] = [];
+      if (!wasManual && !isPair && res.voided && res.voided.length > 0) {
+        try {
+          const list = await Promise.all(
+            res.voided.map((vid) => (vid === tx.id ? Promise.resolve(tx) : api.get<TxRow>(`/v1/transactions/${vid}`))),
+          );
+          voidedTxs = list.filter(Boolean);
+        } catch {
+          voidedTxs = [tx];
+        }
+      }
+
+      toast(`Đã gỡ gán ${formatVnd(tx.amount)}. Chọn lại cách gán cho giao dịch này.`, {
+        label: "Hoàn tác",
+        run: async () => {
+          try {
+            if (wasManual && logId) {
+              // Khoản tay chỉ được tách log khi gỡ: nối lại đủ cả hai chân (nếu có).
+              for (const l of [tx.log_id, tx.log_id_2].filter((x): x is string => !!x)) {
+                await api.post(`/v1/logs/${encodeURIComponent(l)}/link`, { transaction_id: tx.id });
+              }
+            } else if (isPair && tx.log_id && tx.log_id_2) {
+              await api.post("/v1/logs/pair", { log_a: tx.log_id, log_b: tx.log_id_2 });
+            } else if (logId) {
+              // Đầu kia của chuyển khoản tính theo tài khoản của chính log (tiền vào: log nằm ở counter_account_id).
+              const logs = await api.get<{ id: string; account_id: string | null }[]>("/v1/logs?status=pending&limit=200", true);
+              const logAccount = logs.find((l) => l.id === logId)?.account_id ?? null;
+              const splits = splitsFromTxs(voidedTxs.length > 0 ? voidedTxs : [tx], logAccount);
+              await api.post(`/v1/logs/${encodeURIComponent(logId)}/assign`, { splits });
+            }
+            await refresh();
+            toast(TOAST_UNDO_DONE);
+          } catch (err: any) {
+            toast(errorText(err));
+          }
+        },
+      });
+      go("assign", { txOpen: null, assignFocus: logId ?? null });
     });
 
   function edit() {
@@ -113,7 +153,7 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
   return (
     <Sheet open title={txLabel(tx)} onClose={close}>
       {tx.status !== "active" && (
-        <p class="pad" style={{ margin: 0 }}>
+        <p class="pad txs-flat">
           <span class="chip">đã xoá</span>
         </p>
       )}
@@ -123,9 +163,35 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
           <span class="srow-v">{v}</span>
         </div>
       ))}
+      {tx.rule_id != null && (
+        <div class="srow">
+          <span class="srow-s">Tự gán</span>
+          <span class="srow-r">
+            <span class="srow-v">
+              {tx.rule
+                ? `Tự gán theo mẫu “${tx.rule.pattern}”${tx.rule.active ? "" : " (đã tắt)"}`
+                : tx.rule === null
+                  ? "Tự gán theo một mẫu đã xoá"
+                  : "Tự gán theo mẫu"}
+            </span>
+            {tx.rule && (
+              <button
+                type="button"
+                class="link txs-link"
+                onClick={() => {
+                  close();
+                  go("settings", { settingsFocus: "transfer-codes" });
+                }}
+              >
+                Sửa mẫu ›
+              </button>
+            )}
+          </span>
+        </div>
+      )}
       {legacy.length > 0 && (
         <>
-          <p class="note" style={{ borderTop: "1px solid var(--border)", fontWeight: 550 }}>
+          <p class="note txs-sec">
             Theo cách tính cũ
           </p>
           {legacy.map(([k, v]) => (
@@ -138,11 +204,11 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
       )}
       {tx.link && (
         <button type="button" class="srow" onClick={() => openTx(tx.link!.id)}>
-          <span class="srow-s" style={{ flex: "none" }}>
+          <span class="srow-s txs-k">
             Trả cho
           </span>
           {/* Chữ dài (khoản gốc đã xoá) xuống dòng ở bên phải, không ép nhãn thành cột dọc. */}
-          <span class="srow-r" style={{ flex: "0 1 auto", minWidth: 0 }}>
+          <span class="srow-r txs-r">
             <span class="srow-v">{linkOriginText(tx.link)}</span>
             <Icon name="chevron-right" size={16} />
           </span>
@@ -167,16 +233,16 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
           ))}
         </>
       )}
-      {can.note && <p class="note" style={{ borderTop: "1px solid var(--border)" }}>{can.note}</p>}
-      <div class="pad">
+      {can.note && <p class="note txs-line">{can.note}</p>}
+      <div class={can.edit || can.remove || can.reassign || error ? "sheet-foot" : "pad"}>
         {error && (
-          <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
+          <p class="err txs-err" role="alert">
             {error}
           </p>
         )}
         {confirm ? (
           <>
-            <p style={{ margin: "0 0 8px", fontWeight: 550 }}>{voidConfirm(tx)}</p>
+            <p class="txs-confirm">{voidConfirm(tx)}</p>
             <div class="grid grid-cols-2 gap-2">
               <button type="button" class="btn" disabled={busy} onClick={() => setConfirm(false)}>
                 Thôi
@@ -187,19 +253,30 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
             </div>
           </>
         ) : (
-          <div class="grid grid-cols-2 gap-2">
+          <div class="txs-act">
             {can.edit && (
-              <button type="button" class="btn btn-primary" disabled={busy || !app.online} onClick={edit}>
+              <button type="button" class="btn btn-primary btn-wide" disabled={busy || !app.online} onClick={edit}>
                 Sửa
               </button>
             )}
             {can.remove && (
-              <button type="button" class="btn" disabled={busy || !app.online} onClick={() => setConfirm(true)}>
+              <button
+                type="button"
+                class="btn btn-bad btn-wide"
+                disabled={busy || !app.online}
+                onClick={() => {
+                  if (canUndoVoid(tx)) {
+                    void remove();
+                  } else {
+                    setConfirm(true);
+                  }
+                }}
+              >
                 Xoá
               </button>
             )}
             {can.reassign && (
-              <button type="button" class="btn btn-primary" style={{ gridColumn: "1 / -1" }} disabled={busy || !app.online} onClick={() => void reassign()}>
+              <button type="button" class="btn btn-primary btn-wide" disabled={busy || !app.online} onClick={() => void reassign()}>
                 {busy ? "Đang gỡ gán…" : "Gán lại"}
               </button>
             )}

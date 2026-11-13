@@ -54,7 +54,7 @@ export function householdD(): DatabaseSync {
     UPDATE category_groups SET active = 0;
     UPDATE categories SET name = 'Quà tặng' WHERE id = 'gifts';
     INSERT INTO categories (id, name, icon, sort) VALUES ('school-fees', 'Học phí', 'book', 16);
-    INSERT INTO category_groups (id, name, essential, cycle_limit, sort) VALUES
+    INSERT INTO category_groups (id, name, essential, monthly_limit, sort) VALUES
       ('d-food', 'Ăn uống', 1, 3000000, 1), ('d-transport', 'Đi lại', 1, 800000, 2),
       ('d-school', 'Học phí', 1, NULL, 3), ('d-shopping', 'Mua sắm', 0, 1000000, 4);
     UPDATE categories SET group_id = 'd-food' WHERE id IN ('groceries', 'eating-out');
@@ -67,7 +67,7 @@ export function householdD(): DatabaseSync {
       ('vay-tieu-dung', '2026-09-01', 'opening', 20000000), ('vay-nguoi-nha', '2026-09-01', 'opening', 5000000);
     INSERT INTO transactions (id, at, amount, meaning, counter_account_id, income_stream_id, week_key, month_key, source)
       VALUES (20, '2026-11-10T01:00:00.000Z', 20000000, 'income', 'main', 'salary', '2026-W46', '2026-11', 'manual');
-    INSERT INTO pay_cycles (income_tx_id, started_at, payday, prev_operating) VALUES (20, '2026-11-10T01:00:00.000Z', '2026-11-10', 0);
+    UPDATE transactions SET is_salary = 1 WHERE id = 20;
   `);
   // Kỳ 2026-10-10.
   spend(db, { at: "2026-10-15T12:00", amount: 2_800_000, category: "groceries" });

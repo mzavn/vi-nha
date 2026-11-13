@@ -1,5 +1,6 @@
 // Mọi `action` server ghi vào nhật ký thay đổi (access UC-504). `audit()` / `recordChange()` chỉ nhận mã trong danh sách này
 // (`setup.done` ghi thẳng trong batch Thiết lập lần đầu), nên PWA (Cài đặt › Nhật ký, pwa UC-709) kiểm được mỗi mã đều có nhãn.
+// `pay_cycle*`, `goal.cycle_amount`: không còn ghi (ADR-144), giữ để đọc nhật ký cũ.
 
 export const AUDIT_ACTIONS = [
   "account.create",
@@ -22,6 +23,7 @@ export const AUDIT_ACTIONS = [
   "conversion.step",
   "goal.cycle_amount",
   "goal.create",
+  "goal.month_amount",
   "goal.order",
   "goal.update",
   "income_plan.version",
@@ -31,6 +33,7 @@ export const AUDIT_ACTIONS = [
   "log.assign",
   "log.ignore",
   "log.link",
+  "log.unignore",
   "mcp.connect",
   "mcp.revoke",
   "member.activate",
@@ -40,6 +43,13 @@ export const AUDIT_ACTIONS = [
   "member.update",
   "member.zalo_code",
   "member.zalo_link",
+  "month_close.reopen",
+  "month_close.skip",
+  "month_close.split",
+  "month_task.amount",
+  "month_task.done",
+  "month_task.reopen",
+  "month_task.skip",
   "pay_cycle.open",
   "pay_cycle.void",
   "pay_cycle_task.amount",
@@ -64,6 +74,7 @@ export const AUDIT_ACTIONS = [
   "tenant.bill_save",
   "tx.create",
   "tx.replace",
+  "tx.salary",
   "tx.unassign",
   "tx.void",
 ] as const;

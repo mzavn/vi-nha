@@ -108,7 +108,7 @@ export function Setup() {
   return (
     <main class="app" style={{ paddingBottom: "32px" }}>
       <div style={{ padding: "calc(40px + var(--safe-top)) 4px 20px" }}>
-        <h1 style={{ fontSize: "24px", fontWeight: 650, letterSpacing: "-0.02em" }}>Ví nhà</h1>
+        <h1 style={{ fontSize: "var(--text-title)", fontWeight: 600, letterSpacing: "-0.02em" }}>Ví nhà</h1>
         <p style={{ color: "var(--fg-2)", margin: "4px 0 0" }}>Thiết lập nhà lần đầu. Làm một lần, sửa lại được ở Cài đặt.</p>
       </div>
       <form class="card" onSubmit={next} noValidate>
@@ -177,7 +177,7 @@ function HouseholdStep({ f, set, errors, show, toggle }: { f: SetupForm; set: (p
           </button>
         </div>
       </Field>
-      <Hint>Mật khẩu đã đặt ở ô APP_PASSWORD lúc deploy. Cả nhà vào app bằng mật khẩu này; ai muốn thì đặt thêm mật khẩu riêng ở bước sau.</Hint>
+      <Hint>Mật khẩu chung đã đặt ở ô APP_PASSWORD lúc cài app. Cả nhà vào app bằng mật khẩu này; ai muốn thì đặt thêm mật khẩu riêng ở bước sau.</Hint>
     </>
   );
 }
@@ -187,7 +187,7 @@ function HouseholdStep({ f, set, errors, show, toggle }: { f: SetupForm; set: (p
 /** Hàng đầu của một khối (người, tài khoản): tên khối bên trái, nút Bớt bên phải. */
 function BlockHead({ label, first, onRemove, removeLabel }: { label: string; first: boolean; onRemove?: () => void; removeLabel: string }) {
   return (
-    <div class="field" style={first ? { borderTop: 0 } : { borderTop: "1px solid var(--border-strong)" }}>
+    <div class="field" style={first ? { borderTop: 0 } : { borderTop: "1px solid var(--line-strong)" }}>
       <span class="k" style={{ color: "var(--fg)", fontWeight: 600 }}>
         {label}
       </span>
@@ -268,8 +268,7 @@ function MembersStep({
         </button>
       </div>
       <Hint>
-        Tối đa {MAX_MEMBERS} người, ai cũng xem và ghi được. Người đầu tiên là chủ hộ. Để trống mật khẩu riêng thì người đó vào bằng mật khẩu chung; đặt sau ở Cài
-        đặt › Thành viên cũng được.
+        Tối đa {MAX_MEMBERS} người, ai cũng xem và ghi được. Người đầu tiên là chủ hộ. Để trống mật khẩu riêng thì vào bằng mật khẩu chung; đặt sau ở Cài đặt › Thành viên cũng được.
       </Hint>
     </>
   );
@@ -367,6 +366,20 @@ function AccountsStep({
                 ))}
               </select>
             </Field>
+            <Field
+              id={idOf(k("opening_balance"))}
+              label={a.kind === "credit" ? "Đang nợ bao nhiêu?" : "Đang có bao nhiêu?"}
+              error={errors[k("opening_balance")]}
+            >
+              <AmountInput
+                id={idOf(k("opening_balance"))}
+                value={a.balance ?? 0}
+                onChange={(n) => setAccount(i, { balance: n })}
+              />
+              <span class="sub-line" style={{ display: "block", marginTop: "4px" }}>
+                Số gần đúng cũng được, đếm lại sau ở Tài khoản.
+              </span>
+            </Field>
           </div>
         );
       })}
@@ -454,11 +467,11 @@ function PocketsStep({
         />
       </Field>
       <SavingsSlider pct={savingsStep(f).pct} onPct={(p) => set({ savingsPct: String(p) })} />
-      <Hint>Trích mỗi kỳ lương — lương về sẽ có việc “Trích Tích luỹ”. {savingsStep(f).text}</Hint>
+      <Hint>Trích mỗi khoản lương: lương về sẽ nhắc “Trích Tích luỹ”. {savingsStep(f).text}</Hint>
       <Field id={taxId} label="Nhà có tự nộp thuế không?" error={errors.taxable} wrap>
-        <Seg<"" | "yes" | "no">
+        <Seg<"yes" | "no">
           label="Nhà có tự nộp thuế không"
-          value={f.taxable === null ? "" : f.taxable ? "yes" : "no"}
+          value={f.taxable ? "yes" : "no"}
           onChange={(v) => set({ taxable: v === "yes" })}
           options={[
             { value: "yes", label: "Có" },
@@ -466,7 +479,7 @@ function PocketsStep({
           ]}
         />
       </Field>
-      <Hint>Có (kinh doanh, cho thuê nhà, làm tự do…): thêm mục tiêu Dự phòng “Thuế”, để riêng 10% thu chịu thuế. Không: thu nhập đã khấu trừ thuế, như lương.</Hint>
+      <Hint>Chỉ chọn Có nếu nhà có thu nhập phải tự khai thuế. Đổi được trong Cài đặt.</Hint>
       <div class="set-sub">Nhóm danh mục chi thiết yếu</div>
       {GROUP_OPTIONS.map((o) => (
         <Check
@@ -534,7 +547,7 @@ function PocketsStep({
           </div>
         );
       })}
-      {f.goals.length > 0 && <Hint>Mỗi mục tiêu gắn một tài khoản thật ở ngăn Dự phòng, nhiều mục tiêu dùng chung một tài khoản được (đổi thứ tự ưu tiên sau ở Cài đặt › Ba ngăn); chưa có tài khoản thì chọn “Chưa có”.</Hint>}
+      {f.goals.length > 0 && <Hint>Mỗi mục tiêu gắn một tài khoản ở ngăn Dự phòng, nhiều mục tiêu dùng chung một tài khoản được (đổi thứ tự ưu tiên ở Cài đặt › Ba ngăn); chưa có thì chọn “Chưa có”.</Hint>}
       <ListError error={errors.goals} />
       <div class="pad">
         <button type="button" class="btn" disabled={f.goals.length >= MAX_GOALS} onClick={() => setF((x) => ({ ...x, goals: [...x.goals, newGoal()] }))}>
@@ -542,7 +555,7 @@ function PocketsStep({
           Thêm mục tiêu
         </button>
       </div>
-      <div class="note" style={{ borderTop: "1px solid var(--border)" }}>
+      <div class="note" style={{ borderTop: "1px solid var(--line)" }}>
         {setupSummary(f)}
       </div>
     </>

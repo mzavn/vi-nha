@@ -10,9 +10,9 @@
 > Install with the **Deploy to Cloudflare** button, `npm run setup`, or by asking an AI coding agent to follow
 > [`docs/cai-bang-ai.md`](docs/cai-bang-ai.md). License: AGPL-3.0, Copyright (C) 2026 MZA. Security reports: [`SECURITY.md`](SECURITY.md).
 
-Ví nhà trả lời một câu mỗi ngày: **"Vận hành còn bao nhiêu, mỗi ngày chi khoảng bao nhiêu tới kỳ lương?"**. Mỗi tài khoản
+Ví nhà trả lời một câu mỗi ngày: **"Vận hành còn bao nhiêu, mỗi ngày chi khoảng bao nhiêu tới ngày lương?"**. Mỗi tài khoản
 thật của nhà thuộc một trong ba ngăn — **Tích luỹ** (trích trước, không đụng), **Dự phòng** (các khoản đã biết sẽ phải trả;
-phần còn lại là phần an tâm), **Vận hành** (tiền chi tiêu tới kỳ lương). Mọi số là tiền thật trong tài khoản, không có ví
+phần còn lại là phần an tâm), **Vận hành** (tiền chi tiêu tới ngày lương). Mọi số là tiền thật trong tài khoản, không có ví
 trên giấy. Mục tiêu (học phí, thuế, điện nước…) là kế hoạch: số "đã có" đọc từ số dư thật — một tài khoản riêng hay dùng
 chung, tài khoản mẹ kèm các khoản gửi kỳ hạn, hoặc trả thẳng từ tiền chi tiêu. Lương về, app đưa danh sách việc: trích
 Tích luỹ, nạp mục tiêu, chia phần dư kỳ trước. App chạy trên
@@ -21,7 +21,7 @@ Tích luỹ, nạp mục tiêu, chia phần dư kỳ trước. App chạy trên
 bấm mở Hướng dẫn — không ai thấy số liệu.)
 
 <p>
-  <img src="docs/img/hom-nay.jpg" alt="Màn Hôm nay: chi khoảng mỗi ngày, việc ngày lương" width="260">
+  <img src="docs/img/hom-nay.jpg" alt="Màn Hôm nay: chi khoảng mỗi ngày, nhắc trích Tích luỹ" width="260">
   <img src="docs/img/ba-ngan.jpg" alt="Cài đặt › Ba ngăn" width="260">
 </p>
 
@@ -32,10 +32,10 @@ bấm mở Hướng dẫn — không ai thấy số liệu.)
 | | |
 |---|---|
 | **Ghi khoản chi trong vài giây** | Gõ số tiền, chạm danh mục, bấm Lưu — app nói ngay Vận hành còn bao nhiêu. Mất mạng vẫn ghi được, có mạng thì tự gửi |
-| **Ba ngăn** | Tích luỹ · Dự phòng · Vận hành, mỗi ngăn là một nhóm tài khoản thật; thẻ Vận hành cho biết còn bao nhiêu và chi khoảng bao nhiêu mỗi ngày tới kỳ lương |
+| **Ba ngăn** | Tích luỹ · Dự phòng · Vận hành, mỗi ngăn là một nhóm tài khoản thật; thẻ Vận hành cho biết còn bao nhiêu và chi khoảng bao nhiêu mỗi ngày tới ngày lương |
 | **Mục tiêu là kế hoạch** | Số "đã có" đọc từ số dư thật: tài khoản riêng hoặc dùng chung, tài khoản mẹ + khoản gửi kỳ hạn, hoặc trả thẳng từ tiền chi tiêu. Khoản phải trả đặt được số riêng cho kỳ này (0 cũng được); chi theo danh mục gắn với khoản tự tính là đã trả |
 | **Trả cho mình trước** | Lương về có danh sách việc: trích Tích luỹ theo thang 1 · 10 · 30%, nạp mục tiêu, chia dư kỳ trước 50/50 Tích luỹ / Ví Thưởng; kèm mã QR, tự đánh dấu khi tiền tới đúng tài khoản |
-| **Nhìn lại theo kỳ lương** | Chi theo nhóm danh mục so hạn mức mềm, so kỳ trước |
+| **Nhìn lại theo tháng** | Chi theo nhóm danh mục so hạn mức mềm, so tháng trước |
 | **Tự ghi sổ ngân hàng** | Tài khoản nối [SePay](https://my.sepay.vn/register?gcid=arqcwdek) tự báo tiền vào / ra; bạn chỉ chọn "khoản này là gì", khoản lặp lại thì đặt luật tự gán |
 | **Đối soát** | Sổ so với giao dịch ngân hàng và số dư thật; lệch là báo |
 | **Nợ và phải thu** | Mình nợ ai, ai nợ mình, người thuê nhà còn phải trả bao nhiêu |
@@ -52,9 +52,9 @@ Hướng dẫn sử dụng đầy đủ (có hình từng màn): **https://mzavn
 | Tiền nằm ở đâu | Ví ảo đặt trên các tài khoản | Chỉ tài khoản thật, mỗi tài khoản thuộc một ngăn |
 | Chia tiền | Luật nạp, rót theo dòng thác vào từng ví | Ba ngăn Tích luỹ · Dự phòng · Vận hành |
 | Mục tiêu | Ví quỹ có số dư riêng trên giấy | Kế hoạch đọc từ số dư thật (tài khoản dùng chung, tài khoản mẹ + gửi kỳ hạn, hoặc trả từ tiền chi tiêu) |
-| Con số hằng ngày | Còn bao nhiêu để chi tuần này, theo từng ví | Vận hành còn bao nhiêu, chi khoảng …/ngày tới kỳ lương |
-| Nhịp | Theo tháng, chốt tháng | Theo kỳ lương, lương về có danh sách việc |
-| Trích Tích luỹ | % khi chia một khoản thu | Thang 1 · 10 · 30% trong việc ngày lương |
+| Con số hằng ngày | Còn bao nhiêu để chi tuần này, theo từng ví | Vận hành còn bao nhiêu, chi khoảng …/ngày tới ngày lương |
+| Nhịp | Theo tháng, chốt tháng | Theo tháng dương lịch, lương về có một nhắc trích Tích luỹ |
+| Trích Tích luỹ | % khi chia một khoản thu | Thang 1 · 10 · 30% trong nhắc trích khi lương về |
 | Nhìn lại | Theo ví | Theo nhóm danh mục, so hạn mức mềm và kỳ trước |
 | Giữ nguyên | Trả cho mình trước · phần dư chia 50/50 · tự ghi sổ qua SePay | như v1 |
 
@@ -104,7 +104,7 @@ Trên điện thoại: mở bằng trình duyệt → "Thêm vào màn hình ch�
   Tài khoản đã dùng hết cron cho việc khác thì deploy sẽ báo lỗi.
 - **Tự ghi sổ ngân hàng cần [SePay](https://sepay.vn?gcid=arqcwdek)** (dịch vụ bên thứ ba, nối tài khoản ngân hàng Việt Nam; giá xem ở [sepay.vn](https://sepay.vn?gcid=arqcwdek)).
   Chưa có tài khoản: [đăng ký SePay qua link giới thiệu của Ví nhà](https://my.sepay.vn/register?gcid=arqcwdek) (cũng có trong app: Cài đặt › Kết nối › SePay).
-  Không có SePay thì vẫn dùng được: ghi tay, danh sách việc ngày lương, nhắc việc đều chạy.
+  Không có SePay thì vẫn dùng được: ghi tay, nhắc trích Tích luỹ, chia dư cuối tháng, tin nhắc đều chạy.
 - **Nối Claude (hoặc ứng dụng AI khác) thì số liệu bạn hỏi sẽ đi qua nhà cung cấp AI đó.** Không nối thì số liệu chỉ nằm
   trong Cloudflare của bạn.
 - **`API_TOKEN` (tuỳ chọn) — để trống trừ khi bạn viết script gọi API.** Ai có token này gọi được toàn bộ `/v1/*` với
@@ -161,19 +161,18 @@ Hướng dẫn kèm ảnh: [Cập nhật Ví nhà](https://mzavn.gitbook.io/vi-n
 
 ## Phát triển
 
-Node.js 22.13 trở lên (test dùng `node:sqlite`), Python 3 (kiểm tra specs).
+Node.js 22.13 trở lên (test dùng `node:sqlite`).
 
 ```bash
 npm ci
 cp .dev.vars.example .dev.vars        # điền APP_PASSWORD
 npm run db:migrate:local
 npm run dev                            # Worker ở http://localhost:8787 — giao diện: npm run build trước, hoặc npm run dev:web
-npm test && npm run typecheck && npm run specs:check
+npm test && npm run typecheck
 ```
 
 - `src/` Worker (Hono, D1, cron, MCP) · `web/` PWA (Preact, Tailwind) · `migrations/` database · `test/` vitest.
-- `specs/` là đặc tả đã chốt (Spec-Driven Development) — đọc `specs/README.md`; `docs/` là nguyên lý và thiết kế.
-- Đóng góp: [`CONTRIBUTING.md`](CONTRIBUTING.md). Luật cho agent AI: [`AGENTS.md`](AGENTS.md). Báo lỗ hổng bảo mật:
+- Đóng góp: [`CONTRIBUTING.md`](CONTRIBUTING.md). Báo lỗ hổng bảo mật:
   [`SECURITY.md`](SECURITY.md).
 
 ## Liên hệ

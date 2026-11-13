@@ -18,13 +18,18 @@ const MAX_AMOUNT = 1_000_000_000_000;
  */
 export const OLD_ENTRY_FIELDS = ["wallet_id", "counter_wallet_id", "from_wallet_id", "wealth_move", "allocate", "wealth_amount", "wealth_note", "amounts", "earmark_id"] as const;
 
+/** Trường của kỳ lương đã bỏ (ADR-144): gửi lên (kể cả `false`) → 400 `model_changed` kèm tên trường, không ghi gì (pocket UC-1205 AC-7). */
+export const OLD_CYCLE_FIELDS = ["opens_cycle"] as const;
+
 /**
  * Từ chối thân yêu cầu còn trường cũ (`null`, `""`, `false` coi như không gửi — app cũ gửi trống). Một hàm cho Nhập, Gán, rule,
- * danh mục, MCP.
+ * danh mục, MCP. Trường kỳ lương (`opens_cycle`) luôn bị từ chối khi có mặt, trừ `null`.
  */
 export function rejectOldFields(body: Record<string, unknown>, names: readonly string[] = OLD_ENTRY_FIELDS): void {
   const fields = names.filter((k) => Object.prototype.hasOwnProperty.call(body, k) && body[k] !== null && body[k] !== undefined && body[k] !== "" && body[k] !== false);
   if (fields.length) throw new DomainError("model_changed", `Ví nhà v2 đã bỏ ví và chia tiền: bỏ trường ${fields.join(", ")}.`, 400, undefined, fields);
+  const cycle = OLD_CYCLE_FIELDS.filter((k) => Object.prototype.hasOwnProperty.call(body, k) && body[k] !== null && body[k] !== undefined);
+  if (cycle.length) throw new DomainError("model_changed", `Ví nhà 2.5 đã bỏ kỳ lương: bỏ trường ${cycle.join(", ")}, dùng is_salary ("Đây là lương").`, 400, undefined, cycle);
 }
 
 /** Tài khoản trong input luôn là "tài khoản dính tới khoản này" — hàm tự đặt vào đúng cột tiền ra / tiền vào. */
@@ -42,7 +47,7 @@ export interface EntryInput {
   link_id?: number | null;
   asset_kind?: string | null;
   client_id?: string | null;
-  /** Chỉ dùng cho `income`: nguồn thu (quyết `opens_cycle` mặc định và ngăn của tiền về). */
+  /** Chỉ dùng cho `income`: nguồn thu (quyết "Đây là lương" mặc định và ngăn của tiền về). */
   income_stream_id?: string | null;
   /** Chỉ dùng cho `income`: tiền người thuê trả. Không chọn nguồn thì lấy nguồn cho thuê mặc định. */
   tenant_id?: string | null;
@@ -54,8 +59,11 @@ export interface EntryInput {
   interest_debt_id?: string | null;
   /** Khoản trước mốc mà SePay đã báo và đã vào sổ (409 `bank_log_exists`): người ghi xác nhận đây là khoản thật thứ hai. */
   confirm_duplicate?: boolean;
-  /** Chỉ dùng cho `income`: ghi đè "Mở kỳ lương" của nguồn (pocket UC-1205 bước 2); không gửi = cờ của nguồn. */
-  opens_cycle?: boolean;
+  /**
+   * Chỉ dùng cho `income`: "Đây là lương" (pocket UC-1205, Q1-B) — có nhắc ① trích Tích luỹ. Không gửi: nguồn lương, hoặc khoản
+   * không nguồn từ `salary_reminder_min` trở lên. Quyết ở `resolveIsSalary` (services/month-tasks).
+   */
+  is_salary?: boolean;
   /**
    * Chỉ dùng cho `spend` / `transfer`: mục tiêu mà khoản này dùng tiền (pocket UC-1209 bước 11) — mục tiêu tài khoản: tiền ra
    * từ tài khoản của mục tiêu hoặc con của nó; mục tiêu trả từ tiền chi tiêu: tiền ra từ một tài khoản Vận hành. Không gửi: tài
@@ -93,10 +101,14 @@ export interface TxRow {
   goal_id?: string | null;
   /** 1 = rút từ tiền lãi của nhóm (`transactions.from_interest`); thiếu = 0. */
   from_interest?: number;
+  /** income: 1 = khoản lương, có nhắc ① trích Tích luỹ (`transactions.is_salary`, pocket UC-1205); thiếu = 0. */
+  is_salary?: number;
+  /** Mẫu đã tự gán khoản này (`transactions.rule_id`, ingest UC-307 AC-25); thiếu = NULL. */
+  rule_id?: number | null;
 }
 
 export const INVALID_GOAL = "Mục tiêu này không thuộc tài khoản chi.";
-export const INVALID_INTEREST = "Khoản này không lấy từ tiền lãi được: chỉ khoản chi / chuyển ra khỏi tài khoản có mục tiêu (hoặc khoản gửi của nó), không kèm mục tiêu.";
+export const INVALID_INTEREST = "Khoản này không lấy từ tiền lãi được: chỉ dùng khi chi hoặc chuyển khỏi tài khoản mục tiêu (hay khoản gửi), không kèm mục tiêu.";
 const INTEREST_INCOME_ONLY = "Tiền lãi chỉ ghi cho khoản thu vào tài khoản có mục tiêu hoặc khoản gửi của nó.";
 
 const fail = (code: string, message: string): never => {
@@ -109,13 +121,13 @@ export function normalizeAt(at: string | undefined, now: Date): string {
   if (Number.isNaN(t)) fail("invalid_at", "Ngày giờ không hợp lệ.");
   // Không cho ghi trước tương lai quá một ngày: gần như chắc chắn là nhập nhầm.
   if (t > now.getTime() + 86_400_000) {
-    fail("future_at", "Ngày của khoản này ở tương lai. Nếu nhập lúc mất mạng, đồng hồ điện thoại có thể đang chạy nhanh: chỉnh lại giờ rồi nhập lại.");
+    fail("future_at", "Khoản này đang để ngày tương lai. Nếu nhập lúc mất mạng, đồng hồ điện thoại có thể chạy nhanh: chỉnh lại giờ rồi nhập lại.");
   }
   return new Date(t).toISOString();
 }
 
 function account(refs: Refs, id: string | null | undefined, label: string) {
-  if (!id) return fail("missing_account", `Thiếu ${label}.`);
+  if (!id) return fail("missing_account", `Chưa có ${label}.`);
   return refs.accounts.find((a) => a.id === id) ?? fail("unknown_account", `Không có tài khoản "${id}".`);
 }
 
@@ -139,7 +151,7 @@ const viDate = (day: string) => {
  */
 export function assertOpened(account: { name: string; openedAt: string | null }, at: string): void {
   if (account.openedAt && dayKey(at) < account.openedAt) {
-    fail("before_opening", `Ngày này trước ngày mở sổ của tài khoản ${account.name} (${viDate(account.openedAt)}) — số dư đầu đã tính khoản này.`);
+    fail("before_opening", `Ngày này trước ngày mở sổ tài khoản ${account.name} (${viDate(account.openedAt)}), số dư đầu đã tính khoản này.`);
   }
 }
 
@@ -180,7 +192,7 @@ export function buildEntry(input: EntryInput, refs: Refs, memberId: string | nul
   if (input.debt_id && input.meaning !== "spend") fail("debt_spend_only", "Khoản nợ chỉ gắn được với khoản chi (trả nợ).");
   if (input.interest_debt_id && input.meaning !== "spend") fail("interest_spend_only", "Trả lãi chỉ gắn được với khoản chi.");
   if (input.interest_debt_id && input.debt_id) {
-    fail("debt_and_interest", "Một khoản chi không vừa trả gốc vừa trả lãi — ghi hai khoản: lãi (interest_debt_id) và gốc (debt_id).");
+    fail("debt_and_interest", "Khoản chi không vừa trả gốc vừa trả lãi: hãy ghi riêng lãi (interest_debt_id) và gốc (debt_id).");
   }
   if (input.receivable_id && input.meaning !== "lend" && input.meaning !== "collect") {
     fail("receivable_only", "Khoản phải thu chỉ gắn được với cho vay hoặc nhận lại tiền cho vay.");
@@ -198,11 +210,11 @@ export function buildEntry(input: EntryInput, refs: Refs, memberId: string | nul
   if (input.meaning !== "income" && (input.income_stream_id || input.tenant_id)) {
     fail("income_only", "Nguồn thu và người thuê chỉ gắn được với khoản thu nhập.");
   }
-  if (input.meaning !== "income" && input.opens_cycle === true) fail("invalid_input", "Mở kỳ lương chỉ dùng cho khoản thu nhập.");
+  if (input.meaning !== "income" && input.is_salary === true) fail("invalid_input", "\"Đây là lương\" chỉ dùng cho khoản thu nhập.");
 
   switch (input.meaning) {
     case "spend": {
-      if (!category) fail("missing_category", "Khoản chi phải có danh mục.");
+      if (!category) fail("missing_category", "Khoản chi cần có danh mục.");
       row.category_id = category!.id;
       row.account_id = account(refs, defaultAccount(), "tài khoản chi").id;
       row.debt_id = debt?.id ?? null;
@@ -278,7 +290,7 @@ export function buildEntry(input: EntryInput, refs: Refs, memberId: string | nul
     row.goal_id = input.goal_id;
   }
   if (input.is_interest) {
-    if (row.meaning !== "income" || input.opens_cycle === true || !rootOf(row.counter_account_id)?.goalIds?.length) fail("invalid_input", INTEREST_INCOME_ONLY);
+    if (row.meaning !== "income" || !rootOf(row.counter_account_id)?.goalIds?.length) fail("invalid_input", INTEREST_INCOME_ONLY);
   }
   if (input.from_interest) {
     const root = rootOf(row.account_id);

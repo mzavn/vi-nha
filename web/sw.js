@@ -1,5 +1,5 @@
 // Service worker viết tay của Ví nhà. vite.config.ts chèn danh sách app shell và mã phiên bản lúc build.
-//  - App shell: precache, trả từ cache trước (mở app không cần mạng).
+//  - App shell: precache, trả từ cache trước (mở app không cần mạng). Font tự host (/fonts/*.woff2) nằm trong app shell.
 //  - GET /v1/*: bản lưu còn "tươi" (freshFor, ADR-69: 30 giây cho số, 5 phút cho cấu hình) thì trả luôn, không hỏi mạng;
 //    hết hạn, hoặc app gửi header x-no-cache (người dùng bấm tải lại) thì mạng trước. Mất mạng thì trả bản lưu gần nhất,
 //    gắn header x-sw-cached-at để app ghi "số lúc HH:mm". Bản trả khi còn tươi bỏ header này: số đó không cũ.
@@ -12,7 +12,6 @@
 const VERSION = "__VERSION__";
 const SHELL = `vi-nha-shell-${VERSION}`;
 const API = "vi-nha-api";
-const FONTS = "vi-nha-fonts";
 const PRECACHE = __PRECACHE__;
 
 /* __FRESH_FOR__ */
@@ -40,7 +39,8 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k.startsWith("vi-nha-shell-") && k !== SHELL).map((k) => caches.delete(k))))
+      // "vi-nha-fonts": cache font Google của bản trước khi font tự host (change 261113-giao-dien-m1-va-ten-moi).
+      .then((keys) => Promise.all(keys.filter((k) => k === "vi-nha-fonts" || (k.startsWith("vi-nha-shell-") && k !== SHELL)).map((k) => caches.delete(k))))
       .then(() => invalidateApi())
       .then(() => self.clients.claim()),
   );
@@ -103,15 +103,6 @@ async function shellCacheFirst(request) {
   }
 }
 
-async function fontsCacheFirst(request) {
-  const cache = await caches.open(FONTS);
-  const hit = await cache.match(request);
-  if (hit) return hit;
-  const response = await fetch(request);
-  if (response.ok || response.type === "opaque") await cache.put(request, response.clone());
-  return response;
-}
-
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
@@ -125,9 +116,6 @@ self.addEventListener("fetch", (event) => {
     if (bypassWorker(url.pathname)) return;
     if (request.mode === "navigate") return event.respondWith(shellCacheFirst(new Request("/")));
     return event.respondWith(shellCacheFirst(request));
-  }
-  if (url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com") {
-    event.respondWith(fontsCacheFirst(request));
   }
 });
 

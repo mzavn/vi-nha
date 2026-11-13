@@ -67,7 +67,7 @@ function after0039(db: DatabaseSync) {
   db.exec(`
     INSERT INTO config (k, v) VALUES ('surplus_reward_account', 'vcb-em'), ('savings_pct', '10')
       ON CONFLICT (k) DO UPDATE SET v = excluded.v;
-    UPDATE income_streams SET opens_cycle = CASE id WHEN 'luong-chong' THEN 1 ELSE 0 END;
+    UPDATE income_streams SET is_salary = CASE id WHEN 'luong-chong' THEN 1 ELSE 0 END;
   `);
 }
 

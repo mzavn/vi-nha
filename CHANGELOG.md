@@ -6,6 +6,57 @@ bản cài cũ vẫn lên được bình thường (kể cả nâng database t�
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
 trước (xem README › Cập nhật bản mới).
 
+## v3.0.0 — 13/11/2026
+
+- **Hôm nay gọn 4 khối:** Vận hành, Việc tháng này, Cần xem, Gần đây; các thẻ Tích luỹ và Dự phòng dời sang màn Tài khoản, bỏ thẻ Sổ giao dịch. Nút "Trả ›" mở thẳng sheet Trả nợ hoặc điền sẵn khoản phải trả.
+- **Màn Tài khoản 4 tab với Ba ngăn:** tab Ba ngăn hiển thị toàn bộ tài khoản theo 3 ngăn Vận hành, Tích luỹ, Dự phòng kèm chấm màu ngăn; khối Tích luỹ có tài sản đang giữ; khối Dự phòng có mục tiêu, phần an tâm và Ví Thưởng. Các tab còn lại: Chi tiêu · Nợ · Cho thuê (bỏ khối tiền/vốn chủ lặp ở tab Nợ).
+- **Báo cáo 4 phần gọn gàng:** Cân đối (gồm Tháp tài sản ngay dưới bảng cân đối), Dòng tiền, Thu chi, Tự do (gộp Mốc tự do và Dự tính thử số).
+- **Hoàn tác thay hỏi lại:** xoá khoản một chạm có nút Hoàn tác; hoàn tác cho cả Gán lại, Bỏ qua log ngân hàng, và Chia / Để lại Vận hành tháng dư.
+- **Thiết lập nhà lần đầu trực quan hơn:** hỏi số dư ban đầu từng tài khoản, câu hỏi thuế mặc định "Không" và có gợi ý giải thích.
+- **Nút ⓘ giải thích thuật ngữ:** chạm mở câu giải thích ngắn gọn, dễ hiểu ngay tại chỗ cho các thuật ngữ và số liệu quan trọng.
+- **Dấu tự gán:** các khoản do quy tắc ngân hàng tự động gán được gắn chip "tự gán", sheet chi tiết có thông tin mẫu và nút "Sửa mẫu ›".
+- **Chế độ gọn (chỉ ghi chi):** bật trong Cài đặt › Máy này để ẩn bớt các phần quản lý, chỉ giữ lại những gì cần thiết cho việc ghi chép hằng ngày.
+- **Trạng thái rỗng có hướng dẫn:** mọi danh sách khi chưa có dữ liệu đều hiển thị câu hướng dẫn và gợi ý bước tiếp theo rõ ràng.
+- **Trả nợ gốc ở Chi tiêu rõ hơn:** hàng "Trả nợ" ghi "Trả gốc X ₫, không tính vào chi" thay cho số 0 (tiền gốc trả lại không phải tiêu xài nên không cộng vào Đã chi); tháng không trả gốc thì ẩn hàng này.
+- **Thứ viết tắt T2…T7, CN:** đầu màn Hôm nay và tiêu đề ngày trong Sổ giao dịch gọn một dòng.
+- **Giao diện mới tối giản:** chữ to và rõ hơn, số tiền dùng font số thẳng cột dễ đối soát, bố cục thoáng gọn, không dùng dải màu phân tán sự chú ý.
+- **Thanh dưới mới 4 mục:** Hôm nay · Sổ · Gán · Tài khoản; ghi nhanh khoản chi bằng nút "+" nổi (kèm số giao dịch chưa lên sổ khi mất mạng).
+- **Đổi tên màn và mục cho trực quan:** Ví & quỹ → Tài khoản, Tài sản & tự do → Báo cáo, Nhìn lại → Chi tiêu, Người thuê → Cho thuê, Gán giao dịch → Chưa gán, Tháp → Tháp tài sản, Lưu chuyển tiền → Dòng tiền, Thử số → Dự tính; các mục Cài đặt dùng tên rõ nghĩa (Ngân hàng và tin nhắn, Trợ lý AI, Ngưỡng và tỉ lệ, Danh mục và hạn mức).
+- **Font nằm sẵn trong app:** tải sẵn cùng app shell, không gọi Google Fonts bên ngoài, mở offline đúng chữ ngay lần đầu và bảo vệ quyền riêng tư người dùng.
+- **Tin nhắn không còn emoji:** thông báo Telegram, Zalo và web push chuyển sang chữ thuần gọn gàng, tập trung vào số liệu đối soát.
+- **Gọn và đều tay hơn ở Ghi khoản, Gán, Cài đặt, Cho thuê và mọi bảng kéo lên:** mỗi hàng chỉ một dòng phụ, thao tác của hàng mở khi chạm cả hàng thay vì nút to trên từng hàng; mọi bảng kéo lên có nút chính dính ở đáy; danh mục ở Ghi khoản không còn khung lồng khung; chạm trên điện thoại không còn để lại hàng trông như đang chọn; ở máy tính nút Ghi khoản và các mục thanh bên cùng cỡ, thẳng hàng.
+- Nội dung chuyển khoản trong mã QR không còn chữ "Tich luy" (vốn trùng mẫu tự gán của heo đất MB nên khoản trích bị gán nhầm vào heo đất) — giờ là mã việc, xem dòng "Mã riêng trong nội dung chuyển khoản" bên dưới.
+
+Có nâng cấp database: `0046` (tháng dương lịch thay kỳ lương), `0047` (mã việc trong nội dung chuyển khoản), `0048` (hoàn tác chia dư và đánh dấu khoản tự gán). Database tự nâng khi cập nhật; không xoá dòng nào — lịch sử
+kỳ lương cũ được giữ, chỉ đọc.
+
+- **Báo cáo theo tháng:** Nhìn lại, hạn mức nhóm, Tích luỹ, phần an tâm, khoản phải trả, sổ giao dịch, tin sáng và tin tuần
+  giờ tính từ ngày 1 tới cuối tháng. "Chi khoảng …/ngày" vẫn tính tới ngày lương.
+- **Lương về gọn hơn:** chỉ còn một nhắc "Trích Tích luỹ 10%" (kéo 1 · 10 · 30, có QR, tự tick khi chuyển). Không còn danh
+  sách việc ngày lương và công tắc "Mở kỳ lương". Khoản thu từ 5.000.000 không gắn nguồn sẽ được hỏi "Đây là lương?" (đổi
+  ngưỡng ở Cài đặt › Tham số).
+- **Nhắc trích chỉ tự tick với khoản chuyển từ 100.000 ₫:** tiền lẻ heo đất tự gom (8.000, 1.000…) không còn bị tính là đã
+  trích Tích luỹ. Dòng "Tháng này" của thẻ Tích luỹ vẫn cộng mọi tiền vào; trích bằng cách khác thì bấm "Đã chuyển".
+- **Mã riêng trong nội dung chuyển khoản:** mỗi nhắc trích và việc chia dư có QR mang một mã như `TL 7K2Q T11` (trích lương),
+  `CD 9F3A T11` (chia dư vào Tích luỹ), `VT 2M8X T11` (Ví Thưởng). Chuyển khoản ngân hàng báo về có mã đó thì app gán đúng
+  việc, kể cả khoản nhỏ, và không bị mẫu tự gán khác gán nhầm. Mã chỉ được nhận khi có đủ đuôi tháng (`T11`) đúng tháng của
+  việc, nên tên cửa hàng tình cờ bắt đầu bằng "VT…" hay "CD…" không bị nhận nhầm.
+- **Chia dư cuối tháng:** từ ngày 1, app hỏi "Tháng trước dư bao nhiêu — chia Tích luỹ / Ví Thưởng?". Số dư đã trừ tiền đang
+  chờ chuyển, khoản phải trả tháng mới và tiền ăn tiêu tới ngày lương. Lần hỏi đầu tiên là ngày 1/12 cho tháng 11.
+- **Mới: tuổi tiền.** Thẻ Vận hành cho biết tiền đang tiêu về cách đây bao nhiêu ngày — bước đầu để sống bằng lương tháng trước.
+- **Danh sách Mục tiêu Dự phòng dễ đọc hơn:** tài khoản chung là một khung có số dư to; mỗi mục tiêu tên đậm, số bên phải, chip
+  "Đủ" / "Thiếu …" và thanh tiến độ; khoản trả từ tiền chi tiêu tách riêng, ghi "tháng này đặt …" khi có số riêng.
+- **Thẻ Vận hành dễ đọc hơn:** "Chi khoảng …/ngày" là số chính, dưới là "còn … · N ngày tới lương"; bữa ăn / đi chợ thành hai ô
+  nhỏ; khoản phải trả, nợ ngắn hạn, tuổi tiền thành các hàng nhãn – số (hai hàng đầu chạm được), không còn chữ gạch chân.
+- **Thay đổi API / MCP:** `opens_cycle` → `is_salary`; `payCycle` → `month` / `monthClose`; `nearSpend.cyclePayday` →
+  `salaryPayday`; Nhìn lại và sổ giao dịch bỏ `cycle`; `cycle_limit` → `monthly_limit`; thêm `config.salary_reminder_min`.
+  Gửi trường cũ → lỗi `model_changed`. Thêm `POST /v1/month-close/:month/reopen` (hoàn tác chia dư), `POST /v1/logs/:id/unignore`
+  (hoàn tác Bỏ qua), `transactions.rule_id` và `rule` ở `GET /v1/transactions/:id` (khoản tự gán), `accounts[].opening_balance` ở
+  `POST /v1/setup`.
+- Sửa nhiều lỗi giao diện máy tính và điện thoại: bảng thẳng hàng, phân trang một dòng, thanh dính nền đặc, chân thanh bên gọn,
+  điều hướng mục con thống nhất (cột mục lục trái / một hàng tab), danh sách mục tiêu và tài khoản không lồng khung, form cùng cỡ,
+  ⓘ mở khối riêng; app không tự phóng to trên iPhone, sheet luôn cuộn được.
+
 ## v2.4.1 — 12/11/2026
 
 - Trang cấp quyền khi nối Claude ghi đúng chữ của v2: quyền Xem "Ba ngăn, chi khoảng mỗi ngày, mục tiêu, giao dịch, sổ nợ", quyền Ghi "Ghi giao dịch, gán, cập nhật giá tài sản" (bỏ chữ "ngân sách", "chia tiền").

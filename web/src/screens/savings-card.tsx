@@ -1,57 +1,67 @@
-// Thẻ "Việc ngày lương" (pwa UC-702): hàng việc từ `snapshot.payCycle`, nút QR / Đã làm / Đã chuyển / Bỏ qua / Hoàn tác, chạm số để sửa
-// (① mở sheet "Trích Tích luỹ" có thanh 1 · 10 · 30 — ADR-142). Thao tác cần mạng (ghi thẳng lên server, server tick); mất mạng thì nút
-// khoá kèm "Cần mạng". Chữ và trạng thái ở lib/pay-cycle.ts.
+// Thẻ "Trích Tích luỹ" (pwa UC-702 AC-38): một hàng chính cho mỗi việc đang mở của `snapshot.month` (nhắc ① theo khoản lương,
+// việc chia dư sau khi bấm Chia), nút QR / Đã chuyển / Bỏ qua / Hoàn tác, chạm số để sửa (① mở sheet thanh 1 · 10 · 30, 0 bắt lý
+// do — ADR-142), dòng gợi ý mục tiêu còn thiếu (mở Ví › Dự phòng). Xong hết → thu gọn "✓ Đã trích 3.400.000 ₫ · 10% lương cả nhà tháng 12". Thao tác cần
+// mạng; mất mạng thì nút khoá kèm "Cần mạng". Chữ và trạng thái ở lib/month-tasks.ts.
 
-import { Fragment } from "preact";
 import { useState } from "preact/hooks";
 import { errorText } from "../lib/api";
 import {
   amountProblem,
-  goalGroupQr,
-  noCycleStreamLine,
-  payCycleCard,
   savingsSheetAction,
   savingsSheetDrag,
   savingsSheetOpen,
   savingsSheetType,
+  monthNo,
   savingsSheetView,
+  savingsTaskCard,
   SKIP_REASON_REQUIRED,
   skipProblem,
   taskQr,
-  type PayTaskRow,
   type TaskAction,
   type TaskQr,
-} from "../lib/pay-cycle";
-import type { PayCycleTask, Snapshot } from "../lib/types";
-import { go, payCycleAction, toast, useApp } from "../state/store";
+  type TaskRow,
+} from "../lib/month-tasks";
+import type { MonthTask, Snapshot } from "../lib/types";
+import { go, monthTaskAction, toast, useApp } from "../state/store";
 import { AmountInput } from "../ui/fields";
+import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
-import { Sheet } from "../ui/parts";
+import { Row, Sheet } from "../ui/parts";
 import { TransferQrBlock } from "../ui/qr";
 import { SavingsSlider } from "../ui/savings-slider";
 
-type Open = { kind: "qr" | "skip" | "amount"; task: PayCycleTask } | { kind: "group-qr"; accountId: string } | null;
+type Open = { kind: "qr" | "skip" | "amount"; task: MonthTask } | null;
 
-export function PayCycleCard({ snap }: { snap: Snapshot }) {
+/** Mọi việc xong / bỏ qua: một `Row` "Tiết kiệm tháng 11 · 10% lương cả nhà — 3.418.000 ₫"; chưa xong thì không hiện. */
+export function SavingsDoneRow({ snap }: { snap: Snapshot }) {
+  const { online } = useApp();
+  const m = snap.month;
+  const v = savingsTaskCard(m, online);
+  if (!m || !v?.collapsed) return null;
+  const savings = m.tasks.filter((t) => t.kind === "savings");
+  if (!savings.some((t) => t.status === "done")) return <Row title={v.collapsed} />;
+  return (
+    <Row
+      title={`Tiết kiệm tháng ${monthNo(savings[savings.length - 1]!.month)}`}
+      sub={`${m.savings.pct ?? 0}% lương cả nhà`}
+      value={<Money value={m.savings.amount} />}
+    />
+  );
+}
+
+/** `doneApart` (máy tính): xong hết thì không vẽ thẻ — hàng Tiết kiệm nằm ở thẻ trạng thái cột phụ. */
+export function SavingsTaskCard({ snap, doneApart }: { snap: Snapshot; doneApart?: boolean }) {
   const { online } = useApp();
   const [open, setOpen] = useState<Open>(null);
   const [busy, setBusy] = useState(false);
-  const reminder = noCycleStreamLine(snap);
-  if (reminder) {
-    return (
-      <button type="button" class="card link pad" style={{ width: "100%", textAlign: "left" }} onClick={() => go("settings", { settingsFocus: "streams" })}>
-        {reminder}
-      </button>
-    );
-  }
-  const c = snap.payCycle;
-  const v = payCycleCard(c, online);
-  if (!c || !v) return null;
+  const m = snap.month;
+  const v = savingsTaskCard(m, online);
+  if (!v || (doneApart && v.collapsed)) return null;
 
   async function run(id: number, action: TaskAction) {
     setBusy(true);
     try {
-      await payCycleAction(id, action);
+      await monthTaskAction(id, action);
       setOpen(null);
     } catch (err) {
       toast(errorText(err));
@@ -59,56 +69,42 @@ export function PayCycleCard({ snap }: { snap: Snapshot }) {
       setBusy(false);
     }
   }
-  const taskOf = (r: PayTaskRow) => c.tasks.find((t) => t.id === r.id)!;
+  const taskOf = (r: TaskRow) => m.tasks.find((t) => t.id === r.id)!;
   const locked = !online || busy;
-  const groupAt = new Map(v.goalGroups.map((g) => [g.taskIds[0]!, g]));
-  const grouped = new Set(v.goalGroups.flatMap((g) => g.taskIds));
 
   return (
-    <section class="card pocket" aria-label="Việc ngày lương">
+    <section class={v.collapsed ? "card pocket savings-done" : "card pocket"} aria-label="Việc tháng này">
       {v.collapsed ? (
-        <p class="pad" style={{ margin: 0 }}>
-          {v.collapsed}
-        </p>
+        <SavingsDoneRow snap={snap} />
       ) : (
         <>
           <div class="pocket-h">
-            <h2>{v.title}</h2>
-            {v.chip && <span class="chip">{v.chip}</span>}
+            <h2>Việc tháng này</h2>
           </div>
-          {v.overspent && <p class="note">{v.overspent}</p>}
           {v.rows.map((r) => {
-            const head = groupAt.get(r.id);
+            // Mọi việc chừa cùng một ô icon 16px trước tiêu đề (việc xong có ✓), nên chữ các việc thẳng hàng.
+            const done = r.state === "done" || /^[✓✔☑]/.test(r.title);
+            const title = r.title.replace(/^[✓✔☑]\s*/, "");
             return (
-              <Fragment key={r.id}>
-                {head && (
-                  <div class="srow" style={{ display: "block" }}>
-                    <div class="font-semibold">{head.title}</div>
-                    {head.qr && (
-                      <div class="flex gap-2" style={{ marginTop: "6px" }}>
-                        <button type="button" class="btn" onClick={() => setOpen({ kind: "group-qr", accountId: head.accountId })}>
-                          QR gộp
-                        </button>
-                      </div>
-                    )}
-                  </div>
+              <div key={r.id} class={r.state === "skipped" ? "task-row skipped" : "task-row"}>
+                {r.head && <div class="sub-line">{r.head}</div>}
+                <span class="task-ic">{done && <Icon name="check" size={16} />}</span>
+                {r.noSavingsAccount ? (
+                  // Chưa có tài khoản Tích luỹ: tiêu đề nhắc mở tài khoản thật → Cài đặt › Ba ngăn.
+                  <button type="button" class="task-t" onClick={() => go("settings", { settingsFocus: "pockets" })}>
+                    {title}
+                  </button>
+                ) : r.canEdit ? (
+                  <button type="button" class="task-t" disabled={locked} onClick={() => setOpen({ kind: "amount", task: taskOf(r) })}>
+                    {title}
+                  </button>
+                ) : (
+                  <div class="task-t">{title}</div>
                 )}
-                <div class="srow" style={{ display: "block", opacity: r.state === "skipped" ? 0.6 : 1, paddingLeft: grouped.has(r.id) ? "28px" : undefined }}>
-                  {r.noSavingsAccount ? (
-                    // ① khi chưa có tài khoản Tích luỹ: tiêu đề nhắc mở tài khoản thật → Cài đặt › Ba ngăn.
-                    <button type="button" class="link" style={{ textAlign: "left" }} onClick={() => go("settings", { settingsFocus: "pockets" })}>
-                      {r.title}
-                    </button>
-                  ) : r.canEdit ? (
-                    <button type="button" class="link" style={{ textAlign: "left" }} disabled={locked} onClick={() => setOpen({ kind: "amount", task: taskOf(r) })}>
-                      {r.title}
-                    </button>
-                  ) : (
-                    <div>{r.title}</div>
-                  )}
-                  {r.sub && <div class="sub-line">{r.sub}</div>}
-                  {r.qrHint && <div class="sub-line">{r.qrHint}</div>}
-                  <div class="flex gap-2" style={{ marginTop: "6px", flexWrap: "wrap" }}>
+                {r.sub && <div class="sub-line">{r.sub}</div>}
+                {r.qrHint && <div class="sub-line">{r.qrHint}</div>}
+                {(r.qr || r.doneLabel || r.canSkip || r.canUndo) && (
+                  <div class="task-act">
                     {r.qr && (
                       <button type="button" class="btn" onClick={() => setOpen({ kind: "qr", task: taskOf(r) })}>
                         QR
@@ -130,15 +126,20 @@ export function PayCycleCard({ snap }: { snap: Snapshot }) {
                       </button>
                     )}
                   </div>
-                </div>
-              </Fragment>
+                )}
+              </div>
             );
           })}
+          {v.goalHint && (
+            // Gợi ý không bắt buộc (pocket UC-1206 AC-18): mở mục tiêu Dự phòng (Cài đặt › Ba ngăn › Mục tiêu Dự phòng).
+            <button type="button" class="task-hint" onClick={() => go("settings", { settingsFocus: "pocket-goals" })}>
+              {v.goalHint}
+            </button>
+          )}
           {v.offline && <p class="note">{v.offline}</p>}
         </>
       )}
-      {open?.kind === "qr" && <QrSheet qrOf={(accountId) => taskQr(c, open.task, accountId)} onClose={() => setOpen(null)} />}
-      {open?.kind === "group-qr" && <QrSheet qrOf={() => goalGroupQr(c, open.accountId)} onClose={() => setOpen(null)} />}
+      {open?.kind === "qr" && <QrSheet qrOf={(accountId) => taskQr(open.task, accountId)} onClose={() => setOpen(null)} />}
       {open?.kind === "skip" && <SkipSheet task={open.task} busy={locked} onSubmit={(reason) => void run(open.task.id, { kind: "skip", reason })} onClose={() => setOpen(null)} />}
       {open?.kind === "amount" &&
         (open.task.kind === "savings" ? (
@@ -150,7 +151,7 @@ export function PayCycleCard({ snap }: { snap: Snapshot }) {
   );
 }
 
-/** Sheet mã QR chuyển khoản (ADR-116) — dùng chung việc ngày lương và nhắc chuyển thêm ở thẻ Vận hành. */
+/** Sheet mã QR chuyển khoản (ADR-116) — dùng chung nhắc trích Tích luỹ, việc chia dư và nhắc chuyển thêm ở thẻ Vận hành. */
 export function QrSheet({ qrOf, onClose }: { qrOf: (accountId?: string) => TaskQr; onClose: () => void }) {
   const [accountId, setAccountId] = useState<string | undefined>(undefined);
   const qr = qrOf(accountId);
@@ -172,9 +173,9 @@ export function QrSheet({ qrOf, onClose }: { qrOf: (accountId?: string) => TaskQ
               </select>
             </div>
           )}
-          {/* Số trên QR = phần còn thiếu lúc mở (pocket UC-1206 bước 10). */}
+          {/* Số trên QR = phần còn thiếu lúc mở (pocket UC-1206 bước 10): việc 1.500.000 đã nhận 9.000 → QR 1.491.000. */}
           <div class="field">
-            <span class="k">Số tiền</span>
+            <span class="k">Còn thiếu</span>
             <Money value={qr.amount} class="font-semibold" />
           </div>
           <div class="pad">{"payload" in qr ? <TransferQrBlock payload={qr.payload} label={qr.label} memo={qr.memo} /> : <p class="sub-line">{qr.reason}</p>}</div>
@@ -184,17 +185,17 @@ export function QrSheet({ qrOf, onClose }: { qrOf: (accountId?: string) => TaskQ
   );
 }
 
-function SkipSheet({ task, busy, onSubmit, onClose }: { task: PayCycleTask; busy: boolean; onSubmit: (reason: string) => void; onClose: () => void }) {
+function SkipSheet({ task, busy, onSubmit, onClose }: { task: MonthTask; busy: boolean; onSubmit: (reason: string) => void; onClose: () => void }) {
   const [reason, setReason] = useState("");
   const problem = skipProblem(task, reason);
   return (
-    <Sheet open title="Bỏ qua việc này" onClose={onClose}>
+    <Sheet open title="Bỏ qua lần này" onClose={onClose}>
       <div class="field">
         <label for="skip-reason">Lý do</label>
         <input id="skip-reason" class="ctl" maxLength={500} value={reason} onInput={(e) => setReason(e.currentTarget.value)} />
       </div>
       {problem && <p class="fhint">{problem}</p>}
-      <div class="pad">
+      <div class="sheet-foot">
         <button type="button" class="btn btn-primary btn-wide" disabled={busy || !!problem} onClick={() => onSubmit(reason)}>
           Bỏ qua
         </button>
@@ -203,8 +204,8 @@ function SkipSheet({ task, busy, onSubmit, onClose }: { task: PayCycleTask; busy
   );
 }
 
-/** Sửa số của việc khác ① (② / ④ / chuyển theo ngăn): không cần lý do. */
-function AmountSheet({ task, busy, onSubmit, onClose }: { task: PayCycleTask; busy: boolean; onSubmit: (amount: number) => void; onClose: () => void }) {
+/** Sửa số của việc chia dư: không cần lý do. */
+function AmountSheet({ task, busy, onSubmit, onClose }: { task: MonthTask; busy: boolean; onSubmit: (amount: number) => void; onClose: () => void }) {
   const [amount, setAmount] = useState<number | null>(task.amount);
   const problem = amountProblem(task, amount, "");
   return (
@@ -214,7 +215,7 @@ function AmountSheet({ task, busy, onSubmit, onClose }: { task: PayCycleTask; bu
         <AmountInput id="task-amount" value={amount ?? 0} onChange={(n, valid) => setAmount(valid || n === 0 ? n : null)} />
       </div>
       {problem && <p class="fhint">{problem}</p>}
-      <div class="pad">
+      <div class="sheet-foot">
         <button type="button" class="btn btn-primary btn-wide" disabled={busy || !!problem} onClick={() => onSubmit(amount!)}>
           Lưu
         </button>
@@ -224,7 +225,7 @@ function AmountSheet({ task, busy, onSubmit, onClose }: { task: PayCycleTask; bu
 }
 
 /** Sheet "Trích Tích luỹ" (UC-702 AC-35): thanh 1–100% có vạch 1 · 10 · 30 và ô số tiền đi cùng nhau; số 0 bắt lý do. */
-function SavingsSheet({ task, busy, onSubmit, onClose }: { task: PayCycleTask; busy: boolean; onSubmit: (action: TaskAction) => void; onClose: () => void }) {
+function SavingsSheet({ task, busy, onSubmit, onClose }: { task: MonthTask; busy: boolean; onSubmit: (action: TaskAction) => void; onClose: () => void }) {
   const [s, setS] = useState(() => savingsSheetOpen(task));
   const v = savingsSheetView(s);
   return (
@@ -245,7 +246,7 @@ function SavingsSheet({ task, busy, onSubmit, onClose }: { task: PayCycleTask; b
         </div>
       )}
       {v.problem && <p class="fhint">{v.problem}</p>}
-      <div class="pad">
+      <div class="sheet-foot">
         <button type="button" class="btn btn-primary btn-wide" disabled={busy || !v.canSave} onClick={() => onSubmit(savingsSheetAction(s))}>
           Lưu
         </button>

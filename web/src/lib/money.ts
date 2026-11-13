@@ -7,7 +7,7 @@ export const MINUS = "−";
 /** Khoảng trắng không ngắt dòng giữa số và ₫ — để ₫ không rơi xuống dòng riêng. */
 const NBSP = "\u00a0";
 /** Chữ thay cho số tiền khi đang che. */
-export const HIDDEN_DIGITS = "••••";
+export const HIDDEN_DIGITS = "•••••";
 export const HIDE_AMOUNTS_KEY = "vi-nha:hide-amounts";
 
 let hidden = false;
@@ -44,7 +44,7 @@ export function groupDigits(n: number): string {
   return (n < 0 ? MINUS : "") + grouped + (frac ? `,${frac}` : "");
 }
 
-/** Số tiền không kèm ₫: như `groupDigits`, nhưng đang che thì `••••` (giữ dấu −). */
+/** Số tiền không kèm ₫: như `groupDigits`, nhưng đang che thì `•••••` (giữ dấu −). */
 export function moneyDigits(n: number): string {
   return hidden ? (n < 0 ? MINUS : "") + HIDDEN_DIGITS : groupDigits(n);
 }
@@ -64,7 +64,7 @@ export function formatSigned(n: number): string {
 }
 
 /** Chữ có sẵn số tiền (ghi chú server ghi vào dòng giao dịch, vd "Đối soát số dư: sổ 2.090.000 ₫"): đang che thì mọi
- *  "số ₫" thành `•••• ₫` (giữ dấu −). Số không kèm ₫ (mã, số tài khoản) giữ nguyên. */
+ *  "số ₫" thành `••••• ₫` (giữ dấu −). Số không kèm ₫ (mã, số tài khoản) giữ nguyên. */
 export function maskAmounts(text: string): string {
   return hidden ? text.replace(/\d[\d.]*(?:,\d+)?[\s\u00a0]?₫/g, `${HIDDEN_DIGITS}${NBSP}₫`) : text;
 }

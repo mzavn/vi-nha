@@ -2,14 +2,16 @@
 
 import { useEffect, useState } from "preact/hooks";
 import { ApiError, api, errorText, httpTransport, request, setUnauthorizedHandler } from "../lib/api";
+import { loadCompact, saveCompact } from "../lib/compact";
 import { loadAmountsHidden, saveAmountsHidden, setAmountsHidden } from "../lib/money";
 import { setupNeeded, type SetupBody } from "../lib/setup";
-import { effectsToast, taskRequest, withPayCycle, type TaskAction } from "../lib/pay-cycle";
+import { effectsToast, taskRequest, withMonth, type TaskAction } from "../lib/month-tasks";
 import { applyQueue, entryToast, localNearSpend, queuedLineAfter } from "../lib/pending";
 import { checkPin, clearPin, clearRelogin, deviceStorage, forgetPinOnDevice, keepPinFor, needsRelogin, readPin, shouldLock, type PinCheck } from "../lib/pin";
 import { editToast, voidToast } from "../lib/transactions";
 import { bookFromHashQuery, bookHashQuery, type BookFilter } from "../lib/tx-filter";
-import type { Bootstrap, EntryBody, MemberRef, PayCycleView, ReplaceEntryResult, Snapshot, TxRow } from "../lib/types";
+import type { Bootstrap, EntryBody, MemberRef, MonthView, ReplaceEntryResult, Snapshot, TxRow } from "../lib/types";
+import { canUndoVoid, restoreBody, TOAST_BANK_TX_ERROR, TOAST_UNDO_DONE } from "../lib/undo";
 import { cacheClear, cacheGet, cacheSet, queueStore, StorageUnavailableError } from "../offline/idb";
 import { createSyncer, type QueuedEntry } from "../offline/queue";
 import { syncPush, unbindPush } from "./push";
@@ -17,7 +19,16 @@ import { syncPush, unbindPush } from "./push";
 /** Bốn tab ở thanh dưới, cộng ba màn phụ không chiếm tab: Cài đặt (nút bánh răng ở Hôm nay), Sổ giao dịch (`#ledger`, UC-716)
  *  và Tài sản & tự do (`#net-worth`, UC-717 — mở từ tab Nợ và thanh bên). */
 export type { NetWorthSection, Tab, WalletsTab } from "../lib/hash-route";
-import { DEFAULT_WALLETS_TAB, hashFor, parseHash, type NetWorthSection, type Tab, type WalletsTab } from "../lib/hash-route";
+import { DEFAULT_WALLETS_TAB, hashFor, legacyRedirect, parseHash, type NetWorthSection, type Tab, type WalletsTab } from "../lib/hash-route";
+
+export interface EntryPreset {
+  day?: string;
+  back: Tab;
+  goal_id?: string | null;
+  category_id?: string | null;
+  amount?: number;
+  note?: string;
+}
 
 export interface AppState {
   /** "setup": nhà chưa thiết lập (DB mới), hiện màn Thiết lập thay màn đăng nhập (UC-701 AC-8). */
@@ -35,15 +46,15 @@ export interface AppState {
   syncing: boolean;
   tab: Tab;
   walletsTab: WalletsTab;
-  /** Kỳ đang xem ở Ví & quỹ › Nhìn lại (ngày lương, `#wallets/analysis/<ngày>`); null = kỳ hiện tại. */
-  lookBackCycle: string | null;
+  /** Tháng đang xem ở Ví & quỹ › Nhìn lại (`#wallets/analysis/YYYY-MM`); null = tháng hiện tại. */
+  lookBackMonth: string | null;
   /** Phần đang xem ở màn Tài sản & tự do. */
   netWorthSection: NetWorthSection;
   /** Phần Cài đặt mở thẳng tới (vd "Đổi ngăn" ở thẻ Vận hành, "Chọn tài khoản giữ" ở thẻ Dự phòng, "Đổi" % Tích luỹ); Cài đặt đọc xong thì xoá. */
-  settingsFocus: "pockets" | "pocket-goals" | "parameters" | "streams" | null;
+  settingsFocus: "pockets" | "pocket-goals" | "parameters" | "streams" | "transfer-codes" | null;
   /** Log chọn sẵn khi mở màn Gán từ bảng điều khiển máy tính. */
   assignFocus: string | null;
-  toast: { id: number; text: string } | null;
+  toast: { id: number; text: string; action?: { label: string; run: () => void } } | null;
   /** Dòng "vừa ghi" trên màn Nhập — toast tắt sau 2,2s, dòng này ở lại cho tới lần nhập sau. */
   lastEntry: string | null;
   /** Tăng mỗi lần có dữ liệu mới trên server, để các màn tự tải lại phần riêng của chúng. */
@@ -55,11 +66,15 @@ export interface AppState {
   /** Bộ lọc đang xem ở Sổ giao dịch (UC-716) — giữ khi rời màn rồi quay lại, và trên địa chỉ `#ledger?…` để F5 giữ; null = tháng hiện tại, không lọc. */
   book: BookFilter | null;
   /** Ghi thêm từ Sổ giao dịch: ngày điền sẵn ở màn Nhập, và màn quay về khi ghi xong. */
-  entryPreset: { day: string; back: Tab } | null;
+  entryPreset: EntryPreset | null;
+  /** Khoản nợ mở sẵn sheet Trả nợ khi sang tab Nợ. */
+  debtPayId: string | null;
   /** Service worker bản mới đã giành quyền (state/sw-update.ts): hiện thanh "Đã có bản mới" kèm nút Tải bản mới. */
   updateReady: boolean;
   /** Che số tiền trên máy này (pwa UC-718) — cờ thật nằm ở lib/money.ts; ở đây để đổi cờ là vẽ lại cả cây. */
   hideAmounts: boolean;
+  /** Chế độ gọn "chỉ ghi chi" trên máy này (pwa UC-711 AC-36, UC-709 AC-56). */
+  compact: boolean;
   /** Màn khóa mã PIN đang thay cả màn app (pwa UC-719). Tính cùng lúc vào app, trước khi số hiện ra. */
   locked: boolean;
 }
@@ -78,7 +93,7 @@ let state: AppState = {
   syncing: false,
   tab: route.tab,
   walletsTab: route.walletsTab ?? DEFAULT_WALLETS_TAB,
-  lookBackCycle: route.cycle,
+  lookBackMonth: route.month,
   netWorthSection: route.netWorthSection ?? "sheet",
   settingsFocus: null,
   assignFocus: null,
@@ -90,7 +105,9 @@ let state: AppState = {
   book: route.ledger ? bookFromHashQuery(route.ledger, new Date()) : null,
   updateReady: false,
   entryPreset: null,
+  debtPayId: null,
   hideAmounts: false,
+  compact: loadCompact(deviceStorage()),
   locked: false,
 };
 const listeners = new Set<() => void>();
@@ -120,10 +137,10 @@ export const viewSnapshot = (s: AppState = state): Snapshot | null =>
 
 // ── Toast ──────────────────────────────────────────────────────────
 let toastSeq = 0;
-export const toast = (text: string) => setState({ toast: { id: ++toastSeq, text } });
+export const toast = (text: string, action?: { label: string; run: () => void }) => setState({ toast: { id: ++toastSeq, text, action } });
 
-// ── Điều hướng: màn trong hash ("#wallets/wealth-building") để F5, nút quay lại và lối tắt màn hình chính mở đúng chỗ ──
-const currentHash = (tab: Tab) => hashFor(tab, state.walletsTab, state.netWorthSection, state.lookBackCycle, state.book ? bookHashQuery(state.book, new Date()) : "");
+// ── Điều hướng: màn trong hash ("#wallets/accounts") để F5, nút quay lại và lối tắt màn hình chính mở đúng chỗ ──
+const currentHash = (tab: Tab) => hashFor(tab, state.walletsTab, state.netWorthSection, state.lookBackMonth, state.book ? bookHashQuery(state.book, new Date()) : "");
 
 export function go(tab: Tab, patch: Partial<AppState> = {}) {
   setState(patch);
@@ -132,15 +149,15 @@ export function go(tab: Tab, patch: Partial<AppState> = {}) {
   else setState({ tab });
 }
 
-/** Đổi tab con của Ví & quỹ: ghi vào hash (thay chỗ, không thêm lượt quay lại) để F5 vẫn mở đúng tab con. Nhìn lại mở ở kỳ hiện tại. */
+/** Đổi tab con của Ví & quỹ: ghi vào hash (thay chỗ, không thêm lượt quay lại) để F5 vẫn mở đúng tab con. Nhìn lại mở ở tháng hiện tại. */
 export function setWalletsTab(walletsTab: WalletsTab) {
-  setState({ walletsTab, lookBackCycle: null });
+  setState({ walletsTab, lookBackMonth: null });
   history.replaceState(null, "", currentHash("wallets"));
 }
 
-/** Chọn kỳ ở Nhìn lại (‹ / ›, hay kỳ trên địa chỉ không có thật → null): ghi ngày lương vào hash (thay chỗ) để F5 mở đúng kỳ. */
-export function setLookBackCycle(lookBackCycle: string | null) {
-  setState({ lookBackCycle });
+/** Chọn tháng ở Nhìn lại (‹ / ›): ghi tháng vào hash (thay chỗ) để F5 mở đúng tháng (UC-707 AC-40). */
+export function setLookBackMonth(lookBackMonth: string | null) {
+  setState({ lookBackMonth });
   history.replaceState(null, "", currentHash("wallets"));
 }
 
@@ -188,14 +205,14 @@ async function flushAndRefresh(): Promise<void> {
 /** Nút "Đồng bộ": gửi hàng đợi và tải lại số (bỏ qua bản lưu còn tươi của service worker), rồi nói kết quả. */
 export async function syncNow(): Promise<void> {
   const before = state.queue.filter((q) => q.status === "pending" && q.memberId === state.member?.id).length;
-  if (!navigator.onLine) return toast(before ? `Chưa có mạng. ${before} khoản vẫn chờ đồng bộ.` : "Chưa có mạng.");
+  if (!navigator.onLine) return toast(before ? `Chưa có mạng. ${before} khoản vẫn chờ gửi.` : "Chưa có mạng.");
   await flushAndRefresh();
   await refresh(true);
   const left = state.queue.filter((q) => q.status === "pending" && q.memberId === state.member?.id).length;
   if (before === 0) toast(state.stale ? "Chưa tới được máy chủ. Đang hiện số cũ." : "Đã tải số mới.");
-  else if (left === 0) toast(`Đã đồng bộ ${before} khoản.`);
-  else if (left === before) toast(`Chưa tới được máy chủ. ${left} khoản vẫn chờ đồng bộ.`);
-  else toast(`Đã đồng bộ ${before - left} khoản. ${left} khoản vẫn chờ.`);
+  else if (left === 0) toast(`Đã gửi ${before} khoản.`);
+  else if (left === before) toast(`Chưa kết nối được. ${left} khoản vẫn chờ gửi.`);
+  else toast(`Đã gửi ${before - left} khoản. ${left} khoản vẫn chờ.`);
 }
 
 /**
@@ -206,9 +223,9 @@ export async function retryEntry(clientId: string, opts: { dropGoal?: boolean } 
   const report = await syncer.retry(clientId, opts);
   if (report.stopped === "auth") return toLogin();
   const r = report.results[clientId];
-  if (r?.kind === "ok") toast("Đã đồng bộ khoản này.");
+  if (r?.kind === "ok") toast("Đã gửi khoản này.");
   else if (r?.kind === "rejected") toast(`Vẫn bị từ chối: ${r.message}`);
-  else toast("Chưa tới được máy chủ. Khoản này vẫn chờ đồng bộ.");
+  else toast("Chưa kết nối được. Khoản này vẫn chờ gửi.");
   await refresh();
 }
 /** "Vẫn ghi" của khoản bị 409 `bank_log_exists`: người nhập xác nhận đây là khoản thật thứ hai, gửi lại kèm confirm_duplicate. */
@@ -218,7 +235,7 @@ export async function confirmDuplicateEntry(clientId: string): Promise<void> {
   const r = report.results[clientId];
   if (r?.kind === "ok") toast("Đã ghi thêm khoản này.");
   else if (r?.kind === "rejected") toast(`Vẫn bị từ chối: ${r.message}`);
-  else toast("Chưa tới được máy chủ. Khoản này vẫn chờ đồng bộ.");
+  else toast("Chưa kết nối được. Khoản này vẫn chờ gửi.");
   await refresh();
 }
 /** Bỏ hẳn một khoản: dòng "vừa ghi" đang nói về nó (chờ đồng bộ) thì xoá luôn — khoản không bao giờ lên sổ. */
@@ -265,19 +282,59 @@ export async function saveEntry(body: EntryBody, okText?: string): Promise<boole
 
   const counted = body.meaning === "spend" || body.meaning === "refund";
   let text: string;
+  let undoAction: { label: string; run: () => void } | undefined = undefined;
+
   if (result?.kind === "ok") {
     const fx = effectsToast(result.data.effects);
     const base = okText ?? (counted ? entryToast(result.data.nearSpend ?? local, false) : doneText(body, false));
-    // Hệ quả lên kỳ lương / việc ngày lương (UC-705, UC-706): "Kỳ lương mới từ 10/11 · 5 việc", "Đã ghi · Trích Tích luỹ ✓".
+    // Hệ quả lên nhắc trích Tích luỹ / việc tháng (UC-705, UC-706): "Đã ghi · nhắc trích Tích luỹ 10% = …", "Đã ghi · Trích Tích luỹ ✓".
     text = fx ? (fx.startsWith("Đã ghi") ? fx : `${base} ${fx}`) : base;
+    const txId = result.data.tx.id;
+    undoAction = {
+      label: "Hoàn tác",
+      run: async () => {
+        try {
+          await api.post(`/v1/transactions/${txId}/void`);
+          await refresh();
+          toast(TOAST_UNDO_DONE);
+        } catch (err: any) {
+          if (err?.code === "bank_tx") toast(TOAST_BANK_TX_ERROR);
+          else toast(errorText(err));
+        }
+      },
+    };
   } else if (result?.kind === "rejected") {
     // SePay đã báo đúng khoản này và nó đã vào sổ: không tự gửi lại — người nhập chọn Vẫn ghi hay Bỏ ở hàng đợi.
     text =
       result.code === "bank_log_exists"
-        ? `Chưa ghi: ${result.message} Đúng là hai khoản khác nhau thì bấm Vẫn ghi ở mục Chưa lên sổ; không thì Bỏ khoản này.`
-        : `Chưa ghi được: ${result.message} Khoản này nằm trong hàng đợi để sửa.`;
+        ? `Chưa ghi: ${result.message} Nếu đúng hai khoản khác nhau, bấm Vẫn ghi ở Chưa lên sổ, không thì Bỏ khoản này.`
+        : `Chưa ghi được: ${result.message} Khoản này được giữ lại để sửa.`;
   } else {
     text = counted ? entryToast(local, true) : doneText(body, true);
+    undoAction = {
+      label: "Hoàn tác",
+      run: async () => {
+        try {
+          // Đang gửi thì chờ lượt gửi đó xong — bỏ khỏi hàng đợi giữa chừng không chặn được câu ghi trên server.
+          const rep = await flushing;
+          const r = rep.results[body.client_id];
+          const pending = state.queue.find((q) => q.clientId === body.client_id && q.status === "pending");
+          if (r?.kind !== "ok" && pending) {
+            // Chưa lên sổ (mất mạng / lỗi tạm): bỏ hẳn trên máy, không bao giờ gửi.
+            discardEntry(body.client_id);
+          } else if (r?.kind !== "rejected") {
+            // Đã lên sổ (ở lượt này hay lượt sau): gửi lại cùng client_id — server trả đúng khoản đã ghi (không ghi trùng) — rồi void.
+            const id = r?.kind === "ok" ? r.data.tx.id : (await api.post<{ tx: { id: number } }>("/v1/transactions", body)).tx.id;
+            await api.post(`/v1/transactions/${id}/void`);
+          }
+          await refresh();
+          toast(TOAST_UNDO_DONE);
+        } catch (err: any) {
+          if (err?.code === "bank_tx") toast(TOAST_BANK_TX_ERROR);
+          else toast(errorText(err));
+        }
+      },
+    };
   }
   navigator.vibrate?.(12);
   // Còn chờ: lên sổ ở lượt gửi sau thì dòng thành câu đã ghi (số còn lại tính lúc lưu, đã trừ tạm khoản này); bị từ chối thì xoá.
@@ -286,13 +343,13 @@ export async function saveEntry(body: EntryBody, okText?: string): Promise<boole
       ? null
       : { clientId: body.client_id, synced: okText ?? (counted ? entryToast(local, false) : doneText(body, false)) };
   setState({ lastEntry: text });
-  toast(text);
+  toast(text, undoAction);
   return true;
 }
 
 function doneText(body: EntryBody, queued: boolean): string {
   const what = { lend: "khoản cho vay", collect: "khoản nhận lại", transfer: "chuyển nội bộ", buy_asset: "mua tài sản", income: "khoản thu", refund: "hoàn tiền", spend: "khoản chi" }[body.meaning];
-  return `Đã ghi ${what}${queued ? ", chờ đồng bộ" : ""}.`;
+  return `Đã ghi ${what}${queued ? ", chờ gửi" : ""}.`;
 }
 
 // ── Xem, sửa, xoá một khoản đã lên sổ (UC-715) ─────────────────────
@@ -307,7 +364,22 @@ export async function voidEntry(tx: TxRow): Promise<void> {
   // Dòng "vừa ghi" ở màn Nhập nói số còn lại của lần ghi trước — sửa / xoá xong thì thay bằng câu mới, không để số cũ.
   lastEntryQueued = null;
   setState({ lastEntry: text });
-  toast(text);
+  if (canUndoVoid(tx)) {
+    toast(text, {
+      label: "Hoàn tác",
+      run: async () => {
+        try {
+          const clientId = crypto.randomUUID();
+          const body = restoreBody(tx, clientId);
+          await saveEntry(body, TOAST_UNDO_DONE);
+        } catch (err) {
+          toast(errorText(err));
+        }
+      },
+    });
+  } else {
+    toast(text);
+  }
 }
 
 /** Sửa = server huỷ khoản cũ và ghi khoản mới trong một lần (ADR-73). */
@@ -322,16 +394,23 @@ export async function replaceEntry(id: number, body: EntryBody): Promise<Replace
   return res;
 }
 
-// ── Việc ngày lương (pwa UC-702) ───────────────────────────────────
+// ── Nhắc trích Tích luỹ, việc chia dư (pwa UC-702) ─────────────────
 /**
- * Đã làm / Bỏ qua / Hoàn tác / sửa số một việc: cần mạng, ghi thẳng lên server. Server trả kỳ mới → thay `payCycle` trong
+ * Đã chuyển / Bỏ qua / Hoàn tác / sửa số một việc tháng: cần mạng, ghi thẳng lên server. Server trả `month` mới → thay trong
  * snapshot ngay, rồi tải lại để số mỗi ngày / thẻ Tích luỹ theo kịp. Lỗi ném ra để sheet hiện tại chỗ.
  */
-export async function payCycleAction(id: number, action: TaskAction): Promise<void> {
+export async function monthTaskAction(id: number, action: TaskAction): Promise<void> {
   const r = taskRequest(id, action);
-  const view = r.method === "PATCH" ? await api.patch<PayCycleView>(r.path, r.body) : await api.post<PayCycleView>(r.path, r.body);
-  if (state.snap) setState({ snap: withPayCycle(state.snap, view) });
+  type View = Omit<MonthView, "goalHint">;
+  const view = r.method === "PATCH" ? await api.patch<View>(r.path, r.body) : await api.post<View>(r.path, r.body);
+  if (state.snap) setState({ snap: withMonth(state.snap, view) });
   void refresh();
+}
+
+/** Chia dư / Để lại Vận hành ở thẻ Tháng dư (UC-702 AC-39): cần mạng; xong thì tải lại (việc chia dư hiện ở thẻ Trích Tích luỹ). */
+export async function monthCloseAction(path: string, body: Record<string, unknown> = {}): Promise<void> {
+  await api.post(path, body);
+  await refresh();
 }
 
 // ── Dữ liệu ────────────────────────────────────────────────────────
@@ -492,6 +571,12 @@ export function setHideAmounts(on: boolean) {
   setState({ hideAmounts: true, toast: null, lastEntry: null });
 }
 
+// ── Chế độ gọn "chỉ ghi chi" trên máy này (pwa UC-711 AC-36, UC-709 AC-56) ──
+export function setCompact(on: boolean) {
+  saveCompact(deviceStorage(), on);
+  setState({ compact: on });
+}
+
 // ── Khóa bằng mã PIN (pwa UC-719) ─────────────────────────────────
 /** Màn khóa: đúng PIN → về đúng màn đang ở (địa chỉ giữ nguyên); sai lần thứ 5 → như Quên PIN. */
 export async function unlock(pin: string): Promise<PinCheck> {
@@ -522,12 +607,29 @@ export async function forgetPin(): Promise<void> {
   await signedOut();
 }
 
+/**
+ * Địa chỉ cũ theo kỳ lương (`#wallets/analysis/2026-11-10`, `#ledger?cycle=2026-11-10&…`) ghi lại thành địa chỉ theo tháng
+ * (thay chỗ), để F5 / chia sẻ dùng địa chỉ mới (pwa UC-707 AC-40, UC-716 AC-25).
+ * Địa chỉ cũ tab Tích luỹ hoặc các phần Báo cáo gộp (#wallets/wealth-building, #net-worth/pyramid…) ghi lại qua legacyRedirect (UC-707 AC-41, UC-717 AC-7).
+ */
+function rewriteLegacyHash() {
+  const redirected = legacyRedirect(location.hash);
+  if (redirected) {
+    history.replaceState(null, "", redirected);
+    return;
+  }
+  if (state.tab !== "ledger" && state.tab !== "wallets") return;
+  const hash = currentHash(state.tab);
+  if (location.hash !== hash) history.replaceState(null, "", hash);
+}
+
 // ── Khởi động ─────────────────────────────────────────────────────
 export function start() {
   setUnauthorizedHandler(toLogin);
   const hide = loadAmountsHidden(deviceStorage());
   setAmountsHidden(hide);
   setState({ hideAmounts: hide });
+  rewriteLegacyHash();
   addEventListener("hashchange", () => {
     const r = parseHash(location.hash);
     const now = new Date();
@@ -535,10 +637,11 @@ export function start() {
     const book = r.ledger !== null && r.ledger !== (state.book ? bookHashQuery(state.book, now) : "") ? { book: bookFromHashQuery(r.ledger, now) } : {};
     setState({
       tab: r.tab,
-      ...(r.walletsTab ? { walletsTab: r.walletsTab, lookBackCycle: r.cycle } : {}),
+      ...(r.walletsTab ? { walletsTab: r.walletsTab, lookBackMonth: r.month } : {}),
       ...(r.netWorthSection ? { netWorthSection: r.netWorthSection } : {}),
       ...book,
     });
+    rewriteLegacyHash();
     scrollTo({ top: 0 });
   });
   addEventListener("online", () => {

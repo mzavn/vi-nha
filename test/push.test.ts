@@ -219,7 +219,7 @@ describe("đăng ký máy", () => {
     await subscribe("wife", `${FCM}/vo`, android);
     const telegram = () => pushed.filter((p) => p.url.includes("api.telegram.org")).map((p) => JSON.parse(String(p.body)) as { chat_id: string; text: string });
     expect(telegram()).toEqual([
-      expect.objectContaining({ chat_id: "1001", text: "⚠️ Vợ (qua API token) vừa thêm máy nhận thông báo: Android · Chrome — nếu không phải người nhà làm, vào Cài đặt gỡ ngay." }),
+      expect.objectContaining({ chat_id: "1001", text: "Cảnh báo: Vợ (qua API token) vừa thêm máy nhận thông báo: Android · Chrome. Nếu không phải người nhà làm, vào Cài đặt gỡ ngay." }),
     ]);
     await subscribe("wife", `${FCM}/vo`, android);
     expect(telegram()).toHaveLength(1);
@@ -289,8 +289,8 @@ describe("notifyMembers qua push", () => {
 
     const tg = pushed.filter((p) => p.url.startsWith("https://api.telegram.org/")).map((p) => JSON.parse(p.body as string).text as string);
     expect(tg).toHaveLength(1);
-    expect(tg[0]!.split("\n")[0]).toBe("💰 Tiền vận hành đã hết (0 ₫) — còn 18 ngày");
-    expect(tg[0]).toContain("🏦 Đối soát");
+    expect(tg[0]!.split("\n")[0]).toBe("Tiền vận hành đã hết (0 ₫), còn 18 ngày");
+    expect(tg[0]).toContain("Đối soát");
 
     const devices = pushed.filter((p) => p.url.startsWith(`${FCM}/`));
     expect(devices).toHaveLength(2);
@@ -307,7 +307,7 @@ describe("notifyMembers qua push", () => {
     ]);
   });
 
-  it("UC-406 AC-9, AC-12: tổng kết tuần: máy nhận tiêu đề tổng chi cả tuần (spend trừ refund, mọi danh mục), mở thẳng Ví & quỹ › Nhìn lại", async () => {
+  it("UC-406 AC-9, AC-12: tổng kết tuần: máy nhận tiêu đề tổng chi cả tuần (spend trừ refund, mọi danh mục), mở thẳng Tài khoản › Chi tiêu", async () => {
     raw.prepare("UPDATE accounts SET sepay_enabled = 0").run(); // tài khoản ghi tay mới nhận nhập tay (D14)
     const entry = (meaning: "spend" | "refund", amount: number, category_id: string, at: string, link_id?: number) =>
       createEntry(env.DB, { meaning, amount, category_id, account_id: "vcb-husband", at, link_id }, null, new Date(at));
@@ -414,7 +414,7 @@ describe("thử khi tắt app (lượt gửi thử)", () => {
     expect(pushed[0]!.headers).toMatchObject({ urgency: "high", ttl: "300" });
     const payloads = await Promise.all(pushed.map((p) => decrypt(p.url, p.body as Uint8Array)));
     expect(payloads.map((p) => p.tag)).toEqual(["test-series-1-1", "test-series-1-1", "test-series-1-2", "test-series-1-2"]);
-    expect(payloads[2]).toEqual({ title: "Thử khi tắt app", body: "Tin 2/2 — thấy tin này khi app đã tắt là thông báo chạy tốt.", url: "/#settings", tag: "test-series-1-2" });
+    expect(payloads[2]).toEqual({ title: "Thử khi tắt app", body: "Tin 2/2. Thấy tin này khi app đã tắt là thông báo chạy tốt.", url: "/#settings", tag: "test-series-1-2" });
     expect(series()).toEqual([{ id: 1, member_id: "husband", count: 2, interval_s: 10, status: "done", sent: 2 }]);
   });
 
@@ -476,7 +476,8 @@ describe("nội dung push", () => {
     const push = { title: "2 giao dịch chưa gán", body: "−24.400 ₫ MB · +50.000 ₫ TK lạ" };
     expect(pushPayload("pending_batch", push)).toEqual({ ...push, url: "/#assign", tag: "pending_batch" });
     expect(pushPayload("weekly", push)).toMatchObject({ url: "/#wallets/analysis", tag: "weekly" });
-    expect(pushPayload("pay_cycle", push)).toMatchObject({ url: "/#today", tag: "pay_cycle" });
+    expect(pushPayload("salary", push)).toMatchObject({ url: "/#today", tag: "salary" });
+    expect(pushPayload("pay_cycle", push)).toMatchObject({ url: "/", tag: "pay_cycle" });
     expect(pushPayload("test", push)).toMatchObject({ url: "/#settings" });
     expect(pushPayload("other", push)).toMatchObject({ url: "/", tag: "other" });
   });

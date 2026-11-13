@@ -61,7 +61,7 @@ import {
   MEANING_LABEL,
   linkCodeLeft,
   memberPayload,
-  OPENS_CYCLE_HINT,
+  SALARY_STREAM_HINT,
   normalizePattern,
   notifyPayload,
   type Result,
@@ -167,15 +167,14 @@ export function Hint({ children }: { children: ComponentChildren }) {
   return <p class="fhint">{children}</p>;
 }
 
+/** Bật / tắt trong form (DESIGN §4.22): cả hàng là nhãn bấm được — chữ trái, ô check phải. */
 export function Check(props: { id: string; label: string; checked: boolean; onChange: (v: boolean) => void; error?: string; disabled?: boolean }) {
   return (
     <>
-      <div class="field">
-        <label class="check" for={props.id} style={{ color: props.disabled ? "var(--fg-2)" : "var(--fg)" }}>
-          <input id={props.id} type="checkbox" checked={props.checked} disabled={props.disabled} onChange={(e) => props.onChange(e.currentTarget.checked)} />
-          {props.label}
-        </label>
-      </div>
+      <label class={props.disabled ? "field check-row off" : "field check-row"} for={props.id}>
+        <span>{props.label}</span>
+        <input id={props.id} type="checkbox" checked={props.checked} disabled={props.disabled} onChange={(e) => props.onChange(e.currentTarget.checked)} />
+      </label>
       {props.error && <p class="err ferr">{props.error}</p>}
     </>
   );
@@ -184,7 +183,7 @@ export function Check(props: { id: string; label: string; checked: boolean; onCh
 function Footer(props: { busy: boolean; error: string | null; label: string; onSubmit: () => void; children?: ComponentChildren }) {
   const { online } = useApp();
   return (
-    <div class="pad">
+    <div class="sheet-foot">
       {props.error && (
         <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
           {props.error}
@@ -229,9 +228,9 @@ export function BankOptions() {
 /** Lời dặn dưới hàng "SePay theo dõi từ" (ADR-113). */
 const FEED_HINT: Record<FeedMode, string> = {
   enabled:
-    "Sổ đã có giao dịch của tài khoản này (nhập tay, hay ghi từ tài khoản kia): app chỉ nhận giao dịch SePay từ lúc bật, khoản trước đó không về lần nữa. Tài khoản chưa có gì trong sổ thì app lấy cả lịch sử từ ngày số dư đầu.",
-  opening: "App nhận mọi giao dịch SePay từ ngày số dư đầu — chọn khi các khoản đó chưa có trong sổ.",
-  time: "Giao dịch SePay trước giờ này coi như đã có trong sổ, app bỏ qua; khoản trước giờ này nhập tay được.",
+    "Sổ đã có giao dịch của tài khoản này: app chỉ nhận giao dịch SePay từ lúc bật, khoản cũ không về lần nữa. Tài khoản chưa có gì trong sổ thì app lấy từ ngày số dư đầu.",
+  opening: "App nhận giao dịch SePay từ ngày số dư đầu, chọn khi các khoản đó chưa có trong sổ.",
+  time: "Giao dịch SePay trước giờ này coi như đã có trong sổ, app sẽ bỏ qua; bạn vẫn nhập tay được.",
 };
 
 /**
@@ -373,7 +372,7 @@ export function AccountSheet({
             {catalogBank ? (
               <select id="a-bank" class="ctl" value={f.bank} onChange={(ev) => pickBank(ev.currentTarget.value)}>
                 <option value="">Chọn ngân hàng</option>
-                {f.bank && !bank && <option value={f.bank}>{f.bank} (tên cũ — chọn lại)</option>}
+                {f.bank && !bank && <option value={f.bank}>{f.bank} (tên cũ, chọn lại)</option>}
                 <BankOptions />
               </select>
             ) : (
@@ -406,7 +405,7 @@ export function AccountSheet({
             error={errors.sepay_enabled}
           />
           <Hint>
-            Chiều tiền SePay báo về thì không nhập tay được — nhập thêm là đếm một khoản hai lần. Tiền vào luôn tự về; tiền ra chỉ tự về khi bật “SePay báo cả tiền ra”.
+            Chiều tiền SePay báo về không nhập tay được để tránh đếm hai lần. Tiền vào luôn tự về; tiền ra chỉ tự về khi bật “SePay báo cả tiền ra”.
           </Hint>
           {f.sepay_enabled && (
             <>
@@ -459,8 +458,7 @@ export function AccountSheet({
                   <Hint>{FEED_HINT[f.feed_mode]}</Hint>
                   {feedSuggestion && f.feed_mode !== "time" && (
                     <Hint>
-                      Giao dịch SePay sớm nhất của tài khoản này lúc {feedFromText(feedSuggestion)}, sau ngày số dư đầu — có vẻ tài khoản nối SePay khi sổ đã ghi các
-                      khoản trước đó. Đặt mốc lúc đó để rà soát đêm hay Đồng bộ lại không đưa chúng về lần nữa.{" "}
+                      Giao dịch SePay sớm nhất của tài khoản này lúc {feedFromText(feedSuggestion)}, sau ngày số dư đầu. Có vẻ tài khoản nối SePay khi sổ đã ghi các khoản trước đó. Đặt mốc lúc đó để rà soát đêm hay tải lại không đưa về lần nữa.{" "}
                       <button type="button" class="btn btn-ghost" onClick={() => set({ feed_mode: "time", feed_from: feedSuggestion })}>
                         Đặt mốc lúc đó
                       </button>
@@ -492,7 +490,7 @@ export function AccountSheet({
       {!parent && ownerLocked && <Hint>Tài khoản riêng tư: chỉ chủ tài khoản đổi được chủ.</Hint>}
       {!parent && showPrivate && (
         <>
-          <Check id="a-private" label="Riêng tư — người khác chỉ thấy tổng" checked={f.private} onChange={(v) => set({ private: v })} />
+          <Check id="a-private" label="Riêng tư: người khác chỉ thấy tổng" checked={f.private} onChange={(v) => set({ private: v })} />
           <Hint>Người khác vẫn thấy số dư, không thấy từng khoản chi.</Hint>
         </>
       )}
@@ -508,7 +506,7 @@ export function AccountSheet({
       {!isNew && !f.active && (
         <Hint>
           Ngừng dùng thì tài khoản không còn hiện ở chỗ chọn; lịch sử vẫn giữ nguyên.
-          {item.deactivated_at ? ` Đã tắt từ ${dateText(item.deactivated_at)} — bảng cân đối vẫn tính nó ở các tháng trước ngày đó.` : " Bảng cân đối vẫn tính nó ở các tháng trước ngày tắt."}
+          {item.deactivated_at ? ` Đã tắt từ ${dateText(item.deactivated_at)}. Bảng cân đối vẫn tính các tháng trước ngày đó.` : " Bảng cân đối vẫn tính nó ở các tháng trước ngày tắt."}
         </Hint>
       )}
       {item && onAddDeposit && item.active && canAddDeposit(item, d.accounts) && (
@@ -577,12 +575,12 @@ export function RuleSheet({ d, item, onClose, onSaved }: { d: SettingsData; item
           options={(Object.keys(MEANING_LABEL) as Rule["meaning"][]).map((k) => ({ value: k, label: MEANING_LABEL[k] }))}
         />
       </Field>
-      {f.meaning === "income" && <Hint>Khoản khớp mẫu lương từ ngưỡng tự nhận lương trở lên thì tự ghi; nguồn bật “Mở kỳ lương” thì lương về mở kỳ lương.</Hint>}
+      {f.meaning === "income" && <Hint>Khoản khớp mẫu lương từ ngưỡng tự nhận lương trở lên thì tự ghi; nguồn bật “Nguồn lương” thì lương về có nhắc trích Tích luỹ.</Hint>}
       {f.meaning === "income" && !isNew && (
         <>
           <Field id="r-stream" label="Nguồn thu">
             <select id="r-stream" class="ctl" value={f.income_stream_id} onChange={(ev) => set({ income_stream_id: ev.currentTarget.value })}>
-              <option value="">Không nguồn (không mở kỳ lương)</option>
+              <option value="">Không nguồn</option>
               {(d.incomeStreams ?? [])
                 .filter((s) => s.active || s.id === f.income_stream_id)
                 .map((s) => (
@@ -710,7 +708,7 @@ function MemberActive({ member, self, onClose, onSaved }: { member: SettingsMemb
     return (
       <>
         <div class="set-sub">Đang dùng</div>
-        <Hint>{member.name} là chủ hộ, luôn đang dùng — không tắt được.</Hint>
+        <Hint>{member.name} là chủ hộ, luôn đang dùng nên không tắt được.</Hint>
       </>
     );
   }
@@ -911,7 +909,7 @@ function ZaloLink({ member, ready, onClose, onSaved }: { member: SettingsMember;
     act(async () => {
       const d = await api.get<SettingsData>("/v1/settings", true);
       if (!d.members.find((m) => m.id === member.id)?.zalo_chat_id) {
-        setMsg({ text: "Chưa thấy tin nhắn mã. Kiểm tra đã nhắn đúng bot Zalo của nhà, đủ 6 số, rồi bấm lại.", bad: true });
+        setMsg({ text: "Chưa thấy tin nhắn mã. Nhớ nhắn đúng bot Zalo của nhà đủ 6 số rồi bấm lại.", bad: true });
         return;
       }
       await onSaved(`Đã nối Zalo cho ${member.name}.`);
@@ -988,8 +986,8 @@ function ZaloLink({ member, ready, onClose, onSaved }: { member: SettingsMember;
 // ── Khoá, token (chỉ ghi) ─────────────────────────────────────────
 
 const SECRET_INFO: Record<SecretKey | SepaySecretKey, { title: string; hint: string; done: string }> = {
-  webhook_key: { title: "Khoá webhook (API Key)", hint: "Dán đúng API Key đã đặt trong cấu hình webhook của tài khoản SePay này. Khoá mới cần ít nhất 24 ký tự; khoá đang dùng vẫn chạy bình thường.", done: "khoá webhook" },
-  api_token: { title: "Token API SePay", hint: "Token để máy chủ đọc lại giao dịch của tài khoản SePay này lúc 2 giờ sáng và khi đồng bộ lại.", done: "token API SePay" },
+  webhook_key: { title: "Khoá webhook (API Key)", hint: "Dán đúng API Key đã đặt ở webhook tài khoản SePay này. Khoá mới cần ít nhất 24 ký tự; khoá đang dùng vẫn chạy bình thường.", done: "khoá webhook" },
+  api_token: { title: "Token API SePay", hint: "Token để máy chủ đọc lại giao dịch của tài khoản SePay này lúc 2 giờ sáng và khi lấy lại.", done: "token API SePay" },
   telegram_bot_token: { title: "Bot token Telegram", hint: "Lấy từ @BotFather khi tạo bot, dạng 123456:ABC…", done: "bot token" },
   zalo_bot_token: { title: "Bot token Zalo", hint: "Zalo gửi Bot Token khi tạo bot ở Zalo Bot Creator, dạng 12345689:abc-xyz.", done: "bot token Zalo" },
   zalo_webhook_secret: {
@@ -1121,7 +1119,7 @@ export function SepayConnectionSheet({ item, onClose, onSaved }: { item: SepayCo
           <Hint>
             {f.active
               ? "Token và khoá webhook sửa ở hai hàng ngay dưới tên kết nối."
-              : "Tắt thì app không nhận và không đồng bộ giao dịch qua kết nối này cho tới khi bật lại. Tài khoản đang nối qua nó vẫn giữ nguyên."}
+              : "Tắt thì app không nhận và không lấy giao dịch qua kết nối này cho tới khi bật lại. Tài khoản đang nối vẫn giữ nguyên."}
           </Hint>
         </>
       )}
@@ -1135,6 +1133,8 @@ export function SepayConnectionSheet({ item, onClose, onSaved }: { item: SepayCo
 export function ConfigSheet({ d, onClose, onSaved }: { d: SettingsData; onClose: () => void; onSaved: Saved }) {
   const config = d.config;
   const [salary, setSalary] = useState(config.salary_min_amount);
+  // Bản cài đặt lưu offline từ trước v2.5 thiếu khoá này: không hiện ô, không gửi.
+  const [reminder, setReminder] = useState(config.salary_reminder_min);
   // Bản cài đặt lưu offline từ trước bản lãi tiền gửi thiếu khoá này: mặc định như server.
   const [interest, setInterest] = useState(config.interest_max_amount ?? 10_000);
   const [months, setMonths] = useState(String(config.safety_fund_months));
@@ -1145,7 +1145,7 @@ export function ConfigSheet({ d, onClose, onSaved }: { d: SettingsData; onClose:
   // Bản cài đặt lưu offline từ trước v2 thiếu khoá này: không hiện ô, không gửi.
   const [savingsPct, setSavingsPct] = useState(config.savings_pct === undefined ? undefined : String(config.savings_pct));
   const { busy, error, errors, run } = useSubmit(onSaved, onClose);
-  // Ví Thưởng đã chọn mà nay đã tắt / không còn ở ngăn Dự phòng / đã gắn mục tiêu vẫn hiện để biết (dư kỳ trước coi như chưa chọn).
+  // Ví Thưởng đã chọn mà nay đã tắt / không còn ở ngăn Dự phòng / đã gắn mục tiêu vẫn hiện để biết (dư cuối tháng coi như chưa chọn).
   const options = rewardAccountOptions(d.accounts, d.goals);
   const stale = reward && !options.some((a) => a.id === reward) ? (d.accounts.find((a) => a.id === reward) ?? { id: reward, name: reward }) : undefined;
   return (
@@ -1153,7 +1153,15 @@ export function ConfigSheet({ d, onClose, onSaved }: { d: SettingsData; onClose:
       <Field id="c-salary" label="Ngưỡng tự nhận lương" error={errors.salary_min_amount} first>
         <AmountInput id="c-salary" value={salary} onChange={setSalary} />
       </Field>
-      <Hint>Khoản khớp mẫu lương từ mức này trở lên thì tự ghi (nguồn bật “Mở kỳ lương” thì mở kỳ lương); nhỏ hơn thì chờ ở màn Gán như mọi tiền vào khác. Để 0 là không có ngưỡng.</Hint>
+      <Hint>Khoản khớp mẫu lương từ mức này trở lên thì tự ghi; nhỏ hơn thì chờ ở màn Gán như mọi tiền vào khác. Để 0 là không có ngưỡng.</Hint>
+      {reminder !== undefined && (
+        <>
+          <Field id="c-reminder" label="Ngưỡng nhắc trích Tích luỹ" error={errors.salary_reminder_min}>
+            <AmountInput id="c-reminder" value={reminder} onChange={setReminder} />
+          </Field>
+          <Hint>Khoản thu không chọn nguồn từ mức này trở lên thì ô “Đây là lương” bật sẵn (lương về có nhắc trích Tích luỹ); người ghi / người gán tắt được.</Hint>
+        </>
+      )}
       <Field id="c-interest" label="Lãi tiền gửi: tự ghi khoản dưới" error={errors.interest_max_amount}>
         <AmountInput id="c-interest" value={interest} onChange={setInterest} />
       </Field>
@@ -1161,14 +1169,14 @@ export function ConfigSheet({ d, onClose, onSaved }: { d: SettingsData; onClose:
       <Field id="c-months" label="Phần an tâm (số tháng vận hành)" error={errors.safety_fund_months}>
         <input id="c-months" class="ctl money" inputMode="numeric" pattern="[0-9]*" autocomplete="off" value={months} onInput={(ev) => setMonths(ev.currentTarget.value)} {...invalid(errors, "safety_fund_months", "c-months")} />
       </Field>
-      <Hint>Thẻ Dự phòng ở Hôm nay so phần an tâm với số tháng này (chi vận hành trung bình 3 kỳ lương gần nhất).</Hint>
+      <Hint>Thẻ Dự phòng ở Hôm nay so phần an tâm với số tháng này (chi vận hành trung bình 3 tháng trọn gần nhất).</Hint>
       <Field id="c-payday" label="Ngày lương" error={errors.payday_day}>
         <input id="c-payday" class="ctl money" inputMode="numeric" pattern="[0-9]*" autocomplete="off" value={payday} onInput={(ev) => setPayday(ev.currentTarget.value)} {...invalid(errors, "payday_day", "c-payday")} />
       </Field>
-      <Hint>Kỳ vận hành tính từ ngày lương tới trước ngày lương tháng sau; tháng ít ngày hơn lấy ngày cuối tháng. Thẻ Vận hành ở Hôm nay đếm ngược tới ngày này.</Hint>
+      <Hint>Tháng ít ngày hơn lấy ngày cuối tháng. Thẻ Vận hành ở Hôm nay đếm ngược tới ngày này.</Hint>
       {savingsPct !== undefined && (
         <>
-          <Field id="c-savings-pct" label="% Tích luỹ mỗi kỳ lương" error={errors.savings_pct}>
+          <Field id="c-savings-pct" label="% Tích luỹ khi lương về" error={errors.savings_pct}>
             <input
               id="c-savings-pct"
               class="ctl money"
@@ -1186,7 +1194,7 @@ export function ConfigSheet({ d, onClose, onSaved }: { d: SettingsData; onClose:
       )}
       {surplusPct !== undefined && (
         <>
-          <Field id="c-surplus-pct" label="Dư cuối kỳ vào Tích luỹ (%)" error={errors.surplus_savings_pct}>
+          <Field id="c-surplus-pct" label="Dư cuối tháng vào Tích luỹ (%)" error={errors.surplus_savings_pct}>
             <input
               id="c-surplus-pct"
               class="ctl money"
@@ -1209,17 +1217,18 @@ export function ConfigSheet({ d, onClose, onSaved }: { d: SettingsData; onClose:
               ))}
             </select>
           </Field>
-          <Hint>Lương mở kỳ mới thì dư Vận hành kỳ trước gợi ý chia: phần trăm này vào Tích luỹ, còn lại chuyển vào Ví Thưởng (một tài khoản ngăn Dự phòng không gắn mục tiêu). Chưa chọn Ví Thưởng thì phần còn lại ở Vận hành.</Hint>
+          <Hint>Từ ngày 1, Hôm nay hỏi chia dư Vận hành của tháng vừa hết: phần trăm này vào Tích luỹ, còn lại chuyển vào Ví Thưởng (một tài khoản ngăn Dự phòng không gắn mục tiêu). Chưa chọn Ví Thưởng thì phần còn lại ở Vận hành.</Hint>
         </>
       )}
       <Footer
         busy={busy}
         error={error}
-        label="Lưu tham số"
+        label="Lưu lại"
         onSubmit={() =>
           void run(
             configPayload({
               salary_min_amount: salary,
+              salary_reminder_min: reminder,
               interest_max_amount: interest,
               safety_fund_months: months,
               surplus_savings_pct: surplusPct,
@@ -1228,7 +1237,7 @@ export function ConfigSheet({ d, onClose, onSaved }: { d: SettingsData; onClose:
               savings_pct: savingsPct,
             }),
             (body) => api.put("/v1/settings/config", body),
-            "Đã lưu tham số. Áp dụng từ kỳ lương tới.",
+            "Đã lưu. Áp dụng từ khoản thu tới.",
           )
         }
       />
@@ -1236,7 +1245,7 @@ export function ConfigSheet({ d, onClose, onSaved }: { d: SettingsData; onClose:
   );
 }
 
-/** Tham số nhóm "Tài sản & tự do" (access UC-507 AC-16): ô % cho tỷ lệ, chi phí tháng để trống = theo sổ, năm sinh, tuổi mục tiêu. */
+/** Tham số nhóm "Báo cáo" (access UC-507 AC-16): ô % cho tỷ lệ, chi phí tháng để trống = theo sổ, năm sinh, tuổi mục tiêu. */
 export function FiConfigSheet({ config, onClose, onSaved }: { config: SettingsConfig; onClose: () => void; onSaved: Saved }) {
   const [f, setF] = useState<FiConfigForm>(() => fiConfigToForm(config));
   const set = (patch: Partial<FiConfigForm>) => setF((x) => ({ ...x, ...patch }));
@@ -1247,7 +1256,7 @@ export function FiConfigSheet({ config, onClose, onSaved }: { config: SettingsCo
     </Field>
   );
   return (
-    <Sheet open title="Tài sản & tự do" onClose={onClose}>
+    <Sheet open title="Báo cáo" onClose={onClose}>
       {pct("fi-swr", "swr", "Tỷ lệ rút an toàn (SWR) %", true)}
       {pct("fi-inf", "inflation", "Lạm phát %/năm")}
       {pct("fi-fat", "fat", "Hệ số dự phòng Tự do 2 %")}
@@ -1276,8 +1285,8 @@ export function FiConfigSheet({ config, onClose, onSaved }: { config: SettingsCo
       <Footer
         busy={busy}
         error={error}
-        label="Lưu tham số"
-        onSubmit={() => void run(fiConfigPayload(f, new Date().getFullYear()), (body) => api.put("/v1/settings/config", body), "Đã lưu tham số Tài sản & tự do.")}
+        label="Lưu lại"
+        onSubmit={() => void run(fiConfigPayload(f, new Date().getFullYear()), (body) => api.put("/v1/settings/config", body), "Đã lưu tham số Báo cáo.")}
       />
     </Sheet>
   );
@@ -1317,14 +1326,14 @@ export function NotifyScheduleSheet({ schedule, onClose, onSaved }: { schedule: 
       </Field>
       <Hint>Thứ Hai đến thứ Bảy tổng kết tuần vừa hết; Chủ nhật tổng kết tuần đang kết thúc hôm đó.</Hint>
       <div class="set-sub">Giao dịch chưa gán</div>
-      <Check id="n-pending-on" label="Báo giao dịch chưa gán (kiểm tra mỗi 15 phút)" checked={f.pendingEnabled} onChange={(v) => set({ pendingEnabled: v })} />
+      <Check id="n-pending-on" label="Nhắc giao dịch chưa gán (mỗi 15 phút)" checked={f.pendingEnabled} onChange={(v) => set({ pendingEnabled: v })} />
       <Field id="n-quiet-start" label="Yên lặng từ" error={errors.quiet_start}>
         {time("n-quiet-start", "quietStart", "quiet_start")}
       </Field>
       <Field id="n-quiet-end" label="Đến" error={errors.quiet_end}>
         {time("n-quiet-end", "quietEnd", "quiet_end")}
       </Field>
-      <Hint>Trong giờ yên lặng không báo; giao dịch chưa gán gom lại thành một tin lúc hết giờ yên lặng. Đặt hai giờ bằng nhau là không có giờ yên lặng.</Hint>
+      <Hint>Trong giờ yên lặng app không nhắn; giao dịch chưa gán gom gửi một tin lúc hết giờ. Đặt hai giờ bằng nhau để tắt.</Hint>
       <Footer busy={busy} error={error} label="Lưu giờ nhắc" onSubmit={() => void run(notifyPayload(f), (body) => api.patch("/v1/settings/notify-schedule", body), "Đã lưu giờ nhắc cho cả nhà.")} />
     </Sheet>
   );
@@ -1336,7 +1345,7 @@ export function StreamSheet({ d, item, onClose, onSaved }: { d: SettingsData; it
   const [f, setF] = useState(() => streamToForm(item));
   const { busy, error, errors, run } = useSubmit(onSaved, onClose);
   const isNew = !item;
-  // Nguồn cho thuê không mở kỳ lương (pocket UC-1205): không có công tắc.
+  // Nguồn cho thuê không bao giờ là nguồn lương (pocket UC-1205): không có công tắc.
   const rental = useResource<Rental>("/v1/rental");
   const isRental = !!item && rental.data?.incomeStreamId === item.id;
 
@@ -1353,7 +1362,7 @@ export function StreamSheet({ d, item, onClose, onSaved }: { d: SettingsData; it
       <Field id="s-name" label="Tên" error={errors.name} first>
         <input id="s-name" class="ctl" value={f.name} maxLength={60} placeholder="Lương vợ" onInput={(ev) => setF({ ...f, name: ev.currentTarget.value })} {...invalid(errors, "name", "s-name")} />
       </Field>
-      <Field id="s-pocket" label="Ngăn của tiền về">
+      <Field id="s-pocket" label="Ngăn nhận tiền">
         <select id="s-pocket" class="ctl" value={f.pocket ?? ""} onChange={(ev) => setF({ ...f, pocket: (ev.currentTarget.value || null) as Pocket | null })}>
           <option value="">Theo tài khoản nhận</option>
           {(["savings", "reserve", "operating"] as const).map((p) => (
@@ -1363,11 +1372,11 @@ export function StreamSheet({ d, item, onClose, onSaved }: { d: SettingsData; it
           ))}
         </select>
       </Field>
-      <Hint>Theo tài khoản nhận: tiền về tài khoản ngăn nào là tiền của ngăn đó. Chọn một ngăn khi tiền của nguồn này thuộc ngăn khác (vd tiền thuê là Tích luỹ).</Hint>
+      <Hint>Theo tài khoản nhận: tiền về tài khoản ngăn nào thì vào ngăn đó. Chọn riêng nếu nguồn này thuộc ngăn khác (như tiền cho thuê vào ngăn Tích luỹ).</Hint>
       {!isRental && (
         <>
-          <Check id="s-opens-cycle" label="Mở kỳ lương" checked={f.opens_cycle} onChange={(v) => setF({ ...f, opens_cycle: v })} error={errors.opens_cycle} />
-          <Hint>{OPENS_CYCLE_HINT}</Hint>
+          <Check id="s-is-salary" label="Nguồn lương" checked={f.is_salary} onChange={(v) => setF({ ...f, is_salary: v })} error={errors.is_salary} />
+          <Hint>{SALARY_STREAM_HINT}</Hint>
         </>
       )}
       {!isNew && <Check id="s-active" label="Đang dùng" checked={f.active} onChange={(v) => setF({ ...f, active: v })} />}
@@ -1411,11 +1420,11 @@ export function TenantSheet({ item, onClose, onSaved }: { item: TenantSummary | 
               ]}
             />
           )}
-          <Hint>Số người thuê đang nợ lúc bắt đầu dùng sổ. Để 0 nếu không có.</Hint>
+          <Hint>Số tiền người thuê nợ lúc mở sổ. Để 0 nếu không có.</Hint>
         </>
       )}
       {!isNew && <Check id="t-active" label="Đang ở" checked={f.active} onChange={(v) => setF({ ...f, active: v })} />}
-      {!isNew && !f.active && <Hint>Tắt sau khi đã gửi bản tính tháng cuối. Số dư khác 0 thì vẫn hiện ở màn Người thuê tới khi về 0.</Hint>}
+      {!isNew && !f.active && <Hint>Tắt khi đã gửi bản tính tháng cuối. Còn nợ hay trả dư thì vẫn hiện ở màn Người thuê tới khi về 0.</Hint>}
       <Footer busy={busy} error={error} label={isNew ? "Thêm người thuê" : "Lưu người thuê"} onSubmit={submit} />
     </Sheet>
   );
@@ -1426,7 +1435,7 @@ export function RentalConfigSheet({ d, rental, onClose, onSaved }: { d: Settings
   const { busy, error, errors, run } = useSubmit(onSaved, onClose);
   return (
     <Sheet open title="Cấu hình cho thuê" onClose={onClose}>
-      <Field id="rc-stream" label="Tiền người thuê vào nguồn" error={errors.income_stream_id} first>
+      <Field id="rc-stream" label="Nguồn thu tiền cho thuê" error={errors.income_stream_id} first>
         <select id="rc-stream" class="ctl" value={stream} onChange={(ev) => setStream(ev.currentTarget.value)} {...invalid(errors, "income_stream_id", "rc-stream")}>
           {!stream && <option value="">Chọn nguồn thu</option>}
           {(d.incomeStreams ?? [])
@@ -1438,7 +1447,7 @@ export function RentalConfigSheet({ d, rental, onClose, onSaved }: { d: Settings
             ))}
         </select>
       </Field>
-      <Hint>Tài khoản nhận tiền (mã QR) chọn trên từng bản tính ở Ví & quỹ › Người thuê.</Hint>
+      <Hint>Tài khoản nhận tiền (mã QR) chọn trên từng bản tính ở Tài khoản › Cho thuê.</Hint>
       <Footer
         busy={busy}
         error={error}
@@ -1467,7 +1476,7 @@ function PocketSelect(props: { id: string; value: Pocket | null; label?: string;
 }
 
 /** Câu của sheet xếp ngăn — cũng là bước 1 của màn chuyển đổi (pocket UC-1208). */
-export const POCKETS_SHEET_NOTE = `${POCKETS_SHEET_HEAD} Thẻ tín dụng để ở Vận hành. Khoản gửi kỳ hạn theo ngăn của tài khoản mẹ. Mỗi khoản phải trả để dành ở một tài khoản Dự phòng; nhiều khoản dùng chung được một tài khoản.`;
+export const POCKETS_SHEET_NOTE = `${POCKETS_SHEET_HEAD} Thẻ tín dụng để ở ngăn Vận hành. Khoản gửi kỳ hạn theo ngăn của tài khoản mẹ. Mỗi khoản phải trả để ở một tài khoản Dự phòng; nhiều khoản dùng chung một tài khoản được.`;
 
 /**
  * Xếp tài khoản vào ngăn (UC-709 AC-35): đổi ngăn từng dòng, Xác nhận gửi một lô PUT /v1/settings/pockets. Tài khoản của mục
@@ -1507,7 +1516,7 @@ export function PocketsSheet({ d, onClose, onSaved }: { d: SettingsData; onClose
                 )}
                 {children.map((c) => (
                   <div key={c.id} class="field child-row">
-                    <span class="k">↳ {c.name}</span>
+                    <span class="k">{c.name}</span>
                     <span class="sub-line">{parentPocketText(a.name)}</span>
                   </div>
                 ))}
@@ -1677,7 +1686,7 @@ export function GoalSheet({ d, item, prefill, onClose, onSaved }: { d: SettingsD
             {chosenNote && <span class="sub-line">{chosenNote}</span>}
           </Field>
           {note && <Hint>{note}</Hint>}
-          <Hint>Để dành ở một tài khoản Dự phòng; nhiều khoản dùng chung được một tài khoản — số dư (gồm cả khoản gửi kỳ hạn của tài khoản đó) chia theo thứ tự ưu tiên (đổi ở danh sách mục tiêu). Chưa có tài khoản thì chưa có việc nạp ở ngày lương.</Hint>
+          <Hint>Để ở tài khoản Dự phòng; nhiều mục tiêu dùng chung một tài khoản được. Tiền trong tài khoản (cả tiền gửi kỳ hạn) sẽ chia theo thứ tự ưu tiên của mục tiêu. Chưa chọn tài khoản thì ngày lương chưa nhắc nạp.</Hint>
         </>
       )}
       <Field id="g-mode" label="Cách đặt số" wrap>
@@ -1804,7 +1813,7 @@ export function GoalOrderSheet({ d, accountId, onClose, onSaved, onReload }: { d
 
   return (
     <Sheet open title={`Đổi thứ tự · ${name}`} onClose={onClose}>
-      <Hint>Số dư lấp mục tiêu đứng trên trước. Kéo tay cầm hoặc bấm ↑ ↓; số dưới mỗi mục tiêu là số sau khi đổi.</Hint>
+      <Hint>Tiền ưu tiên cho mục tiêu ở trên trước. Kéo hoặc bấm ↑ ↓; số dưới mỗi mục tiêu là số sau khi đổi.</Hint>
       <ul class="goal-order">
         {rows.map((r, i) => (
           <li
@@ -1828,7 +1837,7 @@ export function GoalOrderSheet({ d, accountId, onClose, onSaved, onReload }: { d
               onPointerUp={() => setDragging(null)}
               onPointerCancel={() => setDragging(null)}
             >
-              ⋮⋮
+              <Icon name="grip-vertical" size={16} />
             </button>
             <div class="goal-order-main">
               <div>
@@ -1837,15 +1846,15 @@ export function GoalOrderSheet({ d, accountId, onClose, onSaved, onReload }: { d
               <div class="sub-line">{r.text}</div>
             </div>
             <button type="button" class="btn btn-ghost" aria-label={`Đưa ${r.name} lên`} disabled={i === 0} onClick={() => moveTo(r.id, i - 1)}>
-              ↑
+              <Icon name="arrow-up" size={16} />
             </button>
             <button type="button" class="btn btn-ghost" aria-label={`Đưa ${r.name} xuống`} disabled={i === rows.length - 1} onClick={() => moveTo(r.id, i + 1)}>
-              ↓
+              <Icon name="arrow-down" size={16} />
             </button>
           </li>
         ))}
       </ul>
-      <div class="pad">
+      <div class="sheet-foot">
         {problem && (
           <p class="err" role="alert" style={{ margin: "0 0 8px" }}>
             {problem.message}
@@ -1867,7 +1876,7 @@ export function GoalOrderSheet({ d, accountId, onClose, onSaved, onReload }: { d
 }
 
 /**
- * Thêm / sửa nhóm danh mục và hạn mức mềm mỗi kỳ lương (UC-709 AC-39). Sửa thì chọn danh mục vào / ra nhóm ngay
+ * Thêm / sửa nhóm danh mục và hạn mức mềm mỗi tháng (UC-709 AC-39). Sửa thì chọn danh mục vào / ra nhóm ngay
  * (PATCH /v1/categories/:id), không cần bấm Lưu.
  */
 export function GroupSheet({ d, item, onClose, onSaved }: { d: SettingsData; item: CategoryGroup | null; onClose: () => void; onSaved: Saved }) {
@@ -1901,10 +1910,10 @@ export function GroupSheet({ d, item, onClose, onSaved }: { d: SettingsData; ite
         <input id="g-name" class="ctl" value={f.name} maxLength={60} placeholder="Ăn uống" onInput={(ev) => set({ name: ev.currentTarget.value })} {...invalid(errors, "name", "g-name")} />
       </Field>
       <Check id="g-essential" label="Thiết yếu" checked={f.essential} onChange={(v) => set({ essential: v })} />
-      <Field id="g-limit" label="Hạn mức mỗi kỳ lương">
-        <AmountInput id="g-limit" value={f.cycle_limit} onChange={(n) => set({ cycle_limit: n })} />
+      <Field id="g-limit" label="Hạn mức mỗi tháng">
+        <AmountInput id="g-limit" value={f.monthly_limit} onChange={(n) => set({ monthly_limit: n })} />
       </Field>
-      <Hint>Để trống là không đặt. Hạn mức mềm chỉ để nhìn lại, không giữ tiền, không âm, không bù.</Hint>
+      <Hint>Để trống là không đặt. Hạn mức mềm chỉ để theo dõi, không giữ tiền, không âm, không bù.</Hint>
       {!isNew && <Check id="g-active" label="Đang dùng" checked={f.active} onChange={(v) => set({ active: v })} />}
       <Footer
         busy={busy}

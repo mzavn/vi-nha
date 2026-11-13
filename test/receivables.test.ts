@@ -45,7 +45,7 @@ async function seedReceivable(amount = 2_000_000) {
   return res.json.data;
 }
 
-/** Lương 20tr vào VCB, nguồn mở kỳ: kỳ lương mở (không chia ví từ v2). */
+/** Lương 20tr vào VCB, nguồn lương: có nhắc trích Tích luỹ (không chia ví từ v2). */
 async function salary() {
   const income = await call<EntryData>("POST", "/v1/transactions", { meaning: "income", amount: 20_000_000, account_id: "vcb-husband", income_stream_id: "salary-husband", at: "2026-10-01T02:00:00.000Z" });
   expect(income.status).toBe(201);
@@ -232,23 +232,23 @@ describe("tiền cho vay về không phải thu nhập (ADR-72)", () => {
     expect(await receivable()).toMatchObject({ lent: 300_000, collected: 300_000, balance: 0, done: true });
   });
 
-  it("collect không đổi 'còn để chi tuần này', không vào đã tiêu, không phải thu nhập (không kỳ, không việc) — chỉ tiền chi được tăng (tiền thật về tài khoản)", async () => {
+  it("collect không đổi 'còn để chi tuần này', không vào đã tiêu, không phải thu nhập (không nhắc trích) — chỉ tiền chi được tăng (tiền thật về tài khoản)", async () => {
     await salary();
     await seedReceivable();
     const snapshot = async () => (await call<{ nearSpend: { amount: number }; pockets: { operating: { total: number } } }>("GET", "/v1/snapshot")).json.data;
     const spent = () => raw.prepare("SELECT category_id, spent FROM v_spend_by_category ORDER BY category_id").all();
-    const cycleRows = () => raw.prepare("SELECT (SELECT COUNT(*) FROM pay_cycles) AS cycles, (SELECT COUNT(*) FROM pay_cycle_tasks) AS tasks").get();
+    const taskRows = () => raw.prepare("SELECT COUNT(*) AS n FROM month_tasks").get();
     const { nearSpend: cashBefore, pockets: pocketsBefore } = await snapshot();
     const spentBefore = spent();
-    const cyclesBefore = cycleRows();
+    const tasksBefore = taskRows();
     const collect = await tx("collect", 1_500_000, { account_id: "vcb-husband" });
-    expect(collect.json.data.effects).toEqual({ cycle: null, tasksDone: [] });
+    expect(collect.json.data.effects).toEqual({ savings: null, tasksDone: [] });
     const { nearSpend: cashAfter, pockets: pocketsAfter } = await snapshot();
     expect(cashAfter.amount - cashBefore.amount).toBe(1_500_000);
     // Ba ngăn đọc tiền thật như tiền vận hành: tiền về tài khoản Vận hành thì ngăn đó tăng đúng số đó.
     expect(pocketsAfter.operating.total - pocketsBefore.operating.total).toBe(1_500_000);
     expect(spent()).toEqual(spentBefore);
-    expect(cycleRows()).toEqual(cyclesBefore);
+    expect(taskRows()).toEqual(tasksBefore);
   });
 });
 
@@ -414,7 +414,7 @@ describe("trả cho khoản cho vay khi nhập tay (change 261005-lien-ket-khoan
     ]) {
       const bad = await call("POST", `/v1/transactions/${lend2}/replace`, body);
       expect(bad.status).toBe(400);
-      expect(bad.json.error).toMatchObject({ code: "invalid_link", message: "Khoản này đang có khoản trả lại trỏ về — gỡ liên kết trước." });
+      expect(bad.json.error).toMatchObject({ code: "invalid_link", message: "Khoản này đang có khoản trả lại trỏ về: gỡ liên kết trước." });
     }
     expect(raw.prepare("SELECT COUNT(*) n FROM transactions").get()).toEqual(before);
     expect(raw.prepare("SELECT status FROM transactions WHERE id = ?").get(lend2)).toEqual({ status: "active" });

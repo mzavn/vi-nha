@@ -1,0 +1,188 @@
+@layer components {
+.tier .nw-sub span {
+    overflow-wrap: anywhere;
+  }
+
+/* Vốn chủ: số tổng của báo cáo (DESIGN §2.1 --num-total), tên 500. */
+.nw-equity .v {
+    font-size: var(--num-total); line-height: var(--leading-total);
+    letter-spacing: -0.03em;
+  }
+
+.nw-group {
+    padding: 8px 14px 0;
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    font-weight: 600;
+    color: var(--fg-2);
+  }
+
+/* Tháp: thanh tiến độ đứng riêng 4px theo % tổng tài sản, phần đầy --fg-2 (DESIGN §4.9); % ghi bằng chữ dưới số. */
+.nw-tier .track {
+    height: 4px;
+  }
+
+.nw-tier .track i {
+    background: var(--fg-2);
+  }
+
+/* Máy tính: cột mục lục · nội dung phần · thẻ tóm tắt. Dưới 1280px thẻ tóm tắt lên trên nội dung (một cột). */
+.nw-cols {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s3);
+    align-items: start;
+  }
+
+.nw-cols > .dk-panel {
+    order: -1;
+    position: static;
+    max-height: none;
+  }
+
+@media (min-width: 1280px) {
+    .nw-cols {
+      grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+    }
+    .nw-cols > .dk-panel {
+      order: 0;
+      position: sticky;
+      max-height: calc(100dvh - 92px);
+    }
+  }
+
+.nw-lot {
+    align-items: flex-start;
+  }
+
+.nw-lot .srow-amt,
+  .nw-lot > span:last-child {
+    white-space: nowrap;
+    font-weight: 600;
+  }
+
+.nw-act {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin-top: 2px;
+  }
+
+.nw-act .link,
+  .nw-act .btn {
+    min-height: 36px;
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+  }
+
+.nw-total {
+    padding-top: 8px;
+    font-weight: 500;
+    color: var(--fg);
+  }
+
+/* Lưu chuyển tiền, Thu chi: hàng chọn kỳ xuống dòng khi chật; ‹ › đủ 44px. */
+
+.nw-period {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 12px;
+    margin: 0 2px 12px;
+  }
+
+.nw-step {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+.nw-step .btn {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+  }
+
+.nw-step strong {
+    min-width: 7.5em;
+    text-align: center;
+  }
+
+.nw-step-gap {
+    display: inline-block;
+    width: 44px;
+  }
+
+.nw-savings {
+    font-size: var(--text-title); line-height: var(--leading-title);
+    font-weight: 600;
+    line-height: 1.15;
+  }
+
+.nw-tx {
+    align-items: flex-start;
+  }
+
+.nw-tx .srow-amt {
+    white-space: nowrap;
+  }
+
+/* Mốc tự do, Thử số. */
+
+.nw-line {
+    margin: 0 0 4px;
+    overflow-wrap: anywhere;
+  }
+
+.nw-plan-line {
+    border-top: 1px solid var(--line);
+  }
+
+.nw-plan-line .field {
+    gap: 8px;
+    border-top: 0;
+  }
+
+.nw-plan-line .field > .ctl,
+  .nw-plan-line .field > .amt-in {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+.nw-growth {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: none;
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    color: var(--fg-2);
+  }
+
+.nw-growth .ctl {
+    width: 4.5em;
+  }
+
+/* Dải "Số thử" luôn thấy khi cuộn bảng dự phóng (UC-717 AC-4). */
+
+.nw-sticky-warn {
+    position: sticky;
+    top: var(--topbar-h, 56px);
+    z-index: 5;
+    margin-bottom: 12px;
+    background: var(--bg);
+  }
+
+.nw-mini {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 2px 8px;
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    color: var(--fg-2);
+  }
+
+.nw-mini .bar {
+    grid-column: auto;
+    height: 3px;
+  }
+}

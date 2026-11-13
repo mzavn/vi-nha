@@ -42,7 +42,7 @@ export function secretPayload<K extends string>(key: K, text: string): Result<Pa
   const v = text.trim();
   const errors: Errors = {};
   if (!v) errors.secret = "Nhập khoá mới.";
-  else if (/\s/.test(v)) errors.secret = "Khoá không có khoảng trắng ở giữa.";
+  else if (/\s/.test(v)) errors.secret = "Khoá không có dấu cách ở giữa.";
   return done(errors, () => ({ [key]: v }) as Partial<Record<K, string>>);
 }
 
@@ -73,8 +73,8 @@ export function sepayConnectionPayload(f: SepayConnectionForm, existing: { name:
   const token = f.api_token.trim();
   const key = f.webhook_key.trim();
   if (!existing) {
-    if (/\s/.test(token)) errors.api_token = "Token không có khoảng trắng ở giữa.";
-    if (/\s/.test(key)) errors.webhook_key = "Khoá không có khoảng trắng ở giữa.";
+    if (/\s/.test(token)) errors.api_token = "Token không có dấu cách ở giữa.";
+    if (/\s/.test(key)) errors.webhook_key = "Khoá không có dấu cách ở giữa.";
   }
   return done(errors, () => {
     if (!existing) return { name, ...(token ? { api_token: token } : {}), ...(key ? { webhook_key: key } : {}) };
@@ -89,9 +89,9 @@ const SYNC_MAX_DAYS = 31;
 export function syncRangeError(from: string, to: string, today: string): string | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return "Chọn đủ ngày bắt đầu và ngày kết thúc.";
   if (from > to) return "Ngày bắt đầu phải trước hoặc trùng ngày kết thúc.";
-  if (to > today) return "Chưa tới ngày kết thúc — chọn đến hôm nay là xa nhất.";
+  if (to > today) return "Chưa tới ngày kết thúc, chọn đến hôm nay là xa nhất.";
   const days = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000 + 1;
-  if (days > SYNC_MAX_DAYS) return `Mỗi lần đồng bộ tối đa ${SYNC_MAX_DAYS} ngày — chia thành nhiều lần.`;
+  if (days > SYNC_MAX_DAYS) return `Mỗi lần lấy tối đa ${SYNC_MAX_DAYS} ngày, chia thành nhiều lần.`;
   return null;
 }
 
@@ -100,9 +100,9 @@ export function syncRangeError(from: string, to: string, today: string): string 
  * (đã có trong sổ, ADR-113) đếm riêng; kết nối lỗi thì nói, không chỉ "Đã lấy thêm 0 giao dịch" như thể xong xuôi.
  */
 export function sepaySyncText(r: SepaySyncResult): string {
-  const early = r.beforeOpening > 0 ? ` ${r.beforeOpening} giao dịch trước ngày mở sổ — đã có trong số dư đầu, không ghi lại.` : "";
-  const beforeFeed = r.beforeFeed > 0 ? ` ${r.beforeFeed} giao dịch trước mốc theo dõi SePay — đã có trong sổ, không ghi lại.` : "";
-  const failed = r.errors.length > 0 ? " Có chỗ chưa lấy được — xem lý do dưới nút Đồng bộ." : "";
+  const early = r.beforeOpening > 0 ? ` ${r.beforeOpening} giao dịch trước ngày mở sổ, đã có trong số dư đầu, không ghi lại.` : "";
+  const beforeFeed = r.beforeFeed > 0 ? ` ${r.beforeFeed} giao dịch trước mốc theo dõi SePay, đã có trong sổ, không ghi lại.` : "";
+  const failed = r.errors.length > 0 ? " Có chỗ chưa lấy được, xem lý do dưới nút Đồng bộ." : "";
   return `Đã lấy thêm ${r.added} giao dịch, ${r.duplicates} đã có sẵn.${early}${beforeFeed}${failed}`;
 }
 
@@ -138,9 +138,9 @@ export function connectionPicker(connections: SepayConnection[], current: string
 export function bankHint(code: string): string | null {
   const bank = bankByCode(code);
   if (!bank) return null;
-  if (!bank.sepay) return "SePay chưa hỗ trợ — ghi tay.";
-  const flow = bank.sepay.out ? "SePay: báo cả tiền vào lẫn tiền ra." : "SePay: báo tiền vào, chưa báo tiền ra — khoản chi từ tài khoản này nhập tay.";
-  return bank.sepay.vaRequired ? `${flow} SePay chỉ nhận qua tài khoản ảo (VA) — nhập số VA ở ô Tài khoản ảo.` : flow;
+  if (!bank.sepay) return "SePay chưa hỗ trợ, ghi tay.";
+  const flow = bank.sepay.out ? "SePay: báo cả tiền vào lẫn tiền ra." : "SePay: báo tiền vào, chưa báo tiền ra, khoản chi từ tài khoản này nhập tay.";
+  return bank.sepay.vaRequired ? `${flow} SePay chỉ nhận qua tài khoản ảo (VA), nhập số VA ở ô Tài khoản ảo.` : flow;
 }
 
 /** Lời dặn dưới ô "SePay báo cả tiền ra": tài liệu SePay nói gì về chiều ra của ngân hàng này. */
@@ -286,7 +286,7 @@ export function accountPayload(f: AccountForm, existing: SettingsAccount | null,
   const sepay = f.sepay_enabled && !parent;
   if (sepay && f.kind !== "bank") errors.sepay_enabled = "SePay chỉ nối được tài khoản ngân hàng.";
   else if (sepay && !bankByCode(f.bank)?.sepay && (!existing?.sepay_enabled || f.bank !== (existing.bank ?? "") || f.kind !== existing.kind)) errors.sepay_enabled = "SePay chưa hỗ trợ ngân hàng này.";
-  else if (sepay && !accountNo) errors.account_no = "SePay khớp giao dịch theo số tài khoản — nhập số tài khoản.";
+  else if (sepay && !accountNo) errors.account_no = "Nhập số tài khoản để SePay khớp giao dịch.";
   // Mốc theo dõi chỉ gửi khi sửa tài khoản đang / sắp nối SePay; tài khoản mới chưa có gì trong sổ để trùng.
   const feed = existing && sepay && f.kind === "bank" ? f.feed_mode : null;
   if (feed === "time" && !f.feed_from) errors.feed_from = "Chọn giờ bắt đầu theo dõi.";
@@ -317,7 +317,7 @@ export function accountPayload(f: AccountForm, existing: SettingsAccount | null,
 // ── Khoản gửi kỳ hạn: tài khoản con (ADR-140, pwa UC-709 AC-51) ──────
 
 /** Lý do ô "Thuộc tài khoản" tắt (server: E14 / `invalid_parent`). */
-export const PARENT_SEPAY = "Tài khoản đang nối SePay: khoản gửi kỳ hạn không có số báo riêng — tắt SePay trước.";
+export const PARENT_SEPAY = "Tài khoản đang nối SePay: khoản gửi kỳ hạn không có số báo riêng, tắt SePay trước.";
 export const PARENT_REWARD = "Ví Thưởng không là khoản gửi kỳ hạn.";
 
 export const accountParentHint = (parent: string): string => `Khoản gửi kỳ hạn mở từ tài khoản này. Tiền vẫn tính là của ${parent}; mục tiêu gắn ${parent} thấy cả khoản này.`;
@@ -404,7 +404,7 @@ export interface RuleForm {
   by_member_id: string;
   priority: string;
   active: boolean;
-  /** Chỉ cho mã lương (thu nhập): nguồn thu (mở kỳ lương theo cờ của nguồn). */
+  /** Chỉ cho mã lương (thu nhập): nguồn thu (nhắc trích Tích luỹ theo "Nguồn lương" của nguồn). */
   income_stream_id: string;
 }
 
@@ -454,7 +454,7 @@ export function memberPayload(f: { name: string; tg_chat_id: string }, current: 
   const name = f.name.trim();
   if (!name) errors.name = "Nhập tên.";
   const chat = f.tg_chat_id.trim().replace("−", "-");
-  if (chat && !/^-?\d{5,20}$/.test(chat)) errors.tg_chat_id = "chat_id là một dãy số (nhóm thì có dấu - ở đầu).";
+  if (chat && !/^-?\d{5,20}$/.test(chat)) errors.tg_chat_id = "chat_id là dãy số (nhóm thì có dấu - ở đầu).";
   return done(errors, () => ({
     ...(name !== current.name ? { name } : {}),
     ...((chat || null) !== current.tg_chat_id ? { tg_chat_id: chat || null } : {}),
@@ -463,22 +463,29 @@ export function memberPayload(f: { name: string; tg_chat_id: string }, current: 
 
 type ConfigFields = "salary_min_amount" | "interest_max_amount" | "safety_fund_months" | "payday_day";
 
+/** Trần ngưỡng nhắc trích Tích luỹ (`salary_reminder_min`, access UC-507). */
+export const SALARY_REMINDER_MIN_LIMIT = 1e12;
+
 export function configPayload(f: {
   salary_min_amount: number;
+  /** Ngưỡng nhắc trích Tích luỹ (Q1-B, UC-709 AC-55); undefined = bản cài đặt cũ chưa có, không gửi. */
+  salary_reminder_min?: number;
   interest_max_amount: number;
   safety_fund_months: string;
   payday_day: string;
-  /** % Tích luỹ mỗi kỳ lương (UC-507); undefined = bản cài đặt cũ chưa có, không gửi. */
+  /** % Tích luỹ khi lương về (UC-507); undefined = bản cài đặt cũ chưa có, không gửi. */
   savings_pct?: string;
-  /** Dư cuối kỳ vào Tích luỹ (UC-1207); undefined = bản cài đặt cũ chưa có, không gửi. */
+  /** Dư cuối tháng vào Tích luỹ (UC-1207); undefined = bản cài đặt cũ chưa có, không gửi. */
   surplus_savings_pct?: string;
   /** Ví Thưởng: mã tài khoản Dự phòng không gắn mục tiêu (UC-1209 bước 4); "" = chưa chọn. */
   surplus_reward_account?: string;
-}): Result<Required<Pick<SettingsConfig, ConfigFields>> & { savings_pct?: number; surplus_savings_pct?: number; surplus_reward_account?: string | null }> {
+}): Result<Required<Pick<SettingsConfig, ConfigFields>> & { salary_reminder_min?: number; savings_pct?: number; surplus_savings_pct?: number; surplus_reward_account?: string | null }> {
   const errors: Errors = {};
   const months = parseInteger(f.safety_fund_months, 1, 24);
   if (months === null) errors.safety_fund_months = "Số tháng là số nguyên từ 1 đến 24.";
   if (f.salary_min_amount < 0) errors.salary_min_amount = "Ngưỡng không âm.";
+  if (f.salary_reminder_min !== undefined && (!Number.isInteger(f.salary_reminder_min) || f.salary_reminder_min < 0 || f.salary_reminder_min > SALARY_REMINDER_MIN_LIMIT))
+    errors.salary_reminder_min = "Ngưỡng là số nguyên không âm.";
   if (f.interest_max_amount < 0 || f.interest_max_amount > INTEREST_MAX_AMOUNT_LIMIT) errors.interest_max_amount = "Ngưỡng từ 0 đến 10.000.000 ₫ (0 = tắt).";
   const payday = parseInteger(f.payday_day, 1, 31);
   if (payday === null) errors.payday_day = "Ngày lương là số nguyên từ 1 đến 31.";
@@ -488,6 +495,7 @@ export function configPayload(f: {
   if (surplusPct === null) errors.surplus_savings_pct = "Phần trăm từ 0 đến 100.";
   return done(errors, () => ({
     salary_min_amount: f.salary_min_amount,
+    ...(f.salary_reminder_min === undefined ? {} : { salary_reminder_min: f.salary_reminder_min }),
     interest_max_amount: f.interest_max_amount,
     safety_fund_months: months!,
     payday_day: payday!,
@@ -511,7 +519,7 @@ export const TAX_OWN_ACCOUNT = "Thuế cần tài khoản riêng";
 /** 409 `tax_account_shared`. */
 export const TAX_ACCOUNT_SHARED = "Thuế cần tài khoản riêng: thuế đã nộp đếm mọi khoản chi từ tài khoản này.";
 /** 400 `invalid_order` của `PUT /v1/settings/goals/order`. */
-export const ORDER_CHANGED = "Danh sách mục tiêu vừa đổi ở máy khác — tải lại.";
+export const ORDER_CHANGED = "Danh sách mục tiêu vừa đổi ở máy khác, tải lại.";
 
 /** Tài khoản Dự phòng đang dùng chưa gắn mục tiêu đang dùng nào — chỗ chọn Ví Thưởng ở Tham số (UC-709 AC-43). */
 export function rewardAccountOptions(accounts: SettingsAccount[], goals: ReserveGoal[]): SettingsAccount[] {
@@ -577,57 +585,76 @@ export function goalSubmitError(err: unknown, accounts: { id: string; name: stri
   return { field: null, message: errorText(err) };
 }
 
-/** Phần "đã có A / B" của một mục tiêu kèm "đã chi X kỳ này" và "đủ" (A + đã chi ≥ B) — chung cho dòng danh sách và xem trước. */
+/** Phần "đã có A / B" của một mục tiêu kèm "đã chi X tháng này" và "đủ" (A + đã chi ≥ B) — chung cho dòng danh sách và xem trước. */
 function heldText(held: number, need: number | null, spent: number, where: string | null): string {
   const parts = [`đã có ${moneyDigits(held)}${need !== null ? ` / ${moneyDigits(need)}` : ""}`];
   if (where !== null) parts.push(`trong ${where}`);
-  if (spent > 0) parts.push(`đã chi ${moneyDigits(spent)} kỳ này`);
+  if (spent > 0) parts.push(`đã chi ${moneyDigits(spent)} tháng này`);
   if (need !== null && held + spent >= need) parts.push("đủ");
   return parts.join(" · ");
 }
 
 /**
- * Một dòng ở Cài đặt › Ba ngăn › Mục tiêu Dự phòng (UC-709 AC-36): "Học phí · đã có 4.000.000 / 6.000.000 · trong BIDV ·
- * hạn 15/01/2027 · 2.000.000/tháng, 3 tháng một lần"; trong nhóm tài khoản chung (`shared`) bỏ "trong {tài khoản}"; đã chi
- * > 0 thêm "đã chi X kỳ này"; "đủ" theo đã có + đã chi; chưa gắn → "Bảo dưỡng xe · chưa có tài khoản · hạn 31/03/2027".
+ * Một hàng ở Cài đặt › Ba ngăn › Mục tiêu Dự phòng (UC-709 AC-36; DESIGN §4.5 tối đa một dòng phụ): tên nổi bật; bên phải đã có
+ * (quá B hiện bằng B — phần dư chỉ ở dòng nhóm); chip "Đủ" / "Thiếu X" theo đã có + đã chi; thanh tiến độ (đã có + đã chi) / B;
+ * dòng phụ ngắn "10% thu chịu thuế" / "hạn …" (chip đã nói phần thiếu nên không lặp "cần B" — 390px vẫn một dòng). Đã chi, số
+ * mỗi tháng, mấy tháng một lần, tài khoản chỉ ở sheet mục tiêu. Chưa gắn tài khoản → không số, không chip, `needsAccount`,
+ * dòng phụ "cần B · hạn …".
  */
-export function goalLineText(g: ReserveGoal, accounts: { id: string; name: string }[], shared = false): string {
-  const parts = [g.name];
-  if (g.account_id) {
-    const where = shared ? null : (accounts.find((a) => a.id === g.account_id)?.name ?? g.account_id);
-    parts.push(heldText(g.held ?? 0, g.target_pct !== null ? null : g.target_amount, g.spent, where));
-  } else parts.push("chưa có tài khoản");
-  if (g.target_pct !== null) parts.push(`${g.target_pct}% thu chịu thuế`);
-  if (g.due_date) parts.push(`hạn ${dueText(g.due_date)}`);
-  if (g.monthly_amount !== null && g.repeat_months !== null) {
-    parts.push(g.repeat_months === 1 ? `${moneyDigits(g.monthly_amount)}/tháng` : `${moneyDigits(g.monthly_amount)}/tháng, ${g.repeat_months} tháng một lần`);
+export interface GoalRowView {
+  name: string;
+  amount: string | null;
+  chip: { text: string; tone: "ok" | "warn" } | null;
+  pct: number | null;
+  sub: string | null;
+  needsAccount: boolean;
+}
+
+export function goalRowView(g: ReserveGoal): GoalRowView {
+  const sub: string[] = [];
+  let amount: string | null = null;
+  let chip: GoalRowView["chip"] = null;
+  let pct: number | null = null;
+  const need = g.target_pct !== null ? null : g.target_amount;
+  if (!g.account_id) {
+    if (need !== null) sub.push(`cần ${moneyDigits(need)}`);
+  } else if (need === null) amount = formatVnd(g.held ?? 0);
+  else {
+    const held = g.held ?? 0;
+    const covered = held + g.spent;
+    amount = formatVnd(Math.min(held, need));
+    pct = need > 0 ? Math.min(100, (Math.max(0, covered) / need) * 100) : 100;
+    chip = covered >= need ? { text: "Đủ", tone: "ok" } : { text: `Thiếu ${moneyDigits(need - covered)}`, tone: "warn" };
   }
-  return parts.join(" · ");
+  if (g.target_pct !== null) sub.push(`${g.target_pct}% thu chịu thuế`);
+  if (g.due_date) sub.push(`hạn ${dueText(g.due_date)}`);
+  return { name: g.name, amount, chip, pct, sub: sub.length ? sub.join(" · ") : null, needsAccount: g.active && !g.account_id };
 }
 
 /**
- * Một nhóm của danh sách mục tiêu (UC-709 bước 4u): `title` null = mục tiêu một mình / đã ngừng dùng; `reorder` = có nút Đổi
- * thứ tự (cùng dòng tiêu đề); `note` = "Tiền lãi {I} (không tính vào mục tiêu)" khi nhóm có tiền lãi.
+ * Một nhóm của danh sách mục tiêu (UC-709 bước 4u): `head` = đầu nhóm tài khoản chung (tên, số dư gộp, một dòng phụ "{n} mục
+ * tiêu · thiếu X / đủ / dư X"), null = mục tiêu một mình / chưa có tài khoản / đã ngừng dùng; `reorder` = có nút Đổi thứ tự;
+ * `note` = "Tiền lãi {I} (không tính vào mục tiêu)" dưới nhóm khi tài khoản có tiền lãi.
  */
 export interface GoalListGroup {
   key: string;
   accountId: string | null;
-  title: string | null;
+  head: { name: string; balance: string; meta: string } | null;
   shared: boolean;
   reorder: boolean;
   note: string | null;
   goals: ReserveGoal[];
 }
 
-/** Hai phần của danh sách mục tiêu (UC-709 AC-53). */
-export const GOAL_SECTION_LABEL = { account: "Để dành ở tài khoản", operating: "Trả từ tiền chi tiêu mỗi tháng" } as const;
+/** Các phần của danh sách mục tiêu (UC-709 AC-53). */
+export const GOAL_SECTION_LABEL = { account: "Để dành ở tài khoản", none: "Chưa có tài khoản", operating: "Trả từ tiền chi tiêu mỗi tháng" } as const;
 
 const paysOperating = (g: ReserveGoal) => g.pays_from === "operating";
 
 /**
- * Phần "Để dành ở tài khoản": nhóm theo tài khoản mẹ như thẻ Dự phòng (`goal_groups`, thứ tự server, số dư gộp): nhóm chung có
- * dòng "{tài khoản} · {số dư} · {n} mục tiêu · thiếu X / đủ / dư X"; mục tiêu tài khoản đang dùng chưa gắn ở nhóm "Chưa có tài
- * khoản"; mục tiêu ngừng dùng cuối. Mục tiêu trả từ tiền chi tiêu đang dùng ở `operatingGoalLines`.
+ * Phần "Để dành ở tài khoản": nhóm theo tài khoản mẹ như thẻ Dự phòng (`goal_groups`, thứ tự server, số dư gộp); mục tiêu tài
+ * khoản đang dùng chưa gắn ở nhóm `+none` (phần "Chưa có tài khoản"); mục tiêu ngừng dùng ở nhóm `+off` cuối. Mục tiêu trả từ
+ * tiền chi tiêu đang dùng ở `operatingGoalRows`.
  */
 export function goalListGroups(d: Pick<SettingsData, "accounts" | "goals" | "goal_groups">): GoalListGroup[] {
   const byId = new Map(d.goals.map((g) => [g.id, g]));
@@ -636,24 +663,34 @@ export function goalListGroups(d: Pick<SettingsData, "accounts" | "goals" | "goa
     const shared = goals.length > 1;
     const name = d.accounts.find((a) => a.id === grp.account_id)?.name ?? grp.account_id;
     const state = grp.short ? `thiếu ${formatVnd(grp.short)}` : grp.extra ? `dư ${formatVnd(grp.extra)}` : "đủ";
+    const head = shared ? { name, balance: formatVnd(grp.balance), meta: `${goals.length} mục tiêu · ${state}` } : null;
+    // Tiền lãi là câu ghi chú dưới nhóm, không chen vào dòng phụ đầu nhóm (một dòng phụ — DESIGN §4.5, K-010).
     const note = grp.interest ? `Tiền lãi ${formatVnd(grp.interest)} (không tính vào mục tiêu)` : null;
-    return { key: grp.account_id, accountId: grp.account_id, title: shared ? `${name} · ${formatVnd(grp.balance)} · ${goals.length} mục tiêu · ${state}` : null, shared, reorder: shared, note, goals };
+    return { key: grp.account_id, accountId: grp.account_id, head, shared, reorder: shared, note, goals };
   });
   const loose = d.goals.filter((g) => g.active && g.account_id === null && !paysOperating(g));
-  if (loose.length) out.push({ key: "+none", accountId: null, title: "Chưa có tài khoản", shared: false, reorder: false, note: null, goals: loose });
+  if (loose.length) out.push({ key: "+none", accountId: null, head: null, shared: false, reorder: false, note: null, goals: loose });
   const off = d.goals.filter((g) => !g.active);
-  if (off.length) out.push({ key: "+off", accountId: null, title: null, shared: false, reorder: false, note: null, goals: off });
+  if (off.length) out.push({ key: "+off", accountId: null, head: null, shared: false, reorder: false, note: null, goals: off });
   return out;
 }
 
-/** Phần "Trả từ tiền chi tiêu mỗi tháng": "{tên} · {mỗi tháng}/tháng · còn {R_g} kỳ này", theo thứ tự ưu tiên. */
-export function operatingGoalLines(goals: ReserveGoal[]): { goal: ReserveGoal; text: string }[] {
+/**
+ * Phần "Trả từ tiền chi tiêu mỗi tháng", theo thứ tự ưu tiên: tên; bên phải "còn {R_g} tháng này"; dòng phụ "{mỗi tháng}/tháng"
+ * kèm "tháng này đặt X" khi tháng này có số riêng (`monthAmounts`: mã → số riêng, từ `snapshot.pockets.operating.goals`).
+ * Tháng này đặt 0 (bỏ tháng này): bên phải "Tháng này: 0 ₫", dòng phụ chỉ còn "{mỗi tháng}/tháng" — không lặp "còn 0 tháng này".
+ */
+export function operatingGoalRows(goals: ReserveGoal[], monthAmounts: ReadonlyMap<string, number | null> = new Map()): { goal: ReserveGoal; amount: string; sub: string }[] {
   return goals
     .filter((g) => g.active && paysOperating(g))
     .map((g) => {
       const monthly = g.monthly_amount ?? 0;
-      const remaining = g.remaining ?? Math.max(0, monthly - g.spent);
-      return { goal: g, text: `${g.name} · ${moneyDigits(monthly)}/tháng · còn ${moneyDigits(remaining)} kỳ này` };
+      const own = monthAmounts.get(g.id) ?? null;
+      const perMonth = `${moneyDigits(monthly)}/tháng`;
+      if (own === 0) return { goal: g, amount: "Tháng này: 0 ₫", sub: perMonth };
+      const remaining = g.remaining ?? Math.max(0, (own ?? monthly) - g.spent);
+      const sub = [perMonth, ...(own !== null ? [`tháng này đặt ${moneyDigits(own)}`] : [])].join(" · ");
+      return { goal: g, amount: `còn ${moneyDigits(remaining)} tháng này`, sub };
     });
 }
 
@@ -795,11 +832,11 @@ export function goalPayload(f: GoalForm, existing: ReserveGoal | null): Result<R
     const months = parseInteger(f.repeat_months, 1, 12);
     if (f.monthly_amount <= 0) errors.monthly_amount = "Nhập số mỗi tháng.";
     if (months === null) errors.repeat_months = "Số tháng là số nguyên từ 1 đến 12.";
-    else if (f.monthly_amount * months > MAX_TARGET) errors.monthly_amount = "Số cần không quá 1.000.000.000.000.";
+    else if (f.monthly_amount * months > MAX_TARGET) errors.monthly_amount = "Số cần tối đa 1.000.000.000.000.";
     amounts = { ...amounts, monthly_amount: f.monthly_amount, repeat_months: months, target_amount: f.monthly_amount * (months ?? 0) };
   } else if (f.mode === "once") {
     if (f.target_amount <= 0) errors.target_amount = "Nhập số cần.";
-    else if (f.target_amount > MAX_TARGET) errors.target_amount = "Số cần không quá 1.000.000.000.000.";
+    else if (f.target_amount > MAX_TARGET) errors.target_amount = "Số cần tối đa 1.000.000.000.000.";
     amounts = { ...amounts, target_amount: f.target_amount };
   } else {
     const pct = parseInteger(f.target_pct, 1, 100);
@@ -904,7 +941,7 @@ export function fiConfigPayload(f: FiConfigForm, year: number): Result<FiConfig>
     if (v === null || v < min || v > max) errors[key] = `${label} từ ${pctOfBps(min)}% đến ${pctOfBps(max)}%.`;
     return v ?? 0;
   };
-  const swr = bps("swr", f.swr, 100, 1000, "Tỷ lệ rút an toàn");
+  const swr = bps("swr", f.swr, 100, 1000, "Tỉ lệ rút an toàn");
   const inflation = bps("inflation", f.inflation, 0, 2000, "Lạm phát");
   const fat = bps("fat", f.fat, 10000, 20000, "Hệ số dự phòng");
   const legacy = bps("legacy", f.legacy, 50, 1000, "Lãi thực");
@@ -951,27 +988,27 @@ export const WEEKDAY_LABEL: Record<number, string> = { 1: "Thứ Hai", 2: "Thứ
 /** Bắt đầu = kết thúc nghĩa là không đặt giờ yên lặng. */
 export const quietLabel = (s: Pick<NotifySchedule, "quietStart" | "quietEnd">): string => (s.quietStart === s.quietEnd ? "Không đặt" : `${s.quietStart}–${s.quietEnd}`);
 
-/** Các dòng tóm tắt ở thẻ Giờ nhắc. */
+/** Các dòng tóm tắt ở thẻ Giờ nhắc — mỗi hàng một dòng phụ ngắn (DESIGN §4.5, K-010); chi tiết ở ghi chú thẻ và sheet. */
 export function scheduleRows(s: NotifySchedule): { title: string; sub: string; value: string }[] {
   return [
     {
       title: "Tin sáng",
-      sub: s.dailyEnabled ? "Chi khoảng mỗi ngày tới kỳ lương, nhóm gần hạn mức, đối soát, việc cần làm" : "Đang tắt — mở Hôm nay để xem việc cần làm",
+      sub: s.dailyEnabled ? "Chi mỗi ngày, hạn mức, việc cần làm" : "Đang tắt",
       value: s.dailyEnabled ? s.dailyTime : "Tắt",
     },
     {
       title: "Tổng kết tuần",
-      sub: "Chi tuần và chi từ Vận hành, nhóm có hạn mức, top 5 danh mục",
+      sub: "Chi tuần, hạn mức, top 5 danh mục",
       value: s.weeklyEnabled ? `${WEEKDAY_LABEL[s.weeklyDay]} ${s.weeklyTime}` : "Tắt",
     },
     {
       title: "Báo giao dịch chưa gán",
-      sub: s.pendingEnabled ? "Tiền ra/vào chưa biết là gì — kiểm tra mỗi 15 phút (đêm 1–4 giờ: mỗi giờ)" : "Đang tắt — vẫn đếm trong tin sáng và ở màn Gán",
+      sub: s.pendingEnabled ? "Kiểm tra mỗi 15 phút" : "Đang tắt, vẫn đếm ở màn Gán",
       value: s.pendingEnabled ? "Bật" : "Tắt",
     },
     {
       title: "Giờ yên lặng",
-      sub: s.quietStart === s.quietEnd ? "Báo giao dịch chưa gán cả ngày lẫn đêm" : "Giao dịch chưa gán gom lại báo sáng ra",
+      sub: s.quietStart === s.quietEnd ? "Báo cả ngày lẫn đêm" : "Gom lại, báo sáng ra",
       value: quietLabel(s),
     },
   ];
@@ -992,7 +1029,7 @@ export function notifyPayload(f: NotifySchedule): Result<{
   const clocks = { daily_time: f.dailyTime, weekly_time: f.weeklyTime, quiet_start: f.quietStart, quiet_end: f.quietEnd };
   for (const [k, v] of Object.entries(clocks)) {
     const minutes = clockMinutes(v);
-    if (minutes === null || minutes % 15 !== 0) errors[k] = "Giờ phải chia hết cho 15 phút (vd 07:00, 07:15).";
+    if (minutes === null || minutes % 15 !== 0) errors[k] = "Chọn giờ chẵn 15 phút (vd 07:00, 07:15).";
   }
   if (!WEEKDAY_LABEL[f.weeklyDay]) errors.weekly_day = "Chọn một ngày trong tuần.";
   return done(errors, () => ({
@@ -1011,37 +1048,30 @@ export interface StreamForm {
   active: boolean;
   /** Ngăn của tiền về (UC-506); null = theo tài khoản nhận. */
   pocket: Pocket | null;
-  /** "Mở kỳ lương" (pocket UC-1205). */
-  opens_cycle: boolean;
+  /** "Nguồn lương" (pocket UC-1205): lương về từ nguồn này có nhắc trích Tích luỹ. */
+  is_salary: boolean;
 }
 
-export const OPENS_CYCLE_HINT = "Lương về từ nguồn này mở kỳ lương mới và danh sách việc. Nhà hai người lương khác ngày: chỉ bật cho một nguồn.";
+export const SALARY_STREAM_HINT = "Lương về từ nguồn này có nhắc trích Tích luỹ.";
 
 export function streamToForm(s: IncomeStream | null): StreamForm {
-  if (!s) return { name: "", active: true, pocket: null, opens_cycle: false };
-  return { name: s.name, active: s.active, pocket: s.pocket ?? null, opens_cycle: s.opens_cycle ?? false };
+  if (!s) return { name: "", active: true, pocket: null, is_salary: false };
+  return { name: s.name, active: s.active, pocket: s.pocket ?? null, is_salary: s.is_salary };
 }
 
 /**
- * Thân POST/PATCH nguồn thu. Nguồn cho thuê (config `rental_income_stream_id`) không mở kỳ lương: không có công tắc, không gửi
- * `opens_cycle` (server: 400 `cannot_open_cycle`).
+ * Thân POST/PATCH nguồn thu. Nguồn cho thuê (config `rental_income_stream_id`) không bao giờ là nguồn lương: không có công tắc,
+ * không gửi `is_salary` (server: 400 `cannot_be_salary`).
  */
-export function streamPayload(f: StreamForm, isNew: boolean, isRental = false): Result<{ name: string; active?: boolean; pocket: Pocket | null; opens_cycle?: boolean }> {
+export function streamPayload(f: StreamForm, isNew: boolean, isRental = false): Result<{ name: string; active?: boolean; pocket: Pocket | null; is_salary?: boolean }> {
   const errors: Errors = {};
   const name = f.name.trim();
   if (!name) errors.name = "Nhập tên nguồn thu.";
-  return done(errors, () => ({ name, ...(isNew ? {} : { active: f.active }), pocket: f.pocket, ...(isRental ? {} : { opens_cycle: f.opens_cycle }) }));
+  return done(errors, () => ({ name, ...(isNew ? {} : { active: f.active }), pocket: f.pocket, ...(isRental ? {} : { is_salary: f.is_salary }) }));
 }
 
-/** "Mở kỳ lương" · "" — dòng phụ của nguồn ở Cài đặt › Nguồn thu. */
-export const streamSummary = (s: IncomeStream): string => (s.opens_cycle ? "Mở kỳ lương" : "Không mở kỳ lương");
-
-/** Dòng nhắc ở Cài đặt › Nguồn thu (UC-709 AC-45): không nguồn đang dùng nào bật "Mở kỳ lương". Bản lưu cũ thiếu cờ: không nhắc. */
-export function cycleStreamReminder(streams: IncomeStream[]): string | null {
-  const active = streams.filter((s) => s.active);
-  if (active.length === 0 || active.some((s) => s.opens_cycle === undefined)) return null;
-  return active.some((s) => s.opens_cycle) ? null : "Chưa có nguồn nào mở kỳ lương: bật cho nguồn lương chính để lương về có danh sách việc.";
-}
+/** "Nguồn lương" · "" — dòng phụ của nguồn ở Cài đặt › Nguồn thu. */
+export const streamSummary = (s: IncomeStream): string => (s.is_salary ? "Nguồn lương" : "");
 
 // ── Nhật ký thay đổi ──────────────────────────────────────────────
 
@@ -1061,8 +1091,8 @@ export const AUDIT_ACTION: Record<AuditAction | "income.allocate" | "month.close
   "push.add": "Thêm máy nhận thông báo",
   "push.remove": "Gỡ máy nhận thông báo",
   "session.revoke_all": "Đăng xuất mọi máy",
-  "mcp.connect": "Nối ứng dụng AI",
-  "mcp.revoke": "Gỡ kết nối ứng dụng AI",
+  "mcp.connect": "Nối Trợ lý AI",
+  "mcp.revoke": "Gỡ kết nối Trợ lý AI",
   "tx.create": "Ghi giao dịch",
   "log.assign": "Gán giao dịch ngân hàng",
   "income.allocate": "Chia khoản thu",
@@ -1075,6 +1105,15 @@ export const AUDIT_ACTION: Record<AuditAction | "income.allocate" | "month.close
   "tenant.bill_item": "Claude sửa khoản bản tính",
   "month.close": "Chốt tháng",
   "pay_cycle.open": "Mở kỳ lương",
+  "month_task.done": "Đã chuyển theo nhắc trích Tích luỹ",
+  "month_task.skip": "Bỏ qua nhắc trích Tích luỹ",
+  "month_task.reopen": "Hoàn tác nhắc trích Tích luỹ",
+  "month_task.amount": "Sửa số trích Tích luỹ",
+  "month_close.split": "Chia dư cuối tháng",
+  "month_close.skip": "Để dư cuối tháng lại Vận hành",
+  "month_close.reopen": "Hoàn tác chia dư cuối tháng",
+  "goal.month_amount": "Đặt số tháng này cho khoản phải trả",
+  "tx.salary": "Đổi 'Đây là lương' của khoản thu",
   "pay_cycle.void": "Huỷ kỳ lương",
   "pay_cycle_task.done": "Xong việc ngày lương",
   "pay_cycle_task.skip": "Bỏ qua việc ngày lương",
@@ -1088,6 +1127,7 @@ export const AUDIT_ACTION: Record<AuditAction | "income.allocate" | "month.close
   "income_stream.create": "Thêm nguồn thu",
   "income_stream.update": "Sửa nguồn thu",
   "log.ignore": "Bỏ qua giao dịch ngân hàng",
+  "log.unignore": "Hoàn tác bỏ qua giao dịch ngân hàng",
   "category.create": "Thêm danh mục",
   "category.update": "Sửa danh mục",
   "category_group.create": "Thêm nhóm danh mục",
@@ -1095,7 +1135,7 @@ export const AUDIT_ACTION: Record<AuditAction | "income.allocate" | "month.close
   "pockets.confirm": "Xác nhận ngăn tài khoản",
   "goal.order": "Đổi thứ tự mục tiêu",
   "goal.cycle_amount": "Đặt số kỳ này cho khoản phải trả",
-  "config.update": "Sửa tham số",
+  "config.update": "Sửa ngưỡng và tỉ lệ",
   "member.create": "Thêm thành viên",
   "member.activate": "Bật lại thành viên",
   "member.deactivate": "Tắt thành viên",

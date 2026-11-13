@@ -47,12 +47,12 @@ describe("Mốc tự do: câu chữ", () => {
 
   it("UC-1103 AC-3: Mốc an tâm — \"Có 156.000.000 ₫ · cần 120.000.000 ₫ · 6 tháng\"; chưa có E thì chỉ \"Có …\" và câu cần chi phí", () => {
     expect(safetyText({ key: "A1", months: 6, need: 120_000_000, have: 156_000_000, pct: 130, reached: true })).toBe(vnd("Có 156.000.000 ₫ · cần 120.000.000 ₫ · 6 tháng"));
-    expect(safetyText({ key: "A1", months: 6, need: null, have: 30_000_000, pct: null, reached: null })).toBe(vnd("Có 30.000.000 ₫ · cần 6 tháng chi phí — Cần chi phí tháng — nhập ở Tham số hoặc chờ đủ 3 tháng"));
+    expect(safetyText({ key: "A1", months: 6, need: null, have: 30_000_000, pct: null, reached: null })).toBe(vnd("Có 30.000.000 ₫ · cần 6 tháng chi phí · Cần chi phí tháng — nhập ở Tham số hoặc chờ đủ 3 tháng"));
   });
 
   it("UC-1103 AC-4: mốc thu nhập — đạt / còn thiếu; thu nhập theo kế hoạch ghi \"theo kế hoạch\"; không có số → \"chưa có số\"", () => {
-    expect(incomeMilestoneText({ key: "M2p", need: 33_333_334, have: 45_000_000, reached: true })).toBe(vnd("Thu nhập 45.000.000 ₫ · cần 33.333.334 ₫ — đạt"));
-    expect(incomeMilestoneText({ key: "M3", need: 40_000_000, have: 30_000_000, reached: false })).toBe(vnd("Thu nhập 30.000.000 ₫ · cần 40.000.000 ₫ — còn thiếu 10.000.000 ₫"));
+    expect(incomeMilestoneText({ key: "M2p", need: 33_333_334, have: 45_000_000, reached: true })).toBe(vnd("Thu nhập 45.000.000 ₫ · cần 33.333.334 ₫ · đạt"));
+    expect(incomeMilestoneText({ key: "M3", need: 40_000_000, have: 30_000_000, reached: false })).toBe(vnd("Thu nhập 30.000.000 ₫ · cần 40.000.000 ₫ · còn thiếu 10.000.000 ₫"));
     expect(incomeMilestoneText({ key: "M2", need: 20_000_000, have: null, reached: null })).toBe("chưa có số");
     expect(incomeSourceText("plan")).toBe("theo kế hoạch");
     expect(incomeSourceText("ledger")).toBe("theo sổ, 3 tháng gần nhất");
@@ -63,7 +63,7 @@ describe("Mốc tự do: câu chữ", () => {
     const f1 = { key: "F1" as const, need: 5_142_857_143, have: 486_000_000, pct: 9.4, cashflowNeed: 15_000_000, cashflowHave: 104_166, reached: false, target: null };
     expect(freedomHaveText(f1)).toBe(vnd("Tài sản đầu tư trừ nợ 486.000.000 ₫ / cần 5.142.857.143 ₫"));
     expect(freedomCashflowText(f1)).toBe(vnd("hoặc dòng tiền ròng 104.166 ₫ / cần 15.000.000 ₫"));
-    expect(freedomHaveText({ ...f1, need: null })).toBe(vnd("Tài sản đầu tư trừ nợ 486.000.000 ₫ — Cần chi phí tháng — nhập ở Tham số hoặc chờ đủ 3 tháng"));
+    expect(freedomHaveText({ ...f1, need: null })).toBe(vnd("Tài sản đầu tư trừ nợ 486.000.000 ₫ · Cần chi phí tháng — nhập ở Tham số hoặc chờ đủ 3 tháng"));
   });
 
   it("UC-1103 AC-2: F1 \"45 tuổi · năm 2035 · còn 9 năm · ≈ 7,01 tỷ ₫ theo giá 2035\"; F2 \"≈ 12,21 tỷ ₫ theo giá 2040\"", () => {

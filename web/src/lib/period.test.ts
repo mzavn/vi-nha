@@ -30,8 +30,8 @@ describe("nhãn kỳ", () => {
   });
 
   it("ngày và giờ", () => {
-    expect(dayHeading("2026-09-22")).toBe("Thứ Ba 22/9");
-    expect(dayHeading("2026-09-20")).toBe("Chủ nhật 20/9");
+    expect(dayHeading("2026-09-22")).toBe("T3 22/9");
+    expect(dayHeading("2026-09-20")).toBe("CN 20/9");
     expect(shortDate("2026-09-05")).toBe("5/9");
     expect(shortDate("2026-09-21T18:00:00Z")).toBe("22/9");
     expect(timeHM("2026-09-22T07:05:00Z")).toBe("14:05");

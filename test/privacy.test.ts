@@ -226,16 +226,16 @@ describe("luật giấu ở mọi đường (UC-504, ADR-133) — hộ mẫu P",
     expect((await call("POST", "/v1/transactions", { ...refund(101), account_id: "cash-wife" }, "wife")).status).toBe(201);
   });
 
-  it("UC-504 AC-18: lương 20.000.000 về vcb-wife mở kỳ → snapshot của chồng mọi việc có source { hidden: true }; vợ thấy đủ; vợ đã tắt → chồng thấy đủ", async () => {
+  it("UC-504 AC-18: lương 20.000.000 về vcb-wife (nhắc ①) → snapshot của chồng nhắc ① có source { hidden: true }; vợ thấy đủ; vợ đã tắt → chồng thấy đủ", async () => {
     db.exec(`
       UPDATE accounts SET sepay_enabled = 0 WHERE id = 'vcb-wife';
       UPDATE config SET v = '10' WHERE k = 'savings_pct';
     `);
     const income = await call("POST", "/v1/transactions", { meaning: "income", amount: 20_000_000, account_id: "vcb-wife", income_stream_id: "salary-husband", at: "2026-11-12T01:00:00.000Z" }, "wife");
     expect(income.status).toBe(201);
-    expect(income.json.data.effects.cycle).toMatchObject({ opened: true });
+    expect(income.json.data.effects.savings).toEqual({ amount: 2_000_000, pct: 10 });
     const txId = income.json.data.tx.id;
-    const tasks = async (who: string) => (await call("GET", "/v1/snapshot", undefined, who)).json.data.payCycle.tasks as { kind: string; amount: number; status: string; source: unknown }[];
+    const tasks = async (who: string) => (await call("GET", "/v1/snapshot", undefined, who)).json.data.month.tasks as { kind: string; amount: number; status: string; source: unknown }[];
     const husband = await tasks("husband");
     const wife = await tasks("wife");
     expect(husband.find((t) => t.kind === "savings")).toMatchObject({ amount: 2_000_000, status: "open" });
@@ -262,7 +262,7 @@ describe("luật giấu ở mọi đường (UC-504, ADR-133) — hộ mẫu P",
     const assign = { splits: [{ meaning: "income", amount: 3_000_000, tenant_id: "an" }] };
     const wife = (m: string, p: string, b?: unknown) => call(m, p, b, "wife");
     for (const r of [await wife("POST", "/v1/transactions", rent), await wife("POST", "/v1/transactions/110/replace", rent), await wife("POST", "/v1/logs/L1/assign", assign)]) {
-      expect(err(r)).toEqual([400, "tenant_private_account", "Tiền thuê không ghi vào tài khoản riêng tư — chọn tài khoản khác."]);
+      expect(err(r)).toEqual([400, "tenant_private_account", "Tiền thuê không ghi vào Tài khoản riêng tư. Chọn tài khoản khác."]);
     }
     for (const r of [await call("POST", "/v1/transactions", rent), await call("POST", "/v1/logs/L1/assign", assign)]) {
       expect([r.status, r.json.error?.code]).toEqual([403, "private_account"]);
@@ -302,7 +302,7 @@ describe("nhắc chuyển thêm không gợi ý tài khoản riêng tư của ng
     db.exec("UPDATE members SET tg_chat_id = '111' WHERE id = 'husband'");
     await daily({ DB: asD1(db), TG_BOT_TOKEN: "test-token" } as Env, new Date("2026-11-20T00:00:00Z"));
     const { text }: { text: string } = JSON.parse(String(fetchMock.mock.calls[0]![1].body));
-    expect(text.split("\n")[0]).toBe("💰 Vận hành còn 1.000.000 ₫ tới kỳ lương 10/12 (còn 20 ngày) · cần chuyển thêm 2.500.000 ₫ vào tiền chi tiêu (từ Phao)");
+    expect(text.split("\n")[0]).toBe("Vận hành còn 1.000.000 ₫ tới ngày lương 10/12 (còn 20 ngày) · cần chuyển thêm 2.500.000 ₫ vào Tiền vận hành (từ Phao)");
     expect(text).not.toContain("BIDV");
 
     db.exec("UPDATE members SET active = 0 WHERE id = 'wife'");

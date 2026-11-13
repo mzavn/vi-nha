@@ -3,7 +3,7 @@ import { rejectOldFields } from "../domain/entry";
 import { suggestRulePattern } from "../domain/rules";
 import { DomainError } from "../domain/types";
 import type { AppEnv } from "../env";
-import { notifyPayCycle } from "../notify/pay-cycle";
+import { notifySalary } from "../notify/salary";
 import { afterResponse, recordChange } from "../services/audit";
 import * as ingest from "../services/ingest";
 import type { Split, SplitMeaning } from "../services/ingest";
@@ -27,7 +27,7 @@ const SPLIT_MEANINGS: readonly SplitMeaning[] = ["spend", "transfer", "income", 
 function parseSplit(raw: unknown, index: number): Split {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return bad(`splits[${index}] phải là object.`);
   const s = raw as Record<string, unknown>;
-  // Trường cũ (wallet_id, from_wallet_id, wealth_move, allocate, earmark_id…) → 400 model_changed, không ghi gì (ADR-123, ADR-131).
+  // Trường cũ (wallet_id, from_wallet_id, wealth_move, allocate, earmark_id, opens_cycle…) → 400 model_changed, không ghi gì (ADR-123, ADR-131, ADR-144).
   rejectOldFields(s);
   if (typeof s.meaning !== "string" || !SPLIT_MEANINGS.includes(s.meaning as SplitMeaning)) {
     bad(`splits[${index}].meaning phải là một trong: ${SPLIT_MEANINGS.join(", ")}.`);
@@ -38,7 +38,7 @@ function parseSplit(raw: unknown, index: number): Split {
   if (s.link_id !== undefined && s.link_id !== null && (typeof s.link_id !== "number" || !Number.isInteger(s.link_id) || s.link_id <= 0)) {
     bad(`splits[${index}].link_id phải là số nguyên dương.`);
   }
-  if (s.opens_cycle !== undefined && s.opens_cycle !== null && typeof s.opens_cycle !== "boolean") bad(`splits[${index}].opens_cycle là true hoặc false.`);
+  if (s.is_salary !== undefined && s.is_salary !== null && typeof s.is_salary !== "boolean") bad(`splits[${index}].is_salary là true hoặc false.`);
   return {
     meaning: s.meaning as SplitMeaning,
     amount: s.amount as number,
@@ -53,7 +53,7 @@ function parseSplit(raw: unknown, index: number): Split {
     taxable: s.taxable === true,
     asset_kind: typeof s.asset_kind === "string" ? s.asset_kind : null,
     interest: s.interest === true || s.is_interest === true,
-    ...(typeof s.opens_cycle === "boolean" ? { opens_cycle: s.opens_cycle } : {}),
+    ...(typeof s.is_salary === "boolean" ? { is_salary: s.is_salary } : {}),
     note: typeof s.note === "string" ? s.note : null,
     goal_id: typeof s.goal_id === "string" ? s.goal_id : null,
     from_interest: s.from_interest === true,
@@ -96,8 +96,10 @@ logs.post("/logs/:id/assign", async (c) => {
   if (explicit && ruleBlocker) bad(ruleBlocker, "rule_not_allowed");
 
   const result = await ingest.assignLog(c.env.DB, c.req.param("id"), splits, c.get("memberId"), new Date());
-  // Gán khoản lương mở kỳ: báo kỳ lương mới sau khi trả lời (notify UC-412).
-  if (result.effects.cycle?.opened) await afterResponse(c, notifyPayCycle(c.env, result.effects.cycle.payday));
+  // Gán khoản lương có nhắc ①: báo lương về sau khi trả lời (notify UC-412), mỗi khoản lương một tin.
+  if (result.effects.savings) {
+    for (const t of result.transactions) if (t.meaning === "income" && Number(t.is_salary) === 1) await afterResponse(c, notifySalary(c.env, Number(t.id)));
+  }
 
   let rule: Record<string, unknown> | null = null;
   let ruleSkipped: string | null = wantRule ? ruleBlocker : null;
@@ -120,6 +122,13 @@ logs.post("/logs/:id/ignore", async (c) => {
   const result = await ingest.ignoreLog(c.env.DB, id, c.get("memberId"));
   // Không ghi số tiền: ai trong nhà cũng đọc được nhật ký (ingest UC-305, access UC-505).
   await recordChange(c, "log.ignore", `log:${id}`, null);
+  return ok(c, result);
+});
+// Hoàn tác "Bỏ qua" ở màn Chưa gán (ingest UC-305 AC-38): log về chờ gán.
+logs.post("/logs/:id/unignore", async (c) => {
+  const id = c.req.param("id");
+  const result = await ingest.unignoreLog(c.env.DB, id, c.get("memberId"));
+  await recordChange(c, "log.unignore", `log:${id}`, null);
   return ok(c, result);
 });
 

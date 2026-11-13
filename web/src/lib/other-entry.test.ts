@@ -1,22 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { incomeBody, opensCycleDefault, queuedBody, queuedMissing, type QueuedDraft } from "./other-entry";
+import { incomeBody, isSalaryDefault, queuedBody, queuedMissing, type QueuedDraft } from "./other-entry";
 
 const AT = "2026-11-10T03:00:00.000Z";
 const streams = [
-  { id: "salary-husband", opens_cycle: true },
-  { id: "side", opens_cycle: false },
+  { id: "salary-husband", is_salary: true },
+  { id: "side", is_salary: false },
 ];
 
 describe("Ghi thu nhập không chia (pwa UC-705)", () => {
-  it("UC-705 AC-33: nguồn Lương → công tắc 'Lương — mở kỳ lương' bật sẵn, Việc phụ → tắt; lưu → thân có opens_cycle, không allocate / wallet_id", () => {
-    expect(opensCycleDefault(streams, "salary-husband")).toBe(true);
-    expect(opensCycleDefault(streams, "side")).toBe(false);
-    expect(opensCycleDefault(streams, "")).toBe(false);
-    const body = incomeBody({ amount: 20_000_000, at: AT, clientId: "c1", accountId: "main", taxable: false, streamId: "salary-husband", tenantId: "", note: "", opensCycle: true });
-    expect(body).toEqual({ meaning: "income", amount: 20_000_000, at: AT, client_id: "c1", account_id: "main", taxable: false, income_stream_id: "salary-husband", opens_cycle: true });
-    expect(JSON.stringify(body)).not.toMatch(/allocate|wallet|wealth/);
-    // tiền người thuê: không gửi opens_cycle (nguồn cho thuê không mở kỳ)
-    expect(incomeBody({ amount: 4_000_000, at: AT, clientId: "c2", accountId: "main", taxable: false, streamId: "", tenantId: "t1", note: "", opensCycle: true })).not.toHaveProperty("opens_cycle");
+  it("UC-705 AC-33: nguồn Lương → ô 'Đây là lương' bật sẵn, Việc phụ → tắt; lưu → thân có is_salary, không opens_cycle / allocate / wallet_id; tiền người thuê / tiền lãi → không gửi is_salary", () => {
+    expect(isSalaryDefault(streams, "salary-husband", 20_000_000, 5_000_000)).toBe(true);
+    expect(isSalaryDefault(streams, "side", 20_000_000, 5_000_000)).toBe(false);
+    const body = incomeBody({ amount: 20_000_000, at: AT, clientId: "c1", accountId: "main", taxable: false, streamId: "salary-husband", tenantId: "", note: "", isSalary: true });
+    expect(body).toEqual({ meaning: "income", amount: 20_000_000, at: AT, client_id: "c1", account_id: "main", taxable: false, income_stream_id: "salary-husband", is_salary: true });
+    expect(JSON.stringify(body)).not.toMatch(/allocate|wallet|wealth|opens_cycle/);
+    expect(incomeBody({ amount: 4_000_000, at: AT, clientId: "c2", accountId: "main", taxable: false, streamId: "", tenantId: "t1", note: "", isSalary: true })).not.toHaveProperty("is_salary");
+    expect(incomeBody({ amount: 37_000, at: AT, clientId: "c5", accountId: "main", taxable: false, streamId: "", tenantId: "", note: "", isSalary: false, isInterest: true })).not.toHaveProperty("is_salary");
+  });
+
+  it("UC-705 AC-39: không nguồn, ngưỡng nhắc trích 5.000.000 → 20.000.000 bật sẵn, 1.200.000 tắt; tắt tay → gửi is_salary: false (lưu 'không phải lương'); ngưỡng chưa có trong cài đặt → 5.000.000", () => {
+    expect(isSalaryDefault(streams, "", 20_000_000, 5_000_000)).toBe(true);
+    expect(isSalaryDefault(streams, "", 1_200_000, 5_000_000)).toBe(false);
+    expect(isSalaryDefault(streams, "", 5_000_000, undefined)).toBe(true);
+    expect(isSalaryDefault(streams, "", 3_000_000, 2_000_000)).toBe(true);
+    expect(isSalaryDefault(streams, "", 0, 5_000_000)).toBe(false);
+    const off = incomeBody({ amount: 20_000_000, at: AT, clientId: "c6", accountId: "main", taxable: false, streamId: "", tenantId: "", note: "", isSalary: false });
+    expect(off).toMatchObject({ is_salary: false });
+    expect(off).not.toHaveProperty("income_stream_id");
   });
 });
 
@@ -42,7 +52,7 @@ describe("Loại khác không ví (pwa UC-705)", () => {
   });
 
   it("UC-705 AC-38: thu nhập vào khoản gửi với ô 'Đây là tiền lãi' → thân có is_interest: true; tắt ô → không gửi; chuyển ra chọn 'Từ tiền lãi' → from_interest: true, không goal_id; chỉ chi / chuyển mang", () => {
-    const income = { amount: 3_000_000, at: AT, clientId: "c4", accountId: "gui-6t", taxable: false, streamId: "", tenantId: "", note: "", opensCycle: false };
+    const income = { amount: 3_000_000, at: AT, clientId: "c4", accountId: "gui-6t", taxable: false, streamId: "", tenantId: "", note: "", isSalary: false };
     expect(incomeBody({ ...income, isInterest: true })).toMatchObject({ meaning: "income", account_id: "gui-6t", is_interest: true });
     expect(incomeBody({ ...income, isInterest: false })).not.toHaveProperty("is_interest");
     expect(incomeBody(income)).not.toHaveProperty("is_interest");

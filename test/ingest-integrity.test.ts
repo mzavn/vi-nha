@@ -113,24 +113,27 @@ describe("lương giả", () => {
     expect(count("SELECT COUNT(*) n FROM transactions")).toBe(0);
   });
 
-  it("UC-303 AC-10: lương thật (đủ ngưỡng) tự ghi khoản thu và mở kỳ; ngưỡng chỉnh được trong config", async () => {
-    await ingestLog(env.DB, log({ id: "S9", direction: "in", amount: 30_000_000, content: "LUONG THANG 9" }), "webhook", now());
-    expect(count("SELECT COUNT(*) n FROM transactions WHERE meaning = 'income'")).toBe(1);
-    expect(count("SELECT COUNT(*) n FROM pay_cycles WHERE status = 'active'")).toBe(1);
+  it("UC-303 AC-10: lương thật (đủ ngưỡng) tự ghi khoản thu là lương, kèm một nhắc ① (ingestLog trả salaryTxId); ngưỡng chỉnh được trong config", async () => {
+    const res = await ingestLog(env.DB, log({ id: "S9", direction: "in", amount: 30_000_000, content: "LUONG THANG 9" }), "webhook", now());
+    const income = raw.prepare("SELECT id, is_salary FROM transactions WHERE meaning = 'income'").all() as { id: number; is_salary: number }[];
+    expect(income).toHaveLength(1);
+    expect(res.salaryTxId).toBe(income[0]!.id);
+    expect(income[0]!.is_salary).toBe(1);
+    expect(count("SELECT COUNT(*) n FROM month_tasks WHERE kind = 'savings' AND status = 'open'")).toBe(1);
 
     raw.prepare("INSERT INTO config (k, v) VALUES ('salary_min_amount', '50000000')").run();
     await ingestLog(env.DB, log({ id: "S10", direction: "in", amount: 30_000_000, content: "LUONG THANG 10", at: "2026-09-22T05:00:00.000Z" }), "webhook", now());
     expect(raw.prepare("SELECT status FROM bank_logs WHERE id = 'S10'").get()).toEqual({ status: "pending" });
   });
 
-  it("UC-306 AC-7: lương giả lọt qua (đủ ngưỡng) vẫn gỡ được: gỡ gán log thì khoản thu void, kỳ nó mở void cùng mọi việc", async () => {
+  it("UC-306 AC-7: lương giả lọt qua (đủ ngưỡng) vẫn gỡ được: gỡ gán log thì khoản thu void, nhắc ① của nó void", async () => {
     await ingestLog(env.DB, log({ id: "S11", direction: "in", amount: 5_000_000, content: "LUONG THANG 9" }), "webhook", now());
     const income = raw.prepare("SELECT id FROM transactions WHERE log_id = 'S11' AND meaning = 'income'").get() as { id: number };
+    expect(count("SELECT COUNT(*) n FROM month_tasks WHERE status <> 'void'")).toBe(1);
     await unassignTransaction(env.DB, income.id, "husband");
     expect(count("SELECT COUNT(*) n FROM transactions WHERE status = 'active'")).toBe(0);
     expect(raw.prepare("SELECT status FROM bank_logs WHERE id = 'S11'").get()).toEqual({ status: "pending" });
-    expect(count("SELECT COUNT(*) n FROM pay_cycles WHERE status = 'active'")).toBe(0);
-    expect(count("SELECT COUNT(*) n FROM pay_cycle_tasks WHERE status <> 'void'")).toBe(0);
+    expect(count("SELECT COUNT(*) n FROM month_tasks WHERE status <> 'void'")).toBe(0);
   });
 });
 
@@ -144,7 +147,7 @@ describe("ba cách một đồng tiền bị đếm hai lần (red team, số c�
       new Date("2026-09-22T19:00:00.000Z"),
     );
     expect(count("SELECT COUNT(*) n FROM transactions WHERE meaning = 'income' AND status = 'active'")).toBe(1);
-    expect(count("SELECT COUNT(*) n FROM pay_cycles")).toBe(1);
+    expect(count("SELECT COUNT(*) n FROM month_tasks")).toBe(1);
     expect(raw.prepare("SELECT status FROM bank_logs WHERE id = 'api-9f3c'").get()).toEqual({ status: "pending" });
     const pending = await listPendingLogs(env.DB, 50, "husband");
     expect(pending.find((l) => l.id === "api-9f3c")?.suggestion).toMatchObject({ possible_duplicate_of: "wh-77" });
@@ -259,7 +262,7 @@ describe("mốc theo dõi SePay: khoản trước mốc nhập tay được (ADR
     await expect(income("2026-10-15T22:20:00+07:00")).rejects.toMatchObject({
       code: "bank_log_exists",
       status: 409,
-      message: "SePay đã báo khoản này và đã có trong sổ — ghi nữa là hai lần.",
+      message: "SePay đã báo khoản này và có trong sổ, ghi nữa là hai lần.",
     });
     expect(count("SELECT COUNT(*) n FROM transactions WHERE status = 'active'")).toBe(before);
     const again = await createEntry(env.DB, { meaning: "income", amount: 1_500_000, account_id: "mb-husband", at: "2026-10-15T22:20:00+07:00", confirm_duplicate: true }, "husband", today);
@@ -312,8 +315,8 @@ describe("rà lại các bản sửa (reviewer cuối)", () => {
     expect(db.prepare("SELECT status FROM bank_logs WHERE id = 'LS'").get()).toEqual({ status: "pending" });
   });
 
-  it("lương về nhưng ghi kỳ lỗi → không im lặng: không ghi gì, log còn chờ, ghi lại để tin sáng báo", async () => {
-    raw.exec("CREATE TRIGGER boom BEFORE INSERT ON pay_cycles BEGIN SELECT RAISE(ABORT, 'boom'); END");
+  it("lương về nhưng ghi nhắc ① lỗi → không im lặng: không ghi gì, log còn chờ, ghi lại để tin sáng báo", async () => {
+    raw.exec("CREATE TRIGGER boom BEFORE INSERT ON month_tasks BEGIN SELECT RAISE(ABORT, 'boom'); END");
     const res = await ingestLog(env.DB, log({ id: "W1", direction: "in", amount: 30_000_000, content: "LUONG THANG 9" }), "webhook", now());
     expect(res.created).toBe(true);
     expect(count("SELECT COUNT(*) n FROM transactions")).toBe(0);

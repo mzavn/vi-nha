@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, useState } from "preact/hooks";
 import { ApiError, request } from "../lib/api";
+import { EMPTY_STATES } from "../lib/empty-states";
 import { formatVnd, groupDigits, maskAmounts, moneyDigits } from "../lib/money";
 import { dayKey, monthLabel, timeHM } from "../lib/period";
 import { isLegacyTx, LEGACY_LABEL, MEANING_LABEL, txLabel, txSign } from "../lib/transactions";
@@ -12,7 +13,6 @@ import {
   BOOK_PAGE,
   bookPath,
   clearFilters,
-  cycleLabel,
   dateRangeLabel,
   defaultFilter,
   entryDay,
@@ -60,9 +60,9 @@ export function LedgerBook() {
   const nextMonth = stepMonth(filter.month, 1, now);
   const shortQuery = query.trim().length === 1;
   const add = () => go("entry", { entryPreset: { day: entryDay(filter, now), back: "ledger" } });
-  // Kỳ lương (mở từ Nhìn lại) và khoảng ngày cùng thay chỗ tháng: nhãn đầu màn nói kỳ / khoảng, ‹ › mờ.
-  const dateLabel = filter.cycle ? cycleLabel(filter.cycle) : dateRangeLabel(filter.fromDate, filter.toDate);
-  const hasDateRange = Boolean(filter.cycle || filter.fromDate || filter.toDate);
+  // Khoảng ngày thay chỗ tháng: nhãn đầu màn nói khoảng, ‹ › mờ.
+  const dateLabel = dateRangeLabel(filter.fromDate, filter.toDate);
+  const hasDateRange = Boolean(filter.fromDate || filter.toDate);
 
   return (
     <>
@@ -94,7 +94,7 @@ export function LedgerBook() {
             aria-pressed={hasDateRange || filter.month === null}
             onClick={() => {
               if (hasDateRange) {
-                setFilter({ ...filter, cycle: null, fromDate: null, toDate: null, month: defaultFilter(now).month });
+                setFilter({ ...filter, fromDate: null, toDate: null, month: defaultFilter(now).month });
               } else {
                 setFilter({ ...filter, month: filter.month === null ? defaultFilter(now).month : null });
               }
@@ -266,19 +266,16 @@ function BookList({ list, boot, wide, filtered, onClear }: { list: BookRows; boo
     if (list.loading) return <Skeleton rows={6} />;
     if (list.error) {
       return (
-        <Empty title={list.error.offline ? "Không có mạng. Sổ giao dịch cần mạng." : list.error.message}>
-          <div style={{ marginTop: "10px" }}>
-            <button type="button" class="btn" onClick={list.reload}>
-              Tải lại
-            </button>
-          </div>
-        </Empty>
+        <Empty title={list.error.offline ? "Không có mạng. Sổ giao dịch cần mạng." : list.error.message} action="Tải lại" onAction={list.reload} />
       );
     }
     return (
-      <Empty title={filtered ? "Không có giao dịch nào khớp bộ lọc." : "Không có giao dịch nào trong thời gian này."}>
+      <Empty
+        state={filtered ? EMPTY_STATES.ledgerFilter : EMPTY_STATES.ledgerMonth}
+        onAction={filtered ? undefined : () => go("entry", { entryPreset: { back: "ledger" } })}
+      >
         {filtered && (
-          <div style={{ marginTop: "10px" }}>
+          <div class="empty-act-wrap">
             <button type="button" class="btn" onClick={onClear}>
               Bỏ lọc và tìm
             </button>
@@ -296,7 +293,9 @@ function BookList({ list, boot, wide, filtered, onClear }: { list: BookRows; boo
           <thead>
             <tr>
               <th scope="col">Giờ</th>
-              <th scope="col">Số tiền ₫</th>
+              <th scope="col" class="num">
+                Số tiền ₫
+              </th>
               <th scope="col" class="l">
                 Khoản
               </th>
@@ -340,7 +339,7 @@ function BookList({ list, boot, wide, filtered, onClear }: { list: BookRows; boo
           </>
         ) : list.more ? (
           <button type="button" class="btn" disabled={list.loading} onClick={list.loadMore}>
-            {list.loading ? "Đang tải…" : `Tải thêm ${BOOK_PAGE} khoản`}
+            {list.loading ? "Đang tải…" : `Xem thêm ${BOOK_PAGE} khoản`}
           </button>
         ) : (
           <span class="hint">Đã hết các khoản khớp bộ lọc.</span>
@@ -385,6 +384,14 @@ const Legacy = ({ r }: { r: TxRow }) =>
     </>
   ) : null;
 
+const AutoAssigned = ({ r }: { r: TxRow }) =>
+  r.rule_id != null ? (
+    <>
+      {" "}
+      <span class="chip">tự gán</span>
+    </>
+  ) : null;
+
 /** Điện thoại: hai cột — khoản (giờ · ghi chú · tài khoản · người ở dòng phụ) và số tiền. Cả hàng chạm được. */
 function PhoneRow({ r, boot }: { r: TxRow; boot: Bootstrap | null }) {
   const sub = [timeHM(r.at), r.note && maskAmounts(r.note), accountText(r, boot), who(r, boot)].filter(Boolean).join(" · ");
@@ -396,6 +403,7 @@ function PhoneRow({ r, boot }: { r: TxRow; boot: Bootstrap | null }) {
         </button>
         <Voided r={r} />
         <Legacy r={r} />
+        <AutoAssigned r={r} />
         <div class="sub-line">{sub}</div>
       </td>
       <Amount r={r} />
@@ -416,6 +424,7 @@ function WideRow({ r, boot }: { r: TxRow; boot: Bootstrap | null }) {
         </button>
         <Voided r={r} />
         <Legacy r={r} />
+        <AutoAssigned r={r} />
         {r.note && <div class="sub-line">{maskAmounts(r.note)}</div>}
       </td>
       <td class="l">
@@ -431,7 +440,7 @@ function WideRow({ r, boot }: { r: TxRow; boot: Bootstrap | null }) {
 function FilterSheet({ filter, boot, onChange, onClose }: { filter: BookFilter; boot: Bootstrap | null; onChange: (f: BookFilter) => void; onClose: () => void }) {
   const today = dayKey(new Date());
   const pick = (id: string, label: string, value: string | null, options: { id: string; name: string }[], set: (v: string | null) => void) => (
-    <div class="field">
+    <div class="field book-f">
       <label for={id}>{label}</label>
       <select id={id} class="ctl" value={value ?? ""} onChange={(e) => set(e.currentTarget.value || null)}>
         <option value="">Tất cả</option>
@@ -445,22 +454,19 @@ function FilterSheet({ filter, boot, onChange, onClose }: { filter: BookFilter; 
   );
   return (
     <Sheet open title="Lọc sổ giao dịch" onClose={onClose}>
-      <div class="pad">
-        <div class="book-sheet-k" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span>Khoảng ngày</span>
-          {(filter.fromDate || filter.toDate) && (
-            <button
-              type="button"
-              class="btn"
-              style={{ padding: "2px 8px", fontSize: "0.8125rem" }}
-              onClick={() => onChange({ ...filter, fromDate: null, toDate: null, month: filter.month ?? defaultFilter(new Date()).month })}
-            >
-              Xoá ngày
-            </button>
-          )}
-        </div>
+      <div class="pad book-sheet-h">
+        <span class="book-sheet-k">Khoảng ngày</span>
+        {(filter.fromDate || filter.toDate) && (
+          <button
+            type="button"
+            class="link"
+            onClick={() => onChange({ ...filter, fromDate: null, toDate: null, month: filter.month ?? defaultFilter(new Date()).month })}
+          >
+            Xoá ngày
+          </button>
+        )}
       </div>
-      <div class="field" style={{ borderTop: 0 }}>
+      <div class="field book-f book-f-first">
         <label for="f-book-from">Từ ngày</label>
         <input
           id="f-book-from"
@@ -470,11 +476,11 @@ function FilterSheet({ filter, boot, onChange, onClose }: { filter: BookFilter; 
           value={filter.fromDate ?? ""}
           onInput={(e) => {
             const v = e.currentTarget.value || null;
-            onChange({ ...filter, cycle: null, fromDate: v, month: v || filter.toDate ? null : (filter.month ?? defaultFilter(new Date()).month) });
+            onChange({ ...filter, fromDate: v, month: v || filter.toDate ? null : (filter.month ?? defaultFilter(new Date()).month) });
           }}
         />
       </div>
-      <div class="field">
+      <div class="field book-f">
         <label for="f-book-to">Đến ngày</label>
         <input
           id="f-book-to"
@@ -485,7 +491,7 @@ function FilterSheet({ filter, boot, onChange, onClose }: { filter: BookFilter; 
           value={filter.toDate ?? ""}
           onInput={(e) => {
             const v = e.currentTarget.value || null;
-            onChange({ ...filter, cycle: null, toDate: v, month: v || filter.fromDate ? null : (filter.month ?? defaultFilter(new Date()).month) });
+            onChange({ ...filter, toDate: v, month: v || filter.fromDate ? null : (filter.month ?? defaultFilter(new Date()).month) });
           }}
         />
       </div>
@@ -493,7 +499,7 @@ function FilterSheet({ filter, boot, onChange, onClose }: { filter: BookFilter; 
         <div class="book-sheet-k" id="f-book-types">
           Loại
         </div>
-        <div class="seg" role="group" aria-labelledby="f-book-types">
+        <div class="seg book-pick" role="group" aria-labelledby="f-book-types">
           {BOOK_MEANINGS.map((m) => (
             <button type="button" key={m.value} aria-pressed={filter.meanings.includes(m.value)} onClick={() => onChange(toggleMeaning(filter, m.value))}>
               {m.label}
@@ -504,9 +510,10 @@ function FilterSheet({ filter, boot, onChange, onClose }: { filter: BookFilter; 
       {pick("f-book-cat", "Danh mục", filter.categoryId, boot?.categories ?? [], (v) => onChange({ ...filter, categoryId: v }))}
       {pick("f-book-acct", "Tài khoản", filter.accountId, boot?.accounts ?? [], (v) => onChange({ ...filter, accountId: v }))}
       {(boot?.members.length ?? 0) > 1 && pick("f-book-member", "Người ghi", filter.memberId, boot?.members ?? [], (v) => onChange({ ...filter, memberId: v }))}
-      <div class="field">
+      <div class="field book-f">
         <span class="k">Nguồn</span>
         <Seg
+          class="book-pick"
           label="Nguồn"
           value={filter.source ?? "all"}
           onChange={(v) => onChange({ ...filter, source: v === "all" ? null : v })}
@@ -517,13 +524,12 @@ function FilterSheet({ filter, boot, onChange, onClose }: { filter: BookFilter; 
           ]}
         />
       </div>
-      <div class="field">
-        <label class="check" for="f-book-void">
-          <input id="f-book-void" type="checkbox" checked={filter.showVoid} onChange={(e) => onChange({ ...filter, showVoid: e.currentTarget.checked })} />
-          Hiện khoản đã xoá
-        </label>
-      </div>
-      <div class="note">Khoản đã xoá vẫn nằm trong sổ để xem lại, không tính vào tổng nào.</div>
+      {/* Cả hàng là nhãn của ô check: nhãn trái, ô check phải, chạm đâu trên hàng cũng bật / tắt. */}
+      <label class="field book-check" for="f-book-void">
+        <span>Hiện khoản đã xoá</span>
+        <input id="f-book-void" type="checkbox" checked={filter.showVoid} onChange={(e) => onChange({ ...filter, showVoid: e.currentTarget.checked })} />
+      </label>
+      <div class="note">Khoản đã xoá vẫn lưu để xem lại, không tính vào tổng.</div>
       <div class="pad book-sheet-act">
         <button type="button" class="btn" onClick={() => onChange(clearFilters(filter))}>
           Bỏ hết bộ lọc

@@ -9,9 +9,9 @@ const CACHE = "cache";
 // Phiên bản dữ liệu lưu trên máy: tăng khi dạng dữ liệu API đổi (2: tên tiếng Anh — tiers.wealth_building, safetyFund…;
 // 3: v2 ba ngăn — không ví, mục tiêu là tài khoản thật; 4: v2.1 mục tiêu dùng chung tài khoản — accounts[].goalIds,
 // reserve.groups, goal_groups; 5: v2.3 tài khoản con, mục tiêu trả từ tiền chi tiêu — accounts[].parentId, groups[].childIds /
-// interest, operating.goals, topUp). Khác phiên bản thì bản lưu cũ (bootstrap, snapshot, settings) bị bỏ; hàng đợi nhập giữ
-// nguyên (pwa UC-710 AC-11, AC-13).
-const DATA_VERSION = 5;
+// interest, operating.goals, topUp; 6: v2.5 tháng thay kỳ lương — snapshot.month là đối tượng, monthClose, moneyAge, bỏ payCycle).
+// Khác phiên bản thì bản lưu cũ (bootstrap, snapshot, settings) bị bỏ; hàng đợi nhập giữ nguyên (pwa UC-710 AC-11, AC-13).
+const DATA_VERSION = 6;
 const LS_CACHE = "vi-nha:cache:";
 const LS_CACHE_VERSION = "vi-nha:cache-version";
 
@@ -71,7 +71,7 @@ const lsWrite = (key: string, value: unknown): boolean => {
 
 export class StorageUnavailableError extends Error {
   constructor() {
-    super("Không lưu được vào máy: bộ nhớ trình duyệt đang bị chặn hoặc đã đầy. Khoản này chưa được ghi.");
+    super("Không lưu được: bộ nhớ trình duyệt bị chặn hoặc đã đầy. Khoản này chưa được ghi.");
   }
 }
 

@@ -1,5 +1,5 @@
 -- ============================================================
---  PROFIT FIRST — HỘ GIA ĐÌNH · SCHEMA (D1 / SQLite)  v1.40
+--  PROFIT FIRST — HỘ GIA ĐÌNH · SCHEMA (D1 / SQLite)  v1.47
 --  v1.2 (20/9/2026): danh mục · tiền mặt · đa TK · thuế taxable ·
 --  lệnh chuyển tiền · thông báo
 --  v1.3 (21/9/2026): ngân sách theo kỳ chuyển sang query có tham số ·
@@ -103,6 +103,14 @@
 --                     _no_delete → bill_issued); tenant_lines thêm kind 'bill' + bill_id (idx_tenant_lines_bill_active: tối
 --                     đa một dòng bill còn hiệu lực mỗi bản tính); bỏ tenant_fixed_fees, tenant_settlements, config
 --                     rental_headcount / rental_shared_categories (rental UC-806, UC-807)
+--  v1.46 (12/11/2026): tháng dương lịch thay kỳ lương (ADR-144) — income_streams.is_salary (cũ opens_cycle) ·
+--                     category_groups.monthly_limit (cũ cycle_limit) · transactions.is_salary (trg_tx_salary_income_only
+--                     → cannot_be_salary) · month_tasks (nhắc ① trích Tích luỹ, việc chia dư) + month_task_tx · month_surplus
+--                     (chia dư cuối tháng, chỉ ghi thêm) · goal_month_amounts · config salary_reminder_min · conversion_claims
+--                     bước 'salary' (cũ 'pay_cycle') · pay_cycles, pay_cycle_tasks, pay_cycle_task_tx, goal_cycle_amounts chỉ còn
+--                     lịch sử (chặn ghi, model_changed)
+--  v1.47 (12/11/2026): mã việc trong nội dung chuyển khoản — month_tasks.code (cột sinh từ id, 4 ký tự không 0 O 1 I;
+--                     idx_month_tasks_code) · month_task_tx.by_code (ghép theo mã, không xét ngưỡng tự nhận)
 -- ============================================================
 --  NGUYÊN TẮC ENCODE:
 --   1. Hai lớp: bank_logs (thô, BẤT BIẾN) vs transactions (đã diễn giải)
@@ -206,7 +214,7 @@ CREATE TABLE category_groups (
   id          TEXT PRIMARY KEY,
   name        TEXT NOT NULL,
   essential   INTEGER NOT NULL DEFAULT 0 CHECK (essential IN (0,1)),          -- 1 = Thiết yếu, 0 = Mong muốn: dòng chi báo cáo, E_must Mốc tự do
-  cycle_limit INTEGER CHECK (cycle_limit IS NULL OR cycle_limit > 0),          -- hạn mức mềm mỗi kỳ lương; NULL = không đặt
+  monthly_limit INTEGER CHECK (monthly_limit IS NULL OR monthly_limit > 0),    -- hạn mức mềm mỗi tháng (v1.46, cũ cycle_limit); NULL = không đặt
   sort        INTEGER NOT NULL DEFAULT 100,
   active      INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1))
 );
@@ -271,7 +279,7 @@ CREATE TABLE transactions (
   note         TEXT,
   created_at   TEXT NOT NULL DEFAULT (datetime('now')),
   client_id    TEXT,                                 -- UUID sinh ở máy khi nhập offline -> gửi lại không ghi trùng
-  income_stream_id TEXT REFERENCES income_streams(id), -- income: nguồn thu (mở kỳ lương, ngăn của tiền về)
+  income_stream_id TEXT REFERENCES income_streams(id), -- income: nguồn thu (nguồn lương, ngăn của tiền về)
   tenant_id    TEXT REFERENCES tenants(id),           -- income: tiền người thuê trả (trừ vào sổ người thuê)
   debt_id      TEXT REFERENCES debts(id),             -- spend: khoản trả nợ (trừ vào sổ nợ)
   receivable_id TEXT REFERENCES receivables(id),      -- lend: cho vay thêm · collect: nhận lại (sổ phải thu)
@@ -279,6 +287,8 @@ CREATE TABLE transactions (
   legacy_class TEXT CHECK (legacy_class IS NULL OR legacy_class IN ('essential','flex','tax','savings','holding')),  -- loại chi cũ (ADR-131): chỉ dòng trước v1.40
   goal_id      TEXT REFERENCES reserve_goals(id),      -- spend / transfer: mục tiêu Dự phòng dùng tiền (v1.42); NULL = không cho mục tiêu nào
   from_interest INTEGER NOT NULL DEFAULT 0 CHECK (from_interest IN (0,1)),  -- chi / chuyển ra khỏi nhóm mẹ + con, lấy từ tiền lãi (v1.44, ADR-140)
+  is_salary    INTEGER NOT NULL DEFAULT 0 CHECK (is_salary IN (0,1)),  -- income: khoản lương, có nhắc ① trích Tích luỹ (v1.46, pocket UC-1205)
+  rule_id      INTEGER REFERENCES rules(id),           -- mẫu đã tự gán khoản này (v1.48, ingest UC-307 AC-25); NULL = không do mẫu
   CHECK (meaning <> 'spend'  OR category_id IS NOT NULL)
 );
 CREATE INDEX idx_tx_cat          ON transactions(category_id, month_key) WHERE status='active';
@@ -365,14 +375,14 @@ CREATE TABLE notifications (
 --  secret:session_key: khoá ký phiên ngẫu nhiên app tự sinh lần đầu cần (UC-501); không API nào trả ra.
 CREATE TABLE config (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 
--- 14. NGUỒN THU — ngăn của tiền về, nguồn mở kỳ lương ---
+-- 14. NGUỒN THU — ngăn của tiền về, nguồn lương ---
 CREATE TABLE income_streams (
   id     TEXT PRIMARY KEY,
   name   TEXT NOT NULL,
   sort   INTEGER NOT NULL DEFAULT 100,
   active INTEGER NOT NULL DEFAULT 1,
   pocket TEXT CHECK (pocket IS NULL OR pocket IN ('savings','reserve','operating')),  -- ngăn của tiền về; NULL = theo tài khoản nhận
-  opens_cycle INTEGER NOT NULL DEFAULT 0 CHECK (opens_cycle IN (0,1))  -- khoản thu từ nguồn này mở kỳ lương (pocket UC-1205)
+  is_salary INTEGER NOT NULL DEFAULT 0 CHECK (is_salary IN (0,1))  -- nguồn lương: khoản thu từ nguồn này có nhắc trích Tích luỹ (v1.46, cũ opens_cycle)
 );
 
 -- 15. SỔ NGƯỜI THUÊ — phải thu, ngoài sổ cái, chỉ ghi thêm ------------
@@ -662,6 +672,17 @@ CREATE TRIGGER trg_tx_legacy_frozen BEFORE UPDATE ON transactions
 WHEN NEW.meaning IS NOT OLD.meaning OR NEW.legacy_class IS NOT OLD.legacy_class
 BEGIN
   SELECT RAISE(ABORT, 'model_changed');
+END;
+-- Chỉ khoản thu mới là lương (v1.46); lãi tiền gửi / tiền người thuê kiểm ở service (pocket UC-1205).
+CREATE TRIGGER trg_tx_salary_income_only BEFORE INSERT ON transactions
+WHEN NEW.is_salary = 1 AND NEW.meaning <> 'income'
+BEGIN
+  SELECT RAISE(ABORT, 'cannot_be_salary');
+END;
+CREATE TRIGGER trg_tx_salary_income_only_update BEFORE UPDATE OF is_salary, meaning ON transactions
+WHEN NEW.is_salary = 1 AND NEW.meaning <> 'income'
+BEGIN
+  SELECT RAISE(ABORT, 'cannot_be_salary');
 END;
 
 -- Sổ người thuê chỉ được đổi status active -> void; không sửa, không xoá.
@@ -1117,10 +1138,10 @@ BEGIN
   SELECT RAISE(ABORT, 'invalid_interest');
 END;
 
--- % Tích luỹ mỗi kỳ lương (UC-507), "1".."100"; D1 trống không có luật Tích sản nên mặc định.
+-- % Tích luỹ mỗi khoản lương (UC-507), "1".."100"; D1 trống không có luật Tích sản nên mặc định.
 INSERT INTO config (k,v) VALUES ('savings_pct','10');
 
--- KỲ LƯƠNG (v1.39, ADR-124) — kỳ mở tại thời điểm khoản lương của nguồn "Mở kỳ lương", mỗi ngày lương danh nghĩa tối đa
+-- KỲ LƯƠNG (v1.39, ADR-124; chỉ còn lịch sử từ v1.46) — kỳ mở tại thời điểm khoản lương của nguồn "Mở kỳ lương", mỗi ngày lương danh nghĩa tối đa
 --  một kỳ còn hiệu lực. Kỳ hiện tại = kỳ active có payday lớn nhất. Huỷ khoản lương mở kỳ → kỳ void cùng mọi việc.
 CREATE TABLE pay_cycles (
   id             INTEGER PRIMARY KEY,
@@ -1187,6 +1208,14 @@ CREATE TABLE pay_cycle_task_tx (
 );
 CREATE INDEX idx_pay_cycle_task_tx ON pay_cycle_task_tx(tx_id);
 
+-- Bảng kỳ lương chỉ còn lịch sử (v1.46, ADR-144): không ghi thêm / sửa được nữa.
+CREATE TRIGGER trg_pay_cycles_no_insert BEFORE INSERT ON pay_cycles BEGIN SELECT RAISE(ABORT, 'model_changed'); END;
+CREATE TRIGGER trg_pay_cycles_no_update BEFORE UPDATE ON pay_cycles BEGIN SELECT RAISE(ABORT, 'model_changed'); END;
+CREATE TRIGGER trg_pay_cycle_tasks_no_insert BEFORE INSERT ON pay_cycle_tasks BEGIN SELECT RAISE(ABORT, 'model_changed'); END;
+CREATE TRIGGER trg_pay_cycle_tasks_no_update BEFORE UPDATE ON pay_cycle_tasks BEGIN SELECT RAISE(ABORT, 'model_changed'); END;
+CREATE TRIGGER trg_pay_cycle_task_tx_no_insert BEFORE INSERT ON pay_cycle_task_tx BEGIN SELECT RAISE(ABORT, 'model_changed'); END;
+CREATE TRIGGER trg_pay_cycle_task_tx_no_update BEFORE UPDATE ON pay_cycle_task_tx BEGIN SELECT RAISE(ABORT, 'model_changed'); END;
+
 -- Lần chia cũ chỉ còn lịch sử (ADR-123, ADR-131): không ghi thêm / sửa / xoá được nữa.
 CREATE TRIGGER trg_allocation_runs_no_insert BEFORE INSERT ON allocation_runs BEGIN SELECT RAISE(ABORT, 'model_changed'); END;
 CREATE TRIGGER trg_allocation_runs_no_update BEFORE UPDATE ON allocation_runs BEGIN SELECT RAISE(ABORT, 'model_changed'); END;
@@ -1200,7 +1229,7 @@ INSERT INTO config (k,v) VALUES ('surplus_savings_pct','50');
 --  Config 0040 ghi cho nhà đã có tài khoản: legacy_savings_cash / legacy_savings_assets (số ví Tích sản cũ, chỉ để đối chiếu),
 --  legacy_max_tx_id (khoản id ≤ mốc là khoản cũ, ADR-131), conversion_done_at khi xong.
 CREATE TABLE conversion_claims (
-  step         TEXT PRIMARY KEY CHECK (step IN ('pockets','goals','savings_gap','pay_cycle','savings_pct')),
+  step         TEXT PRIMARY KEY CHECK (step IN ('pockets','goals','savings_gap','salary','savings_pct')),
   at           TEXT NOT NULL,
   by_member_id TEXT REFERENCES members(id)
 );
@@ -1224,11 +1253,115 @@ CREATE TABLE goal_cycle_amounts (
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (goal_id, cycle_key)
 );
+CREATE TRIGGER trg_goal_cycle_amounts_no_insert BEFORE INSERT ON goal_cycle_amounts BEGIN SELECT RAISE(ABORT, 'model_changed'); END;
+CREATE TRIGGER trg_goal_cycle_amounts_no_update BEFORE UPDATE ON goal_cycle_amounts BEGIN SELECT RAISE(ABORT, 'model_changed'); END;
 CREATE TABLE reserve_goal_categories (
   category_id TEXT PRIMARY KEY REFERENCES categories(id),
   goal_id     TEXT NOT NULL REFERENCES reserve_goals(id)
 );
 CREATE INDEX idx_reserve_goal_categories_goal ON reserve_goal_categories(goal_id);
 
+-- THÁNG DƯƠNG LỊCH (v1.46, pocket UC-1205, UC-1206, UC-1207, UC-1209, ADR-144).
+-- Ngưỡng nhắc trích Tích luỹ: khoản thu không nguồn từ số này trở lên thì ô "Đây là lương" bật sẵn (Q1-B).
+INSERT INTO config (k,v) VALUES ('salary_reminder_min','5000000');
+
+-- Việc theo tháng: ① savings — nhắc trích Tích luỹ của một khoản lương (month_key = tháng VN của khoản lương); surplus — việc
+--  chia dư cuối tháng (month_key = tháng được chia; → Tích luỹ hoặc → tài khoản Ví Thưởng). 'done' chỉ là tick tay; tự tick
+--  tính từ month_task_tx. Mỗi khoản lương tối đa một nhắc còn hiệu lực; void rồi tạo lại được.
+CREATE TABLE month_tasks (
+  id            INTEGER PRIMARY KEY,
+  kind          TEXT NOT NULL CHECK (kind IN ('savings','surplus')),
+  month_key     TEXT NOT NULL CHECK (month_key GLOB '[0-9][0-9][0-9][0-9]-[01][0-9]'),
+  income_tx_id  INTEGER REFERENCES transactions(id),      -- savings: khoản lương; NULL cho surplus
+  to_pocket     TEXT CHECK (to_pocket IS NULL OR to_pocket = 'savings'),
+  to_account_id TEXT REFERENCES accounts(id),             -- surplus → Ví Thưởng
+  amount        INTEGER NOT NULL CHECK (amount >= 0),
+  pct           INTEGER CHECK (pct IS NULL OR pct BETWEEN 0 AND 100),
+  status        TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','done','skipped','void')),
+  reason        TEXT CHECK (reason IS NULL OR length(reason) BETWEEN 1 AND 500),
+  by_member_id  TEXT REFERENCES members(id),
+  created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  -- Mã trong nội dung chuyển khoản (v1.47): (id × 742297) mod 2^20 viết 4 ký tự — song ánh, không trùng; = `taskCode` của domain.
+  code          TEXT GENERATED ALWAYS AS (
+    substr('23456789ABCDEFGHJKLMNPQRSTUVWXYZ', (((id * 742297) % 1048576) >> 15 & 31) + 1, 1) ||
+    substr('23456789ABCDEFGHJKLMNPQRSTUVWXYZ', (((id * 742297) % 1048576) >> 10 & 31) + 1, 1) ||
+    substr('23456789ABCDEFGHJKLMNPQRSTUVWXYZ', (((id * 742297) % 1048576) >> 5 & 31) + 1, 1) ||
+    substr('23456789ABCDEFGHJKLMNPQRSTUVWXYZ', (((id * 742297) % 1048576) & 31) + 1, 1)
+  ) VIRTUAL,
+  CHECK (kind <> 'savings' OR (income_tx_id IS NOT NULL AND to_pocket IS 'savings' AND to_account_id IS NULL)),
+  CHECK (kind <> 'surplus' OR (income_tx_id IS NULL AND ((to_pocket IS 'savings') <> (to_account_id IS NOT NULL))))
+);
+CREATE UNIQUE INDEX idx_month_tasks_income ON month_tasks(income_tx_id) WHERE kind = 'savings' AND status <> 'void';
+CREATE INDEX idx_month_tasks_status ON month_tasks(status, month_key);
+CREATE INDEX idx_month_tasks_code ON month_tasks(code);
+CREATE TRIGGER trg_month_tasks_reason BEFORE INSERT ON month_tasks
+WHEN NEW.kind = 'savings' AND NEW.status <> 'void' AND NEW.reason IS NULL AND (NEW.status = 'skipped' OR NEW.amount = 0)
+BEGIN
+  SELECT RAISE(ABORT, 'reason_required');
+END;
+CREATE TRIGGER trg_month_tasks_reason_update BEFORE UPDATE OF status, amount, reason ON month_tasks
+WHEN NEW.kind = 'savings' AND NEW.status <> 'void' AND NEW.reason IS NULL AND (NEW.status = 'skipped' OR NEW.amount = 0)
+BEGIN
+  SELECT RAISE(ABORT, 'reason_required');
+END;
+CREATE TRIGGER trg_month_tasks_no_delete BEFORE DELETE ON month_tasks
+BEGIN
+  SELECT RAISE(ABORT, 'month_task_append_only');
+END;
+
+-- Liên kết việc ↔ chuyển khoản đã ghép (tự tick). Phần đã dùng của một chuyển khoản = Σ liên kết của việc tháng chưa void
+--  + Σ liên kết của việc kỳ cũ chưa void không được chép sang (src/services/month-tasks.ts).
+CREATE TABLE month_task_tx (
+  task_id    INTEGER NOT NULL REFERENCES month_tasks(id),
+  tx_id      INTEGER NOT NULL REFERENCES transactions(id),
+  amount     INTEGER NOT NULL CHECK (amount > 0),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  by_code    INTEGER NOT NULL DEFAULT 0 CHECK (by_code IN (0,1)),  -- ghép theo mã trong nội dung (v1.47): không xét ngưỡng tự nhận
+  PRIMARY KEY (task_id, tx_id)
+);
+CREATE INDEX idx_month_task_tx ON month_task_tx(tx_id);
+
+-- Chia dư cuối tháng (UC-1207): một dòng mỗi tháng đã chia ('split') / để lại Vận hành ('skipped'). Khoá chính chặn hai máy bấm
+--  đua; không sửa được. Mở lại tháng (v1.48, AC-7): void hết việc chia dư của tháng rồi xoá dòng trong cùng batch. Tháng chưa
+--  bấm không có dòng.
+CREATE TABLE month_surplus (
+  month_key      TEXT PRIMARY KEY CHECK (month_key GLOB '[0-9][0-9][0-9][0-9]-[01][0-9]'),
+  operating_end  INTEGER NOT NULL,                                  -- E: ngăn Vận hành theo sổ tại 00:00 VN ngày 1 tháng sau
+  pending_at_end INTEGER NOT NULL CHECK (pending_at_end >= 0),      -- W: phần còn thiếu của việc đang mở tại mốc
+  early_salary   INTEGER NOT NULL CHECK (early_salary >= 0),        -- L: lương tháng sau về trước mốc (payday_day ≤ 7)
+  held_payables  INTEGER NOT NULL CHECK (held_payables >= 0),       -- P: khoản phải trả tháng sau
+  held_to_payday INTEGER NOT NULL CHECK (held_to_payday >= 0),      -- D: ăn tiêu từ ngày 1 tới ngày lương
+  surplus        INTEGER NOT NULL,                                  -- S = E − W − L − P − D
+  savings_pct    INTEGER NOT NULL CHECK (savings_pct BETWEEN 0 AND 100),
+  status         TEXT NOT NULL CHECK (status IN ('split','skipped')),
+  note           TEXT CHECK (note IS NULL OR length(note) <= 200),
+  by_member_id   TEXT REFERENCES members(id),
+  at             TEXT NOT NULL                                      -- lúc bấm: mốc tự tick của việc chia dư
+);
+CREATE TRIGGER trg_month_surplus_no_update BEFORE UPDATE ON month_surplus
+BEGIN
+  SELECT RAISE(ABORT, 'month_closed');
+END;
+CREATE TRIGGER trg_month_surplus_no_delete BEFORE DELETE ON month_surplus
+WHEN EXISTS (SELECT 1 FROM month_tasks WHERE kind = 'surplus' AND month_key = OLD.month_key AND status <> 'void')
+BEGIN
+  SELECT RAISE(ABORT, 'month_closed');
+END;
+-- Tháng 10/2026 đã xử lý bằng việc ④ của kỳ lương 1: tháng đầu tiên được chia là 2026-11 (0046).
+INSERT INTO month_surplus (month_key, operating_end, pending_at_end, early_salary, held_payables, held_to_payday, surplus, savings_pct, status, note, by_member_id, at)
+VALUES ('2026-10', 0, 0, 0, 0, 0, 0, 0, 'skipped', 'Tháng 10 đã xử lý ở kỳ lương 1 (việc ④)', NULL, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
+-- Khoản phải trả tháng này (UC-1209 bước 12): số riêng của một tháng cho mục tiêu trả từ tiền chi tiêu (0 = tháng này không
+--  trả); tháng không có dòng → số mỗi tháng.
+CREATE TABLE goal_month_amounts (
+  goal_id    TEXT NOT NULL REFERENCES reserve_goals(id),
+  month_key  TEXT NOT NULL CHECK (month_key GLOB '[0-9][0-9][0-9][0-9]-[01][0-9]'),
+  amount     INTEGER NOT NULL CHECK (amount BETWEEN 0 AND 1000000000000),
+  note       TEXT CHECK (note IS NULL OR length(note) <= 80),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (goal_id, month_key)
+);
+
 -- Phiên bản schema — /v1/health đọc từ đây
-INSERT INTO config (k,v) VALUES ('schema_version','1.45');
+INSERT INTO config (k,v) VALUES ('schema_version','1.48');

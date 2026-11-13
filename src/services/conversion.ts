@@ -5,7 +5,7 @@
 import type { ConversionProgress } from "../domain/snapshot";
 import { DomainError } from "../domain/types";
 
-export const CONVERSION_STEPS = ["pockets", "goals", "savings_gap", "pay_cycle", "savings_pct"] as const;
+export const CONVERSION_STEPS = ["pockets", "goals", "savings_gap", "salary", "savings_pct"] as const;
 export type ConversionStep = (typeof CONVERSION_STEPS)[number];
 
 /** Bước kế tiếp = bước đầu tiên chưa có claim; null khi đủ 5. */
@@ -93,13 +93,13 @@ const conflict = (code: string, message: string): never => {
 export async function claimStep(db: D1Database, step: string, body: Record<string, unknown>, memberId: string | null, now: Date): Promise<StepResult> {
   if (!(CONVERSION_STEPS as readonly string[]).includes(step)) throw new DomainError("not_found", "Không có bước này.", 404);
   const s = step as ConversionStep;
-  const noSalary = s === "pay_cycle" && body.no_salary === true;
-  if (s === "pay_cycle" && body.no_salary !== undefined && typeof body.no_salary !== "boolean") {
+  const noSalary = s === "salary" && body.no_salary === true;
+  if (s === "salary" && body.no_salary !== undefined && typeof body.no_salary !== "boolean") {
     throw new DomainError("invalid_input", "no_salary phải là true / false.", 400, "no_salary");
   }
   const pct = s === "savings_pct" ? body.savings_pct : undefined;
   if (pct !== undefined && (typeof pct !== "number" || !Number.isInteger(pct) || pct < 1 || pct > 100)) {
-    throw new DomainError("invalid_input", "% Tích luỹ mỗi kỳ lương là số nguyên từ 1 đến 100.", 400, "savings_pct");
+    throw new DomainError("invalid_input", "% Tích luỹ trích từ lương là số nguyên từ 1 đến 100.", 400, "savings_pct");
   }
 
   const current = await getConversion(db);
@@ -110,9 +110,9 @@ export async function claimStep(db: D1Database, step: string, body: Record<strin
     const n = Number((await db.prepare("SELECT COUNT(*) AS n FROM accounts WHERE active = 1 AND pocket_confirmed = 0").first<{ n: number }>())?.n ?? 0);
     if (n > 0) conflict("step_incomplete", `Còn ${n} tài khoản chưa xác nhận ngăn`);
   }
-  if (s === "pay_cycle" && !noSalary) {
-    const on = await db.prepare("SELECT 1 FROM income_streams WHERE active = 1 AND opens_cycle = 1 LIMIT 1").first();
-    if (!on) conflict("step_incomplete", "Chưa có nguồn thu nào bật \"Mở kỳ lương\": bật một nguồn hoặc chọn \"Nhà mình không có lương cố định\".");
+  if (s === "salary" && !noSalary) {
+    const on = await db.prepare("SELECT 1 FROM income_streams WHERE active = 1 AND is_salary = 1 LIMIT 1").first();
+    if (!on) conflict("step_incomplete", "Chưa có nguồn thu nào là \"Nguồn lương\": bật một nguồn hoặc chọn \"Nhà mình không có lương cố định\".");
   }
 
   const at = now.toISOString();

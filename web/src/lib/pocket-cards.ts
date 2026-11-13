@@ -5,15 +5,15 @@
 
 import { peaceMonthsView, type PocketsView } from "../../../src/domain/pockets";
 import { formatSigned, formatVnd } from "./money";
-import { savingsDoneLine, savingsDoneWarn } from "./pay-cycle";
+import { savingsDoneLine, savingsDoneWarn } from "./month-tasks";
 import { shortDate } from "./period";
 import { dueText } from "./pockets";
-import type { PayCycleView } from "./types";
+import type { MonthView } from "./types";
 
 const NBSP = "\u00a0";
 const signedVnd = (n: number) => `${formatSigned(n)}${NBSP}₫`;
 
-export const NO_SAVINGS_ACCOUNT = "Chưa có tài khoản Tích luỹ — mở một tài khoản thật rồi xếp vào ngăn Tích luỹ ›";
+export const NO_SAVINGS_ACCOUNT = "Chưa có tài khoản Tích luỹ. Mở tài khoản thật rồi xếp vào ngăn Tích luỹ ›";
 
 export interface SavingsCardView {
   total: string;
@@ -23,30 +23,30 @@ export interface SavingsCardView {
   change: string;
   prev: string;
   pct: string;
-  /** "Kỳ này đã trích ✓ … · đạt mức …" / "Kỳ này chưa trích (…)" (UC-702); null khi chưa có kỳ có khoản lương sinh ①. */
+  /** "Tháng 12 đã trích 3.500.000 ₫ · 10% lương · mức 10–30%" / "Tháng 12 chưa trích (…)" (UC-702 AC-40); null khi tháng chưa có khoản lương sinh ①. */
   done: string | null;
   /** Mức "dưới 1%" (ADR-142): dòng `done` tô vàng. */
   doneWarn: boolean;
 }
 
-export function savingsCard(p: PocketsView | undefined, cycle?: PayCycleView | null): SavingsCardView | null {
+export function savingsCard(p: PocketsView | undefined, month?: MonthView | null): SavingsCardView | null {
   if (!p) return null;
   const s = p.savings;
   return {
     total: formatVnd(s.total),
     empty: s.accounts.length === 0,
     lines: s.accounts.map((a) => ({ label: a.name, value: formatVnd(a.balance) })),
-    // Mốc kỳ: `started_at` ISO của kỳ lương hoặc YYYY-MM-DD (chưa có kỳ) — hiện theo ngày giờ VN.
-    change: `Kỳ này (từ ${shortDate(s.change.since)}): ${signedVnd(s.change.amount)}`,
-    prev: `Kỳ trước: ${signedVnd(s.change.prevAmount)}`,
-    pct: `Trích ${p.savingsPct}% mỗi kỳ lương`,
-    done: savingsDoneLine(cycle, p.savingsPct),
-    doneWarn: savingsDoneWarn(cycle),
+    // Mốc tháng: "YYYY-MM-01" của tháng này (UC-1203).
+    change: `Tháng này (từ ${shortDate(s.change.since)}): ${signedVnd(s.change.amount)}`,
+    prev: `Tháng trước: ${signedVnd(s.change.prevAmount)}`,
+    pct: `Trích ${p.savingsPct}% mỗi khoản lương`,
+    done: savingsDoneLine(month, p.savingsPct),
+    doneWarn: savingsDoneWarn(month),
   };
 }
 
 /** Câu chân nhóm tài khoản chung (UC-702 bước 7). */
-export const SHARED_GROUP_NOTE = "Chia theo thứ tự ưu tiên — khoản chi không chọn mục tiêu làm mục tiêu cuối thiếu trước.";
+export const SHARED_GROUP_NOTE = "Chia theo thứ tự ưu tiên: chi không chọn mục tiêu làm mục tiêu cuối thiếu trước.";
 
 export interface ReserveGoalRow {
   id: string;
@@ -63,7 +63,7 @@ export interface ReserveGoalRow {
   full: boolean;
   /** A âm (đã chi vào phần của mục tiêu trước): `amount` hiện đỏ. */
   over: boolean;
-  /** "đã chi {X} kỳ này" khi đã chi > 0. */
+  /** "đã chi {X} tháng này" khi đã chi > 0. */
   spent: string | null;
   sub: string | null;
   /** Chưa gắn tài khoản thật: link "Mở tài khoản thật ›" (→ sheet mục tiêu). */
@@ -74,10 +74,11 @@ export interface ReserveGoalRow {
 export interface ReserveGroupView {
   key: string;
   /**
-   * "{tài khoản} · {số dư gộp} (gồm {Σ con} gửi kỳ hạn) cho {n} mục tiêu" + chip "thiếu X" (vàng) / "đủ" / "dư X"; một mục tiêu ở
-   * tài khoản có khoản gửi cũng có dòng nhóm (không "cho 1 mục tiêu").
+   * Dòng nhóm dạng nhãn – số (DESIGN §4.5): `name` tài khoản trái, `balance` số dư gộp (gồm khoản gửi kỳ hạn) phải, `meta`
+   * một dòng phụ "{n} mục tiêu · thiếu X / đủ / dư X" (`tone` warn khi thiếu); một mục tiêu ở tài khoản có khoản gửi cũng có
+   * dòng nhóm, `meta` chỉ "thiếu X / đủ / dư X".
    */
-  head: { title: string; chip: string; tone: "warn" | "ok" } | null;
+  head: { name: string; balance: string; meta: string; tone: "warn" | "ok" } | null;
   goals: ReserveGoalRow[];
   note: string | null;
   /** "Tiền lãi {I} (không tính vào mục tiêu)" khi tiền lãi của nhóm > 0 (QĐ2). */
@@ -99,7 +100,7 @@ function goalRow(g: PocketsView["reserve"]["goals"][number], where: string | nul
   const sub = [g.dueDate ? `hạn ${dueText(g.dueDate)}` : null, repeat].filter(Boolean).join(" · ") || null;
   if (g.held === null) return { id: g.id, name, amount: "chưa có tài khoản", pct: null, full: false, over: false, spent: null, sub, needsAccount: true };
   const inAccount = where === null ? "" : ` trong ${where}`;
-  const spent = g.spent > 0 ? `đã chi ${formatVnd(g.spent)} kỳ này` : null;
+  const spent = g.spent > 0 ? `đã chi ${formatVnd(g.spent)} tháng này` : null;
   const over = g.held < 0;
   const amount = (whole: string) => (over ? `chi vượt phần ${formatVnd(-g.held!)}` : whole);
   if (g.target === null) return { id: g.id, name, amount: amount(`đã có ${formatVnd(g.held)}${inAccount}`), pct: null, full: false, over, spent, sub, needsAccount: false };
@@ -132,18 +133,16 @@ function reserveGroups(r: PocketsView["reserve"]): ReserveGroupView[] {
     if (seen.has(grp.accountId)) continue;
     seen.add(grp.accountId);
     const members = grp.goalIds.flatMap((id) => goalById.get(id) ?? []);
-    const childIds = new Set(grp.childIds ?? []);
-    const deposits = r.accounts.filter((a) => childIds.has(a.id)).reduce((s, a) => s + a.balance, 0);
     const interest = grp.interest ? `Tiền lãi ${formatVnd(grp.interest)} (không tính vào mục tiêu)` : null;
-    if (members.length < 2 && childIds.size === 0) {
+    if (members.length < 2 && !grp.childIds?.length) {
       out.push({ key: grp.accountId, head: null, goals: members.map((m) => goalRow(m, grp.name)), note: null, interest });
       continue;
     }
-    const chip = grp.short ? { chip: `thiếu ${formatVnd(grp.short)}`, tone: "warn" as const } : grp.extra ? { chip: `dư ${formatVnd(grp.extra)}`, tone: "ok" as const } : { chip: "đủ", tone: "ok" as const };
-    const gross = `${grp.name} · ${formatVnd(grp.balance)}${childIds.size > 0 ? ` (gồm ${formatVnd(deposits)} gửi kỳ hạn)` : ""}`;
+    const state = grp.short ? `thiếu ${formatVnd(grp.short)}` : grp.extra ? `dư ${formatVnd(grp.extra)}` : "đủ";
+    const meta = members.length < 2 ? state : `${members.length} mục tiêu · ${state}`;
     out.push({
       key: grp.accountId,
-      head: { title: members.length < 2 ? gross : `${gross} cho ${members.length} mục tiêu`, ...chip },
+      head: { name: grp.name, balance: formatVnd(grp.balance), meta, tone: grp.short ? "warn" : "ok" },
       goals: members.map((m) => goalRow(m, null)),
       note: members.length < 2 ? null : SHARED_GROUP_NOTE,
       interest,
@@ -155,18 +154,18 @@ function reserveGroups(r: PocketsView["reserve"]): ReserveGroupView[] {
 export function reserveCard(p: PocketsView | undefined): ReserveCardView | null {
   if (!p) return null;
   const r = p.reserve;
-  const { monthly, target, cycles } = r.peaceMonths;
+  const { monthly, target, months } = r.peaceMonths;
   const view = peaceMonthsView(r.peace, monthly, target);
   const peace: ReserveCardView["peace"] =
     r.peace < 0
       ? { title: `Phần an tâm âm ${formatVnd(-r.peace)}`, months: null, pct: null, note: "Tài khoản Dự phòng không gắn mục tiêu đang âm", bad: true }
       : r.peace === 0
-        ? { title: `Phần an tâm ${formatVnd(0)} — mọi tiền Dự phòng đã có hẹn`, months: null, pct: null, note: null, bad: false }
+        ? { title: `Phần an tâm ${formatVnd(0)}, tiền Dự phòng đều đã có hẹn`, months: null, pct: null, note: null, bad: false }
         : {
             title: `Phần an tâm ${formatVnd(r.peace)}`,
             months: view.covered === null ? null : `đủ ${view.covered.toFixed(1).replace(".", ",")} / ${target} tháng vận hành`,
             pct: view.pct,
-            note: monthly === null ? "Chưa đủ một kỳ lương trọn để đo số tháng" : `chi vận hành trung bình ${formatVnd(monthly)}/kỳ (${cycles} kỳ gần nhất)`,
+            note: monthly === null ? "Chưa đủ một tháng trọn để đo số tháng" : `chi vận hành trung bình ${formatVnd(monthly)}/tháng (${months} tháng trọn)`,
             bad: false,
           };
   return {

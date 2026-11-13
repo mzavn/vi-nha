@@ -1,0 +1,66 @@
+@layer components {
+.blist > .set-sub:first-child {
+    border-top: 0;
+  }
+
+.set-sub {
+    padding: 12px 14px 6px;
+    background: none;
+    border-top: 1px solid var(--line);
+    color: var(--fg-2);
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    font-weight: 500;
+  }
+
+.set-gl {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+/* Hàng danh sách trong card: chữ trái, số/nút phải; là <button> khi mở được sheet. */
+
+.set-results {
+    margin: 6px 0 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    color: var(--fg-2);
+    display: grid;
+    gap: 2px;
+  }
+
+/* Nút "Sửa" trong ô bảng (chỉ máy tính): chữ trong dòng, không đệm, không cao riêng — chữ thẳng hàng các ô khác (K-001). */
+.set-edit {
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+    border: 0;
+  }
+
+.zalo-code {
+    margin: 4px 14px 8px;
+    font-size: var(--num-total); line-height: var(--leading-total);
+    font-weight: 600;
+    letter-spacing: 0.2em;
+    text-align: center;
+  }
+
+.zalo-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-top: 0;
+    padding-bottom: 10px;
+  }
+
+/* Bản tính người thuê (pwa UC-713): mỗi khoản một hàng tên · dấu · số · bỏ, vừa 390px; chân dính tổng + Chốt & gửi. */
+
+.dash-todo > .set-sub:first-child {
+    border-top: 0;
+  }
+
+.status-compact-hint {
+    margin: 0 0 12px;
+  }
+}

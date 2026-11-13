@@ -72,5 +72,5 @@ export async function runScheduledDigests(env: Env, now: Date, state: NotifyStat
   }
 
   const failed = (await Promise.allSettled(jobs)).filter((r): r is PromiseRejectedResult => r.status === "rejected");
-  if (failed.length) throw new AggregateError(failed.map((r) => r.reason), "gửi tin theo lịch lỗi");
+  if (failed.length) throw new AggregateError(failed.map((r) => r.reason), "Lỗi gửi tin theo lịch");
 }

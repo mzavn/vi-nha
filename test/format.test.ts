@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { PayCycleTask } from "../src/domain/pay-cycle";
 import {
   dailyMessage,
   formatMoney,
   formatWeekLabel,
-  payCycleMessage,
   pendingMessage,
   PUSH_BODY_MAX,
   PUSH_TITLE_MAX,
+  salaryMessage,
   weeklyMessage,
   type DailyMessageInput,
   type WeeklyMessageInput,
@@ -49,13 +48,13 @@ describe("dailyMessage", () => {
     shortDebt: { total: 0, count: 0, items: [] },
     day: "2026-11-13",
     driftAccounts: [],
-    payTasksOpen: 0,
+    savingsDue: null,
     pairedTransfersYesterday: 0,
     backfillAddedLastNight: 0,
     cashCountReminder: [],
   };
-  const FIRST = "💰 Vận hành 4.100.000 ₫ · chi khoảng 141.000 ₫/ngày tới kỳ lương 10/12 (còn 29 ngày)";
-  const BLESS = "💳 Không nợ ngắn hạn nào. Giữ nhịp này nhé 👏";
+  const FIRST = "Vận hành 4.100.000 ₫ · chi khoảng 141.000 ₫/ngày tới ngày lương 10/12 (còn 29 ngày)";
+  const BLESS = "Không nợ ngắn hạn nào. Giữ nhịp này nhé";
   /**
    * Hộ mẫu B: mục tiêu Dự phòng theo thứ tự server (A = số dư tài khoản của mục tiêu), phần an tâm 31.500.000 đủ 3,1 / 6
    * tháng, nợ ngắn hạn 8.000.000 (tài khoản Trả nợ có 1.000.000).
@@ -74,32 +73,32 @@ describe("dailyMessage", () => {
     debts: { balance: 58_000_000, count: 3 },
   };
 
-  it("UC-402 AC-32: dòng đầu mở bằng cả hai số — Vận hành X · chi khoảng Y/ngày tới kỳ lương d/m (còn N ngày); hết tiền → báo đã hết kèm số ngày; còn ít không đủ 1.000/ngày → số còn lại; tiêu đề bản ngắn /ngày", () => {
+  it("UC-402 AC-32: dòng đầu mở bằng cả hai số — Vận hành X · chi khoảng Y/ngày tới ngày lương d/m (còn N ngày); hết tiền → báo đã hết kèm số ngày; còn ít không đủ 1.000/ngày → số còn lại; tiêu đề bản ngắn /ngày", () => {
     expect(dailyMessage(base).full.split("\n")[0]).toBe(FIRST);
     const out = dailyMessage({ ...base, nearSpend: { amount: -250_000, payday: "2026-12-10", daysLeft: 29, perDay: null } });
-    expect(out.full.split("\n")[0]).toBe("💰 Tiền vận hành đã hết (−250.000 ₫) — còn 29 ngày");
+    expect(out.full.split("\n")[0]).toBe("Tiền vận hành đã hết (−250.000 ₫), còn 29 ngày");
     const little = dailyMessage({ ...base, nearSpend: { amount: 20_000, payday: "2027-01-10", daysLeft: 31, perDay: null } });
-    expect(little.full.split("\n")[0]).toBe("💰 Vận hành còn 20.000 ₫ tới kỳ lương 10/1 (còn 31 ngày)");
+    expect(little.full.split("\n")[0]).toBe("Vận hành còn 20.000 ₫ tới ngày lương 10/1 (còn 31 ngày)");
     // Tiêu đề bản ngắn cùng số (≤ 25 ký tự; che số không áp dụng cho thông báo đẩy).
     expect([dailyMessage(base).push.title, out.push.title, little.push.title]).toEqual(["Vận hành ~141.000/ngày", "Tiền vận hành đã hết", "Vận hành còn 20.000 ₫"]);
   });
 
-  it("UC-402 AC-5: không cảnh báo, không mục tiêu Dự phòng, Dự phòng trống, không nợ → đúng 3 dòng: 💰, 💳 lời chúc, đối soát", () => {
-    expect(dailyMessage(base).full.split("\n")).toEqual([FIRST, BLESS, "🏦 Đối soát: khớp"]);
+  it("UC-402 AC-5: không cảnh báo, không mục tiêu Dự phòng, Dự phòng trống, không nợ → đúng 3 dòng: Vận hành, lời chúc, đối soát", () => {
+    expect(dailyMessage(base).full.split("\n")).toEqual([FIRST, BLESS, "Đối soát: khớp"]);
   });
 
-  it("UC-402 AC-34: 🎯 mỗi mục tiêu Dự phòng có tài khoản và B theo thứ tự truyền vào (held / B), rồi phần an tâm; không có Thuế (theo %), không có mục tiêu chưa gắn tài khoản, không có Quỹ an tâm; phần an tâm âm → thiếu; covered null → không có mục; không mục nào → không dòng 🎯", () => {
-    const line = (o: Partial<DailyMessageInput>) => dailyMessage({ ...base, ...sampleB, ...o }).full.split("\n").find((l) => l.startsWith("🎯"));
-    expect(line({})).toBe("🎯 Trả nợ Vay người thân 100% · Học phí 66% · Bảo dưỡng xe 20% · Phần an tâm đủ 3,1/6 tháng");
-    expect(line({ peace: -1_000_000, peaceMonths: { covered: 0, target: 6 } })).toBe("🎯 Trả nợ Vay người thân 100% · Học phí 66% · Bảo dưỡng xe 20% · Phần an tâm thiếu 1.000.000 ₫");
-    expect(line({ peaceMonths: { covered: null, target: 6 } })).toBe("🎯 Trả nợ Vay người thân 100% · Học phí 66% · Bảo dưỡng xe 20%");
-    expect(line({ reserveGoals: [{ name: "Quá <đích>", held: 9_000_000, target: 6_000_000, spent: 0 }], peace: 0 })).toBe("🎯 Quá &lt;đích&gt; 100%");
+  it("UC-402 AC-34: Mục tiêu: mỗi mục tiêu Dự phòng có tài khoản và B theo thứ tự truyền vào (held / B), rồi phần an tâm; không có Thuế (theo %), không có mục tiêu chưa gắn tài khoản, không có Quỹ an tâm; phần an tâm âm → thiếu; covered null → không có mục; không mục nào → không dòng Mục tiêu", () => {
+    const line = (o: Partial<DailyMessageInput>) => dailyMessage({ ...base, ...sampleB, ...o }).full.split("\n").find((l) => l.startsWith("Mục tiêu:"));
+    expect(line({})).toBe("Mục tiêu: Trả nợ Vay người thân 100% · Học phí 66% · Bảo dưỡng xe 20% · Phần an tâm đủ 3,1/6 tháng");
+    expect(line({ peace: -1_000_000, peaceMonths: { covered: 0, target: 6 } })).toBe("Mục tiêu: Trả nợ Vay người thân 100% · Học phí 66% · Bảo dưỡng xe 20% · Phần an tâm thiếu 1.000.000 ₫");
+    expect(line({ peaceMonths: { covered: null, target: 6 } })).toBe("Mục tiêu: Trả nợ Vay người thân 100% · Học phí 66% · Bảo dưỡng xe 20%");
+    expect(line({ reserveGoals: [{ name: "Quá <đích>", held: 9_000_000, target: 6_000_000, spent: 0 }], peace: 0 })).toBe("Mục tiêu: Quá &lt;đích&gt; 100%");
     expect(line({ reserveGoals: [], peace: 0 })).toBeUndefined();
     expect(dailyMessage({ ...base, ...sampleB }).full).not.toContain("Quỹ an tâm");
     expect(dailyMessage({ ...base, ...sampleB }).full).not.toContain("Sửa nhà");
   });
 
-  it("UC-402 AC-41: 🎯 theo thứ tự ưu tiên, p = ⌊(held + spent) × 100 ÷ B⌋ kẹp 0…100 — nhóm tài khoản chung; Thuế không vào; đã chi 7.500.000 gắn Nhà ở → 100%; Học tập held −6.000.000, spent 6.000.000 → 0%", () => {
+  it("UC-402 AC-41: Mục tiêu theo thứ tự ưu tiên, p = ⌊(held + spent) × 100 ÷ B⌋ kẹp 0…100 — nhóm tài khoản chung; Thuế không vào; đã chi 7.500.000 gắn Nhà ở → 100%; Học tập held −6.000.000, spent 6.000.000 → 0%", () => {
     const goals = [
       { name: "Hoá đơn", held: 2_000_000, target: 2_000_000, spent: 0 },
       { name: "Nhà ở", held: 7_500_000, target: 7_500_000, spent: 0 },
@@ -109,51 +108,70 @@ describe("dailyMessage", () => {
       { name: "Thuế", held: 1_500_000, target: null, spent: 0 },
     ];
     const line = (reserveGoals: typeof goals) =>
-      dailyMessage({ ...base, ...sampleB, reserveGoals, peace: 5_000_000, peaceMonths: { covered: null, target: 6 } }).full.split("\n").find((l) => l.startsWith("🎯"));
-    expect(line(goals)).toBe("🎯 Hoá đơn 100% · Nhà ở 100% · Học tập 75% · Bảo dưỡng xe 100% · Hiếu hỉ 73%");
+      dailyMessage({ ...base, ...sampleB, reserveGoals, peace: 5_000_000, peaceMonths: { covered: null, target: 6 } }).full.split("\n").find((l) => l.startsWith("Mục tiêu:"));
+    expect(line(goals)).toBe("Mục tiêu: Hoá đơn 100% · Nhà ở 100% · Học tập 75% · Bảo dưỡng xe 100% · Hiếu hỉ 73%");
     const paid = goals.map((g) => (g.name === "Nhà ở" ? { ...g, held: 0, spent: 7_500_000 } : g));
     expect(line(paid)).toContain("Nhà ở 100%");
     const over = goals.map((g) => (g.name === "Học tập" ? { ...g, held: -6_000_000, spent: 6_000_000 } : g));
     expect(line(over)).toContain("Học tập 0%");
     const single = [{ name: "Hoá đơn", held: 1_000_000, target: 2_000_000, spent: 500_000 }];
-    expect(line(single)).toBe("🎯 Hoá đơn 75%");
+    expect(line(single)).toBe("Mục tiêu: Hoá đơn 75%");
   });
 
-  it("UC-402 AC-35: 💳 nợ ngắn hạn kèm số đã có trong tài khoản Trả nợ và tất cả khoản nợ; chỉ nợ ngắn hạn → không vế cuối; hết nợ ngắn hạn → lời chúc của ngày kèm nợ khác; bản ngắn không đổi", () => {
-    const debtLine = (o: Partial<DailyMessageInput>) => dailyMessage({ ...base, ...o }).full.split("\n").find((l) => l.startsWith("💳"));
-    expect(debtLine(sampleB)).toBe("💳 Nợ ngắn hạn còn 8.000.000 ₫ (2 khoản) · đã có 1.000.000 ₫ trong tài khoản Trả nợ · tất cả khoản nợ còn 58.000.000 ₫ (3 khoản)");
+  it("UC-402 AC-35: nợ ngắn hạn kèm số đã có trong tài khoản Trả nợ và tất cả khoản nợ; chỉ nợ ngắn hạn → không vế cuối; hết nợ ngắn hạn → lời chúc của ngày kèm nợ khác; bản ngắn không đổi", () => {
+    const debtLine = (o: Partial<DailyMessageInput>) => dailyMessage({ ...base, ...o }).full.split("\n").find((l) => l.startsWith("Nợ ngắn hạn") || l.startsWith("Không còn nợ") || l.startsWith("Sạch nợ") || l.startsWith("Không nợ") || l.startsWith("Hết nợ"));
+    expect(debtLine(sampleB)).toBe("Nợ ngắn hạn còn 8.000.000 ₫ (2 khoản) · đã có 1.000.000 ₫ trong tài khoản Trả nợ · tất cả khoản nợ còn 58.000.000 ₫ (3 khoản)");
     expect(dailyMessage({ ...base, ...sampleB }).full).not.toMatch(/để riêng|giữ riêng/);
-    expect(debtLine({ shortDebt: { total: 8_000_000, count: 2, items: [{ heldFor: 0 }, { heldFor: 0 }] }, debts: { balance: 8_000_000, count: 2 } })).toBe("💳 Nợ ngắn hạn còn 8.000.000 ₫ (2 khoản)");
-    expect(debtLine({ day: "2026-11-11", debts: { balance: 50_000_000, count: 1 } })).toBe("💳 Không còn nợ ngắn hạn 🎉 — tiền vận hành là của mình trọn vẹn · còn nợ khác 50.000.000 ₫ (1 khoản)");
-    expect(debtLine({ day: "2026-11-12" })).toBe("💳 Sạch nợ ngắn hạn — mỗi đồng chi hôm nay là tiền của mình");
+    expect(debtLine({ shortDebt: { total: 8_000_000, count: 2, items: [{ heldFor: 0 }, { heldFor: 0 }] }, debts: { balance: 8_000_000, count: 2 } })).toBe("Nợ ngắn hạn còn 8.000.000 ₫ (2 khoản)");
+    expect(debtLine({ day: "2026-11-11", debts: { balance: 50_000_000, count: 1 } })).toBe("Không còn nợ ngắn hạn — tiền vận hành là của mình trọn vẹn · còn nợ khác 50.000.000 ₫ (1 khoản)");
+    expect(debtLine({ day: "2026-11-12" })).toBe("Sạch nợ ngắn hạn — mỗi đồng chi hôm nay là tiền của mình");
     expect(dailyMessage({ ...base, ...sampleB }).push).toEqual(dailyMessage(base).push);
   });
 
   it("UC-402 AC-30: lãi tiền gửi tự ghi hôm qua → một dòng thông tin sau dòng đối soát, vào tên tài khoản nhận (escape HTML); bản đẩy không đổi; không có lãi → không có dòng", () => {
     const msg = dailyMessage({ ...base, interestYesterday: { total: 155, count: 3, accounts: ["Tài khoản chính", "VCB <vợ>", "Tài khoản tiết kiệm"] } });
-    expect(msg.full.split("\n")).toEqual([FIRST, BLESS, "🏦 Đối soát: khớp", "💰 Lãi tiền gửi: +155 ₫ (3 khoản) — vào Tài khoản chính, VCB &lt;vợ&gt;, Tài khoản tiết kiệm"]);
+    expect(msg.full.split("\n")).toEqual([FIRST, BLESS, "Đối soát: khớp", "Lãi tiền gửi: +155 ₫ (3 khoản) — vào Tài khoản chính, VCB &lt;vợ&gt;, Tài khoản tiết kiệm"]);
     expect(msg.push).toEqual(dailyMessage(base).push);
     expect(dailyMessage({ ...base, interestYesterday: { total: 0, count: 0, accounts: [] } }).full).toBe(dailyMessage(base).full);
   });
 
   it("UC-402 AC-40: lãi vào tài khoản riêng tư chỉ nối số khoản, không số tiền, không tên; chỉ có lãi riêng tư → một dòng chỉ số khoản; bản ngắn không đổi", () => {
     const mixed = dailyMessage({ ...base, interestYesterday: { total: 105, count: 2, accounts: ["VCB (chính)", "MB (Thuế)"], privateCount: 1 } });
-    expect(mixed.full.split("\n").filter((l) => l.includes("Lãi tiền gửi"))).toEqual(["💰 Lãi tiền gửi: +105 ₫ (2 khoản) — vào VCB (chính), MB (Thuế) · 1 khoản của tài khoản riêng tư"]);
+    expect(mixed.full.split("\n").filter((l) => l.includes("Lãi tiền gửi"))).toEqual(["Lãi tiền gửi: +105 ₫ (2 khoản) — vào VCB (chính), MB (Thuế) · 1 khoản của tài khoản riêng tư"]);
     const only = dailyMessage({ ...base, interestYesterday: { total: 0, count: 0, accounts: [], privateCount: 1 } });
-    expect(only.full.split("\n").filter((l) => l.includes("Lãi tiền gửi"))).toEqual(["💰 Lãi tiền gửi: 1 khoản của tài khoản riêng tư"]);
+    expect(only.full.split("\n").filter((l) => l.includes("Lãi tiền gửi"))).toEqual(["Lãi tiền gửi: 1 khoản của tài khoản riêng tư"]);
     expect(only.push).toEqual(dailyMessage(base).push);
     expect(mixed.push).toEqual(dailyMessage(base).push);
   });
 
-  it("UC-402 AC-36: việc ngày lương còn mở → dòng ☑️ ở chỗ cũ của 📅 (sau 🔎, trước 🧮); bản ngắn có \"việc ngày lương N\"; 0 việc → không có dòng; không còn 🔁 / 📅 / 📌", () => {
-    const msg = dailyMessage({ ...base, payTasksOpen: 5, limitNudges: [{ name: "Ăn uống", pct: 90, over: 0 }], cashCountReminder: ["Tiền mặt"] });
-    expect(msg.full.split("\n").slice(1, 4)).toEqual(["🔎 Nhìn lại kỳ này: Ăn uống 90%", "☑️ Việc ngày lương còn 5 việc", "🧮 Chủ nhật: đếm tiền mặt, nhập số dư — Tiền mặt"]);
-    expect(msg.push.body).toBe("Ăn uống 90% · việc ngày lương 5 · đếm tiền mặt");
-    expect(msg.full).not.toMatch(/🔁|📅|📌/);
-    expect(dailyMessage({ ...base, payTasksOpen: 0 }).full).not.toContain("☑️");
+  it("UC-402 AC-43: nhắc ① còn thiếu 2.000.000 → \"Chưa trích Tích luỹ 2.000.000 ₫\" sau Chi tiêu tháng này, trước Tháng dư; tháng 11 dư 4.800.000 chưa chia → \"Tháng 11 dư 4.800.000 ₫ — mở app để chia\"; Chi tiêu tháng này; bản ngắn cùng thứ tự", () => {
+    const monthClose = { month: "2026-11", surplus: 4_800_000, status: "ask" as const };
+    const msg = dailyMessage({ ...base, savingsDue: { missing: 2_000_000, privateCount: 0 }, monthClose, limitNudges: [{ name: "Ăn uống", pct: 90, over: 0 }], cashCountReminder: ["Tiền mặt"] });
+    expect(msg.full.split("\n").slice(1, 5)).toEqual([
+      "Chi tiêu tháng này: Ăn uống 90%",
+      "Chưa trích Tích luỹ 2.000.000 ₫",
+      "Tháng 11 dư 4.800.000 ₫ — mở app để chia",
+      "Chủ nhật: đếm tiền mặt, nhập số dư — Tiền mặt",
+    ]);
+    expect(msg.push.body).toBe("Ăn uống 90% · chưa trích Tích luỹ 2.000.000 · chia dư tháng 11 · đếm tiền mặt");
+    expect(msg.full).not.toMatch(/🔁|📅|📌|kỳ này|Việc ngày lương/);
+    // Không còn thiếu; dư đã chia / đã bỏ qua / không dư → không dòng.
+    const none = dailyMessage({ ...base, savingsDue: { missing: 0, privateCount: 0 } });
+    expect(none.full).not.toContain("Chưa trích Tích luỹ");
+    for (const mc of [{ ...monthClose, status: "split" as const }, { ...monthClose, status: "skipped" as const }, { ...monthClose, surplus: 0 }, { ...monthClose, surplus: -1_200_000 }]) {
+      expect(dailyMessage({ ...base, monthClose: mc }).full, JSON.stringify(mc)).not.toContain("mở app để chia");
+    }
   });
 
-  it("UC-402 AC-4: đủ mọi mục → đúng 9 dòng 💰 📥 🔎 ☑️ 🎯 💳 🏦 🔗 🩹: dòng 💰, rồi việc cần làm, rồi thông tin; đúng câu chữ", () => {
+  it("UC-402 AC-43: nhắc ① của lương về tài khoản riêng tư (ADR-133) → chỉ đếm số khoản, không số tiền; có cả nhắc công khai → số công khai kèm số khoản riêng tư", () => {
+    const only = dailyMessage({ ...base, savingsDue: { missing: 0, privateCount: 1 } });
+    expect(only.full.split("\n")).toContain("Chưa trích Tích luỹ · 1 khoản của tài khoản riêng tư");
+    expect(only.push.body).toBe("Chưa trích Tích luỹ");
+    const mixed = dailyMessage({ ...base, savingsDue: { missing: 500_000, privateCount: 1 } });
+    expect(mixed.full.split("\n")).toContain("Chưa trích Tích luỹ 500.000 ₫ · 1 khoản của tài khoản riêng tư");
+  });
+
+  it("UC-402 AC-4: đủ mọi mục: dòng Vận hành, rồi việc cần làm, rồi thông tin; đúng câu chữ", () => {
     const input: DailyMessageInput = {
       ...base,
       limitNudges: [
@@ -165,58 +183,58 @@ describe("dailyMessage", () => {
       peace: 32_000_000,
       peaceMonths: { covered: 3.2, target: 6 },
       driftAccounts: [{ name: "VCB", amount: -120_000 }],
-      payTasksOpen: 3,
+      savingsDue: { missing: 3_000_000, privateCount: 0 },
       pairedTransfersYesterday: 1,
       backfillAddedLastNight: 2,
     };
     expect(dailyMessage(input).full).toBe(
       [
         FIRST,
-        "📥 5 giao dịch chưa gán",
-        "🔎 Nhìn lại kỳ này: Đi lại vượt 40.000 ₫ · Ăn uống 92%",
-        "☑️ Việc ngày lương còn 3 việc",
-        "🎯 Du lịch 45% · Phần an tâm đủ 3,2/6 tháng",
+        "5 giao dịch chưa gán",
+        "Chi tiêu tháng này: Đi lại vượt 40.000 ₫ · Ăn uống 92%",
+        "Chưa trích Tích luỹ 3.000.000 ₫",
+        "Mục tiêu: Du lịch 45% · Phần an tâm đủ 3,2/6 tháng",
         BLESS,
-        "🏦 Đối soát: ❌ lệch 120.000 ₫ ở VCB",
-        "🔗 Hôm qua tự ghép 1 cặp chuyển nội bộ",
-        "🩹 Đêm qua vá 2 giao dịch webhook bỏ sót",
+        "Đối soát: lệch 120.000 ₫ ở VCB",
+        "Hôm qua tự ghép 1 cặp chuyển nội bộ",
+        "Đêm qua vá 2 giao dịch webhook bỏ sót",
       ].join("\n"),
     );
   });
 
-  it("UC-402 AC-6: dòng 🔎 giữ thứ tự limitNudges truyền vào (vượt trước rồi % giảm dần — cron dùng limitNudges); nhóm vượt ghi số vượt, nhóm gần chạm ghi %", () => {
+  it("UC-402 AC-6: dòng Chi tiêu tháng này giữ thứ tự limitNudges truyền vào (vượt trước rồi % giảm dần — cron dùng limitNudges); nhóm vượt ghi số vượt, nhóm gần chạm ghi %", () => {
     const text = dailyMessage({ ...base, limitNudges: [{ name: "Mua sắm", pct: 120, over: 200_000 }, { name: "Ăn uống", pct: 83, over: 0 }] }).full;
-    expect(text).toContain("🔎 Nhìn lại kỳ này: Mua sắm vượt 200.000 ₫ · Ăn uống 83%");
+    expect(text).toContain("Chi tiêu tháng này: Mua sắm vượt 200.000 ₫ · Ăn uống 83%");
     expect(text).not.toContain("Sắp vỡ");
   });
 
-  it("UC-402 AC-38: không nhóm nào cần nhắc → không dòng 🔎, không mục nhóm ở bản ngắn; không dòng nào chứa \"Sắp vỡ\" hay \"bù\"", () => {
-    const msg = dailyMessage({ ...base, limitNudges: [], payTasksOpen: 1 });
-    expect(msg.full).not.toMatch(/🔎|Sắp vỡ|bù/);
-    expect(msg.push.body).toBe("Việc ngày lương 1");
+  it("UC-402 AC-38: không nhóm nào cần nhắc → không dòng Chi tiêu tháng này, không mục nhóm ở bản ngắn; không dòng nào chứa \"Sắp vỡ\" hay \"bù\"", () => {
+    const msg = dailyMessage({ ...base, limitNudges: [], savingsDue: { missing: 1_000_000, privateCount: 0 } });
+    expect(msg.full).not.toMatch(/Chi tiêu tháng này|Sắp vỡ|bù/);
+    expect(msg.push.body).toBe("Chưa trích Tích luỹ 1.000.000");
   });
 
   it("UC-404 AC-5: Chủ nhật: nhắc đếm tiền mặt / nhập số dư kèm tên tài khoản", () => {
     const text = dailyMessage({ ...base, cashCountReminder: ["Tiền mặt (chồng)", "Tiền mặt (vợ)"] }).full;
-    expect(text).toContain("🧮 Chủ nhật: đếm tiền mặt, nhập số dư — Tiền mặt (chồng), Tiền mặt (vợ)");
+    expect(text).toContain("Chủ nhật: đếm tiền mặt, nhập số dư — Tiền mặt (chồng), Tiền mặt (vợ)");
     expect(text).not.toContain("ví tiền mặt");
   });
 
   it("UC-402 AC-17: ngày 1: mỗi người thuê chưa gửi bản tính tháng trước một dòng nhắc lập bản tính kèm tháng và số dư", () => {
     const text = dailyMessage({ ...base, rentalBillReminder: { month: "2026-10", tenants: [{ name: "An", balance: -80_000 }, { name: "Bình", balance: 5_111_667 }] } }).full;
-    expect(text.split("\n")).toEqual([FIRST, "🏠 Lập bản tính tháng 10 cho An (số dư −80.000 ₫)", "🏠 Lập bản tính tháng 10 cho Bình (số dư 5.111.667 ₫)", BLESS, "🏦 Đối soát: khớp"]);
-    expect(dailyMessage({ ...base, rentalBillReminder: { month: "2026-10", tenants: [] } }).full).not.toContain("🏠");
+    expect(text.split("\n")).toEqual([FIRST, "Lập bản tính tháng 10 cho An (số dư −80.000 ₫)", "Lập bản tính tháng 10 cho Bình (số dư 5.111.667 ₫)", BLESS, "Đối soát: khớp"]);
+    expect(dailyMessage({ ...base, rentalBillReminder: { month: "2026-10", tenants: [] } }).full).not.toContain("Lập bản tính");
   });
 
   it("tin sáng báo người khác nợ mình X (N khoản) ngay sau dòng còn nợ, không còn ai nợ thì không có dòng", () => {
     const debts = { debts: { balance: 15_379_000, count: 2 }, shortDebt: { total: 15_379_000, count: 2, items: [{ heldFor: 0 }, { heldFor: 0 }] } };
     expect(dailyMessage({ ...base, ...debts, receivables: { balance: 3_000_000, count: 1 } }).full.split("\n")).toEqual([
       FIRST,
-      "💳 Nợ ngắn hạn còn 15.379.000 ₫ (2 khoản)",
-      "🤝 Người khác nợ mình 3.000.000 ₫ (1 khoản)",
-      "🏦 Đối soát: khớp",
+      "Nợ ngắn hạn còn 15.379.000 ₫ (2 khoản)",
+      "Người khác nợ mình 3.000.000 ₫ (1 khoản)",
+      "Đối soát: khớp",
     ]);
-    expect(dailyMessage({ ...base, ...debts, receivables: { balance: 0, count: 0 } }).full).not.toContain("🤝");
+    expect(dailyMessage({ ...base, ...debts, receivables: { balance: 0, count: 0 } }).full).not.toContain("Người khác nợ mình");
   });
 
   it("UC-402 AC-13: tên nhóm được escape HTML ở bản đầy đủ (parse_mode=HTML), giữ chữ thật ở bản ngắn", () => {
@@ -226,7 +244,7 @@ describe("dailyMessage", () => {
     expect(push.body).toBe("Ăn <uống> & chơi 90%");
   });
 
-  it("UC-402 AC-42: có topUp (UC-103 AC-25) → dòng 💰 thêm \"· cần chuyển thêm 2.500.000 ₫ vào tiền chi tiêu (từ BIDV)\"; có số mỗi ngày thì câu nối sau số đó; topUp null hay không nguồn → không / không \"(từ …)\"", () => {
+  it("UC-402 AC-42: có topUp (UC-103 AC-25) → dòng Vận hành thêm \"· cần chuyển thêm 2.500.000 ₫ vào tiền chi tiêu (từ BIDV)\"; có số mỗi ngày thì câu nối sau số đó; topUp null hay không nguồn → không / không \"(từ …)\"", () => {
     const topUp = {
       amount: 2_500_000,
       sources: [
@@ -235,9 +253,9 @@ describe("dailyMessage", () => {
       ],
     };
     const ac25 = dailyMessage({ ...base, nearSpend: { amount: 1_000_000, payday: "2026-12-10", daysLeft: 20, perDay: null }, topUp });
-    expect(ac25.full.split("\n")[0]).toBe("💰 Vận hành còn 1.000.000 ₫ tới kỳ lương 10/12 (còn 20 ngày) · cần chuyển thêm 2.500.000 ₫ vào tiền chi tiêu (từ BIDV)");
-    expect(dailyMessage({ ...base, topUp }).full.split("\n")[0]).toBe(`${FIRST} · cần chuyển thêm 2.500.000 ₫ vào tiền chi tiêu (từ BIDV)`);
-    expect(dailyMessage({ ...base, topUp: { amount: 300_000, sources: [] } }).full.split("\n")[0]).toBe(`${FIRST} · cần chuyển thêm 300.000 ₫ vào tiền chi tiêu`);
+    expect(ac25.full.split("\n")[0]).toBe("Vận hành còn 1.000.000 ₫ tới ngày lương 10/12 (còn 20 ngày) · cần chuyển thêm 2.500.000 ₫ vào Tiền vận hành (từ BIDV)");
+    expect(dailyMessage({ ...base, topUp }).full.split("\n")[0]).toBe(`${FIRST} · cần chuyển thêm 2.500.000 ₫ vào Tiền vận hành (từ BIDV)`);
+    expect(dailyMessage({ ...base, topUp: { amount: 300_000, sources: [] } }).full.split("\n")[0]).toBe(`${FIRST} · cần chuyển thêm 300.000 ₫ vào Tiền vận hành`);
     expect(dailyMessage({ ...base, topUp: null }).full.split("\n")[0]).toBe(FIRST);
   });
 });
@@ -253,7 +271,7 @@ describe("dailyMessage — bản ngắn cho thông báo đẩy", () => {
     shortDebt: { total: 15_379_000, count: 2, items: [{ heldFor: 0 }, { heldFor: 0 }] },
     day: "2026-11-13",
     driftAccounts: [],
-    payTasksOpen: 0,
+    savingsDue: null,
     pairedTransfersYesterday: 1,
     backfillAddedLastNight: 2,
     cashCountReminder: [],
@@ -268,16 +286,17 @@ describe("dailyMessage — bản ngắn cho thông báo đẩy", () => {
     expect(dailyMessage({ ...base, driftAccounts: [{ name: "MB", amount: -120_000 }] }).push.body).toBe("Lệch 120.000 ₫ ở MB");
   });
 
-  it("UC-402 AC-26: việc cần làm theo thứ tự chưa gán → xem tay → nhóm 🔎 → việc ngày lương → đếm tiền mặt → lập bản tính người thuê, rồi chỗ lệch; không còn \"chốt tháng <m>\"", () => {
+  it("UC-402 AC-26: việc cần làm theo thứ tự chưa gán → xem tay → nhóm Chi tiêu tháng này → chưa trích Tích luỹ → chia dư → đếm tiền mặt → lập bản tính người thuê, rồi chỗ lệch; không còn \"chốt tháng <m>\"", () => {
     const push = dailyMessage({
       ...base,
       unassignedCount: 3,
       unreadableBankTransactions: 1,
       limitNudges: [{ name: "Ăn uống", pct: 88, over: 0 }],
-      payTasksOpen: 2,
+      savingsDue: { missing: 2_000_000, privateCount: 0 },
+      monthClose: { month: "2026-11", surplus: 4_800_000, status: "ask" },
       driftAccounts: [{ name: "MB", amount: 5_000 }],
     }).push;
-    expect(push.body).toBe("3 chưa gán · 1 cần xem tay · Ăn uống 88% · việc ngày lương 2 · lệch 5.000 ₫ ở MB");
+    expect(push.body).toBe("3 chưa gán · 1 cần xem tay · Ăn uống 88% · chưa trích Tích luỹ 2.000.000 · chia dư tháng 11 · lệch 5.000 ₫ ở MB");
 
     const dayOne = dailyMessage({
       ...base,
@@ -293,7 +312,8 @@ describe("dailyMessage — bản ngắn cho thông báo đẩy", () => {
       nearSpend: { amount: 3_580_224_000, payday: "2026-12-10", daysLeft: 29, perDay: 123_456_000 },
       unassignedCount: 12,
       unreadableBankTransactions: 2,
-      payTasksOpen: 5,
+      savingsDue: { missing: 2_000_000, privateCount: 0 },
+      monthClose: { month: "2026-11", surplus: 4_800_000, status: "ask" },
       limitNudges: [
         { name: "Ăn uống gia đình mở rộng", pct: 135, over: 1_050_000 },
         { name: "Đi lại & xăng xe hằng ngày", pct: 105, over: 40_000 },
@@ -310,7 +330,27 @@ describe("dailyMessage — bản ngắn cho thông báo đẩy", () => {
     expect(push.body).toBe("12 chưa gán · 2 cần xem tay · Ăn uống gia đình mở rộng vượt 1.050.000 ₫ · Đi lại & xăng xe hằng ngày vượt 40.000 ₫ · Chơi (chồng) 92% …");
     expect(push.body).not.toContain("<");
     // Bản đầy đủ giữ mọi dòng: việc cần làm trước, thông tin sau, dưới giới hạn 4096 ký tự của Telegram.
-    expect(full.split("\n").map((l) => Array.from(l)[0])).toEqual(["💰", "📥", "❗", "🔎", "☑", "🧮", "🏠", "🏠", "🎯", "💳", "🤝", "🏦", "🔗", "💰", "🩹"]);
+    const prefixes = [
+      "Vận hành",
+      "12 giao dịch",
+      "2 giao dịch",
+      "Chi tiêu tháng này",
+      "Chưa trích Tích luỹ",
+      "Tháng 11 dư",
+      "Chủ nhật: đếm tiền mặt",
+      "Lập bản tính tháng 11 cho Anh Bình",
+      "Lập bản tính tháng 11 cho An",
+      "Mục tiêu:",
+      "Nợ ngắn hạn còn",
+      "Người khác nợ mình",
+      "Đối soát:",
+      "Hôm qua tự ghép",
+      "Lãi tiền gửi:",
+      "Đêm qua vá",
+    ];
+    const lines = full.split("\n");
+    expect(lines).toHaveLength(prefixes.length);
+    prefixes.forEach((prefix, i) => expect(lines[i].startsWith(prefix)).toBe(true));
     expect(full).not.toMatch(/🧹|📌|Sắp vỡ/);
     expect(full.length).toBeLessThan(4096);
   });
@@ -338,14 +378,14 @@ describe("weeklyMessage", () => {
     { name: "Mua sắm", spent: 1_200_000, limit: 1_000_000, over: 200_000 },
   ];
 
-  it("UC-406 AC-4: định dạng theo đầu vào mới: 💰 như tin sáng, 🧾 tuần qua, 🔎 mọi nhóm có hạn mức theo thứ tự (vượt ghi rõ), 🏆 top 5; không dòng phong bì", () => {
+  it("UC-406 AC-4: định dạng theo đầu vào mới: Vận hành như tin sáng, tuần qua, mọi nhóm có hạn mức theo thứ tự (vượt ghi rõ), top 5; không dòng phong bì", () => {
     const input: WeeklyMessageInput = {
       weekLabel: "T47 (16–22/11)",
       nearSpend,
       totalSpent: 2_100_000,
       operatingSpent: 1_600_000,
       limits,
-      cycleStart: "2026-11-10",
+      month: "2026-11",
       topCategories: [
         { name: "Mua sắm", spent: 700_000 },
         { name: "Đi chợ / nấu ăn", spent: 600_000 },
@@ -353,16 +393,16 @@ describe("weeklyMessage", () => {
     };
     expect(weeklyMessage(input).full).toBe(
       [
-        "📊 Tổng kết tuần T47 (16–22/11)",
-        "💰 Vận hành 9.000.000 ₫ · chi khoảng 529.000 ₫/ngày tới kỳ lương 10/12 (còn 17 ngày)",
-        "🧾 Tuần qua chi 2.100.000 ₫ · từ Vận hành 1.600.000 ₫ ≈ 228.000 ₫/ngày",
-        "🔎 Kỳ từ 10/11: Ăn uống 2.300.000 ₫ / 3.000.000 ₫ · Đi lại 450.000 ₫ / 800.000 ₫ · Mua sắm 1.200.000 ₫ / 1.000.000 ₫ (vượt 200.000 ₫)",
-        "🏆 Top 5 danh mục tiêu nhiều nhất:",
+        "Tổng kết tuần T47 (16–22/11)",
+        "Vận hành 9.000.000 ₫ · chi khoảng 529.000 ₫/ngày tới ngày lương 10/12 (còn 17 ngày)",
+        "Tuần qua chi 2.100.000 ₫ · từ Vận hành 1.600.000 ₫ ≈ 228.000 ₫/ngày",
+        "Từ 1/11: Ăn uống 2.300.000 ₫ / 3.000.000 ₫ · Đi lại 450.000 ₫ / 800.000 ₫ · Mua sắm 1.200.000 ₫ / 1.000.000 ₫ (vượt 200.000 ₫)",
+        "Top 5 danh mục tiêu nhiều nhất:",
         "1. Mua sắm — 700.000 ₫",
         "2. Đi chợ / nấu ăn — 600.000 ₫",
       ].join("\n"),
     );
-    // Dòng 💰 giống hệt tin sáng cùng số.
+    // Dòng Vận hành giống hệt tin sáng cùng số.
     const daily = dailyMessage({
       nearSpend,
       limitNudges: [],
@@ -373,7 +413,7 @@ describe("weeklyMessage", () => {
       shortDebt: { total: 0, count: 0, items: [] },
       day: "2026-11-23",
       driftAccounts: [],
-      payTasksOpen: 0,
+      savingsDue: null,
       pairedTransfersYesterday: 0,
       backfillAddedLastNight: 0,
       cashCountReminder: [],
@@ -382,31 +422,31 @@ describe("weeklyMessage", () => {
   });
 
   it("UC-406 AC-4: tuần rỗng hoàn toàn (không nearSpend, không nhóm, không danh mục) → tiêu đề + câu trạng thái rỗng", () => {
-    const { full, push } = weeklyMessage({ weekLabel: "T1 (29/12–4/1)", nearSpend: null, totalSpent: 0, operatingSpent: 0, limits: [], cycleStart: null, topCategories: [] });
-    expect(full).toBe(["📊 Tổng kết tuần T1 (29/12–4/1)", "Không có dữ liệu chi tiêu tuần này."].join("\n"));
+    const { full, push } = weeklyMessage({ weekLabel: "T1 (29/12–4/1)", nearSpend: null, totalSpent: 0, operatingSpent: 0, limits: [], month: "2026-12", topCategories: [] });
+    expect(full).toBe(["Tổng kết tuần T1 (29/12–4/1)", "Không có dữ liệu chi tiêu tuần này."].join("\n"));
     expect(push).toEqual({ title: "Tuần T1: chi 0 ₫", body: "Không có dữ liệu chi tiêu tuần này." });
   });
 
-  it("UC-406 AC-3: tuần không chi nhưng có nhóm hạn mức → 💰, 🔎 0 ₫ / hạn mức, câu rỗng; không 🧾, không 🏆", () => {
+  it("UC-406 AC-3: tuần không chi nhưng có nhóm hạn mức → Vận hành, Từ 1/M: 0 ₫ / hạn mức, câu rỗng; không dòng tuần qua, không top 5", () => {
     const { full } = weeklyMessage({
       weekLabel: "T46 (9–15/11)",
       nearSpend,
       totalSpent: 0,
       operatingSpent: 0,
       limits: [{ name: "Ăn uống", spent: 0, limit: 3_000_000, over: 0 }],
-      cycleStart: "2026-11-10",
+      month: "2026-11",
       topCategories: [],
     });
     expect(full.split("\n")).toEqual([
-      "📊 Tổng kết tuần T46 (9–15/11)",
-      "💰 Vận hành 9.000.000 ₫ · chi khoảng 529.000 ₫/ngày tới kỳ lương 10/12 (còn 17 ngày)",
-      "🔎 Kỳ từ 10/11: Ăn uống 0 ₫ / 3.000.000 ₫",
+      "Tổng kết tuần T46 (9–15/11)",
+      "Vận hành 9.000.000 ₫ · chi khoảng 529.000 ₫/ngày tới ngày lương 10/12 (còn 17 ngày)",
+      "Từ 1/11: Ăn uống 0 ₫ / 3.000.000 ₫",
       "Không có dữ liệu chi tiêu tuần này.",
     ]);
   });
 
   it("UC-406 AC-9: bản ngắn: tiêu đề tổng chi; mở bằng Vận hành còn X ≈ Y/ngày, rồi nhóm ≥ 80% (vượt trước), rồi danh mục tiêu nhiều nhất, rồi nhóm còn lại; hết tiền → Vận hành đã hết", () => {
-    const input: WeeklyMessageInput = { weekLabel: "T47 (16–22/11)", nearSpend, totalSpent: 2_100_000, operatingSpent: 1_600_000, limits, cycleStart: "2026-11-10", topCategories: [{ name: "Mua sắm", spent: 700_000 }] };
+    const input: WeeklyMessageInput = { weekLabel: "T47 (16–22/11)", nearSpend, totalSpent: 2_100_000, operatingSpent: 1_600_000, limits, month: "2026-11", topCategories: [{ name: "Mua sắm", spent: 700_000 }] };
     const { push } = weeklyMessage(input);
     expect(push.title).toBe("Tuần T47: chi 2.100.000 ₫");
     expect(push.body.startsWith("Vận hành còn 9.000.000 ₫ ≈ 529.000 ₫/ngày · Mua sắm 1.200.000/1.000.000 ₫ · tiêu nhiều nhất Mua sắm 700.000 ₫")).toBe(true);
@@ -422,12 +462,18 @@ describe("weeklyMessage", () => {
       totalSpent: 12_345_000,
       operatingSpent: 12_345_000,
       limits: Array.from({ length: 8 }, (_, i) => ({ name: `Nhóm số ${i + 1}`, spent: 900_000 - i * 100_000, limit: 1_000_000, over: 0 })),
-      cycleStart: "2026-09-10",
+      month: "2026-09",
       topCategories: [{ name: "Nhà", spent: 12_345_000 }],
     });
     expect(push.title).toBe("T40: chi 12.345.000 ₫");
     expect(Array.from(push.body).length).toBeLessThanOrEqual(PUSH_BODY_MAX);
     expect(push.body).toMatch(/^Vận hành còn 9\.000\.000 ₫ ≈ 529\.000 ₫\/ngày · Nhóm số 1 900\.000\/1\.000\.000 ₫ · Nhóm số 2 800\.000\/1\.000\.000 ₫ · .* …$/);
+  });
+
+  it("UC-406 AC-13: hạn mức nhóm theo tháng → \"Từ 1/12: …\" (đầu tháng), không còn \"Kỳ từ\"", () => {
+    const { full } = weeklyMessage({ weekLabel: "T49 (30/11–6/12)", nearSpend, totalSpent: 500_000, operatingSpent: 500_000, limits: [{ name: "Ăn uống", spent: 500_000, limit: 3_000_000, over: 0 }], month: "2026-12", topCategories: [] });
+    expect(full.split("\n")).toContain("Từ 1/12: Ăn uống 500.000 ₫ / 3.000.000 ₫");
+    expect(full).not.toMatch(/Kỳ từ|đầu kỳ/);
   });
 });
 
@@ -437,8 +483,8 @@ describe("pendingMessage", () => {
       { amount: 24_400, direction: "out", accountName: "MB chính (chồng)" },
       { amount: 50_000, direction: "in", accountName: null },
     ]);
-    expect(full).toBe(["⚠️ 2 giao dịch chưa gán:", "−24.400 ₫ — MB chính (chồng)", "+50.000 ₫ — TK lạ"].join("\n"));
-    expect(push).toEqual({ title: "2 giao dịch chưa gán", body: "−24.400 ₫ MB chính (chồng) · +50.000 ₫ TK lạ" });
+    expect(full).toBe(["2 khoản chưa gán:", "−24.400 ₫ · MB chính (chồng)", "+50.000 ₫ · TK lạ"].join("\n"));
+    expect(push).toEqual({ title: "2 khoản chưa gán", body: "−24.400 ₫ MB chính (chồng) · +50.000 ₫ TK lạ" });
   });
 
   it("nhiều khoản: bản đầy đủ dừng ở 20 dòng; bản ngắn ≤ 150, đuôi … và N khoản", () => {
@@ -447,7 +493,7 @@ describe("pendingMessage", () => {
     const lines = full.split("\n");
     expect(lines).toHaveLength(22);
     expect(lines[21]).toBe("… và 5 khoản khác");
-    expect(push.title).toBe("25 giao dịch chưa gán");
+    expect(push.title).toBe("25 khoản chưa gán");
     expect(Array.from(push.body).length).toBeLessThanOrEqual(PUSH_BODY_MAX);
     const shown = push.body.split(" · ").length;
     expect(push.body.endsWith(` … và ${25 - shown} khoản`)).toBe(true);
@@ -461,8 +507,8 @@ describe("pendingMessage", () => {
 
   it("UC-407 AC-14: log của tài khoản riêng tư gộp thành một dòng không số, không tên — sau các dòng log thường, trước \"… và N khoản khác\"; bản ngắn giữ mục riêng tư ở đầu phần bị cắt", () => {
     const { full, push } = pendingMessage([{ amount: 50_000, direction: "in", accountName: "VCB (chính)" }], 2);
-    expect(full).toBe("⚠️ 3 giao dịch chưa gán:\n+50.000 ₫ — VCB (chính)\n2 khoản của tài khoản riêng tư");
-    expect(push).toEqual({ title: "3 giao dịch chưa gán", body: "+50.000 ₫ VCB (chính) · 2 khoản của tài khoản riêng tư" });
+    expect(full).toBe("3 khoản chưa gán:\n+50.000 ₫ · VCB (chính)\n2 khoản của tài khoản riêng tư");
+    expect(push).toEqual({ title: "3 khoản chưa gán", body: "+50.000 ₫ VCB (chính) · 2 khoản của tài khoản riêng tư" });
     for (const s of [full, push.title, push.body]) {
       expect(s).not.toContain("3.000.000");
       expect(s).not.toContain("120.000");
@@ -471,14 +517,14 @@ describe("pendingMessage", () => {
 
     const many = pendingMessage(Array.from({ length: 25 }, (_, i) => ({ amount: 100_000 + i, direction: "out" as const, accountName: "MB chính (chồng)" })), 3);
     const lines = many.full.split("\n");
-    expect(lines[0]).toBe("⚠️ 28 giao dịch chưa gán:");
+    expect(lines[0]).toBe("28 khoản chưa gán:");
     expect(lines.slice(-2)).toEqual(["3 khoản của tài khoản riêng tư", "… và 5 khoản khác"]);
-    expect(many.push.title).toBe("28 giao dịch chưa gán");
+    expect(many.push.title).toBe("28 khoản chưa gán");
     expect(Array.from(many.push.body).length).toBeLessThanOrEqual(PUSH_BODY_MAX);
     const shown = many.push.body.split(" · ").length - 1;
     expect(many.push.body.endsWith(` · 3 khoản của tài khoản riêng tư … và ${25 - shown} khoản`)).toBe(true);
 
-    expect(pendingMessage([], 1)).toEqual({ full: "⚠️ 1 giao dịch chưa gán:\n1 khoản của tài khoản riêng tư", push: { title: "1 giao dịch chưa gán", body: "1 khoản của tài khoản riêng tư" } });
+    expect(pendingMessage([], 1)).toEqual({ full: "1 khoản chưa gán:\n1 khoản của tài khoản riêng tư", push: { title: "1 khoản chưa gán", body: "1 khoản của tài khoản riêng tư" } });
   });
 });
 
@@ -487,68 +533,34 @@ describe("dòng giao dịch ngân hàng không đọc được", () => {
     const { dailyMessage } = await import("../src/notify/format");
     const base: DailyMessageInput = {
       nearSpend: { amount: 4_100_000, payday: "2026-12-10", daysLeft: 29, perDay: 141_000 }, limitNudges: [], unassignedCount: 0, reserveGoals: [], peace: 0,
-      peaceMonths: { covered: null, target: 6 }, shortDebt: { total: 0, count: 0, items: [] }, day: "2026-11-13", driftAccounts: [], payTasksOpen: 0,
+      peaceMonths: { covered: null, target: 6 }, shortDebt: { total: 0, count: 0, items: [] }, day: "2026-11-13", driftAccounts: [], savingsDue: null,
       pairedTransfersYesterday: 0, backfillAddedLastNight: 0, cashCountReminder: [],
     };
-    expect(dailyMessage({ ...base, unreadableBankTransactions: 2 }).full.split("\n")).toContain("❗ 2 giao dịch ngân hàng cần xem tay");
+    expect(dailyMessage({ ...base, unreadableBankTransactions: 2 }).full.split("\n")).toContain("2 giao dịch ngân hàng cần xem tay");
     expect(dailyMessage({ ...base, unreadableBankTransactions: 0 }).full).not.toContain("cần xem tay");
   });
 });
 
-describe("payCycleMessage — lương về tài khoản riêng tư (notify UC-412)", () => {
-  const QR = [{ accountId: "x", name: "X", bank: "MB", accountNo: "1", subAccount: null }];
-  const task = (o: Partial<PayCycleTask>): PayCycleTask => ({
-    id: 1, kind: "savings", status: "open", auto: false, suggested: 0, amount: 0, linked: 0, missing: 0, pct: null, reason: null, toPocket: null,
-    goal: null, toAccountId: null, source: null, doneAt: null, lastTxAt: null, targets: [], targetName: null, ...o,
-  });
-  const goal = (id: string, name: string) => ({ id, name, held: 0, target: null, accountId: id });
-  const START = "2026-11-10T01:00:00.000Z";
-  const NO_SAVINGS = "chưa có tài khoản Tích luỹ — mở tài khoản thật ›";
+describe("salaryMessage — báo lương về (notify UC-412)", () => {
+  const base = { income: 20_000_000, amount: 2_000_000, pct: 10, goalHint: null };
 
-  it("UC-412 AC-4: chế độ không số — 💵 không số lương, dòng việc không \"· số\", dư kỳ trước không số; pct và tên mục tiêu giữ; bản ngắn không số tiền", () => {
-    const tasks = [
-      task({ kind: "savings", amount: 2_000_000, pct: 10, toPocket: "savings", targets: QR, targetName: "X", source: { hidden: true } }),
-      task({ kind: "goal", amount: 2_000_000, goal: goal("school", "Học phí"), targets: QR, targetName: "X" }),
-      task({ kind: "goal", amount: 760_000, goal: goal("car", "Bảo dưỡng xe"), targets: QR, targetName: "X" }),
-      task({ kind: "surplus", amount: 600_000, toPocket: "savings", targets: QR, targetName: "X" }),
-      task({ kind: "surplus", amount: 600_000, toAccountId: "bonus", targets: QR, targetName: "Ví Thưởng" }),
-    ];
-    const msg = payCycleMessage({ income: 20_000_000, startedAt: START, prevOperating: 1_200_000, tasks }, { hideAmounts: true });
-    expect(msg.full.split("\n")).toEqual([
-      "💵 Lương về — kỳ lương mới từ 10/11",
-      "Việc ngày lương (5):",
-      "☑️ Trích Tích luỹ 10%",
-      "☑️ Nạp Học phí",
-      "☑️ Nạp Bảo dưỡng xe",
-      "☑️ Dư kỳ trước vào Tích luỹ",
-      "☑️ Dư kỳ trước vào Ví Thưởng",
-      "Mở app › Hôm nay để làm — có mã QR chuyển khoản",
-    ]);
-    expect(msg.push).toEqual({ title: "Lương về · 5 việc", body: "Trích Tích luỹ 10% · Nạp Học phí · Nạp Bảo dưỡng xe · Dư kỳ trước vào Tích luỹ · Dư kỳ trước vào Ví Thưởng" });
-    for (const n of ["20.000.000", "2.000.000", "760.000", "600.000", "1.200.000"]) {
+  it("UC-412 AC-1: \"Lương về 20.000.000 ₫ · trích Tích luỹ 10% = 2.000.000 ₫\"; bản đẩy \"Lương về · trích 2.000.000\"; có mục tiêu còn thiếu → thêm đúng một dòng gợi ý (escape HTML ở bản đầy đủ)", () => {
+    const msg = salaryMessage(base);
+    expect(msg.full).toBe("Lương về 20.000.000 ₫ · trích Tích luỹ 10% = 2.000.000 ₫");
+    expect(msg.push).toEqual({ title: "Lương về · trích 2.000.000", body: "Trích Tích luỹ 10% = 2.000.000 ₫ từ lương 20.000.000 ₫" });
+    const hint = salaryMessage({ ...base, goalHint: { name: "Bảo <dưỡng> xe", short: 760_000 } });
+    expect(hint.full.split("\n")).toEqual(["Lương về 20.000.000 ₫ · trích Tích luỹ 10% = 2.000.000 ₫", "Mục tiêu còn thiếu: Bảo &lt;dưỡng&gt; xe 760.000 ₫ ›"]);
+    expect(hint.push.body).toBe("Trích Tích luỹ 10% = 2.000.000 ₫ từ lương 20.000.000 ₫ · mục tiêu còn thiếu: Bảo <dưỡng> xe 760.000 ₫");
+    expect(Array.from(hint.push.body).length).toBeLessThanOrEqual(PUSH_BODY_MAX);
+  });
+
+  it("UC-412 AC-4: lương về tài khoản riêng tư → không số tiền nào (lương, số trích, số còn thiếu của mục tiêu); giữ % và tên mục tiêu", () => {
+    const msg = salaryMessage({ ...base, goalHint: { name: "Bảo dưỡng xe", short: 760_000 } }, { hideAmounts: true });
+    expect(msg.full.split("\n")).toEqual(["Lương về · trích Tích luỹ 10%", "Mục tiêu còn thiếu: Bảo dưỡng xe ›"]);
+    expect(msg.push).toEqual({ title: "Lương về · trích 10%", body: "Trích Tích luỹ 10% · mục tiêu còn thiếu: Bảo dưỡng xe" });
+    for (const n of ["20.000.000", "2.000.000", "760.000"]) {
       expect(msg.full).not.toContain(n);
-      expect(msg.push.body).not.toContain(n);
+      expect(msg.push.body + msg.push.title).not.toContain(n);
     }
-    // Dư kỳ trước âm: dòng "tiêu quá" giữ (không suy ra lương).
-    const over = payCycleMessage({ income: 20_000_000, startedAt: START, prevOperating: -300_000, tasks: tasks.slice(0, 1) }, { hideAmounts: true });
-    expect(over.full.split("\n")).toContain("Kỳ trước tiêu quá 300.000 ₫ — không có gì để chia");
-  });
-
-  it("UC-412 AC-4: trùng ca chưa có tài khoản Tích luỹ (pocket UC-1206 AC-10) → ① và ④ có câu nhắc mở tài khoản, không số; có số thì như thẻ việc", () => {
-    const tasks = [
-      task({ kind: "savings", amount: 2_000_000, pct: 10, toPocket: "savings" }),
-      task({ kind: "surplus", amount: 6_000_000, toPocket: "savings" }),
-    ];
-    const hidden = payCycleMessage({ income: 20_000_000, startedAt: START, prevOperating: 12_000_000, tasks }, { hideAmounts: true });
-    expect(hidden.full.split("\n")).toEqual([
-      "💵 Lương về — kỳ lương mới từ 10/11",
-      "Việc ngày lương (2):",
-      `☑️ Trích Tích luỹ 10% · ${NO_SAVINGS}`,
-      `☑️ Dư kỳ trước vào Tích luỹ · ${NO_SAVINGS}`,
-      "Mở app › Hôm nay để làm",
-    ]);
-    expect(hidden.push).toEqual({ title: "Lương về · 2 việc", body: "Trích Tích luỹ 10% · Dư kỳ trước vào Tích luỹ" });
-    const shown = payCycleMessage({ income: 20_000_000, startedAt: START, prevOperating: 12_000_000, tasks });
-    expect(shown.full.split("\n").slice(2, 4)).toEqual([`☑️ Trích Tích luỹ 10% · ${NO_SAVINGS}`, `☑️ Dư kỳ trước 12.000.000 ₫: 6.000.000 ₫ vào Tích luỹ · ${NO_SAVINGS}`]);
   });
 });

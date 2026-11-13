@@ -20,12 +20,12 @@ export function paramsSummary(p: FreedomParams): string {
 
 /** Mốc an tâm: "Có 156.000.000 ₫ · cần 120.000.000 ₫ · 6 tháng". */
 export const safetyText = (s: SafetyMilestone): string =>
-  s.need === null ? `Có ${formatVnd(s.have)} · cần ${s.months} tháng chi phí — ${expenseNeededText}` : `Có ${formatVnd(s.have)} · cần ${formatVnd(s.need)} · ${s.months} tháng`;
+  s.need === null ? `Có ${formatVnd(s.have)} · cần ${s.months} tháng chi phí · ${expenseNeededText}` : `Có ${formatVnd(s.have)} · cần ${formatVnd(s.need)} · ${s.months} tháng`;
 
 /** Mốc thu nhập: "Thu nhập 45.000.000 ₫ · cần 33.333.334 ₫ — đạt" / "— còn thiếu X"; không có số → "chưa có số". */
 export function incomeMilestoneText(m: IncomeMilestone): string {
   if (m.have === null || m.need === null) return m.need === null && m.have !== null ? expenseNeededText : "chưa có số";
-  return `Thu nhập ${formatVnd(m.have)} · cần ${formatVnd(m.need)} — ${m.have >= m.need ? "đạt" : `còn thiếu ${formatVnd(m.need - m.have)}`}`;
+  return `Thu nhập ${formatVnd(m.have)} · cần ${formatVnd(m.need)} · ${m.have >= m.need ? "đạt" : `còn thiếu ${formatVnd(m.need - m.have)}`}`;
 }
 
 /** Nguồn của thu nhập nhà dùng cho mốc thu nhập (Công thức 9). */
@@ -33,13 +33,13 @@ export const incomeSourceText = (s: "ledger" | "plan" | null): string | null => 
 
 /** "Tài sản đầu tư trừ nợ 486.000.000 ₫ / cần 5.142.857.143 ₫". */
 export const freedomHaveText = (f: FreedomMilestone): string =>
-  f.need === null ? `Tài sản đầu tư trừ nợ ${formatVnd(f.have)} — ${expenseNeededText}` : `Tài sản đầu tư trừ nợ ${formatVnd(f.have)} / cần ${formatVnd(f.need)}`;
+  f.need === null ? `Tài sản đầu tư trừ nợ ${formatVnd(f.have)} · ${expenseNeededText}` : `Tài sản đầu tư trừ nợ ${formatVnd(f.have)} / cần ${formatVnd(f.need)}`;
 
 /** "hoặc dòng tiền ròng 104.166 ₫ / cần 15.000.000 ₫"; chưa có chi phí → null. */
 export const freedomCashflowText = (f: FreedomMilestone): string | null =>
   f.cashflowNeed === null ? null : `hoặc dòng tiền ròng ${formatVnd(f.cashflowHave)} / cần ${formatVnd(f.cashflowNeed)}`;
 
-/** Số quy theo giá tương lai — ước lượng, hai chữ số lẻ tỷ: "≈ 7,01 tỷ ₫"; đang che số (UC-718) thì "≈ •••• ₫". */
+/** Số quy theo giá tương lai — ước lượng, hai chữ số lẻ tỷ: "≈ 7,01 tỷ ₫"; đang che số (UC-718) thì "≈ ••••• ₫". */
 export const billionText = (n: number): string =>
   amountsHidden() ? `≈ ${formatVnd(n)}` : `≈ ${(Math.round(n / 1e7) / 100).toFixed(2).replace(".", ",")} tỷ ₫`.replace(" ₫", "\u00a0₫");
 

@@ -1,0 +1,534 @@
+@layer components {
+.dk-main .bill-foot {
+    bottom: var(--safe-bottom);
+  }
+
+.dk-shell > .update-bar {
+    position: fixed;
+    left: 0;
+    right: 0;
+  }
+
+/* ── toast: viên thuốc đáy màn, 2,2s ── */
+
+.dk-shell {
+    display: grid;
+    grid-template-columns: 232px minmax(0, 1fr);
+    min-height: 100dvh;
+    /* nền thanh bên kéo dài hết trang dù thanh bên chỉ cao một màn (dính khi cuộn) */
+    background: linear-gradient(to right, var(--surface) 231px, var(--line) 231px 232px, var(--bg) 232px);
+  }
+
+.app.dk-main {
+    max-width: 1400px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 0 28px 48px;
+  }
+
+.app.dk-main.app-wide {
+    max-width: 1180px;
+  }
+
+.dk-main .topbar {
+    padding: 20px 0 12px;
+  }
+
+.dk-main .topbar h1 {
+    font-size: var(--text-title); line-height: var(--leading-title);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+
+/* ── thanh bên ── */
+
+.side {
+    position: sticky;
+    top: 0;
+    height: 100dvh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 18px 12px 14px;
+    background: var(--surface);
+    border-right: 1px solid var(--line);
+  }
+
+.side-brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 2px 8px;
+    font-size: var(--text-md); line-height: var(--leading-md);
+    font-weight: 600;
+  }
+
+.side-logo {
+    width: 26px;
+    height: 26px;
+    border-radius: var(--r-inner);
+    background: var(--fg);
+    color: var(--bg);
+    display: grid;
+    place-items: center;
+  }
+
+/* Nút Ghi khoản và mục điều hướng cùng một khuôn (DESIGN §4.16): cao 44, đệm ngang 12, chữ --text-md, viên thuốc. Nút chỉ
+   khác ở nền đậm. Chữ của nút thẳng cột trái với chữ các mục. */
+.side-new,
+  .side-item {
+    display: flex;
+    align-items: center;
+    gap: var(--s2);
+    width: 100%;
+    min-height: 44px;
+    padding: 0 var(--s3);
+    border: 0;
+    border-radius: var(--r-pill);
+    font-size: var(--text-md); line-height: var(--leading-md);
+    text-align: left;
+    text-decoration: none;
+  }
+
+.side-new {
+    justify-content: flex-start;
+    background: var(--fg);
+    color: var(--bg);
+    font-weight: 500;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+
+.side-new > span:first-child {
+    flex: 1;
+    min-width: 0;
+  }
+
+.side-new:hover:not(:disabled) {
+    background: var(--fg);
+    opacity: 0.9;
+  }
+
+/* Phím tắt N: chip nhỏ canh giữa theo chiều dọc. */
+.side-new kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 var(--s1);
+    font-family: var(--font-num);
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    border: 1px solid currentColor;
+    border-radius: var(--r-pill);
+    color: inherit;
+    background: none;
+    opacity: 0.6;
+  }
+
+.side-nav {
+    display: grid;
+    gap: 2px;
+  }
+
+.side-item {
+    background: none;
+    color: var(--fg-2);
+  }
+
+/* Rê chuột chỉ đổi chữ; chỉ mục đang chọn có nền (K-006). */
+.side-item:hover {
+    color: var(--fg);
+  }
+
+.side-item[aria-current="page"] {
+    background: var(--surface-2);
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+.side-label {
+    flex: 1;
+    min-width: 0;
+  }
+
+/* Mã QR chuyển tiền: nền trắng cố định để app ngân hàng quét được cả khi app ở nền tối. */
+
+table.data.transfer-table .dk-act {
+    flex-wrap: nowrap;
+  }
+
+.side-badge {
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 99px;
+    background: var(--warn-bg);
+    color: var(--warn);
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    font-weight: 600;
+    display: grid;
+    place-items: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+.side-sep {
+    height: 1px;
+    background: var(--line);
+    margin: 6px 4px;
+  }
+
+/* Chân thanh bên (K-012): trạng thái một dòng, thao tác là nút icon, menu người dùng; không nút viên thuốc to. */
+
+.side-foot {
+    margin-top: auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s2);
+    padding-top: var(--s3);
+    border-top: 1px solid var(--line);
+  }
+
+.side-status {
+    display: grid;
+    gap: var(--s1);
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: stretch;
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    color: var(--fg-2);
+    padding: 0 var(--s1);
+  }
+
+.side-line {
+    display: flex;
+    align-items: center;
+    gap: var(--s1);
+    width: 100%;
+  }
+
+.side-line-t {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+.side-dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: var(--r-pill);
+    background: var(--pos);
+  }
+
+/* Nút icon nhỏ: vòng 32px, không viền, icon 16px --fg-2. */
+.side-ic {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--r-pill);
+    background: none;
+    color: var(--fg-2);
+    cursor: pointer;
+    list-style: none;
+  }
+
+.side-ic::-webkit-details-marker {
+    display: none;
+  }
+
+.side-ic svg {
+    width: 16px;
+    height: 16px;
+  }
+
+.side-ic:hover:not(:disabled) {
+    background: var(--surface-2);
+    color: var(--fg);
+  }
+
+.side-ic:disabled {
+    opacity: 0.4;
+  }
+
+.side-tools {
+    display: flex;
+    gap: var(--s1);
+  }
+
+.side-member {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s2);
+    padding-left: var(--s1);
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+  }
+
+.side-member-nm {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+.side-k {
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    color: var(--fg-2);
+  }
+
+.side-menu {
+    position: relative;
+  }
+
+.side-menu-list {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + var(--s1));
+    z-index: 20;
+    display: grid;
+    width: 200px;
+    padding: var(--s1);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-inner);
+  }
+
+.side-menu-item {
+    display: flex;
+    align-items: center;
+    min-height: 36px;
+    padding: 0 var(--s3);
+    border: 0;
+    border-radius: var(--r-pill);
+    background: none;
+    color: var(--fg);
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    text-align: left;
+    cursor: pointer;
+  }
+
+.side-menu-item:hover {
+    background: var(--surface-2);
+  }
+
+.side-warn {
+    margin: 0;
+    padding: var(--s1) var(--s3);
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    color: var(--neg);
+  }
+
+.side-about {
+    display: block;
+    margin: 0;
+    padding: 0 var(--s1);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+.side-about .link {
+    display: inline;
+    min-height: 0;
+    min-width: 0;
+    padding: 0;
+    color: var(--fg-2);
+  }
+
+/* ── Bảng máy tính (lưới 8–4 của Hôm nay ở .dash trong today.css) ── */
+
+table.data.dk-table {
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+  }
+
+table.data.dk-table th,
+  table.data.dk-table td {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+/* Phong bì chi tiêu (Hôm nay máy tính): tên ví không bị các cột số ép xuống nhiều dòng. */
+
+table.data.dk-env td:first-child {
+    min-width: 128px;
+  }
+
+/* Cài đặt › Tài khoản (máy tính, 9 cột): bảng đã chật hết chỗ, tiêu đề không xuống dòng thì cột Tên bị ép tới
+     từ dài nhất ("Tiền mặt (chồng)" thành ba dòng). Cho tiêu đề xuống dòng, nhường chỗ cho tên: tối đa hai dòng. */
+
+table.data.dk-acct th {
+    white-space: normal;
+  }
+
+table.data.dk-acct td:first-child {
+    min-width: 120px;
+  }
+
+table.data.dk-table th:first-child,
+  table.data.dk-table td:first-child {
+    padding-left: 14px;
+  }
+
+table.data.dk-table th:last-child,
+  table.data.dk-table td:last-child {
+    padding-right: 14px;
+  }
+
+table.data.dk-table tbody tr:not(.group):hover td {
+    background: var(--surface-2);
+  }
+
+table.data th.dk-group {
+    text-align: center;
+    color: var(--fg-2);
+    padding-bottom: 4px;
+  }
+
+table.data tr.dk-total td {
+    background: none;
+    font-weight: 500;
+    border-top: 1px solid var(--line);
+  }
+
+.dk-in {
+    color: var(--pos);
+  }
+
+.dk-void {
+    color: var(--fg-3);
+    text-decoration: line-through;
+  }
+
+.dk-when {
+    white-space: nowrap;
+  }
+
+/* Sổ giao dịch (máy tính): Số tiền đứng ngay sau Giờ — chừa khoảng trước cột Khoản, không xuống dòng. */
+
+table.data.dk-table.book-table th.num,
+  table.data.dk-table.book-table td.num {
+    padding-right: var(--s8);
+    white-space: nowrap;
+    width: 1%;
+  }
+
+.dk-pct {
+    display: grid;
+    gap: 4px;
+    min-width: 96px;
+  }
+
+.dk-pct .bar {
+    margin-top: 0;
+  }
+
+.dk-delta {
+    color: var(--fg-2);
+    white-space: nowrap;
+  }
+
+.dk-act {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
+.dk-act .btn {
+    min-height: 36px;
+    padding: 4px 10px;
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+  }
+
+/* ── cột cạnh nhau (Tích sản, Nhập, Gán) ── */
+
+.dk-cols {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    align-items: start;
+  }
+
+.dk-cols > .card,
+  .dk-cols > div > .card:last-child {
+    margin-bottom: 0;
+  }
+
+.dk-cols > div {
+    min-width: 0;
+  }
+
+.dk-panel {
+    position: sticky;
+    top: 76px;
+    max-height: calc(100dvh - 92px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+.dk-entry .savebar {
+    position: static;
+    margin: 0 0 12px;
+  }
+
+.dk-entry .catgrid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+/* ── Phân tích: cặp thanh tháng này / tháng trước ── */
+
+.dk-cmp {
+    display: block;
+    width: 100%;
+    min-width: 140px;
+    height: 22px;
+    overflow: visible;
+  }
+
+.dk-cmp .now {
+    fill: var(--fg);
+  }
+
+.dk-cmp .prev {
+    fill: none;
+    stroke: var(--fg-3);
+    stroke-width: 1.5;
+  }
+
+.dk-key {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    color: var(--fg-2);
+  }
+
+.dk-key span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+.dk-key i {
+    width: 14px;
+    height: 8px;
+    border-radius: 2px;
+  }
+
+.dk-key .now {
+    background: var(--fg);
+  }
+
+.dk-key .prev {
+    border: 1.5px solid var(--fg-3);
+  }
+}

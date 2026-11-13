@@ -164,15 +164,15 @@ describe("che số tiền trên máy này (pwa UC-718)", () => {
   // Cờ che là trạng thái của module: tắt lại sau mỗi test để không rò sang test khác trong file.
   afterEach(() => setAmountsHidden(false));
 
-  it("UC-718 AC-1: bật che → formatVnd, formatSigned, số tiền không ₫ ra •••• (giữ dấu, giữ ₫); tắt che → về số thật", () => {
-    expect(HIDDEN_DIGITS).toBe("••••");
+  it("UC-718 AC-1: bật che → formatVnd, formatSigned, số tiền không ₫ ra ••••• (giữ dấu, giữ ₫); tắt che → về số thật", () => {
+    expect(HIDDEN_DIGITS).toBe("•••••");
     setAmountsHidden(true);
-    expect(formatVnd(1_500_000)).toBe(`••••${NBSP}₫`);
-    expect(formatVnd(-150_000)).toBe(`${MINUS}••••${NBSP}₫`);
-    expect(formatSigned(120_000)).toBe("+••••");
-    expect(formatSigned(-120_000)).toBe(`${MINUS}••••`);
-    expect(moneyDigits(1_250_000)).toBe("••••");
-    expect(moneyDigits(-1_250_000)).toBe(`${MINUS}••••`);
+    expect(formatVnd(1_500_000)).toBe(`•••••${NBSP}₫`);
+    expect(formatVnd(-150_000)).toBe(`${MINUS}•••••${NBSP}₫`);
+    expect(formatSigned(120_000)).toBe("+•••••");
+    expect(formatSigned(-120_000)).toBe(`${MINUS}•••••`);
+    expect(moneyDigits(1_250_000)).toBe("•••••");
+    expect(moneyDigits(-1_250_000)).toBe(`${MINUS}•••••`);
     setAmountsHidden(false);
     expect(formatVnd(1_500_000)).toBe(`1.500.000${NBSP}₫`);
     expect(formatSigned(120_000)).toBe("+120.000");
@@ -185,12 +185,12 @@ describe("che số tiền trên máy này (pwa UC-718)", () => {
     expect(`${groupDigits(1_234)} giao dịch`).toBe("1.234 giao dịch");
     expect(quantityText(24_000, "chỉ")).toBe("24 chỉ");
     expect(amountText(1_250_000)).toBe("1.250.000");
-    expect(memberPlanText({ actual: 43_500_000, planned: 50_000_000, pct: 87 } as IncomePlanMember)).toBe(`•••• / ••••${NBSP}₫ · 87,0%`);
+    expect(memberPlanText({ actual: 43_500_000, planned: 50_000_000, pct: 87 } as IncomePlanMember)).toBe(`••••• / •••••${NBSP}₫ · 87,0%`);
   });
 
   it("UC-718 AC-1: chỗ tự ghép số tiền cũng bị che — \"≈ 7,01 tỷ ₫\"", () => {
     setAmountsHidden(true);
-    expect(billionText(7_012_345_678)).toBe(`≈ ••••${NBSP}₫`);
+    expect(billionText(7_012_345_678)).toBe(`≈ •••••${NBSP}₫`);
     setAmountsHidden(false);
     expect(billionText(7_012_345_678)).toBe(`≈ 7,01 tỷ${NBSP}₫`);
   });
@@ -199,8 +199,8 @@ describe("che số tiền trên máy này (pwa UC-718)", () => {
     const note = `Đối soát số dư: sổ 2.090.000${NBSP}₫, thật 2.055.000 ₫ · mã 12345`;
     expect(maskAmounts(note)).toBe(note);
     setAmountsHidden(true);
-    expect(maskAmounts(note)).toBe(`Đối soát số dư: sổ ••••${NBSP}₫, thật ••••${NBSP}₫ · mã 12345`);
-    expect(maskAmounts(`chênh ${MINUS}35.000${NBSP}₫`)).toBe(`chênh ${MINUS}••••${NBSP}₫`);
+    expect(maskAmounts(note)).toBe(`Đối soát số dư: sổ •••••${NBSP}₫, thật •••••${NBSP}₫ · mã 12345`);
+    expect(maskAmounts(`chênh ${MINUS}35.000${NBSP}₫`)).toBe(`chênh ${MINUS}•••••${NBSP}₫`);
   });
 
   it("UC-718 AC-2: đang che, gõ 50.000 → ô nhập và nút \"Lưu 50.000 ₫\" vẫn hiện số; toast sau khi lưu không có số tiền", () => {
@@ -208,7 +208,7 @@ describe("che số tiền trên máy này (pwa UC-718)", () => {
     expect(amountText(nextAmount(0, "50000"))).toBe("50.000");
     expect(`Lưu ${formatTypedVnd(50_000)}`).toBe(`Lưu 50.000${NBSP}₫`);
     const text = entryToast({ amount: 900_000, perDay: 30_000 }, false);
-    expect(text).toBe(`Đã ghi · Vận hành còn ••••${NBSP}₫ ≈ ••••/ngày`);
+    expect(text).toBe(`Đã ghi · Vận hành còn •••••${NBSP}₫ ≈ •••••/ngày`);
     expect(text).not.toMatch(/\d/);
   });
 

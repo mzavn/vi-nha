@@ -15,12 +15,12 @@ INSERT INTO accounts (id,name,kind,bank,account_no,sepay_enabled,owner_member_id
  ('mb-tuition','MB (học phí)','bank','MBBank',NULL,0,'husband',NULL,0,date('now')),
  ('mb-reward','MB (Ví Thưởng)','bank','MBBank',NULL,0,'wife',NULL,0,date('now'));
 
--- NGUỒN THU: "Lương chồng" mở kỳ lương; cho thuê không mở kỳ.
-INSERT INTO income_streams (id,name,sort,opens_cycle) VALUES
+-- NGUỒN THU: "Lương chồng" là nguồn lương (có nhắc trích Tích luỹ); cho thuê không bao giờ.
+INSERT INTO income_streams (id,name,sort,is_salary) VALUES
  ('salary-husband','Lương chồng',10,1), ('salary-wife','Lương vợ',20,0), ('rental','Cho thuê lại',30,0);
 
--- NHÓM DANH MỤC: hạn mức mềm mỗi kỳ lương (pocket UC-1204); Thiết yếu = 1.
-INSERT INTO category_groups (id,name,essential,cycle_limit,sort) VALUES
+-- NHÓM DANH MỤC: hạn mức mềm mỗi tháng (pocket UC-1204); Thiết yếu = 1.
+INSERT INTO category_groups (id,name,essential,monthly_limit,sort) VALUES
  ('fun-husband','Chơi (chồng)',0,3554000,30), ('travel','Du lịch',0,NULL,32), ('housing','Nhà ở',1,NULL,40),
  ('food','Ăn uống',1,2709000,41), ('transport','Đi lại',1,1300000,42), ('utilities','Điện nước mạng',1,NULL,43),
  ('nice-to-have','Có thì tốt',0,NULL,50);
@@ -50,7 +50,7 @@ INSERT INTO categories (id,name,group_id,icon,sort) VALUES
  ('entertainment','Giải trí (phim, app)','fun-husband','film',33);
 
 -- QUY TẮC: chỉ rule lương mới được gán income; mã chuyển khoản (code) đi trước, nội dung (content) sau.
--- Mẫu lương gắn nguồn "Lương chồng" (nguồn mở kỳ lương, pocket UC-1205).
+-- Mẫu lương gắn nguồn "Lương chồng" (nguồn lương, pocket UC-1205).
 INSERT INTO rules (priority,match_type,pattern,meaning,is_salary,category_id,by_member_id,income_stream_id) VALUES
  (10,'content','LUONG THANG','income',1,NULL,'husband','salary-husband');
 INSERT INTO rules (priority,match_type,pattern,meaning,is_salary,category_id,by_member_id) VALUES
@@ -85,5 +85,5 @@ INSERT INTO reserve_goals (id,name,account_id,target_amount,target_pct,monthly_a
  ('tuition','Học phí','mb-tuition',6000000,NULL,2000000,3,'2027-01-15',10),
  ('income-tax','Thuế thu nhập',NULL,NULL,10,NULL,NULL,NULL,30),
  ('car-service','Bảo dưỡng xe',NULL,4800000,NULL,NULL,NULL,'2027-03-31',20);
--- Dư cuối kỳ: 50% vào Tích luỹ (mặc định của schema), phần còn lại vào tài khoản Ví Thưởng (UC-1207).
+-- Dư cuối tháng: 50% vào Tích luỹ (mặc định của schema), phần còn lại vào tài khoản Ví Thưởng (UC-1207).
 INSERT INTO config (k,v) VALUES ('surplus_reward_account','mb-reward');

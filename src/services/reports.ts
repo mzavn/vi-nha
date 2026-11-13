@@ -20,6 +20,7 @@ import {
   type StatementRow,
 } from "../domain/reports";
 import { DomainError } from "../domain/types";
+import { unsalaryStatements } from "./month-tasks";
 import { assertTxChangeable, hiddenAccountIds, hiddenTxSql, txNotFound } from "./privacy";
 
 type Row = Record<string, unknown>;
@@ -212,7 +213,7 @@ export interface ReportTx {
  */
 export async function reportTransactions(db: D1Database, period: string | undefined, line: string | undefined, now: Date, viewerId: string | null) {
   const p = parsePeriod(period, dayKey(now));
-  if (!line || !isLineKey(line)) fail("invalid_input", "line là một dòng của báo cáo lưu chuyển tiền.");
+  if (!line || !isLineKey(line)) fail("invalid_input", "line là một dòng của báo cáo Dòng tiền.");
   const priv = hiddenTxSql("t", await hiddenAccountIds(db, viewerId));
   const res = await db
     .prepare(
@@ -250,25 +251,30 @@ async function cashTx(db: D1Database, id: number, viewerId: string | null) {
   const tx = await db.prepare("SELECT id, meaning, status, account_id, counter_account_id FROM transactions WHERE id = ?").bind(id).first<Row>();
   if (!tx) throw txNotFound();
   assertTxChangeable(tx, await hiddenAccountIds(db, viewerId));
-  if (tx.status !== "active") fail("already_void", "Giao dịch đã huỷ: báo cáo không tính nó.", 409);
+  if (tx.status !== "active") fail("already_void", "Giao dịch đã huỷ, báo cáo không tính.", 409);
   if ((tx.account_id === null) === (tx.counter_account_id === null)) {
-    fail("not_cash_flow", "Chuyển giữa hai tài khoản của nhà hoặc khoản không chạm tài khoản nào không phải tiền vào ra — không xếp nhóm được.");
+    fail("not_cash_flow", "Chuyển giữa hai tài khoản nhà hoặc khoản không qua tài khoản không phải tiền vào ra: không xếp nhóm được.");
   }
   return tx;
 }
 
-/** `PUT /v1/transactions/:id/report-class` — chỉ đổi báo cáo; số dư, ngăn, snapshot không đổi. */
-export async function setReportClass(db: D1Database, id: number, cls: unknown, memberId: string | null) {
+/**
+ * `PUT /v1/transactions/:id/report-class` — chỉ đổi báo cáo; số dư, ngăn không đổi. Khoản thu đổi sang Thu nhập thụ động thì
+ * không còn là lương (pocket UC-1205): `is_salary` về 0 và nhắc trích Tích luỹ của nó `void`, cùng batch với câu phân loại.
+ */
+export async function setReportClass(db: D1Database, id: number, cls: unknown, memberId: string | null, now: Date = new Date()) {
   if (!REPORT_CLASSES.includes(cls as ReportClass)) fail("invalid_class", `class phải là một trong: ${REPORT_CLASSES.join(", ")}.`);
   const tx = await cashTx(db, id, memberId);
   if (cls === "passive_income" && tx.meaning !== "income") fail("invalid_class", "Thu nhập thụ động chỉ dành cho khoản thu.");
-  await db
-    .prepare(
-      `INSERT INTO transaction_report_classes (transaction_id, report_class, by_member_id) VALUES (?1, ?2, ?3)
-       ON CONFLICT (transaction_id) DO UPDATE SET report_class = excluded.report_class, by_member_id = excluded.by_member_id, updated_at = datetime('now')`,
-    )
-    .bind(id, cls, memberId)
-    .run();
+  await db.batch([
+    db
+      .prepare(
+        `INSERT INTO transaction_report_classes (transaction_id, report_class, by_member_id) VALUES (?1, ?2, ?3)
+         ON CONFLICT (transaction_id) DO UPDATE SET report_class = excluded.report_class, by_member_id = excluded.by_member_id, updated_at = datetime('now')`,
+      )
+      .bind(id, cls, memberId),
+    ...(cls === "passive_income" ? unsalaryStatements(db, id, now) : []),
+  ]);
   return { transactionId: id, reportClass: cls as ReportClass };
 }
 

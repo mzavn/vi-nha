@@ -113,13 +113,13 @@ describe("sửa bản tính trên máy", () => {
 
 describe("gửi và gửi lại", () => {
   it("UC-713 AC-16: hỏi tổng cũ → mới trước khi lưu bản đã gửi", () => {
-    expect(resendConfirm(4_220_000, 4_270_000, "An")).toBe(`Tổng đổi từ 4.220.000${NBSP}₫ thành 4.270.000${NBSP}₫ — gửi lại tin cho An.`);
+    expect(resendConfirm(4_220_000, 4_270_000, "An")).toBe(`Tổng đổi từ 4.220.000${NBSP}₫ sang 4.270.000${NBSP}₫, gửi lại tin cho An.`);
   });
 
-  it("UC-713 AC-16: chip 'Đã sửa — gửi lại' tới khi máy này gửi / chép bản mới nhất", () => {
+  it("UC-713 AC-16: chip 'Đã sửa, gửi lại' tới khi máy này gửi / chép bản mới nhất", () => {
     const storage = memStorage();
     const bill = { id: 7, month: "2026-10", status: "issued" as const, total: 4_270_000, revision: 5, edited: true };
-    expect(billChip(bill, sentRevisions(storage)).text).toBe("Đã sửa — gửi lại");
+    expect(billChip(bill, sentRevisions(storage)).text).toBe("Đã sửa, gửi lại");
     markSent(storage, 7, 4);
     expect(needsResend(bill, sentRevisions(storage))).toBe(true);
     markSent(storage, 7, 5);

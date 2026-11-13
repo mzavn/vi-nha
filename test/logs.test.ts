@@ -163,16 +163,16 @@ describe("POST /v1/logs/:id/assign", () => {
     expect(wrong.json.error?.code).toBe("debt_spend_only");
   });
 
-  it("gán log tiền vào là nhận lại tiền cho vay (collect): trừ khoản phải thu, không thành thu nhập, không kỳ, không ví", async () => {
+  it("gán log tiền vào là nhận lại tiền cho vay (collect): trừ khoản phải thu, không thành thu nhập, không nhắc trích, không ví", async () => {
     expect((await call("POST", "/v1/receivables", { name: "Em Hai", amount: 3_000_000, at: "2026-09-20T02:00:00.000Z" })).status).toBe(201);
     seedLog("c1", "in", 1_000_000, "vcb-husband", { content: "EM HAI TRA TIEN" });
     const { status, json } = await call("POST", "/v1/logs/c1/assign", { splits: [{ meaning: "collect", amount: 1_000_000, receivable_id: "em-hai" }] });
     expect(status).toBe(201);
     const tx = json.data.transactions[0];
     expect(tx).toMatchObject({ meaning: "collect", receivable_id: "em-hai", counter_account_id: "vcb-husband", account_id: null, source: "sepay" });
-    expect(json.data.effects).toEqual({ cycle: null, tasksDone: [] });
+    expect(json.data.effects).toEqual({ savings: null, tasksDone: [] });
     expect(raw.prepare("SELECT COUNT(*) n FROM transactions WHERE meaning IN ('income', 'fund')").get()).toEqual({ n: 0 });
-    expect(raw.prepare("SELECT COUNT(*) n FROM pay_cycles").get()).toEqual({ n: 0 });
+    expect(raw.prepare("SELECT COUNT(*) n FROM month_tasks").get()).toEqual({ n: 0 });
     const receivable = (await call("GET", "/v1/receivables")).json.data.receivables[0];
     expect(receivable).toMatchObject({ id: "em-hai", lent: 3_000_000, collected: 1_000_000, balance: 2_000_000 });
     expect(receivable.movements).toMatchObject([{ kind: "collect", amount: 1_000_000, accountId: "vcb-husband", source: "sepay" }]);
@@ -360,21 +360,21 @@ describe("trả cho khoản cho vay, xem hai chiều (change 261005-lien-ket-kho
   });
 });
 
-describe("Gán thu nhập không ví, kỳ lương (ingest UC-305 AC-33, ledger UC-103)", () => {
+describe("Gán thu nhập không ví, nhắc trích Tích luỹ (ingest UC-305 AC-33, pocket UC-1205)", () => {
   const snapshot = async () => (await call("GET", "/v1/snapshot")).json.data;
 
-  it("UC-305 AC-33: gán thu nhập nguồn mở kỳ → khoản thu không ví, kỳ mở, effects báo kỳ mới; snapshot không còn khoản thu chưa chia", async () => {
+  it("UC-305 AC-33: gán thu nhập nguồn lương → khoản thu không ví, is_salary 1, một nhắc ① cùng batch, effects.savings; snapshot không còn khoản thu chưa chia", async () => {
     seedLog("u1", "in", 20_000_000, "vcb-husband", { content: "chuyen khoan nhanh qua Zalo" });
     const { status, json } = await call("POST", "/v1/logs/u1/assign", { splits: [{ meaning: "income", amount: 20_000_000, income_stream_id: "salary-husband" }] });
     expect(status).toBe(201);
-    expect(json.data.transactions[0]).toMatchObject({ meaning: "income", amount: 20_000_000 });
+    expect(json.data.transactions[0]).toMatchObject({ meaning: "income", amount: 20_000_000, is_salary: 1 });
     expect(json.data.transactions[0]).not.toHaveProperty("wallet_id");
-    expect(json.data.effects.cycle).toMatchObject({ opened: true, startedAt: "2026-09-22T02:00:00.000Z" });
-    expect(raw.prepare("SELECT COUNT(*) n FROM pay_cycles WHERE status = 'active'").get()).toEqual({ n: 1 });
+    expect(json.data.effects.savings).toMatchObject({ amount: expect.any(Number), pct: expect.any(Number) });
+    expect(raw.prepare("SELECT COUNT(*) n FROM month_tasks WHERE kind = 'savings' AND status = 'open'").get()).toEqual({ n: 1 });
     expect((await snapshot()).attention).not.toHaveProperty("unallocatedIncome");
   });
 
-  it("UC-305 AC-33: opens_cycle: false → không kỳ; transfer_order_id ở thân hay wallet_id / from_wallet_id / wealth_move / allocate / earmark_id ở dòng → 400 model_changed, không ghi gì", async () => {
+  it("UC-1205 AC-7: opens_cycle ở dòng (kể cả false) → 400 model_changed; transfer_order_id ở thân hay wallet_id / from_wallet_id / wealth_move / allocate / earmark_id ở dòng → 400 model_changed, không ghi gì; is_salary false → không nhắc", async () => {
     seedLog("u2", "in", 20_000_000, "vcb-husband");
     const income = { meaning: "income", amount: 20_000_000, income_stream_id: "salary-husband" };
     for (const [body, fields] of [
@@ -384,16 +384,19 @@ describe("Gán thu nhập không ví, kỳ lương (ingest UC-305 AC-33, ledger 
       [{ splits: [{ ...income, wealth_move: "fund" }] }, ["wealth_move"]],
       [{ splits: [{ ...income, allocate: true }] }, ["allocate"]],
       [{ splits: [{ meaning: "spend", amount: 20_000_000, category_id: "groceries", earmark_id: "tuition" }] }, ["earmark_id"]],
+      [{ splits: [{ ...income, opens_cycle: true }] }, ["opens_cycle"]],
+      [{ splits: [{ ...income, opens_cycle: false }] }, ["opens_cycle"]],
     ] as const) {
       const res = await call("POST", "/v1/logs/u2/assign", body);
       expect(res.status).toBe(400);
       expect(res.json.error).toMatchObject({ code: "model_changed", fields });
     }
     expect(raw.prepare("SELECT COUNT(*) n FROM transactions").get()).toEqual({ n: 0 });
-    const res = await call("POST", "/v1/logs/u2/assign", { splits: [{ ...income, opens_cycle: false }] });
+    const res = await call("POST", "/v1/logs/u2/assign", { splits: [{ ...income, is_salary: false }] });
     expect(res.status).toBe(201);
-    expect(res.json.data.effects.cycle).toBeNull();
-    expect(raw.prepare("SELECT COUNT(*) n FROM pay_cycles").get()).toEqual({ n: 0 });
+    expect(res.json.data.effects.savings).toBeNull();
+    expect(res.json.data.transactions[0]).toMatchObject({ is_salary: 0 });
+    expect(raw.prepare("SELECT COUNT(*) n FROM month_tasks").get()).toEqual({ n: 0 });
   });
 });
 
@@ -435,6 +438,23 @@ describe("POST /v1/logs/:id/ignore", () => {
   it("log không tồn tại → 404", async () => {
     const { status } = await call("POST", "/v1/logs/khong-co/ignore");
     expect(status).toBe(404);
+  });
+
+  it("UC-305 AC-38: Hoàn tác bỏ qua — POST /v1/logs/:id/unignore đưa log ignored về pending, nhật ký log.unignore; gọi lần hai → 409 not_ignored; log không có → 404", async () => {
+    seedLog("i2", "out", 1_000, "vcb-husband");
+    expect((await call("POST", "/v1/logs/i2/ignore")).status).toBe(200);
+    const { status, json } = await call("POST", "/v1/logs/i2/unignore");
+    expect(status).toBe(200);
+    expect(json.data.status).toBe("pending");
+    expect(raw.prepare("SELECT action, target, detail FROM audit_log ORDER BY id DESC LIMIT 1").get()).toEqual({ action: "log.unignore", target: "log:i2", detail: null });
+    const again = await call("POST", "/v1/logs/i2/unignore");
+    expect([again.status, again.json.error?.code]).toEqual([409, "not_ignored"]);
+    expect((await call("POST", "/v1/logs/khong-co/unignore")).status).toBe(404);
+    // Log trước ngày mở sổ (máy bỏ qua, số đã nằm trong số dư đầu) → 409 before_opening, vẫn ignored.
+    raw.prepare("UPDATE accounts SET opened_at = '2026-10-01' WHERE id = 'vcb-husband'").run();
+    seedLog("i3", "out", 2_000, "vcb-husband", { status: "ignored", at: "2026-09-20T02:00:00.000Z" });
+    const early = await call("POST", "/v1/logs/i3/unignore");
+    expect([early.status, early.json.error?.code]).toEqual([409, "before_opening"]);
   });
 });
 
@@ -506,6 +526,24 @@ describe("GET/POST /v1/rules", () => {
       meaning: "spend",
       category_id: "eating-out",
     });
+  });
+
+  it("UC-307 AC-25: mẫu EAN tự gán log thành khoản chi → transactions.rule_id = id mẫu; GET /v1/transactions trả rule_id, GET /:id trả rule { id, match_type, pattern, active }; gán tay → rule_id null, rule null", async () => {
+    const rule = raw.prepare("SELECT id, match_type FROM rules WHERE pattern = 'EAN'").get() as { id: number; match_type: string };
+    const hook = { id: "r1", gateway: "Vietcombank", transactionDate: "2026-09-22 09:00:00", accountNumber: "0011xxxxxxx", code: "EAN", content: "EAN AN TRUA", transferType: "out", transferAmount: 90_000, referenceCode: "r1" };
+    await ingestLog(env.DB, parseWebhookPayload(hook), "webhook", new Date("2026-09-22T05:00:00.000Z"));
+    const tx = raw.prepare("SELECT id, rule_id FROM transactions WHERE log_id = 'r1'").get() as { id: number; rule_id: number | null };
+    expect(tx.rule_id).toBe(rule.id);
+    const one = await call("GET", `/v1/transactions/${tx.id}`);
+    expect(one.json.data).toMatchObject({ rule_id: rule.id, rule: { id: rule.id, match_type: rule.match_type, pattern: "EAN", active: true } });
+    const list = await call("GET", "/v1/transactions?limit=5");
+    expect(list.json.data.find((t: { id: number }) => t.id === tx.id)).toMatchObject({ rule_id: rule.id });
+
+    seedLog("m1", "out", 45_000, "vcb-husband");
+    expect((await call("POST", "/v1/logs/m1/assign", { splits: [{ meaning: "spend", amount: 45_000, category_id: "eating-out" }] })).status).toBe(201);
+    const manual = raw.prepare("SELECT id, rule_id FROM transactions WHERE log_id = 'm1'").get() as { id: number; rule_id: number | null };
+    expect(manual.rule_id).toBeNull();
+    expect((await call("GET", `/v1/transactions/${manual.id}`)).json.data.rule).toBeNull();
   });
 
   it("tạo rule income mà không is_salary → từ chối (luật 6)", async () => {
@@ -659,6 +697,10 @@ describe("Log chờ của tài khoản riêng tư ở hộ mẫu P (access UC-50
       target: "log:L1",
       detail: null,
     });
+    // Hoàn tác bỏ qua cùng luật riêng tư (UC-305 AC-38): chồng → 403, log vẫn ignored.
+    const back = await husband("POST", "/v1/logs/L1/unignore");
+    expect([back.status, back.json.error?.code]).toEqual([403, "private_account"]);
+    expect(statusOf("L1")).toBe("ignored");
   });
 
   it("UC-504 AC-17: chồng gán chuyển khoản sang VCB (vợ) hay gắn chân hai vào #110 → 403 private_account; gợi ý trỏ VCB (vợ) bị bỏ; vợ gán L8 → gắn vào #110", async () => {

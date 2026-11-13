@@ -66,19 +66,18 @@ const noWallets = () => {
   expect(raw.prepare("SELECT v FROM config WHERE k = 'conversion_state'").get()).toBeUndefined();
 };
 const goals = () => all("SELECT id, name, account_id, target_amount, target_pct, monthly_amount, repeat_months, due_date FROM reserve_goals ORDER BY sort, id");
-const groups = () => all("SELECT id, name, essential, cycle_limit FROM category_groups ORDER BY sort");
+const groups = () => all("SELECT id, name, essential, monthly_limit FROM category_groups ORDER BY sort");
 const auth = { Authorization: "Bearer tok" };
 const api = (method: string, path: string, body?: unknown) => request(method, path, body, auth);
 /** Nhập thu nhập nguồn "Lương" (bước Nhập của app) vào tài khoản `account`. */
 const salary = (account: string, amount = 20_000_000) => api("POST", "/v1/transactions", { meaning: "income", amount, account_id: account, income_stream_id: "luong" });
-type Task = { id: number; kind: string; amount: number; goal: { id: string; name: string } | null; toPocket: string | null };
+type Task = { id: number; kind: string; amount: number; toPocket: string | null };
 type Snap = {
   pockets: Record<"savings" | "reserve" | "operating" | "outside", { total: number; accounts: { id: string }[] }>;
-  paySetup: { hasCycleStream: boolean };
-  payCycle: { tasks: Task[] } | null;
+  month: { key: string; tasks: Task[] };
 };
 const snap = async () => (await api("GET", "/v1/snapshot")).json.data as Snap;
-const tasks = async () => (await snap()).payCycle!.tasks.map((t) => [t.kind, t.goal?.name ?? t.toPocket, t.amount]);
+const tasks = async () => (await snap()).month.tasks.map((t) => [t.kind, t.toPocket, t.amount]);
 const loginFailures = () => raw.prepare("SELECT failures FROM auth_failures WHERE scope = 'login' AND ip = ?").get(IP);
 
 describe("UC-510 thiết lập nhà lần đầu", () => {
@@ -119,7 +118,7 @@ describe("UC-510 thiết lập nhà lần đầu", () => {
     });
   });
 
-  it("AC-3: đúng mật khẩu, body hợp lệ → 201 chủ hộ + cookie của chủ hộ; thành viên theo thứ tự, mật khẩu riêng lưu băm, tài khoản theo ngăn đã xác nhận, ngày lương, % Tích luỹ, nhóm danh mục, nguồn Lương mở kỳ, không ví / luật nạp, setup_done, nhật ký setup.done", async () => {
+  it("AC-3: đúng mật khẩu, body hợp lệ → 201 chủ hộ + cookie của chủ hộ; thành viên theo thứ tự, mật khẩu riêng lưu băm, tài khoản theo ngăn đã xác nhận, ngày lương, % Tích luỹ, nhóm danh mục, nguồn Lương là nguồn lương, không ví / luật nạp, setup_done, nhật ký setup.done", async () => {
     const res = await request(
       "POST",
       "/v1/setup",
@@ -152,10 +151,10 @@ describe("UC-510 thiết lập nhà lần đầu", () => {
       { k: "savings_pct", v: "20" },
     ]);
     expect(groups()).toEqual([
-      { id: "nha-o", name: "Nhà ở", essential: 1, cycle_limit: null },
-      { id: "dien-nuoc", name: "Điện nước", essential: 1, cycle_limit: null },
-      { id: "y-te", name: "Y tế", essential: 1, cycle_limit: null },
-      { id: "mua-sam", name: "Mua sắm", essential: 0, cycle_limit: null },
+      { id: "nha-o", name: "Nhà ở", essential: 1, monthly_limit: null },
+      { id: "dien-nuoc", name: "Điện nước", essential: 1, monthly_limit: null },
+      { id: "y-te", name: "Y tế", essential: 1, monthly_limit: null },
+      { id: "mua-sam", name: "Mua sắm", essential: 0, monthly_limit: null },
     ]);
     expect(all("SELECT id, name, group_id FROM categories WHERE id <> 'loan-interest' ORDER BY sort")).toEqual([
       { id: "housing", name: "Nhà ở", group_id: "nha-o" },
@@ -165,7 +164,7 @@ describe("UC-510 thiết lập nhà lần đầu", () => {
       { id: "debt-payment", name: "Trả nợ", group_id: null },
       { id: "shopping", name: "Mua sắm", group_id: "mua-sam" },
     ]);
-    expect(all("SELECT id, name, pocket, opens_cycle, active FROM income_streams")).toEqual([{ id: "luong", name: "Lương", pocket: null, opens_cycle: 1, active: 1 }]);
+    expect(all("SELECT id, name, pocket, is_salary, active FROM income_streams")).toEqual([{ id: "luong", name: "Lương", pocket: null, is_salary: 1, active: 1 }]);
     noWallets();
     expect(raw.prepare("SELECT v FROM config WHERE k = 'setup_done'").get()?.v).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     expect(all("SELECT member_id, via, action FROM audit_log")).toEqual([{ member_id: "bo", via: "session", action: "setup.done" }]);
@@ -216,6 +215,9 @@ describe("UC-510 thiết lập nhà lần đầu", () => {
       ["owner ngoài khoảng chỉ số", { accounts: [{ name: "TK", kind: "cash", owner: null }, { name: "TK 2", kind: "cash", owner: 2 }] }, "accounts.1.owner"],
       ["owner âm", { accounts: [{ name: "TK", kind: "cash", owner: -1 }] }, "accounts.0.owner"],
       ["ngăn lạ", { accounts: [{ name: "TK", kind: "cash", owner: null, pocket: "spend" }] }, "accounts.0.pocket"],
+      ["số dư không phải số nguyên", { accounts: [{ name: "TK", kind: "cash", owner: null, opening_balance: 10.5 }] }, "accounts.0.opening_balance"],
+      ["số dư quá 1e12", { accounts: [{ name: "TK", kind: "cash", owner: null, opening_balance: 1e12 + 1 }] }, "accounts.0.opening_balance"],
+      ["số dư là chuỗi", { accounts: [{ name: "TK", kind: "cash", owner: null, opening_balance: "5000000" }] }, "accounts.0.opening_balance"],
       ["ngày lương ngoài 1–31", { payday_day: 32 }, "payday_day"],
       ["ngày lương không nguyên", { payday_day: 10.5 }, "payday_day"],
       ["% Tích luỹ 0", { savings_pct: 0 }, "savings_pct"],
@@ -252,7 +254,7 @@ describe("UC-510 thiết lập nhà lần đầu", () => {
     });
   });
 
-  it("AC-9: ba ngăn đủ — ngăn theo thân, nhóm Ăn uống / Đi lại / Y tế / Mua sắm, Học phí và Thuế chưa gắn tài khoản (thân không gửi account), không giữ riêng Tích luỹ; snapshot ba ngăn, có nguồn mở kỳ; lương 20.000.000 vào tài khoản chính → kỳ mở, ① 3.000.000", async () => {
+  it("AC-9: ba ngăn đủ — ngăn theo thân, nhóm Ăn uống / Đi lại / Y tế / Mua sắm, Học phí và Thuế chưa gắn tài khoản (thân không gửi account), không giữ riêng Tích luỹ; snapshot ba ngăn, chưa có nhắc; lương 20.000.000 nguồn Lương vào tài khoản chính → nhắc trích 3.000.000", async () => {
     const res = await request(
       "POST",
       "/v1/setup",
@@ -280,10 +282,10 @@ describe("UC-510 thiết lập nhà lần đầu", () => {
       { id: "the-vib", pocket: "operating", pocket_confirmed: 1 },
     ]);
     expect(groups()).toEqual([
-      { id: "an-uong", name: "Ăn uống", essential: 1, cycle_limit: null },
-      { id: "di-lai", name: "Đi lại", essential: 1, cycle_limit: null },
-      { id: "y-te", name: "Y tế", essential: 1, cycle_limit: null },
-      { id: "mua-sam", name: "Mua sắm", essential: 0, cycle_limit: null },
+      { id: "an-uong", name: "Ăn uống", essential: 1, monthly_limit: null },
+      { id: "di-lai", name: "Đi lại", essential: 1, monthly_limit: null },
+      { id: "y-te", name: "Y tế", essential: 1, monthly_limit: null },
+      { id: "mua-sam", name: "Mua sắm", essential: 0, monthly_limit: null },
     ]);
     expect(all("SELECT name FROM categories WHERE group_id = 'an-uong' ORDER BY sort")).toEqual([{ name: "Đi chợ / nấu ăn" }, { name: "Ăn ngoài" }]);
     expect(goals()).toEqual([
@@ -293,15 +295,14 @@ describe("UC-510 thiết lập nhà lần đầu", () => {
     noWallets();
     const s = await snap();
     expect(s.pockets.operating.accounts.map((a) => a.id).sort()).toEqual(["the-vib", "tien-mat", "vcb-chinh"]);
-    expect(s.paySetup.hasCycleStream).toBe(true);
-    expect(s.payCycle).toBeNull();
+    expect(s.month.tasks).toEqual([]);
     const income = await salary("vcb-chinh");
     expect(income.status).toBe(201);
-    expect(income.json.data).toMatchObject({ effects: { cycle: { opened: true } } });
-    expect(await tasks()).toContainEqual(["savings", "savings", 3_000_000]);
+    expect(income.json.data).toMatchObject({ effects: { savings: { amount: 3_000_000, pct: 15 } } });
+    expect(await tasks()).toEqual([["savings", "savings", 3_000_000]]);
   });
 
-  it("AC-10: nhà một tài khoản — tài khoản ở Vận hành, không giữ riêng; Học phí chưa gắn tài khoản; lương 20.000.000 → kỳ mở với ① 2.000.000, không có ② (Học phí chưa gắn)", async () => {
+  it("AC-10: nhà một tài khoản — tài khoản ở Vận hành, không giữ riêng; Học phí chưa gắn tài khoản; lương 20.000.000 → đúng một nhắc trích 2.000.000", async () => {
     const res = await request(
       "POST",
       "/v1/setup",
@@ -314,11 +315,34 @@ describe("UC-510 thiết lập nhà lần đầu", () => {
     ]);
     noWallets();
     expect((await salary("vcb")).status).toBe(201);
-    const list = await tasks();
-    expect(list).toContainEqual(["savings", "savings", 2_000_000]);
-    expect(list.filter(([kind]) => kind === "goal")).toEqual([]);
+    expect(await tasks()).toEqual([["savings", "savings", 2_000_000]]);
     const { pockets } = await snap();
     expect([pockets.savings.total, pockets.savings.accounts, pockets.operating.total]).toEqual([0, [], 20_000_000]);
+  });
+
+  it("AC-17: số dư lúc thiết lập — accounts[i].opening_balance lưu vào tài khoản (thẻ tín dụng số âm); không gửi / null → 0; Vận hành của Hôm nay có số thật ngay", async () => {
+    const res = await request(
+      "POST",
+      "/v1/setup",
+      setupBody({
+        accounts: [
+          { name: "Tiền mặt", kind: "cash", owner: null, opening_balance: 2_000_000 },
+          { name: "VCB của Bố", kind: "bank", bank: "Vietcombank", owner: 0, opening_balance: 15_000_000 },
+          { name: "Thẻ VIB", kind: "credit", bank: "Vietcombank", owner: 0, opening_balance: -3_000_000 },
+          { name: "Ví MoMo", kind: "ewallet", bank: "MoMo", owner: null, opening_balance: null },
+          { name: "TK phụ", kind: "cash", owner: null },
+        ],
+      }),
+    );
+    expect(res.status).toBe(201);
+    expect(all("SELECT id, opening_balance FROM accounts ORDER BY opening_balance, id")).toEqual([
+      { id: "the-vib", opening_balance: -3_000_000 },
+      { id: "tk-phu", opening_balance: 0 },
+      { id: "vi-momo", opening_balance: 0 },
+      { id: "tien-mat", opening_balance: 2_000_000 },
+      { id: "vcb-cua-bo", opening_balance: 15_000_000 },
+    ]);
+    expect((await snap()).pockets.operating.total).toBe(14_000_000);
   });
 
   describe("AC-11: mặc định và lỗi", () => {

@@ -34,7 +34,7 @@ settingsRoutes.get("/", async (c) => {
 settingsRoutes.get("/audit", async (c) => ok(c, await listAudit(c.env.DB)));
 
 /**
- * Cài đặt › Claude và ứng dụng AI (UC-508): địa chỉ MCP và mọi kết nối của cả nhà — tên ứng dụng / tên miền lấy từ
+ * Cài đặt › Trợ lý AI (UC-508): địa chỉ MCP và mọi kết nối của cả nhà — tên ứng dụng / tên miền lấy từ
  * `metadata` lưu lúc uỷ quyền; không trả token, mã hay khoá nào.
  */
 settingsRoutes.get("/mcp", async (c) => {
@@ -124,11 +124,11 @@ settingsRoutes.patch("/accounts/:id", async (c) => {
 
 // Ví và luật nạp đã bỏ (ADR-123, access UC-506): mọi đường sửa → 410, không ghi gì.
 const walletsGone = (c: Context<AppEnv>) =>
-  c.json({ ok: false, error: { code: "model_changed", message: "Ví nhà v2 đã bỏ ví và luật nạp: tiền nằm ở ba ngăn theo tài khoản, lương về mở kỳ lương và danh sách việc." } }, 410);
+  c.json({ ok: false, error: { code: "model_changed", message: "Ví nhà v2 đã bỏ ví và luật nạp: tiền nằm ở ba ngăn theo tài khoản, lương về có nhắc trích Tích luỹ." } }, 410);
 settingsRoutes.all("/wallets", walletsGone);
 settingsRoutes.all("/wallets/*", walletsGone);
 
-/** Nguồn thu (access UC-506): nhật ký ghi tên trường; "Mở kỳ lương" thật sự đổi thì kèm `changes.opens_cycle` (quyết việc mở kỳ). */
+/** Nguồn thu (access UC-506): nhật ký ghi tên trường; "Nguồn lương" thật sự đổi thì kèm `changes.is_salary`. */
 settingsRoutes.post("/income-streams", async (c) => {
   const b = await body(c);
   const stream = await settings.createIncomeStream(c.env.DB, b);
@@ -139,7 +139,7 @@ settingsRoutes.patch("/income-streams/:id", async (c) => {
   const b = await body(c);
   const before = await settings.getStream(c.env.DB, c.req.param("id"));
   const stream = await settings.updateIncomeStream(c.env.DB, c.req.param("id"), b);
-  const changes = before.opens_cycle !== stream.opens_cycle ? { opens_cycle: { from: before.opens_cycle, to: stream.opens_cycle } } : null;
+  const changes = before.is_salary !== stream.is_salary ? { is_salary: { from: before.is_salary, to: stream.is_salary } } : null;
   await recordChange(c, "income_stream.update", `income_stream:${stream.id}`, { fields: fieldNames(b), ...(changes ? { changes } : {}) });
   return ok(c, stream);
 });
@@ -167,9 +167,8 @@ settingsRoutes.put("/goals/order", async (c) => {
 });
 settingsRoutes.patch("/goals/:id", async (c) => {
   const b = await body(c);
-  const { goal, changes, voided } = await pockets.updateGoal(c.env.DB, c.req.param("id"), b, new Date());
+  const { goal, changes } = await pockets.updateGoal(c.env.DB, c.req.param("id"), b, new Date());
   await recordChange(c, "goal.update", `goal:${goal.id}`, { fields: fieldNames(b), ...(Object.keys(changes).length ? { changes } : {}) });
-  for (const v of voided) await recordChange(c, "pay_cycle_task.void", `pay_cycle_task:${v.id}`, { reason: v.reason, goal_id: goal.id });
   return ok(c, { goal });
 });
 /**
@@ -219,7 +218,7 @@ settingsRoutes.patch("/members/:id", async (c) => {
   if (before && before.active !== after.active) {
     if (!after.active) await revokeMemberGrants(c.env, new URL(c.req.url).origin, id);
     await recordChange(c, after.active ? "member.activate" : "member.deactivate", `member:${id}`, null, {
-      what: after.active ? `bật lại ${after.name}` : `tắt ${after.name} (mọi máy và kết nối Claude của người này bị gỡ)`,
+      what: after.active ? `bật lại ${after.name}` : `tắt ${after.name} (gỡ mọi máy và kết nối Claude)`,
     });
     if (!after.active && c.get("via") === "session" && c.get("memberId") === id) clearSession(c);
   }
@@ -292,7 +291,7 @@ settingsRoutes.patch("/rules/:id", async (c) => {
 settingsRoutes.put("/config", async (c) => {
   const b = await body(c);
   const config = await settings.updateConfig(c.env.DB, b);
-  // Tham số dư kỳ trước và % Tích luỹ không bí mật: ghi luôn giá trị mới để biết ai đổi Ví Thưởng / tỷ lệ thành gì.
+  // Tham số dư cuối tháng và % Tích luỹ không bí mật: ghi luôn giá trị mới để biết ai đổi Ví Thưởng / tỷ lệ thành gì.
   const values = Object.fromEntries((["surplus_reward_account", "surplus_savings_pct", "savings_pct"] as const).filter((k) => k in b).map((k) => [k, config[k]]));
   await recordChange(c, "config.update", null, { fields: Object.keys(b).filter((k) => /^[a-z0-9_]{1,40}$/.test(k)).sort(), ...values });
   return ok(c, config);

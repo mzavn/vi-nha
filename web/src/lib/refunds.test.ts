@@ -103,8 +103,8 @@ describe("trả cho khoản cho vay, xem hai chiều (change 261005-lien-ket-kho
 describe("dòng nhắc khi chưa chọn khoản gốc", () => {
   it("người đang chọn có khoản cho vay thì nói có mấy khoản để chọn, không nhắc 'khoản gốc còn chờ gán'", () => {
     const loans = [{ receivable_id: "c-mai", receivable_name: "C Mai" }];
-    expect(linkPickHint("lend", loans, "c-mai")).toBe("C Mai có 1 khoản cho vay ở ô trên — chọn khoản đang trả.");
-    expect(linkPickHint("lend", loans, null)).toBe("Có 1 khoản ở ô trên — chọn khoản gốc nếu biết, không thì để trống.");
+    expect(linkPickHint("lend", loans, "c-mai")).toBe("C Mai có 1 khoản cho vay ở ô trên, chọn khoản đang trả.");
+    expect(linkPickHint("lend", loans, null)).toBe("Có 1 khoản ở ô trên, chọn khoản gốc nếu biết, không thì để trống.");
     expect(linkPickHint("spend", [], null)).toBe(LINK_PENDING_HINT);
   });
 });

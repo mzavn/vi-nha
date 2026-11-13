@@ -43,7 +43,7 @@ session.post("/", async (c) => {
     case "wrong_password":
       return wrongPasswordResponse(c);
     case "unknown_member":
-      return c.json({ ok: false, error: { code: "unknown_member", message: "Chọn người dùng." } }, 400);
+      return c.json({ ok: false, error: { code: "unknown_member", message: "Chọn thành viên." } }, 400);
   }
 });
 

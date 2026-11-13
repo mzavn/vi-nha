@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import { app } from "../src/index";
-import { notifyPayCycle } from "../src/notify/pay-cycle";
+import { notifySalary } from "../src/notify/salary";
 import { asD1, openDb } from "./helpers/d1-sqlite";
 import { householdE } from "./helpers/household-e";
 import { B_NOW, householdB } from "./helpers/household-b";
@@ -12,7 +12,7 @@ import { householdShared, SHARED_NOW, vnAt } from "./helpers/household-shared";
 import { householdParent, householdTopUp, PARENT_NOW } from "./helpers/household-parent";
 import { connectClaude, MemoryKV, mcpPost, stubClientMetadata, toolCall as call, type JsonRpc } from "./helpers/oauth";
 
-vi.mock("../src/notify/pay-cycle", () => ({ notifyPayCycle: vi.fn(async () => {}) }));
+vi.mock("../src/notify/salary", () => ({ notifySalary: vi.fn(async () => {}) }));
 
 let env: Env;
 let raw: ReturnType<typeof openDb>;
@@ -20,7 +20,7 @@ let raw: ReturnType<typeof openDb>;
 let token: string;
 
 beforeEach(async () => {
-  vi.mocked(notifyPayCycle).mockClear();
+  vi.mocked(notifySalary).mockClear();
   raw = openDb();
   // Bối cảnh: nhà chưa nối bank feed — mọi tài khoản đều ghi tay (tài khoản đã nối feed thì không nhận nhập tay).
   raw.prepare("UPDATE accounts SET sepay_enabled = 0").run();
@@ -104,18 +104,22 @@ describe("giao thức MCP", () => {
       expect(t.description, t.name).not.toMatch(/headcount|shared-expense|fixed monthly fees/i);
       expect(t.description, t.name).not.toMatch(/budget between two wallets|wealth-building money|locked shares|transfer orders?/i);
       expect(t.description, t.name).not.toMatch(/tichsan|phao khẩn cấp/i);
+      // change 261113-giao-dien-m1-va-ten-moi: tên màn mới (Báo cáo, Tài khoản, Chi tiêu).
+      expect(t.description, t.name).not.toMatch(/Tài sản & tự do|Ví & quỹ|Nhìn lại/);
     }
   });
 
-  it("UC-602: mô tả get_spending_by_category / get_goals / get_reports đúng chữ Đợt D; get_goals không nhắc ví, quỹ an tâm, Tích sản", async () => {
+  it("UC-602: mô tả get_spending_by_category / get_goals / get_reports theo tháng (ADR-144); get_goals không nhắc ví, quỹ an tâm, Tích sản, kỳ lương", async () => {
     const tools = (await mcp({ jsonrpc: "2.0", id: 1, method: "tools/list" })).json!.result.tools as { name: string; description: string }[];
     const description = (name: string) => tools.find((t) => t.name === name)!.description;
     expect(description("get_spending_by_category")).toContain(
-      "Look back over a pay cycle: spending by category group vs the soft limit (never negative, no top-up), vs the previous cycle, loan interest expected vs paid; period=YYYY-MM for a calendar month",
+      "Look back over a calendar month (VN, 1st to month end): spending by category group vs the monthly soft limit (never negative, no top-up), vs the previous month, loan interest expected vs paid",
     );
+    expect(description("get_spending_by_category")).toContain("sending cycle is an error (model_changed)");
     expect(description("get_goals")).toContain(
-      "Savings pocket total and change per pay cycle, savings % and done this cycle, reserve goals vs target (several goals can share one account; held = what the goal has after splitting the account balance by priority, counting spent this pay cycle; null = no account yet)",
+      "Savings pocket total and change per calendar month, savings % and saved this month (savingsDone), reserve goals vs target (several goals can share one account; held = what the goal has after splitting the account balance by priority, counting spent this month; null = no account yet)",
     );
+    for (const t of tools) expect(t.description, t.name).not.toMatch(/payCycle|opens_cycle overrides|(this|current|previous) pay cycle/);
     expect(description("get_goals")).not.toMatch(/wallet|safety fund|wealth building/i);
     expect(description("get_reports")).toContain(
       "expenses by essential / flexible category groups (loan interest under essential), tax paid from the tax goal, spent from the savings pocket, other",
@@ -165,7 +169,7 @@ describe("tool đọc số liệu", () => {
   it("UC-602: get_snapshot tóm tắt bằng tiền vận hành (ADR-118) và trả nearSpend", async () => {
     const { json } = await mcp(call("get_snapshot"));
     const blocks = json!.result.content as { type: string; text: string }[];
-    expect(blocks[0]!.text).toMatch(/^(Vận hành .+ · chi khoảng .+\/ngày tới kỳ lương \d+\/\d+ \(còn \d+ ngày\)|Tiền vận hành đã hết \(.+\) — còn \d+ ngày|Vận hành còn .+ tới kỳ lương \d+\/\d+ \(còn \d+ ngày\))$/);
+    expect(blocks[0]!.text).toMatch(/^(Vận hành .+ · chi khoảng .+\/ngày tới ngày lương \d+\/\d+ \(còn \d+ ngày\)|Tiền vận hành đã hết \(.+\)[,—] còn \d+ ngày|Vận hành còn .+ tới ngày lương \d+\/\d+ \(còn \d+ ngày\))$/);
     expect(blocks[0]!.text).not.toContain("tuần này");
     expect(toolData(json!).nearSpend).toMatchObject({ paydayDay: 10 });
     expect(toolData(json!).nearSpend).not.toHaveProperty("misplaced");
@@ -179,11 +183,11 @@ describe("tool đọc số liệu", () => {
     try {
       const { json } = await mcp(call("get_snapshot"));
       const blocks = json!.result.content as { type: string; text: string }[];
-      expect(blocks[0]!.text).toBe("Vận hành 4.100.000 ₫ · chi khoảng 141.000 ₫/ngày tới kỳ lương 10/12 (còn 29 ngày)");
+      expect(blocks[0]!.text).toBe("Vận hành 4.100.000 ₫ · chi khoảng 141.000 ₫/ngày tới ngày lương 10/12 (còn 29 ngày)");
       const rest = ((await (await app.request("/v1/snapshot", { headers: { Authorization: "Bearer tok" } }, env)).json()) as { data: Record<string, any> }).data;
       const snap = toolData(json!);
       expect(snap.pockets.savings.change).toEqual(rest.pockets.savings.change);
-      expect(snap.pockets.savings.change).toEqual({ since: "2026-11-10", amount: 800_000, prevSince: "2026-10-10", prevAmount: 700_000 });
+      expect(snap.pockets.savings.change).toEqual({ since: "2026-11-01", amount: 800_000, prevSince: "2026-10-01", prevAmount: 700_000 });
       expect(snap.pockets.reserve.peaceMonths).toEqual(rest.pockets.reserve.peaceMonths);
       expect(snap.pockets.shortDebt).toEqual(rest.pockets.shortDebt);
       expect(snap.nearSpend).not.toHaveProperty("misplaced");
@@ -253,11 +257,14 @@ describe("tool đọc số liệu", () => {
     expect(toolData((await mcp(call("get_reconciliation"))).json!)).toEqual(await rest("/v1/accounts"));
   });
 
-  it("UC-602 AC-4: get_spending_by_category { cycle: \"sai\" } → tool error invalid_cycle (JSON-RPC 200), không HTTP 500", async () => {
-    const { status, json } = await mcp(call("get_spending_by_category", { cycle: "sai" }));
+  it("UC-602 AC-4: get_spending_by_category { cycle: \"2026-11-10\" } → tool error model_changed (JSON-RPC 200), không HTTP 500; REST ?cycle= → 400 model_changed", async () => {
+    const { status, json } = await mcp(call("get_spending_by_category", { cycle: "2026-11-10" }));
     expect(status).toBe(200);
     expect(json?.result.isError).toBe(true);
-    expect(json?.result.content[0].text).toBe("Kỳ phải là ngày lương dạng 2026-11-10.");
+    expect(json?.result.content[0].text).toMatch(/^model_changed: /);
+    const rest = await app.request("/v1/spend-by-category?cycle=2026-11-10", { headers: { Authorization: "Bearer tok" } }, env);
+    expect(rest.status).toBe(400);
+    expect(((await rest.json()) as { error: { code: string; fields: string[] } }).error).toMatchObject({ code: "model_changed", fields: ["cycle"] });
   });
 });
 
@@ -376,7 +383,7 @@ describe("bản tính người thuê qua MCP (rental UC-806, UC-807)", () => {
     const auditBefore = raw.prepare("SELECT COUNT(*) AS n FROM audit_log").get();
     const third = await mcp(call("set_tenant_bill_item", { ...args, month: "2026-09" }));
     expect(third.json?.result.isError).toBe(true);
-    expect(errorText(third.json!)).toBe("Bản tính đã gửi — sửa trên app.");
+    expect(errorText(third.json!)).toBe("Bản tính đã gửi: sửa trên app.");
     expect(septemberItems()).toEqual(septBefore);
     expect(raw.prepare("SELECT COUNT(*) AS n FROM audit_log").get()).toEqual(auditBefore);
 
@@ -406,7 +413,7 @@ describe("bản tính người thuê qua MCP (rental UC-806, UC-807)", () => {
     expect(tool).toEqual(rest.json.data);
     expect(tool).toMatchObject({ month: "2026-10", status: "issued", total: 4_220_000, qrAmount: 4_220_000, previousBalance: 50_000 });
     expect(tool.text).toContain("Tổng tháng 10: 4.220.000 ₫ (tháng 9: 4.180.000 ₫, nhiều hơn 40.000 ₫)");
-    expect(tool.text).toContain("Các tháng trước: còn nợ 50.000 ₫ (chưa gồm trong số trên)");
+    expect(tool.text).toContain("Các tháng trước còn nợ 50.000 ₫ (chưa tính ở trên)");
     expect(tool.payments.map((p: { transactionId: number }) => p.transactionId)).toEqual([501]);
     expect(tool.balance).toBe(50_000 + 4_220_000 - 4_000_000 - 100_000);
     expect(writes()).toEqual(before);
@@ -539,7 +546,7 @@ describe("assign_log nhận dòng lãi tiền gửi (261018-lai-tien-gui)", () =
   });
 });
 
-describe("Đợt C: bỏ ví khỏi đường ghi, kỳ lương (261112-ba-ngan-duong-ghi)", () => {
+describe("Đợt C: bỏ ví khỏi đường ghi; bỏ kỳ lương (261112-ba-ngan-duong-ghi, 261112-thang-thay-ky-luong)", () => {
   const errorText = (json: JsonRpcResult) => (json.result.content as { text: string }[]).map((b) => b.text).join("\n");
 
   it("UC-603 AC-31: add_transaction kèm wallet_id / wealth_move → lỗi model_changed kèm tên trường, không ghi gì; bỏ trường → ghi được", async () => {
@@ -591,7 +598,24 @@ describe("Đợt C: bỏ ví khỏi đường ghi, kỳ lương (261112-ba-ngan-
       { meaning: "income", tenant_id: "tenant-binh", income_stream_id: "rental", counter_account_id: "vcb-husband", legacy_class: null, by_member_id: "husband" },
     ]);
     expect(raw.prepare("SELECT status FROM bank_logs WHERE id = 'T1'").get()).toEqual({ status: "assigned" });
-    expect(raw.prepare("SELECT COUNT(*) n FROM pay_cycles").get()).toEqual({ n: 0 });
+    expect(raw.prepare("SELECT COUNT(*) n FROM month_tasks").get()).toEqual({ n: 0 });
+    expect(toolData(res.json!).transactions[0]).toMatchObject({ is_salary: 0 });
+  });
+
+  it("UC-1205 AC-7 (MCP): add_transaction / assign_log gửi opens_cycle (kể cả false) → lỗi model_changed kèm tên trường, không ghi gì; is_salary ở khoản chi → invalid_input", async () => {
+    for (const opens of [true, false]) {
+      const add = await mcp(call("add_transaction", { meaning: "income", amount: 20_000_000, account_id: "vcb-husband", opens_cycle: opens }));
+      expect(add.json?.result.isError).toBe(true);
+      expect(errorText(add.json!)).toMatch(/model_changed.*opens_cycle/);
+    }
+    raw.prepare("INSERT INTO bank_logs (id, at, amount, direction, account_id, content, status) VALUES ('O1', '2026-10-05T02:00:00.000Z', 20000000, 'in', 'vcb-husband', 'CK', 'pending')").run();
+    const assign = await mcp(call("assign_log", { log_id: "O1", splits: [{ meaning: "income", amount: 20_000_000, opens_cycle: true }] }));
+    expect(assign.json?.result.isError).toBe(true);
+    expect(errorText(assign.json!)).toMatch(/model_changed.*opens_cycle/);
+    expect(raw.prepare("SELECT COUNT(*) n FROM transactions").get()).toEqual({ n: 0 });
+    const spend = await mcp(call("add_transaction", { meaning: "spend", amount: 100_000, category_id: "groceries", is_salary: true }));
+    expect(spend.json?.result.isError).toBe(true);
+    expect(raw.prepare("SELECT COUNT(*) n FROM transactions").get()).toEqual({ n: 0 });
   });
 
   it("UC-504 AC-7 (MCP): người uỷ quyền không thấy log chờ của tài khoản riêng tư người khác, gán → lỗi private_account; chủ tài khoản thấy", async () => {
@@ -622,34 +646,39 @@ describe("Đợt C: bỏ ví khỏi đường ghi, kỳ lương (261112-ba-ngan-
       vi.useRealTimers();
     });
 
-    it("UC-603 AC-32: add_transaction lương 20.000.000 → kỳ mới mở (5 việc), nhật ký pay_cycle.open via mcp; chuyển 2.000.000 sang tài khoản tích luỹ → ① tự xong", async () => {
+    it("UC-603 AC-32: add_transaction lương 20.000.000 → effects.savings { 2.000.000, 10 }, một nhắc ①, không nhật ký pay_cycle.open; chuyển 2.000.000 sang tài khoản tích luỹ → ① tự xong", async () => {
       const income = await mcp(call("add_transaction", { meaning: "income", amount: 20_000_000, income_stream_id: "salary", account_id: "main", at: AT("2026-11-10T08:00:00") }));
       expect(income.json?.result.isError).toBeFalsy();
       const data = toolData(income.json!);
-      expect(data.tx).toMatchObject({ meaning: "income", legacy_class: null, counter_account_id: "main" });
-      expect(data.effects.cycle).toEqual({ opened: true, startedAt: AT("2026-11-10T08:00:00"), payday: "2026-11-10", tasks: 5 });
-      expect(raw.prepare("SELECT payday, started_at FROM pay_cycles WHERE income_tx_id = ? AND status = 'active'").get(data.tx.id)).toEqual({ payday: "2026-11-10", started_at: AT("2026-11-10T08:00:00") });
-      expect(raw.prepare("SELECT member_id, via, target FROM audit_log WHERE action = 'pay_cycle.open'").all()).toEqual([{ member_id: "husband", via: "mcp", target: `tx:${data.tx.id}` }]);
+      expect(data.tx).toMatchObject({ meaning: "income", legacy_class: null, counter_account_id: "main", is_salary: 1 });
+      expect(data.effects.savings).toEqual({ amount: 2_000_000, pct: 10 });
+      expect(data.effects).not.toHaveProperty("cycle");
+      expect(raw.prepare("SELECT month_key, amount, status FROM month_tasks WHERE income_tx_id = ?").all(data.tx.id)).toEqual([{ month_key: "2026-11", amount: 2_000_000, status: "open" }]);
+      expect(raw.prepare("SELECT COUNT(*) n FROM audit_log WHERE action LIKE 'pay_cycle%'").get()).toEqual({ n: 0 });
 
       const move = await mcp(call("add_transaction", { meaning: "transfer", amount: 2_000_000, account_id: "main", to_account_id: "savings", at: AT("2026-11-10T08:30:00") }));
       expect(move.json?.result.isError).toBeFalsy();
       expect(toolData(move.json!).effects.tasksDone).toEqual([expect.objectContaining({ kind: "savings" })]);
       const snap = toolData((await mcp(call("get_snapshot"))).json!);
-      expect(snap.payCycle.tasks.find((t: { kind: string }) => t.kind === "savings")).toMatchObject({ status: "done", auto: true });
+      expect(snap.month.tasks.find((t: { kind: string }) => t.kind === "savings")).toMatchObject({ status: "done", auto: true });
     });
 
-    it("UC-602 AC-13: get_snapshot trả payCycle bằng đúng GET /v1/snapshot; mô tả tool có payCycle", async () => {
+    it("UC-602 AC-13: get_snapshot trả month, monthClose, moneyAge, nearSpend.salaryPayday bằng đúng GET /v1/snapshot, không payCycle / paySetup; mô tả tool có month tasks", async () => {
       const api = client(raw);
       const created = await api("POST", "/v1/transactions", { meaning: "income", amount: 20_000_000, income_stream_id: "salary", account_id: "main", at: AT("2026-11-10T08:00:00") });
       expect(created.status).toBe(201);
       const rest = (await api("GET", "/v1/snapshot")).json.data;
       const snap = toolData((await mcp(call("get_snapshot"))).json!);
-      expect(rest.payCycle).toMatchObject({ payday: "2026-11-10", openCount: 5 });
-      expect(snap.payCycle).toEqual(rest.payCycle);
+      expect(rest.month).toMatchObject({ key: "2026-11", openCount: 1 });
+      for (const k of ["month", "monthClose", "moneyAge", "nearSpend"] as const) expect(snap[k]).toEqual(rest[k]);
+      expect(snap.nearSpend).toHaveProperty("salaryPayday");
+      expect(snap).not.toHaveProperty("payCycle");
+      expect(snap).not.toHaveProperty("paySetup");
       const list = (await mcp({ jsonrpc: "2.0", id: 9, method: "tools/list", params: {} })).json!.result.tools as { name: string; description: string }[];
-      expect(list.find((t) => t.name === "get_snapshot")!.description).toContain(
-        "payCycle: current pay cycle (opened by salary) and its payday checklist — savings transfer, reserve goal funding, moves, last cycle surplus",
-      );
+      const description = list.find((t) => t.name === "get_snapshot")!.description;
+      expect(description).toContain("month: month tasks — the savings reminder of each salary");
+      for (const word of ["monthClose", "moneyAge", "nearSpend.salaryPayday"]) expect(description).toContain(word);
+      expect(description).not.toMatch(/payCycle|pay cycle/);
     });
     it("UC-603 AC-5: sau lương, add_transaction chi 200.000 từ Vận hành → nearSpend.amount giảm đúng như khi ghi qua REST", async () => {
       const api = client(raw);
@@ -665,33 +694,33 @@ describe("Đợt C: bỏ ví khỏi đường ghi, kỳ lương (261112-ba-ngan-
       expect(afterMcp - afterRest).toBe(before - afterMcp);
     });
 
-    it("UC-412: add_transaction mở kỳ lương → notifyPayCycle(env, ngày lương) sau khi trả lời; khoản chi hay lương thứ hai vào kỳ đã có → không báo", async () => {
+    it("UC-412: add_transaction khoản lương có nhắc ① → onSalary → notifySalary(env, id khoản thu) sau khi trả lời; khoản chi hay khoản thu không phải lương → không báo", async () => {
       const spend = await mcp(call("add_transaction", { meaning: "spend", amount: 100_000, category_id: "groceries", account_id: "main", at: AT("2026-11-10T07:00:00") }));
       expect(spend.json?.result.isError).toBeFalsy();
-      expect(notifyPayCycle).not.toHaveBeenCalled();
+      expect(notifySalary).not.toHaveBeenCalled();
 
       const income = await mcp(call("add_transaction", { meaning: "income", amount: 20_000_000, income_stream_id: "salary", account_id: "main", at: AT("2026-11-10T08:00:00") }));
-      expect(toolData(income.json!).effects.cycle).toMatchObject({ opened: true, payday: "2026-11-10" });
-      expect(notifyPayCycle).toHaveBeenCalledTimes(1);
-      expect(notifyPayCycle).toHaveBeenCalledWith(expect.objectContaining({ DB: env.DB }), "2026-11-10");
+      const tx = toolData(income.json!).tx;
+      expect(notifySalary).toHaveBeenCalledTimes(1);
+      expect(notifySalary).toHaveBeenCalledWith(expect.objectContaining({ DB: env.DB }), tx.id);
 
-      // Lương thứ hai vào kỳ đã có → không báo thêm.
-      await mcp(call("add_transaction", { meaning: "income", amount: 5_000_000, income_stream_id: "salary", account_id: "main", at: AT("2026-11-10T08:30:00") }));
-      expect(notifyPayCycle).toHaveBeenCalledTimes(1);
+      await mcp(call("add_transaction", { meaning: "income", amount: 5_000_000, income_stream_id: "side", account_id: "main", at: AT("2026-11-10T08:30:00") }));
+      expect(notifySalary).toHaveBeenCalledTimes(1);
     });
 
-    it("UC-412: assign_log log lương mở kỳ → notifyPayCycle(env, ngày lương) một lần", async () => {
+    it("UC-412: assign_log log lương → notifySalary(env, id khoản thu) một lần", async () => {
       raw.prepare("INSERT INTO bank_logs (id, at, amount, direction, account_id, content, status) VALUES ('S11', ?, 20000000, 'in', 'main', 'LUONG', 'pending')").run(AT("2026-11-10T08:00:00"));
       const assigned = await mcp(call("assign_log", { log_id: "S11", splits: [{ meaning: "income", amount: 20_000_000, income_stream_id: "salary" }] }));
       expect(assigned.json?.result.isError).toBeFalsy();
-      expect(toolData(assigned.json!).effects.cycle).toMatchObject({ opened: true, payday: "2026-11-10" });
-      expect(notifyPayCycle).toHaveBeenCalledTimes(1);
-      expect(notifyPayCycle).toHaveBeenCalledWith(expect.objectContaining({ DB: env.DB }), "2026-11-10");
+      const data = toolData(assigned.json!);
+      expect(data.effects.savings).toEqual({ amount: 2_000_000, pct: 10 });
+      expect(notifySalary).toHaveBeenCalledTimes(1);
+      expect(notifySalary).toHaveBeenCalledWith(expect.objectContaining({ DB: env.DB }), data.transactions[0].id);
     });
   });
 });
 
-describe("Đợt D: Nhìn lại theo kỳ lương, mục tiêu theo ngăn (261112-ba-ngan-nhin-lai)", () => {
+describe("Đợt D: Nhìn lại theo tháng, mục tiêu theo ngăn (261112-ba-ngan-nhin-lai, 261112-thang-thay-ky-luong)", () => {
   describe("hộ mẫu D", () => {
     beforeEach(async () => {
       raw = householdD();
@@ -705,23 +734,18 @@ describe("Đợt D: Nhìn lại theo kỳ lương, mục tiêu theo ngăn (26111
       vi.useRealTimers();
     });
 
-    it("UC-602 AC-14: get_spending_by_category {} và { cycle: \"2026-10-10\" } bằng đúng GET /v1/spend-by-category cùng tham số; cycle + period → invalid_input", async () => {
+    it("UC-602 AC-14: get_spending_by_category {} và { period: \"2026-10\" } bằng đúng GET /v1/spend-by-category cùng tham số; mặc định tháng hiện tại; cycle → model_changed như REST", async () => {
       const api = client(raw);
       const current = toolData((await mcp(call("get_spending_by_category", {}))).json!);
       expect(current).toEqual((await api("GET", "/v1/spend-by-category")).json.data);
-      expect(current.kind).toBe("cycle");
-      const previous = toolData((await mcp(call("get_spending_by_category", { cycle: "2026-10-10" }))).json!);
-      expect(previous).toEqual((await api("GET", "/v1/spend-by-category?cycle=2026-10-10")).json.data);
-      const month = toolData((await mcp(call("get_spending_by_category", { period: "2026-11" }))).json!);
-      expect(month).toEqual((await api("GET", "/v1/spend-by-category?period=2026-11")).json.data);
-      const both = await mcp(call("get_spending_by_category", { cycle: "2026-11-10", period: "2026-11" }));
-      expect(both.json?.result.isError).toBe(true);
-      const rest = await api("GET", "/v1/spend-by-category?cycle=2026-11-10&period=2026-11");
-      expect(rest.json.error?.code).toBe("invalid_input");
-      expect(both.json?.result.content[0].text).toBe(rest.json.error?.message);
-      const missing = await mcp(call("get_spending_by_category", { cycle: "2026-11-11" }));
-      expect(missing.json?.result.isError).toBe(true);
-      expect(missing.json?.result.content[0].text).toBe("Không có kỳ lương bắt đầu ngày này.");
+      expect(current).toMatchObject({ kind: "month", month: "2026-11" });
+      const previous = toolData((await mcp(call("get_spending_by_category", { period: "2026-10" }))).json!);
+      expect(previous).toEqual((await api("GET", "/v1/spend-by-category?period=2026-10")).json.data);
+      const old = await mcp(call("get_spending_by_category", { cycle: "2026-11-10" }));
+      expect(old.json?.result.isError).toBe(true);
+      const rest = await api("GET", "/v1/spend-by-category?cycle=2026-11-10");
+      expect(rest.json.error).toMatchObject({ code: "model_changed", fields: ["cycle"] });
+      expect(old.json?.result.content[0].text).toBe(`model_changed: ${rest.json.error?.message}`);
     });
 
     it("UC-602 AC-15: get_goals bằng đúng GET /v1/goals; mô tả tool không có wallet / safety fund / wealth building", async () => {
@@ -773,11 +797,11 @@ describe("tài khoản riêng tư ở MCP (UC-504, ADR-133) — hộ mẫu P", (
     const husband = await mcp(call("add_transaction", rent));
     expect(husband.json?.result.isError).toBe(true);
     expect(errorText(husband.json!)).toBe((await client(raw)("POST", "/v1/transactions", rent)).json.error?.message);
-    expect(errorText(husband.json!)).toBe("Tài khoản riêng tư của người khác — chỉ chủ tài khoản ghi được khoản vào tài khoản này.");
+    expect(errorText(husband.json!)).toBe("Tài khoản riêng tư của người khác, chỉ chủ tài khoản mới ghi được vào đây.");
     token = (await connectClaude(env, { memberId: "wife", password: "mat-khau-chung" })).access;
     const wife = await mcp(call("add_transaction", rent));
     expect(wife.json?.result.isError).toBe(true);
-    expect(errorText(wife.json!)).toBe("Tiền thuê không ghi vào tài khoản riêng tư — chọn tài khoản khác.");
+    expect(errorText(wife.json!)).toBe("Tiền thuê không ghi vào Tài khoản riêng tư. Chọn tài khoản khác.");
     expect({ tx: txCount(), balance: raw.prepare("SELECT balance FROM v_tenant_balance WHERE tenant_id = 'an'").get() }).toEqual(before);
   });
 
@@ -812,16 +836,16 @@ describe("tài khoản riêng tư ở MCP (UC-504, ADR-133) — hộ mẫu P", (
     expect(raw.prepare("SELECT status FROM bank_logs WHERE id = 'L2'").get()).toEqual({ status: "pending" });
   });
 
-  it("UC-504 AC-18: lương về vcb-wife mở kỳ → get_snapshot của chồng có source { hidden: true }, bằng đúng GET /v1/snapshot của chồng", async () => {
+  it("UC-504 AC-18: lương về vcb-wife (nhắc ①) → get_snapshot của chồng có source { hidden: true }, bằng đúng GET /v1/snapshot của chồng", async () => {
     raw.exec("UPDATE accounts SET sepay_enabled = 0 WHERE id = 'vcb-wife'; UPDATE config SET v = '10' WHERE k = 'savings_pct';");
     const api = client(raw);
     const income = await api("POST", "/v1/transactions", { meaning: "income", amount: 20_000_000, account_id: "vcb-wife", income_stream_id: "salary-husband", at: "2026-11-12T01:00:00.000Z" }, "wife");
     expect(income.status).toBe(201);
     const snap = toolData((await mcp(call("get_snapshot"))).json!);
-    const sources = (snap.payCycle.tasks as { source: unknown }[]).map((t) => t.source).filter((s) => s !== null);
+    const sources = (snap.month.tasks as { source: unknown }[]).map((t) => t.source).filter((s) => s !== null);
     expect(sources.length).toBeGreaterThan(0);
     for (const s of sources) expect(s).toEqual({ hidden: true });
-    expect(snap.payCycle).toEqual((await api("GET", "/v1/snapshot")).json.data.payCycle);
+    expect(snap.month).toEqual((await api("GET", "/v1/snapshot")).json.data.month);
   });
 
   it("UC-504 AC-19: BIDV (Ví Thưởng) và hai tài khoản chi tiêu riêng tư của vợ → get_snapshot của chồng có topUp chỉ gợi ý Phao, không đích (toAccountId / target null), bằng đúng GET /v1/snapshot của chồng", async () => {

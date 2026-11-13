@@ -17,7 +17,7 @@ export const ZALO_CODE_MAX_FAILURES = 5;
 const ZALO_CODE_FAILURE_WINDOW_MS = 60 * 60_000;
 
 const LIMITED =
-  "Đã nhắn sai mã quá nhiều lần. Đợi 1 giờ rồi tạo mã mới trong app Ví nhà (Cài đặt › Thành viên › tên của bạn › Nối Zalo) và nhắn lại.";
+  "Đã nhắn sai mã quá nhiều lần. Đợi 1 giờ rồi mở app Ví nhà › Cài đặt › Thành viên › tên của bạn › Nối Zalo, tạo mã mới và nhắn lại.";
 
 const HELP =
   "Đây là bot báo tin của Ví nhà, bot không đọc tin nhắn. Muốn nhận tin ở Zalo: mở app Ví nhà › Cài đặt › Thành viên › tên của bạn › Nối Zalo, rồi nhắn mã 6 số app đưa vào đây (mã dùng được 15 phút).";
@@ -29,7 +29,7 @@ const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !
 export function zaloErrorText(r: ZaloReply): string {
   if (r.status === 0) return `Không gọi được Zalo (${r.error ?? "lỗi mạng"}). Thử lại sau.`;
   if (r.code === 401) return "Bot token Zalo sai hoặc đã bị đặt lại — dán lại token mới ở Kết nối.";
-  if (r.code === 426) return "Hôm nay đã đặt webhook quá số lần Zalo cho phép — để mai thử lại.";
+  if (r.code === 426) return "Hôm nay đã đặt webhook quá số lần Zalo cho phép. Để mai thử lại.";
   if (r.code === 429) return "Bot Zalo đã hết lượt gửi (gói miễn phí 3.000 tin mỗi tháng).";
   return `Zalo từ chối (${r.error ?? r.code}).`;
 }
@@ -159,6 +159,6 @@ export async function testZalo(env: Env, memberId: string, fetchImpl: typeof fet
   if (!m.zalo_chat_id) return { sent: false, error: "Người này chưa nối Zalo." };
   const token = await getSecret(env, "zalo_bot_token");
   if (!token) return { sent: false, error: "Chưa đặt bot token Zalo." };
-  const r = await sendZalo(token, m.zalo_chat_id, `✅ Ví nhà đã nối Zalo cho ${m.name}.`, fetchImpl);
+  const r = await sendZalo(token, m.zalo_chat_id, `Ví nhà đã nối Zalo cho ${m.name}.`, fetchImpl);
   return r.ok ? { sent: true } : { sent: false, error: zaloErrorText(r) };
 }

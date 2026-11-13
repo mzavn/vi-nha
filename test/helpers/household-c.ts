@@ -7,7 +7,7 @@
 //            1.000.000 = Bảo dưỡng xe `car`; tài khoản thuế `tax-acc` 0 = Thuế `tax` (10%); phao `buffer` 5.000.000
 //            (phần an tâm); tài khoản Ví Thưởng `bonus` 0 = surplus_reward_account.
 //  Ngoài ngăn: ví điện tử `ewallet` 200.000.
-//  Nguồn: Lương `salary` (mở kỳ lương), Cho thuê `rental` (config), Việc phụ `side`. Kỳ đang có: ngày lương 2026-10-10.
+//  Nguồn: Lương `salary` (nguồn lương), Cho thuê `rental` (config), Việc phụ `side`. Lương 15.000.000 ngày 10/10 (khoản lương).
 import type { DatabaseSync } from "node:sqlite";
 import type { Env } from "../../src/env";
 import { app } from "../../src/index";
@@ -21,7 +21,7 @@ export function householdC(): DatabaseSync {
     UPDATE reserve_goals SET active = 0;
     DELETE FROM config WHERE k = 'surplus_reward_account';
     UPDATE accounts SET active = 0, sepay_enabled = 0;
-    UPDATE income_streams SET opens_cycle = 0;
+    UPDATE income_streams SET is_salary = 0;
     UPDATE config SET v = '10' WHERE k = 'savings_pct';
     INSERT INTO config (k, v) VALUES ('payday_day', '10'), ('surplus_reward_account', 'bonus');
     INSERT INTO accounts (id, name, kind, bank, account_no, owner_member_id, opening_balance, pocket, pocket_confirmed) VALUES
@@ -35,7 +35,7 @@ export function householdC(): DatabaseSync {
       ('buffer', 'Phao', 'bank', 'MB', '3330006', 'husband', 5000000, 'reserve', 1),
       ('bonus', 'Ví Thưởng', 'bank', 'MB', '3330007', 'wife', 0, 'reserve', 1),
       ('ewallet', 'Ví điện tử', 'ewallet', NULL, NULL, 'wife', 200000, NULL, 1);
-    INSERT INTO income_streams (id, name, sort, opens_cycle) VALUES ('salary', 'Lương', 1, 1), ('side', 'Việc phụ', 2, 0);
+    INSERT INTO income_streams (id, name, sort, is_salary) VALUES ('salary', 'Lương', 1, 1), ('side', 'Việc phụ', 2, 0);
     UPDATE income_streams SET name = 'Cho thuê' WHERE id = 'rental';
     INSERT INTO reserve_goals (id, name, account_id, target_amount, target_pct, monthly_amount, repeat_months, due_date, sort) VALUES
       ('school', 'Học phí', 'reserve', 6000000, NULL, 2000000, 3, '2027-01-15', 1),
@@ -45,7 +45,7 @@ export function householdC(): DatabaseSync {
       VALUES (1, '2026-10-10T01:00:00.000Z', 15000000, 'income', 'main', 'salary', '2026-W41', '2026-10', 'manual');
     INSERT INTO transactions (at, amount, meaning, account_id, category_id, week_key, month_key, source)
       VALUES ('2026-10-20T03:00:00.000Z', 15000000, 'spend', 'main', 'groceries', '2026-W43', '2026-10', 'manual');
-    INSERT INTO pay_cycles (income_tx_id, started_at, payday, prev_operating) VALUES (1, '2026-10-10T01:00:00.000Z', '2026-10-10', 0);
+    UPDATE transactions SET is_salary = 1 WHERE id = 1;
   `);
   return db;
 }

@@ -63,7 +63,7 @@ export function householdParent({ operating = 15_000_000, operatingGoals = false
     `);
   }
   const income = parentTx(raw, { at: "2026-11-10 08:00", meaning: "income", amount: salary, to: "tk-chi-tieu-chong" });
-  raw.prepare("INSERT INTO pay_cycles (income_tx_id, started_at, payday, prev_operating) VALUES (?, ?, '2026-11-10', 0)").run(income, vnAt("2026-11-10 08:00"));
+  raw.prepare("UPDATE transactions SET is_salary = 1 WHERE id = ?").run(income);
   return raw;
 }
 
@@ -82,7 +82,7 @@ export function householdTopUp({ history }: { history: boolean }): DatabaseSync 
       ('gui-3-thang', 'Gửi 3 tháng', 'bank', 'MBBank', 20000000, 'reserve', 1, 'phao');
     INSERT INTO accounts (id, name, kind, bank, account_no, opening_balance, pocket, pocket_confirmed) VALUES
       ('tk-tich-luy', 'TCB tích luỹ', 'bank', 'Techcombank', '01010000009', 50000000, 'savings', 1);
-    INSERT INTO pay_cycle_tasks (cycle_id, kind, to_account_id, suggested, amount) VALUES (1, 'surplus', 'tk-bidv', 600000, 600000);
+    INSERT INTO month_tasks (kind, month_key, to_account_id, amount, created_at, updated_at) VALUES ('surplus', '2026-10', 'tk-bidv', 600000, '2026-11-01T02:00:00.000Z', '2026-11-01T02:00:00.000Z');
   `);
   parentTx(raw, { at: "2026-11-15 09:00", meaning: "spend", amount: 1_000_000, from: "tk-chi-tieu-vo", goal: "dien-nuoc" });
   if (history) {

@@ -129,9 +129,9 @@ export function project(p: ProjectionInput): Projection {
 /** "F1 ở 46 tuổi (2036) — trễ 1 năm" · "F2 ở 49 tuổi (2039) — sớm 1 năm" · "Chưa tới F1 trong 40 năm". */
 export function reachText(name: "F1" | "F2", r: Reach | null): string {
   if (!r) return `Chưa tới ${name} trong ${MAX_YEARS} năm`;
-  const at = r.age === null ? `${name} năm ${r.year}` : `${name} ở ${r.age} tuổi (${r.year})`;
+  const at = r.age === null ? `${name} năm ${r.year}` : `${name} lúc ${r.age} tuổi (${r.year})`;
   if (r.diff === null) return at;
-  return `${at} — ${r.diff === 0 ? "đúng mục tiêu" : `${r.diff > 0 ? "trễ" : "sớm"} ${Math.abs(r.diff)} năm`}`;
+  return `${at}, ${r.diff === 0 ? "đúng mục tiêu" : `${r.diff > 0 ? "trễ" : "sớm"} ${Math.abs(r.diff)} năm`}`;
 }
 
 // ── Ô giả định ─────────────────────────────────────────────────────

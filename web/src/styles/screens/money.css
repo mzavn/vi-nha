@@ -1,0 +1,575 @@
+@layer components {
+/* Sheet Đổi thứ tự mục tiêu (pwa UC-709 AC-48): tay cầm và nút ↑ ↓ ≥ 44px, tên dài xuống dòng. */
+
+.goal-order {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+.goal-order-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-top: 1px solid var(--line);
+  }
+
+.goal-order-row.dragging {
+    background: var(--surface-2);
+  }
+
+.goal-order-main {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+.goal-order-handle {
+    min-width: 44px;
+    min-height: 44px;
+    border: 0;
+    background: none;
+    color: var(--fg-3);
+    cursor: grab;
+    touch-action: none;
+  }
+
+.goal-order-row .btn {
+    min-width: 44px;
+    padding: 0;
+  }
+
+/* Hàng chip "Cho mục tiêu" (pwa UC-703 AC-17): chạm ≥ 44px, xuống dòng thay vì cuộn ngang. */
+
+.field.goal-chips {
+    flex-wrap: wrap;
+  }
+
+.goal-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    flex: 1 1 100%;
+  }
+
+.goal-chip {
+    min-height: 44px;
+    padding: 0 12px;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--fg);
+    font-family: inherit; font-size: inherit; line-height: inherit; font-weight: inherit;
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    overflow-wrap: anywhere;
+  }
+
+.goal-chip[aria-pressed="true"] {
+    background: var(--fg);
+    color: var(--surface);
+    border-color: var(--fg);
+  }
+
+/* Bước 2 màn chuyển đổi (pocket UC-1208 AC-12): ô chọn tài khoản chiếm hết bề ngang, xuống dòng dưới tên mục tiêu; chữ dài
+     xuống dòng, không cuộn ngang. */
+
+.tier {
+    padding: 11px 14px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 3px 10px;
+    align-items: baseline;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 0;
+  }
+
+.tier + .tier {
+    border-top: 1px solid var(--line);
+  }
+
+@media (hover: hover) {
+  button.tier:hover {
+    background: var(--surface-2);
+  }
+}
+
+.tier .nm {
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex-wrap: wrap;
+  }
+
+.tier .tsub {
+    grid-column: 1 / -1;
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    color: var(--fg-3);
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+/* Hàng "Tiền thật đang có" đầu tab Tài khoản (pwa UC-707). */
+
+.blist .tier.accounts-total {
+    background: none;
+    font-weight: 500;
+  }
+
+.blist .tier {
+    border-top: 1px solid var(--line);
+  }
+
+.interest-lines {
+    grid-column: 1 / -1;
+    list-style: none;
+    margin: 2px 0 0;
+    padding: 0;
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    color: var(--fg-2);
+    overflow-wrap: anywhere;
+  }
+
+/* ── Tài sản & tự do (pwa UC-717) ── */
+
+/* Dòng phụ dài (%, dòng tiền, ngày giá) xuống dòng, không tràn ngang ở 390px. */
+
+.srow-t .chip {
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: bottom;
+  }
+
+/* Hàng Cài đặt / sheet: cùng anatomy với Row (DESIGN §4.5, K-010) — tên --text-md, đúng một dòng phụ --text-sm --fg-3. */
+.srow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s3);
+    width: 100%;
+    min-height: 52px;
+    padding: var(--s3) 14px;
+    border: 0;
+    border-top: 1px solid var(--line);
+    background: none;
+    text-align: left;
+    font-size: var(--text-md); line-height: var(--leading-md);
+  }
+
+.card-b.flush > .srow:first-child,
+  .card-b.flush > div:first-child > .srow:first-child {
+    border-top: 0;
+  }
+
+@media (hover: hover) {
+  button.srow:hover {
+    background: var(--surface-2);
+  }
+}
+
+.srow-stack {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+  }
+
+.srow-main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+    min-width: 0;
+  }
+
+.srow-t {
+    color: var(--fg);
+    overflow-wrap: anywhere;
+  }
+
+.srow-s {
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    color: var(--fg-3);
+    overflow-wrap: anywhere;
+  }
+
+/* Dòng phụ của hàng: đúng một dòng (K-010); chữ quá dài thì cắt "…", chữ đầy đủ ở sheet khi chạm hàng. */
+.srow-main > .srow-s {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+/* Lỗi thì đọc đủ, không cắt. */
+.srow-main > .srow-s.err {
+    white-space: normal;
+  }
+
+.srow-r {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+    color: var(--fg-3);
+  }
+
+.srow-r .btn {
+    color: var(--fg);
+  }
+
+.srow-v {
+    display: grid;
+    justify-items: end;
+    color: var(--fg);
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    text-align: right;
+  }
+
+.card.bill-card {
+    overflow: visible; /* để chân dính bám được theo trang */
+  }
+
+.bill-group {
+    border: 0;
+    margin: 0;
+    padding: 0 0 4px;
+    min-width: 0;
+    border-top: 1px solid var(--line);
+  }
+
+.bill-group-h {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 14px 4px;
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    font-weight: 600;
+    color: var(--fg-2);
+  }
+
+.bill-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 44px minmax(96px, 128px) 44px;
+    gap: 4px 6px;
+    align-items: center;
+    padding: 4px 4px 4px 14px;
+    min-width: 0;
+  }
+
+.bill-editor input,
+  .bill-editor select {
+    scroll-margin-bottom: 170px; /* ô đang gõ không nằm dưới chân dính */
+  }
+
+.bill-sign {
+    min-height: 44px;
+    width: 44px;
+    padding: 0;
+    font-size: var(--text-lg); line-height: var(--leading-lg);
+  }
+
+.bill-sign[aria-pressed="true"] {
+    color: var(--neg);
+  }
+
+.bill-sub {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin: 0;
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    color: var(--fg-3);
+  }
+
+.bill-sub.err {
+    color: var(--neg);
+  }
+
+.bill-add {
+    min-height: 44px;
+    margin: 0 8px;
+  }
+
+.bill-foot {
+    position: sticky;
+    bottom: calc(var(--nav-h) + var(--safe-bottom));
+    z-index: 10;
+    background: var(--surface);
+    border-top: 1px solid var(--line);
+    border-radius: 0 0 var(--r-card) var(--r-card);
+    padding: var(--s3) var(--s4);
+  }
+
+/* Điện thoại: nút "+" nổi (56px, cách mép phải 16px) đè lên góc phải chân dính — chừa bề ngang của nó để dòng tổng và nút chính không bị che. */
+
+.has-fab .bill-foot {
+    padding-right: 72px;
+  }
+
+/* Máy tính không có thanh dưới: chân dính sát đáy màn. */
+
+.bill-total {
+    margin: 0 0 8px;
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    overflow-wrap: anywhere;
+  }
+
+.bill-confirm {
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+  }
+
+.bill-text {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-family: inherit;
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    line-height: 1.5;
+  }
+
+.bill-owed {
+    margin: 0;
+    font-weight: 600;
+  }
+
+/* ── danh sách log ── */
+
+table.data.transfer-table td:not(:first-child),
+  table.data.transfer-table th:not(:first-child) {
+    width: 1%;
+    white-space: nowrap;
+  }
+
+table.data.transfer-table .qr-row td {
+    width: auto;
+    white-space: normal;
+  }
+
+/* Card đảo màu (pwa UC-702: hàng Sổ giao dịch ở Hôm nay) — nổi ở cả nền sáng lẫn tối, không dùng màu trạng thái. */
+
+.card-invert .tier .tsub,
+  .card-invert .link-more {
+    color: var(--fg-2);
+  }
+
+.card-invert .tier .tsub {
+    opacity: 1;
+  }
+
+.card-invert button.tier:hover {
+    background: transparent;
+  }
+
+.card-invert .tier .nm {
+    font-weight: 500;
+  }
+
+.srow-amt {
+    font-weight: 600;
+    color: var(--fg);
+  }
+
+/* ── bảng rộng ── */
+
+.sv-slider {
+    padding: 4px 14px 8px;
+    min-width: 0;
+  }
+
+.sv-track {
+    position: relative;
+    padding: 10px 0;
+  }
+
+.sv-range {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    margin: 0;
+    accent-color: var(--fg);
+  }
+
+.sv-ticks {
+    position: absolute;
+    inset: auto 9px 4px;
+    height: 8px;
+    pointer-events: none;
+  }
+
+.sv-tick {
+    position: absolute;
+    top: 0;
+    width: 2px;
+    height: 8px;
+    margin-left: -1px;
+    background: var(--line-strong);
+  }
+
+.sv-marks {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+.sv-mark {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    min-width: 0;
+    padding: 4px 6px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-inner);
+    background: var(--surface);
+    color: var(--fg-2);
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+
+.sv-mark b {
+    color: var(--fg);
+    font-size: var(--text-sm); line-height: var(--leading-sm);
+  }
+
+.sv-mark.on {
+    border-color: var(--fg);
+    background: var(--surface-2);
+  }
+
+.sv-mark:disabled {
+    opacity: 0.5;
+  }
+
+/* Sheet "Trích Tích luỹ" (pwa UC-702 AC-35): nhãn trên, thanh chiếm hết bề ngang bên dưới — không bị đẩy sang phải nhãn ở 390px. */
+
+.field.sv-field {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+  }
+
+.sv-field > .sv-slider {
+    padding: 0 0 8px;
+  }
+
+.acct-child .srow,
+  .tier.acct-child {
+    padding-left: 30px;
+  }
+
+.acct-child > td:first-child {
+    padding-left: 28px;
+  }
+
+/* Hàng người thuê (DESIGN §4.5): tên --text-md, dòng phụ --text-sm --fg-3, số --text-md 500. */
+.ten-row .srow-t {
+    font-size: var(--text-md); line-height: var(--leading-md);
+    font-weight: 400;
+  }
+
+.ten-row .srow-s {
+    color: var(--fg-3);
+  }
+
+.ten-row .srow-amt {
+    font-size: var(--text-md); line-height: var(--leading-md);
+    font-weight: 500;
+  }
+
+/* Câu dẫn của bản tính: cùng lề trái với tiêu đề nhóm và các hàng khoản (14px của thẻ). */
+.bill-lead {
+    margin: 0;
+    padding: var(--s3) 14px 0;
+  }
+
+.gap-b {
+    margin: 0 0 var(--s2);
+  }
+
+.pad-t0 {
+    padding-top: 0;
+  }
+
+.pad-b0 {
+    padding-bottom: 0;
+  }
+
+.pad-y2 {
+    padding-top: var(--s2);
+    padding-bottom: var(--s2);
+  }
+
+.wrap-text {
+    white-space: normal;
+  }
+
+/* Nợ. */
+.debts-hint {
+    margin: 0 var(--s1) var(--s3);
+  }
+
+.field-first {
+    border-top: 0;
+  }
+
+.note-line {
+    border-top: 1px solid var(--line);
+  }
+
+.err-gap {
+    margin: 0 0 var(--s2);
+  }
+
+/* Sheet giao dịch. */
+.txs-flat {
+    margin: 0;
+  }
+
+.txs-link {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+.txs-sec {
+    border-top: 1px solid var(--line);
+    font-weight: 500;
+  }
+
+.txs-k {
+    flex: none;
+  }
+
+.txs-r {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+.txs-line {
+    border-top: 1px solid var(--line);
+  }
+
+.txs-err {
+    margin: 0 0 var(--s2);
+  }
+
+.txs-confirm {
+    margin: 0 0 var(--s2);
+    font-weight: 500;
+  }
+
+/* Chân sheet: mỗi nút rộng hết; Xoá là nút Nguy hiểm (DESIGN §4.10). */
+.txs-act {
+    display: grid;
+    gap: var(--s2);
+  }
+}

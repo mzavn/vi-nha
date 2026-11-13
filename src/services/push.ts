@@ -38,8 +38,8 @@ export type PushPayload = PushText & { url: string; tag: string };
 
 const URLS: Record<string, string> = {
   daily: "/#today",
-  weekly: "/#wallets/analysis", // Ví & quỹ › Nhìn lại (notify UC-406)
-  pay_cycle: "/#today", // thẻ Việc ngày lương (notify UC-412)
+  weekly: "/#wallets/analysis", // Tài khoản › Chi tiêu (notify UC-406)
+  salary: "/#today", // thẻ Trích Tích luỹ (notify UC-412)
   pending_batch: "/#assign",
   test: "/#settings",
   security: "/#settings",
@@ -186,7 +186,7 @@ export async function getPush(env: Env, memberId: string | null, origin: string)
 }
 
 const requireMember = (memberId: string | null): string => {
-  if (!memberId) throw new DomainError("no_member", "Chưa xác định người dùng.");
+  if (!memberId) throw new DomainError("no_member", "Chưa rõ thành viên nào.");
   return memberId;
 };
 
@@ -230,7 +230,7 @@ export async function subscribe(env: Env, memberId: string | null, input: Record
   if (added) {
     const count = await env.DB.prepare("SELECT COUNT(*) AS n FROM push_subscriptions WHERE member_id = ?").bind(member).first<{ n: number }>();
     if ((count?.n ?? 0) >= MAX_DEVICES_PER_MEMBER) {
-      throw new DomainError("too_many_devices", `Mỗi người nhận thông báo trên tối đa ${MAX_DEVICES_PER_MEMBER} máy — gỡ bớt máy cũ ở Cài đặt › Thông báo.`, 409);
+      throw new DomainError("too_many_devices", `Mỗi người nhận thông báo tối đa ${MAX_DEVICES_PER_MEMBER} máy. Hãy gỡ máy cũ ở Cài đặt › Thông báo.`, 409);
     }
   }
   const row = await env.DB.prepare(
@@ -257,7 +257,7 @@ export async function unsubscribe(env: Env, input: Record<string, unknown>): Pro
 /** `DELETE /v1/push/subscriptions/:id` — gỡ một máy trong danh sách ở Cài đặt, của ai cũng được (máy lạ phải gỡ được). */
 export async function removeSubscription(env: Env, id: number): Promise<DeviceChange> {
   const r = toChange(await env.DB.prepare(`DELETE FROM push_subscriptions WHERE id = ? ${REMOVED}`).bind(id).first<RemovedRow>());
-  if (!r) throw new DomainError("not_found", "Không có máy này (có thể đã được gỡ).", 404);
+  if (!r) throw new DomainError("not_found", "Không có máy này, có thể đã được gỡ.", 404);
   return r;
 }
 
@@ -267,7 +267,7 @@ export async function sendTest(env: Env, memberId: string | null, origin: string
   const subs = await env.DB.prepare("SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE member_id = ? ORDER BY id").bind(member).all<SubscriptionRow>();
   if (!subs.results?.length) throw new DomainError("no_subscription", "Máy này chưa bật thông báo.", 409);
   const vapid = await ensureVapid(env, origin);
-  const payload = pushPayload("test", { title: "Gửi thử", body: "✅ Ví nhà sẽ báo tin lên máy này." });
+  const payload = pushPayload("test", { title: "Gửi thử", body: "Ví nhà sẽ báo tin lên máy này." });
   let sent = 0;
   for (const sub of subs.results) {
     const r = await sendPush(env, sub, payload, vapid, { fetchImpl });
@@ -338,7 +338,7 @@ export async function runTestSeries(env: Env, series: TestSeries, vapid: VapidKe
     if (!subs.results?.length) break;
     const payload = {
       title: "Thử khi tắt app",
-      body: `Tin ${i}/${count} — thấy tin này khi app đã tắt là thông báo chạy tốt.`,
+      body: `Tin ${i}/${count}. Thấy tin này khi app đã tắt là thông báo chạy tốt.`,
       url: "/#settings",
       tag: `test-series-${id}-${i}`, // tag khác nhau để iOS không gộp các tin làm một
     };

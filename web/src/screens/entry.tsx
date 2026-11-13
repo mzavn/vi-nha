@@ -7,6 +7,7 @@ import { errorText } from "../lib/api";
 import { defaultAccountFor, manualAccounts, topCategories } from "../lib/categories";
 import { goalChoices, goalField, goalValueOf } from "../lib/goal-choices";
 import { addAmount, formatTypedVnd, formatVnd, moneyDigits, timesThousand } from "../lib/money";
+import { SCREEN_TITLES } from "../lib/nav";
 import { atForDay, dayKey, shortDate, timeHM } from "../lib/period";
 import { draftFromTx, editedAt } from "../lib/transactions";
 import type { Bootstrap, CategoryRef, EntryBody } from "../lib/types";
@@ -31,7 +32,7 @@ export function Entry() {
   if (!boot) {
     return (
       <>
-        <PageHeader title="Nhập khoản chi" />
+        <PageHeader title={SCREEN_TITLES.entry} />
         <Card>
           {app.loadFailed ? <FirstLoadFailed online={app.online} onRetry={() => void refresh(true)} /> : <Skeleton rows={4} />}
         </Card>
@@ -49,12 +50,12 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
   const app = useApp();
   const memberId = app.member?.id ?? null;
   const [d] = useState(() => (edit ? draftFromTx(edit.tx) : null));
-  const [amount, setAmount] = useState(d?.amount ?? 0);
-  const [category, setCategory] = useState<CategoryRef | null>(() => boot.categories.find((c) => c.id === d?.category_id) ?? null);
+  const [amount, setAmount] = useState(d?.amount ?? preset?.amount ?? 0);
+  const [category, setCategory] = useState<CategoryRef | null>(() => boot.categories.find((c) => c.id === (d?.category_id ?? preset?.category_id)) ?? null);
   const [accountId, setAccountId] = useState<string | null>(() => d?.account_id ?? defaultAccountFor(boot, memberId, "out"));
   // "Cho mục tiêu" / "Cho khoản phải trả" / "Từ tiền lãi": không chọn sẵn; đổi tài khoản là bỏ chọn (pwa UC-703 AC-17, AC-18;
   // sửa khoản UC-715 AC-17 giữ lựa chọn đang gắn, kể cả "Từ tiền lãi").
-  const [goalId, setGoalId] = useState<string | null>(d ? goalValueOf(d) : null);
+  const [goalId, setGoalId] = useState<string | null>(d ? goalValueOf(d) : (preset?.goal_id ?? null));
   const pickAccount = (id: string | null) => {
     setAccountId(id);
     setGoalId(null);
@@ -155,7 +156,7 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
   const header = edit ? (
     <PageHeader
       title="Sửa khoản chi"
-      sub={app.online ? "Lưu sẽ thay khoản cũ; khoản cũ vẫn nằm trong sổ, ghi là đã xoá" : "Không có mạng — sửa cần mạng"}
+      sub={app.online ? "Lưu sẽ thay khoản cũ; khoản cũ vẫn nằm trong sổ, ghi là đã xoá" : "Mất mạng, cần có mạng để sửa"}
       action={
         <button type="button" class="btn" onClick={() => go(edit.back, { editTx: null })}>
           Thôi sửa
@@ -164,12 +165,14 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
     />
   ) : (
     <PageHeader
-      title="Nhập khoản chi"
+      title={SCREEN_TITLES.entry}
       sub={
         !app.online
-          ? "Không có mạng — khoản chi vẫn ghi, tự gửi khi có mạng"
+          ? "Không có mạng. Khoản chi vẫn ghi, tự gửi khi có mạng"
           : preset
-            ? `Ghi vào ngày ${shortDate(day)} — ghi xong quay về Sổ giao dịch`
+            ? preset.back === "ledger"
+              ? `Ghi vào ngày ${shortDate(day)}, ghi xong về Sổ giao dịch`
+              : `Ghi vào ngày ${shortDate(day)}`
             : "Tiền mặt và tài khoản SePay không báo tiền ra"
       }
       action={
@@ -196,7 +199,7 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
             enterKeyHint="done"
             placeholder="0"
             value={field.text}
-            style={{ width: amountWidth(field.text) }}
+            style={{ width: amountWidth(field.text), minWidth: "44px" }}
             onInput={(e) => field.onInput(e.currentTarget)}
             onBlur={field.commit}
             onKeyDown={(e) => {
@@ -207,7 +210,7 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
               else void save();
             }}
           />
-          <span class="cur" aria-hidden="true">
+          <span class="unit" aria-hidden="true">
             ₫
           </span>
         </label>
@@ -230,7 +233,7 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
         </div>
         <div
           class="text-center"
-          style={{ minHeight: "22px", padding: "0 12px 10px", fontSize: "12.5px", color: field.expr !== null && field.result === null ? "var(--bad)" : "var(--fg-3)" }}
+          style={{ minHeight: "22px", padding: "0 12px 10px", fontSize: "var(--text-sm)", color: field.expr !== null && field.result === null ? "var(--neg)" : "var(--fg-3)" }}
           aria-live="polite"
         >
           {field.expr !== null
@@ -263,7 +266,7 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
 
       <section class="card" aria-label="Tài khoản">
         {ns && ns.accounts.length > 0 && (
-          <div style={{ padding: "10px 14px 0", fontSize: "12.5px", color: "var(--fg-2)", textAlign: "right" }}>
+          <div style={{ padding: "10px 14px 0", fontSize: "var(--text-sm)", color: "var(--fg-2)", textAlign: "right" }}>
             Vận hành còn <Money value={ns.amount} />
             {ns.perDay !== null && <> · chi khoảng {moneyDigits(ns.perDay)}/ngày</>}
             {app.stale && " (số cũ)"}
@@ -353,7 +356,7 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
           <div>{form}</div>
           <div>
             {side}
-            <RecentTransactions title="Giao dịch gần đây" />
+            <RecentTransactions title="Gần đây" />
           </div>
         </div>
       ) : (
@@ -361,7 +364,7 @@ function EntryForm({ boot, edit, preset }: { boot: Bootstrap; edit: AppState["ed
           <QueueStatus />
           {form}
           {side}
-          <RecentTransactions title="Giao dịch gần đây" />
+          <RecentTransactions title="Gần đây" />
         </>
       )}
       <Sheet open={allCats} title="Tất cả danh mục" onClose={() => setAllCats(false)}>
@@ -402,11 +405,11 @@ function QueueStatus() {
           <Icon name="cloud-off" size={12} /> không có mạng
         </span>
       )}
-      {pending > 0 && <span class="chip warn">{pending} chờ đồng bộ</span>}
+      {pending > 0 && <span class="chip warn">{pending} chờ gửi</span>}
       {rejected > 0 && (
         <>
           <span class="chip bad">{rejected} bị từ chối</span>
-          <button type="button" class="link" style={{ color: "var(--bad)" }} onClick={() => document.getElementById("queue")?.scrollIntoView({ block: "start" })}>
+          <button type="button" class="link" style={{ color: "var(--neg)" }} onClick={() => document.getElementById("queue")?.scrollIntoView({ block: "start" })}>
             Xem lý do
           </button>
         </>
@@ -414,7 +417,7 @@ function QueueStatus() {
       {pending > 0 && (
         <button type="button" class="btn" onClick={() => void syncNow()} disabled={syncing}>
           <Icon name="sync" size={14} />
-          {syncing ? "Đang đồng bộ…" : "Đồng bộ"}
+          {syncing ? "Đang gửi…" : "Gửi lên"}
         </button>
       )}
     </div>
@@ -436,7 +439,7 @@ function QueueList({ boot }: { boot: Bootstrap }) {
       right={
         <button type="button" class="btn" onClick={() => void syncNow()} disabled={syncing}>
           <Icon name="sync" size={14} />
-          Đồng bộ
+          Gửi lên
         </button>
       }
       flush
@@ -451,14 +454,14 @@ function QueueList({ boot }: { boot: Bootstrap }) {
           <Money value={q.body.amount} class="a" />
           <span class="c">
             {q.memberId !== member?.id ? (
-              <span class="chip">của {memberName(q.memberId)} — gửi khi người này đăng nhập</span>
+              <span class="chip">của {memberName(q.memberId)} , gửi khi người này đăng nhập</span>
             ) : q.status === "rejected" ? (
               <>
                 <span class="chip bad">bị từ chối</span> {q.error?.message}
               </>
             ) : (
               <>
-                <span class="chip warn">chờ đồng bộ</span>
+                <span class="chip warn">chờ gửi</span>
                 {q.attempts > 0 && q.error ? ` Lần gửi trước: ${q.error.message}` : ""}
               </>
             )}
@@ -472,7 +475,7 @@ function QueueList({ boot }: { boot: Bootstrap }) {
                       Ghi thêm là hai khoản cùng số tiền trong sổ. Chỉ bấm khi đúng là hai giao dịch thật khác nhau; còn đây chính là khoản SePay đã báo thì Bỏ khoản này.
                     </span>
                     <button type="button" class="btn btn-bad" style={{ flex: 1 }} onClick={() => void confirmDuplicateEntry(q.clientId)}>
-                      Vẫn ghi — là hai khoản
+                      Vẫn ghi, là hai khoản
                     </button>
                   </>
                 ) : (

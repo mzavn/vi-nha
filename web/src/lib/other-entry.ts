@@ -1,11 +1,16 @@
 // Thân yêu cầu và lý do chưa ghi được của sheet "Loại khác" / "Ghi thu nhập" (pwa UC-705, Đợt C): không ví, không chia.
-// Thu nhập mang công tắc "Lương — mở kỳ lương" (mặc định theo nguồn). Thuần để test.
+// Thu nhập mang ô "Đây là lương" (mặc định theo Q1-B). Thuần để test.
 
+import { DEFAULT_SALARY_REMINDER_MIN } from "../../../src/domain/month-tasks";
 import type { EntryBody, IncomeStream } from "./types";
 
-/** Công tắc "Lương — mở kỳ lương" mặc định theo nguồn đang chọn (UC-705 AC-8, AC-33); không nguồn → tắt. */
-export function opensCycleDefault(streams: Pick<IncomeStream, "id" | "opens_cycle">[], streamId: string): boolean {
-  return streams.find((s) => s.id === streamId)?.opens_cycle ?? false;
+/**
+ * Ô "Đây là lương" bật sẵn (pocket UC-1205 Q1-B, UC-705 AC-39, UC-706 AC-40): có nguồn → theo "Nguồn lương" của nguồn; không nguồn →
+ * số tiền từ ngưỡng nhắc trích (`salary_reminder_min`, chưa biết → 5.000.000) trở lên. Tiền người thuê và lãi không có ô (người gọi bỏ).
+ */
+export function isSalaryDefault(streams: Pick<IncomeStream, "id" | "is_salary">[], streamId: string, amount: number, reminderMin: number | undefined): boolean {
+  if (streamId) return streams.find((s) => s.id === streamId)?.is_salary ?? false;
+  return amount > 0 && amount >= (reminderMin ?? DEFAULT_SALARY_REMINDER_MIN);
 }
 
 export interface IncomeDraft {
@@ -17,12 +22,12 @@ export interface IncomeDraft {
   streamId: string;
   tenantId: string;
   note: string;
-  opensCycle: boolean;
+  isSalary: boolean;
   /** Ô "Đây là tiền lãi" (QĐ2): chỉ bật được khi tài khoản nhận thuộc nhóm mẹ có mục tiêu (`incomeInterest`). */
   isInterest?: boolean;
 }
 
-/** Thân POST /v1/transactions của "Ghi thu nhập": luôn gửi `opens_cycle` (trừ tiền người thuê — nguồn cho thuê không mở kỳ). */
+/** Thân POST /v1/transactions của "Ghi thu nhập": gửi `is_salary` theo ô, trừ tiền người thuê và tiền lãi (không bao giờ là lương). */
 export function incomeBody(d: IncomeDraft): EntryBody {
   return {
     meaning: "income",
@@ -32,7 +37,7 @@ export function incomeBody(d: IncomeDraft): EntryBody {
     account_id: d.accountId,
     taxable: d.taxable,
     ...(d.streamId ? { income_stream_id: d.streamId } : {}),
-    ...(d.tenantId ? { tenant_id: d.tenantId } : { opens_cycle: d.opensCycle }),
+    ...(d.tenantId ? { tenant_id: d.tenantId } : d.isInterest ? {} : { is_salary: d.isSalary }),
     ...(d.note.trim() ? { note: d.note.trim() } : {}),
     ...(d.isInterest ? { is_interest: true } : {}),
   };

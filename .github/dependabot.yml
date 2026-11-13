@@ -1,11 +1,15 @@
-# Dependabot: mở PR nâng thư viện npm và GitHub Actions (action ghim SHA kèm chú thích phiên bản) mỗi tuần.
+# Dependabot: không mở PR nâng thư viện theo lịch ở bản công khai — bản công khai là bản sao từ repo gốc, thư viện nâng ở
+# repo gốc rồi phát hành lại. `open-pull-requests-limit: 0` tắt PR nâng phiên bản; cảnh báo / PR bảo mật vẫn chạy nếu bật
+# "Dependabot security updates" trong cài đặt repo.
 version: 2
 updates:
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
