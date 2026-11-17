@@ -1,5 +1,6 @@
-// Mốc tự do (BR-15, UC-1103 — Công thức 8–13 của change 261008-bang-can-doi). Hàm thuần: tiền là số nguyên đồng, tỷ lệ là
-// phần vạn (SWR 3,5% = 350) để không lệch số thực; số theo giá năm mục tiêu chỉ là ước lượng.
+// Mốc tự do (BR-15, UC-1103 — Công thức 8–13 của change 261008-bang-can-doi; đệm, thang mốc, tài sản cho FIRE của change
+// 261117-thang-moc-de-tu-do). Hàm thuần: tiền là số nguyên đồng, tỷ lệ là phần vạn (SWR 3,5% = 350) để không lệch số thực; số
+// theo giá năm mục tiêu chỉ là ước lượng.
 
 import { pct } from "./balance";
 
@@ -8,6 +9,8 @@ export interface FreedomParams {
   expenseSource: "manual" | "ledger" | null;
   expenseMustMonthly: number | null;
   expenseMustSource: "manual" | "ledger" | null;
+  /** N của Công thức 8 (1..3): số tháng trọn E / E_must theo sổ đã lấy; null khi cả hai không lấy từ sổ. */
+  expenseLedgerMonths: number | null;
   incomeMonthly: number | null;
   incomeSource: "ledger" | "plan" | null;
   /** Phần trích trước của M2′ (phần vạn): `savings_pct` + Σ `target_pct` của mục tiêu Thuế đang dùng, tối đa 99%. */
@@ -17,16 +20,45 @@ export interface FreedomParams {
   fatBps: number;
   legacyRateBps: number;
   highInterestBps: number;
+  /** Ba mốc đệm An tâm · An toàn · Vững vàng (tháng chi, `fi_safety_months`). */
   safetyMonths: [number, number, number];
   birthYear: number | null;
   targetAges: { f1: number | null; f2: number | null; f3: number | null };
 }
-export interface SafetyMilestone {
-  key: "A1" | "A2" | "A3";
+/** Một bậc đệm (Công thức 10): Khởi đầu 1 × E, An tâm / An toàn / Vững vàng = `safetyMonths` × E. */
+export interface CushionStep {
+  key: "start" | "calm" | "safe" | "solid";
   months: number;
   need: number | null;
   have: number;
   pct: number | null;
+  reached: boolean | null;
+}
+export interface CushionLadder {
+  monthsCovered: number | null;
+  steps: CushionStep[];
+  /** Bậc chưa đạt đầu tiên; null khi đã qua mọi bậc hoặc chưa có E. */
+  next: CushionStep["key"] | null;
+}
+/** Đệm = tổng ngăn Tích luỹ (kể cả Heo đất; vàng và mục tài sản không vào). */
+export type Cushion = CushionLadder & { amount: number };
+/** Tài sản cho FIRE (Công thức 12): `net` = investable − liabilities − operating − reserveGoals − reward − cushionKept. */
+export interface FireAssets {
+  investable: number;
+  liabilities: number;
+  operating: number;
+  reserveGoals: number;
+  reward: number;
+  cushionKept: number;
+  net: number;
+}
+/** Nửa đường: tài sản cho FIRE ≥ ⌈F1 ÷ 2⌉ hoặc dòng tiền ròng ≥ ⌈E ÷ 2⌉. */
+export interface Halfway {
+  need: number | null;
+  have: number;
+  pct: number | null;
+  cashflowNeed: number | null;
+  cashflowHave: number;
   reached: boolean | null;
 }
 export interface IncomeMilestone {
@@ -53,23 +85,29 @@ export interface FreedomMilestone {
   target: FreedomTarget | null;
 }
 export interface FreedomMilestones {
-  liquid: number;
-  monthsCovered: number | null;
-  safety: SafetyMilestone[];
+  cushion: Cushion;
   income: IncomeMilestone[];
   investable: number;
   liabilities: number;
-  investableNet: number;
+  fireAssets: FireAssets;
+  halfway: Halfway;
   cashflowMonthly: number;
   netCashflowMonthly: number;
   freedom: FreedomMilestone[];
 }
 
-/** Bảng cân đối hôm nay, phần Mốc tự do cần. */
+/** Bảng cân đối và ba ngăn hôm nay, phần Mốc tự do cần (Công thức 12: V, G, W; Công thức 10: đệm). */
 export interface SheetFigures {
-  liquid: number;
   investable: number;
   liabilities: number;
+  /** V: phần các tài khoản ngăn Vận hành góp vào Tiền trong app (thẻ tín dụng đang âm góp 0). */
+  operating: number;
+  /** G: phần các tài khoản Dự phòng gắn mục tiêu đang dùng và tài khoản con của chúng. */
+  reserveGoals: number;
+  /** W: `pockets.reserve.reward?.balance ?? 0`. */
+  reward: number;
+  /** Đệm: tổng ngăn Tích luỹ. */
+  cushion: number;
   cashflowMonthly: number;
   netCashflowMonthly: number;
 }
@@ -77,17 +115,39 @@ export interface SheetFigures {
 /** Chia làm tròn lên (số nguyên dương). */
 const ceilDiv = (a: number, b: number) => Math.ceil(a / b);
 
-/** Mốc an tâm A1–A3 (Công thức 10), thu nhập M2 / M2′ / M3 (11), Tự do F1–F3 (12) và tuổi mục tiêu (13). */
-export function milestones(p: FreedomParams, s: SheetFigures, year: number): FreedomMilestones {
-  const E = p.expenseMonthly;
-  const Em = p.expenseMustMonthly;
-  const I = p.incomeMonthly;
-  const aNet = s.investable - s.liabilities;
-  const safety = (["A1", "A2", "A3"] as const).map((key, i): SafetyMilestone => {
-    const months = p.safetyMonths[i]!;
+const CUSHION_KEYS = ["start", "calm", "safe", "solid"] as const;
+
+/**
+ * Bậc đệm (Công thức 10) — dùng chung server (`cushion`) và thẻ Tích luỹ (gọi lại với số đã trừ tạm). E không có / ≤ 0 → không
+ * có số cần, không số tháng. Số tháng = max(0, ⌊10 × đệm ÷ E⌋ ÷ 10).
+ */
+export function cushionLadder(amount: number, expenseMonthly: number | null, safetyMonths: [number, number, number]): CushionLadder {
+  const E = expenseMonthly !== null && expenseMonthly > 0 ? expenseMonthly : null;
+  const steps = CUSHION_KEYS.map((key, i): CushionStep => {
+    const months = i === 0 ? 1 : safetyMonths[i - 1]!;
     const need = E === null ? null : months * E;
-    return { key, months, need, have: s.liquid, pct: need === null ? null : pct(s.liquid, need), reached: need === null ? null : s.liquid >= need };
+    return { key, months, need, have: amount, pct: need === null ? null : pct(amount, need), reached: need === null ? null : amount >= need };
   });
+  return {
+    monthsCovered: E === null ? null : Math.max(0, Math.trunc((10 * amount) / E) / 10),
+    steps,
+    next: E === null ? null : (steps.find((s) => !s.reached)?.key ?? null),
+  };
+}
+
+/**
+ * Đệm, thu nhập M2 / M2′ / M3 (11), tài sản cho FIRE, Nửa đường, Tự do F1–F3 (12) và tuổi mục tiêu (13). E / E_must ≤ 0 coi như
+ * chưa có (không có số cần nào theo chúng).
+ */
+export function milestones(p: FreedomParams, s: SheetFigures, year: number): FreedomMilestones {
+  const E = p.expenseMonthly !== null && p.expenseMonthly > 0 ? p.expenseMonthly : null;
+  const Em = p.expenseMustMonthly !== null && p.expenseMustMonthly > 0 ? p.expenseMustMonthly : null;
+  const I = p.incomeMonthly;
+  const kept = Math.max(s.cushion, 0);
+  const cushionKept = E === null ? kept : Math.min(kept, p.safetyMonths[2] * E);
+  const net = s.investable - s.liabilities - s.operating - s.reserveGoals - s.reward - cushionKept;
+  const fireAssets: FireAssets = { investable: s.investable, liabilities: s.liabilities, operating: s.operating, reserveGoals: s.reserveGoals, reward: s.reward, cushionKept, net };
+  const P = s.netCashflowMonthly;
   const incomeNeeds: [IncomeMilestone["key"], number | null][] = [
     ["M2", E],
     ["M2p", E === null ? null : ceilDiv(E * 10_000, 10_000 - p.lockedBps)],
@@ -109,23 +169,33 @@ export function milestones(p: FreedomParams, s: SheetFigures, year: number): Fre
   const freedom = defs.map(([key, need, cashflowNeed, age]): FreedomMilestone => ({
     key,
     need,
-    have: aNet,
-    pct: need === null ? null : pct(aNet, need),
+    have: net,
+    pct: need === null ? null : pct(net, need),
     cashflowNeed,
-    cashflowHave: s.netCashflowMonthly,
-    reached: need === null ? null : aNet >= need || (cashflowNeed !== null && s.netCashflowMonthly >= cashflowNeed),
+    cashflowHave: P,
+    reached: need === null ? null : net >= need || (cashflowNeed !== null && P >= cashflowNeed),
     target: target(age, need),
   }));
+  const f1 = defs[0]![1];
+  const halfNeed = f1 === null ? null : ceilDiv(f1, 2);
+  const halfCashflow = E === null ? null : ceilDiv(E, 2);
+  const halfway: Halfway = {
+    need: halfNeed,
+    have: net,
+    pct: halfNeed === null ? null : pct(net, halfNeed),
+    cashflowNeed: halfCashflow,
+    cashflowHave: P,
+    reached: halfNeed === null && halfCashflow === null ? null : (halfNeed !== null && net >= halfNeed) || (halfCashflow !== null && P >= halfCashflow),
+  };
   return {
-    liquid: s.liquid,
-    monthsCovered: E === null || E <= 0 ? null : Math.trunc((10 * s.liquid) / E) / 10,
-    safety,
+    cushion: { amount: s.cushion, ...cushionLadder(s.cushion, E, p.safetyMonths) },
     income,
     investable: s.investable,
     liabilities: s.liabilities,
-    investableNet: aNet,
+    fireAssets,
+    halfway,
     cashflowMonthly: s.cashflowMonthly,
-    netCashflowMonthly: s.netCashflowMonthly,
+    netCashflowMonthly: P,
     freedom,
   };
 }

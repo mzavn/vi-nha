@@ -79,11 +79,36 @@ function household({ interest = 0, operating = true }: { interest?: number; oper
     debts: [],
     savingsPct: 10,
     history: { since: "2026-11-01", prevSince: "2026-10-01", accounts: [] },
-    operatingSpend: { months: [], dataStart: null },
-    peaceTarget: 6,
     interest: interest ? { "tk-tiet-kiem": interest } : {},
   });
 }
+
+describe("ô Cho mục tiêu ở Gán khi khớp chi (ingest UC-305 AC-39)", () => {
+  const closing = (v: PocketsView, ids: string[]): PocketsView => ({ ...v, reserve: { ...v.reserve, goals: v.reserve.goals.map((g) => (ids.includes(g.id) ? { ...g, closed: true } : g)) } });
+
+  it("UC-305 AC-39: tài khoản có từ hai mục tiêu → chip như nay, bỏ mục tiêu đã chốt; còn một mục tiêu chưa chốt → không hàng (server tự gắn)", () => {
+    const p = pocketsShared();
+    const row = goalChoices("tk-chung", closing(p, ["bao-duong-xe"]), { picker: true });
+    expect(row).toMatchObject({ kind: "account", picker: false });
+    expect(row!.choices.map((c) => c.id)).toEqual(["hoa-don", "hieu-hi"]);
+    expect(goalField("bao-duong-xe", row)).toEqual({});
+    expect(goalChoices("tk-tiet-kiem", closing(p, ["nha-o"]), { picker: true })).toBeNull();
+  });
+
+  it("UC-305 AC-39: tài khoản không có mục tiêu (phao, tài khoản chi tiêu) → hàng thu gọn 'Cho mục tiêu ›' mở bộ chọn UC-715 AC-21, mặc định không chọn; chọn Nhà ở → gửi goal_id; mục tiêu đã chốt không gửi; ngoài Gán (không `picker`) như cũ", () => {
+    const p = pocketsShared();
+    const phao = goalChoices("phao", p, { picker: true });
+    expect(phao).toMatchObject({ kind: "account", label: "Cho mục tiêu", choices: [], picker: true });
+    expect(goalField(null, phao)).toEqual({});
+    expect(goalField("nha-o", phao)).toEqual({ goal_id: "nha-o" });
+    expect(goalField("nha-o", goalChoices("phao", closing(p, ["nha-o"]), { picker: true }))).toEqual({});
+    expect(goalChoices("phao", p)).toBeNull();
+    const cash = goalChoices("tien-mat", household(), { picker: true });
+    expect(cash).toMatchObject({ kind: "operating", picker: true });
+    expect(goalField("nha-o", cash)).toEqual({ goal_id: "nha-o" });
+    expect(goalField("dien-nuoc", cash)).toEqual({ goal_id: "dien-nuoc" });
+  });
+});
 
 describe("ô Cho khoản phải trả (ADR-141) và tài khoản con (ADR-140)", () => {
   it("UC-703 AC-18: chi từ tiền mặt (Vận hành) → hàng 'Cho khoản phải trả' bốn khoản theo thứ tự + 'Không cho khoản nào', không chọn sẵn; chọn Điện nước → gửi goal_id 'dien-nuoc'; khoản chợ không mở → không gửi goal_id (không tự gắn); toast 'Chi khoảng …/ngày' tính lại bằng nearSpendView có goalRemaining", () => {

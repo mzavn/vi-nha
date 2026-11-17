@@ -119,6 +119,7 @@ describe("mục tiêu Dự phòng là một tài khoản thật (UC-1209)", () =
     expect(created.json.data.goal).toEqual({
       id: "hoa-don", name: "Hoá đơn", account_id: null, suggested_account_id: null, held: null, need: null, spent: 0, short: null, target_amount: 1_300_000, target_pct: null,
       monthly_amount: 1_300_000, repeat_months: 1, due_date: null, debt_id: null, sort: 40, active: true, pays_from: "account", remaining: null, category_ids: [],
+      closed: false, closed_at: null, leftover: 0, over: 0, suggest_close: false, short_because: [], advance: 0, advance_from: [], pending_refund: 0, period_id: null,
     });
     expect(err(await call("POST", "/v1/settings/goals", { name: "Hoá đơn", target_amount: 1_000 }))).toEqual([409, "duplicate"]);
     expect(auditOf("goal.create")).toEqual([{ target: "goal:hoa-don", detail: { fields: ["monthly_amount", "name", "repeat_months"] } }]);
@@ -248,6 +249,7 @@ describe("nhiều mục tiêu dùng chung một tài khoản (UC-1209 bước 9,
     expect(r.goals.find((g) => g.id === "hoc-tap")!.spent).toBe(0);
     expect(r.groups.find((g) => g.accountId === "tk-tiet-kiem")).toEqual({
       accountId: "tk-tiet-kiem", name: "MB tiết kiệm", balance: 12_000_000, need: 13_500_000, spent: 0, short: 1_500_000, extra: 0, goalIds: ["nha-o", "hoc-tap"], childIds: [], interest: 0,
+      pending: 0, free: 0, unmatched: 0,
     });
     const txBefore = Number((raw.prepare("SELECT COUNT(*) AS n FROM transactions").get() as { n: number }).n);
     expect((await call("POST", "/v1/transactions", { meaning: "transfer", amount: 3_000_000, account_id: "vcb-husband", to_account_id: "tk-tiet-kiem" })).status).toBe(201);

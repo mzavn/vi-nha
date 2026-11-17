@@ -364,6 +364,8 @@ describe("receivable, access: kỳ hạn và ngày tắt", () => {
     expect([swr.status, swr.json.error?.code, swr.json.error?.field]).toEqual([400, "invalid_input", "fi_swr_bps"]);
     const age = await call("PUT", "/v1/settings/config", { fi_target_age_f1: 36 });
     expect([age.status, age.json.error?.field]).toEqual([400, "fi_target_age_f1"]);
+    const ladder = await call("PUT", "/v1/settings/config", { fi_safety_months: "12,6,24" });
+    expect([ladder.status, ladder.json.error?.field, ladder.json.error?.message]).toEqual([400, "fi_safety_months", "Mốc đệm là ba số tháng 1–60, tăng dần (ví dụ 6,12,24)."]);
     expect((await call<SettingsData>("GET", "/v1/settings")).json.data.config).toMatchObject({ fi_swr_bps: 350, fi_target_age_f1: null, fi_birth_year: 1990 });
     expect((await call<SettingsConfig>("PUT", "/v1/settings/config", { fi_swr_bps: 300 })).json.data).toMatchObject({ fi_swr_bps: 300 });
     expect((await call<SettingsConfig>("PUT", "/v1/settings/config", { fi_birth_year: null })).json.data.fi_birth_year).toBeNull();

@@ -128,7 +128,7 @@ export function validateSplits(total: number, splits: Split[]): SplitCheck {
 export function assignBody(
   rows: AssignRow[],
   createRule: boolean,
-  o: { goals?: (toAccountId: string | null) => GoalRow | null; interest?: boolean } = {},
+  o: { goals?: (toAccountId: string | null, spend: boolean) => GoalRow | null; interest?: boolean } = {},
 ): { splits: Split[]; create_rule: boolean } {
   const interest = rows.find((r) => r.interestMode);
   if (interest) return { splits: [{ meaning: "income", amount: interest.amount, interest: true, ...(interest.note ? { note: interest.note } : {}) }], create_rule: createRule };
@@ -147,7 +147,7 @@ export function assignBody(
       ...(s.meaning === "spend" && interest_debt_id ? { interest_debt_id } : {}),
       ...((s.meaning === "lend" || s.meaning === "collect") && receivable_id ? { receivable_id } : {}),
       ...((s.meaning === "refund" || s.meaning === "collect") && link_id ? { link_id } : {}),
-      ...(s.meaning === "spend" || s.meaning === "transfer" ? goalField(goal_id, o.goals?.(s.meaning === "transfer" ? (other_account_id ?? null) : null)) : {}),
+      ...(s.meaning === "spend" || s.meaning === "transfer" ? goalField(goal_id, o.goals?.(s.meaning === "transfer" ? (other_account_id ?? null) : null, s.meaning === "spend")) : {}),
     }),
   );
   return { splits, create_rule: createRule };

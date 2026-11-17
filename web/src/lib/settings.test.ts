@@ -300,14 +300,14 @@ describe("tài khoản", () => {
     expect(r.ok && r.value.active).toBe(false);
   });
 
-  it("UC-709 AC-40: thêm (Ngân hàng, Thẻ tín dụng) và sửa tài khoản không gửi spendable / role / locked — ngăn là thuộc tính duy nhất quyết tiền thuộc đâu", () => {
+  it("UC-709 AC-40: thêm (Ngân hàng, Thẻ tín dụng) và sửa tài khoản không gửi spendable / role / locked — ngăn là thuộc tính duy nhất quyết tiền thuộc đâu; Ngưỡng và tỉ lệ không còn ô phần an tâm (không gửi safety_fund_months)", () => {
     const bank = accountPayload({ ...accountToForm(null), name: "MB (vợ)", bank: "MBBank" }, null);
     const card = accountPayload({ ...accountToForm(null), name: "Thẻ VCB", kind: "credit", bank: "Vietcombank" }, null);
     const edit = accountPayload({ ...accountToForm(existing()), name: "VCB mới" }, existing());
     for (const r of [bank, card, edit]) for (const key of ["spendable", "role", "locked"]) expect(r.ok && key in r.value).toBe(false);
     for (const key of ["spendable", "role", "locked"]) expect(key in accountToForm(existing())).toBe(false);
-    const months = configPayload({ salary_min_amount: 0, interest_max_amount: 10_000, safety_fund_months: "0", payday_day: "10" });
-    expect(!months.ok && months.errors.safety_fund_months).toBe("Số tháng là số nguyên từ 1 đến 24.");
+    const saved = configPayload({ salary_min_amount: 0, interest_max_amount: 10_000, payday_day: "10" });
+    expect(saved.ok && "safety_fund_months" in saved.value).toBe(false);
   });
 
   it("UC-506 AC-24: đổi ngày mở sổ về sau giao dịch sớm nhất → 409 `opening_after_entries` hiện nguyên câu server dưới ô ngày; lỗi khác hiện trên nút", () => {
@@ -411,15 +411,14 @@ describe("thành viên, tham số", () => {
     expect(memberPayload({ name: "Chồng", tg_chat_id: "" }, { ...me, tg_chat_id: "123456" })).toEqual({ ok: true, value: { tg_chat_id: null } });
   });
 
-  const config = { salary_min_amount: 0, interest_max_amount: 10_000, safety_fund_months: "6", payday_day: "10" };
+  const config = { salary_min_amount: 0, interest_max_amount: 10_000, payday_day: "10" };
 
-  it("số tháng phao 1–24, ngưỡng lương không âm", () => {
+  it("UC-709 AC-4: ngưỡng lương không âm; Ngưỡng và tỉ lệ không còn số tháng phần an tâm — không gửi safety_fund_months", () => {
     expect(configPayload(config)).toEqual({
       ok: true,
-      value: { salary_min_amount: 0, interest_max_amount: 10_000, safety_fund_months: 6, payday_day: 10 },
+      value: { salary_min_amount: 0, interest_max_amount: 10_000, payday_day: 10 },
     });
-    expect(configPayload({ ...config, salary_min_amount: 5_000_000, safety_fund_months: "0" }).ok).toBe(false);
-    expect(configPayload({ ...config, salary_min_amount: 5_000_000, safety_fund_months: "3,5" }).ok).toBe(false);
+    expect(configPayload({ ...config, salary_min_amount: -1 })).toMatchObject({ ok: false, errors: { salary_min_amount: "Ngưỡng không âm." } });
   });
 
   it("UC-507: ngưỡng lãi tiền gửi 0..10.000.000 (0 = tắt); quá trần → lỗi ở ô interest_max_amount", () => {
@@ -837,7 +836,7 @@ describe("Ba ngăn (UC-709 AC-35…39)", () => {
   });
 
   it("UC-709 AC-37: % Tích luỹ khi lương về là số nguyên 1–100; bản cài đặt cũ chưa có thì không gửi", () => {
-    const config = { salary_min_amount: 0, interest_max_amount: 10_000, safety_fund_months: "6", payday_day: "10" };
+    const config = { salary_min_amount: 0, interest_max_amount: 10_000, payday_day: "10" };
     expect(configPayload({ ...config, savings_pct: "20" })).toMatchObject({ ok: true, value: { savings_pct: 20 } });
     expect(configPayload({ ...config, savings_pct: "100" })).toMatchObject({ ok: true, value: { savings_pct: 100 } });
     for (const bad of ["0", "101", "12,5", "", "abc"]) {
@@ -1097,7 +1096,7 @@ describe("tài khoản con, mục tiêu trả từ tiền chi tiêu, thang Tích
     expect(sliderPct("30")).toBe(30);
     expect(sliderPct("abc")).toBe(10);
     expect(sliderPct("0")).toBe(10);
-    const config = { salary_min_amount: 0, interest_max_amount: 10_000, safety_fund_months: "6", payday_day: "10" };
+    const config = { salary_min_amount: 0, interest_max_amount: 10_000, payday_day: "10" };
     expect(configPayload({ ...config, savings_pct: String(sliderPct("30")) })).toMatchObject({ ok: true, value: { savings_pct: 30 } });
   });
 });

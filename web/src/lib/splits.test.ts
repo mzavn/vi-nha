@@ -106,7 +106,7 @@ describe("thân yêu cầu Gán (UC-706)", () => {
       { id: "nha-o", name: "Nhà ở" },
       { id: "hoc-tap", name: "Học tập" },
     ];
-    const goals = () => ({ kind: "account" as const, label: "Cho mục tiêu", noneLabel: "Không cho mục tiêu nào", choices, fromInterest: false });
+    const goals = () => ({ kind: "account" as const, label: "Cho mục tiêu", noneLabel: "Không cho mục tiêu nào", choices, fromInterest: false, picker: false, pickable: [] });
     const body = assignBody([row({ meaning: "spend", amount: 6_000_000, category_id: "tuition", goal_id: "hoc-tap" })], false, { goals });
     expect(body.splits).toEqual([{ meaning: "spend", amount: 6_000_000, category_id: "tuition", goal_id: "hoc-tap" }]);
     expect(assignBody([row({ meaning: "transfer", amount: 1_000, other_account_id: "main", goal_id: "nha-o" })], false, { goals }).splits[0]).toMatchObject({ goal_id: "nha-o" });
@@ -121,7 +121,7 @@ describe("thân yêu cầu Gán (UC-706)", () => {
     expect(assignBody([income], false, { interest: true }).splits[0]).toMatchObject({ meaning: "income", amount: 3_000_000, is_interest: true });
     expect(assignBody([income], false).splits[0]).not.toHaveProperty("is_interest");
     expect(assignBody([{ ...income, is_interest: false }], false, { interest: true }).splits[0]).not.toHaveProperty("is_interest");
-    const goals = (to: string | null) => ({ kind: "account" as const, label: "Cho mục tiêu", noneLabel: "Không cho mục tiêu nào", choices: [], fromInterest: to !== "gui-6t" });
+    const goals = (to: string | null) => ({ kind: "account" as const, label: "Cho mục tiêu", noneLabel: "Không cho mục tiêu nào", choices: [], fromInterest: to !== "gui-6t", picker: false, pickable: [] });
     const out = assignBody([row({ meaning: "transfer", amount: 3_000_000, other_account_id: "main", goal_id: FROM_INTEREST })], false, { goals }).splits[0]!;
     expect(out).toMatchObject({ meaning: "transfer", other_account_id: "main", from_interest: true });
     expect(out).not.toHaveProperty("goal_id");

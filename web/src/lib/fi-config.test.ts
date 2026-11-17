@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type FiConfig, fiConfigPayload, fiConfigSummary, fiConfigToForm } from "./settings";
+import { FI_SAFETY_FIELD, type FiConfig, fiConfigPayload, fiConfigSummary, fiConfigToForm } from "./settings";
 
 // Mặc định của migration 0031.
 const defaults: FiConfig = {
@@ -18,12 +18,13 @@ const defaults: FiConfig = {
 };
 
 describe("Cài đặt › Tham số › Tài sản & tự do", () => {
-  it("UC-507 AC-16: form đọc mặc định theo %, lưu lại đúng phần vạn; SWR 3% → 300", () => {
+  it("UC-507 AC-16: form đọc mặc định theo %, lưu lại đúng phần vạn; SWR 3% → 300; tóm tắt '… · Mốc đệm 6/12/24 tháng', ô 'Mốc đệm (số tháng)' với gợi ý ba mốc đệm", () => {
     const f = fiConfigToForm(defaults);
     expect(f).toMatchObject({ swr: "3,5", inflation: "3,5", fat: "110", legacy: "3", highInterest: "15", safetyMonths: "6, 12, 24", birthYear: "" });
     expect(fiConfigPayload(f, 2026)).toEqual({ ok: true, value: defaults });
     expect(fiConfigPayload({ ...f, swr: "3" }, 2026)).toMatchObject({ ok: true, value: { fi_swr_bps: 300 } });
-    expect(fiConfigSummary(defaults)).toBe("SWR 3,5% · lạm phát 3,5% · lãi cao từ 15% · Mốc an tâm 6/12/24 tháng");
+    expect(fiConfigSummary(defaults)).toBe("SWR 3,5% · lạm phát 3,5% · lãi cao từ 15% · Mốc đệm 6/12/24 tháng");
+    expect(FI_SAFETY_FIELD).toEqual({ label: "Mốc đệm (số tháng)", hint: "Ba mốc đệm An tâm · An toàn · Vững vàng (tháng chi), tăng dần." });
   });
 
   it("UC-507 AC-16: SWR 12% hay tuổi mục tiêu bằng tuổi hiện tại → lỗi tại ô, không gửi", () => {

@@ -25,7 +25,9 @@ export interface GoalChoice {
 /**
  * Hàng chọn của tài khoản tiền ra. `account`: mục tiêu để ở tài khoản (tài khoản mẹ hoặc con của nó) — chỉ hỏi khi có từ hai
  * mục tiêu (một mục tiêu → server tự gắn); `fromInterest` thêm chip "Từ tiền lãi". `operating`: mục tiêu trả từ tiền chi tiêu
- * (tài khoản ngăn Vận hành) — ô gọn một dòng, không chọn sẵn, không tự gắn.
+ * (tài khoản ngăn Vận hành) — ô gọn một dòng, không chọn sẵn, không tự gắn. `picker` (chỉ ở Gán, ingest UC-305 AC-39): tài khoản
+ * không có mục tiêu tài khoản → thêm hàng thu gọn "Cho mục tiêu ›" mở bộ chọn mục tiêu gom theo tài khoản (kiểu B, UC-715
+ * AC-21); `pickable` = id mục tiêu chọn được ở bộ chọn đó (chưa chốt).
  */
 export interface GoalRow {
   kind: "account" | "operating";
@@ -33,6 +35,8 @@ export interface GoalRow {
   noneLabel: string;
   choices: GoalChoice[];
   fromInterest: boolean;
+  picker: boolean;
+  pickable: string[];
 }
 
 const lineOf = (p: PocketsView, id: string | null | undefined): PocketAccountLine | undefined =>
@@ -44,44 +48,45 @@ const rootOf = (p: PocketsView, id: string): string => lineOf(p, id)?.parentId ?
 /**
  * Hàng chọn cho khoản chi / chuyển ra từ `accountId`; null = không có hàng. `toAccountId`: tài khoản nhận của chuyển khoản —
  * cùng nhóm mẹ + con thì không có chip "Từ tiền lãi". `keepInterest`: sửa khoản đang "Từ tiền lãi" (UC-715) — giữ chip dù tiền
- * lãi trong snapshot đã về 0 (server tính lại không gồm khoản cũ).
+ * lãi trong snapshot đã về 0 (server tính lại không gồm khoản cũ). `picker`: xem `GoalRow`. Mục tiêu đã chốt không bao giờ là lựa
+ * chọn (pocket UC-1209 AC-30); tài khoản còn đúng một mục tiêu chưa chốt → server tự gắn, không hỏi.
  */
 export function goalChoices(
   accountId: string | null | undefined,
   p: PocketsView | null | undefined,
-  o: { toAccountId?: string | null; keepInterest?: boolean } = {},
+  o: { toAccountId?: string | null; keepInterest?: boolean; picker?: boolean } = {},
 ): GoalRow | null {
   if (!p || !accountId) return null;
+  const pickable = o.picker ? p.reserve.goals.filter((g) => g.accountId && !g.closed).map((g) => g.id) : [];
+  const picker = pickable.length > 0;
   if (p.operating.accounts.some((a) => a.id === accountId)) {
     const goals = p.operating.goals ?? [];
-    if (goals.length === 0) return null;
-    return { kind: "operating", label: OPERATING_CHOICE_LABEL, noneLabel: NO_OPERATING_LABEL, choices: goals.map((g) => ({ id: g.id, name: g.name })), fromInterest: false };
+    if (goals.length === 0 && !picker) return null;
+    return { kind: "operating", label: OPERATING_CHOICE_LABEL, noneLabel: NO_OPERATING_LABEL, choices: goals.map((g) => ({ id: g.id, name: g.name })), fromInterest: false, picker, pickable };
   }
   const root = rootOf(p, accountId);
   const group = p.reserve.groups.find((g) => g.accountId === root);
-  if (!group) return null;
+  if (!group) return picker ? { kind: "account", label: GOAL_CHOICE_LABEL, noneLabel: NO_GOAL_LABEL, choices: [], fromInterest: false, picker, pickable } : null;
   const ids = p.reserve.accounts.find((a) => a.id === root)?.goalIds ?? group.goalIds;
-  const choices =
-    ids.length < 2
-      ? []
-      : ids.flatMap((id) => {
-          const g = p.reserve.goals.find((x) => x.id === id);
-          return g ? [{ id, name: g.name }] : [];
-        });
+  const open = ids.flatMap((id) => {
+    const g = p.reserve.goals.find((x) => x.id === id);
+    return g && !g.closed ? [{ id, name: g.name }] : [];
+  });
+  const choices = open.length < 2 ? [] : open;
   const sameGroup = !!o.toAccountId && rootOf(p, o.toAccountId) === root;
   const fromInterest = !sameGroup && ((group.interest ?? 0) > 0 || !!o.keepInterest);
   if (choices.length === 0 && !fromInterest) return null;
-  return { kind: "account", label: GOAL_CHOICE_LABEL, noneLabel: NO_GOAL_LABEL, choices, fromInterest };
+  return { kind: "account", label: GOAL_CHOICE_LABEL, noneLabel: NO_GOAL_LABEL, choices, fromInterest, picker: false, pickable: [] };
 }
 
 /**
- * Phần `goal_id` / `from_interest` của thân: chỉ khi người nhập đã chọn một mục tiêu còn thuộc hàng hiện tại, hoặc chip "Từ
- * tiền lãi" khi hàng còn chip đó (đổi tài khoản = bỏ chọn).
+ * Phần `goal_id` / `from_interest` của thân: chỉ khi người nhập đã chọn một mục tiêu còn thuộc hàng hiện tại (chip, ô chọn hay bộ
+ * chọn của `picker`), hoặc chip "Từ tiền lãi" khi hàng còn chip đó (đổi tài khoản = bỏ chọn).
  */
 export function goalField(value: string | null | undefined, row: GoalRow | null | undefined): { goal_id?: string; from_interest?: true } {
   if (!value || !row) return {};
   if (value === FROM_INTEREST) return row.fromInterest ? { from_interest: true } : {};
-  return row.choices.some((c) => c.id === value) ? { goal_id: value } : {};
+  return row.choices.some((c) => c.id === value) || row.pickable.includes(value) ? { goal_id: value } : {};
 }
 
 /** Giá trị đang chọn của hàng khi mở form sửa (UC-715): "Từ tiền lãi" nếu khoản cũ rút từ lãi, không thì mục tiêu đang gắn. */

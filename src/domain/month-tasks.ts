@@ -254,15 +254,18 @@ export function taskMemo(t: Pick<MonthTask, "kind" | "toAccountId" | "month" | "
   return `${taskPrefix(t)} ${t.code} T${Number(t.month.slice(5, 7))}`;
 }
 
+/** Tiền tố mã trong nội dung chuyển khoản: việc tháng (TL / CD / VT) hoặc việc chuyển về của mục tiêu (CV, pocket UC-1209 AC-28). */
+export type CodePrefix = TaskPrefix | "CV";
+
 /**
  * Mọi bộ (tiền tố, mã, tháng) có trong nội dung ngân hàng — viết thường, dính chữ, dấu chấm / gạch đều đọc được. Bắt buộc hậu tố
  * `T{tháng}` như nội dung QR: thiếu hậu tố thì không đọc là mã, để mô tả cửa hàng kiểu "VTVCAB…" không khớp nhầm.
  */
-export function codesIn(content: string | null): { prefix: TaskPrefix; code: string; month: number }[] {
+export function codesIn(content: string | null): { prefix: CodePrefix; code: string; month: number }[] {
   if (!content) return [];
-  const out: { prefix: TaskPrefix; code: string; month: number }[] = [];
-  for (const m of content.toUpperCase().matchAll(/(TL|CD|VT)[\s.\-_]?([2-9A-HJ-NP-Z]{4})[\s.\-_]?T(1[0-2]|0?[1-9])(?!\d)/g)) {
-    out.push({ prefix: m[1] as TaskPrefix, code: m[2]!, month: Number(m[3]) });
+  const out: { prefix: CodePrefix; code: string; month: number }[] = [];
+  for (const m of content.toUpperCase().matchAll(/(TL|CD|VT|CV)[\s.\-_]?([2-9A-HJ-NP-Z]{4})[\s.\-_]?T(1[0-2]|0?[1-9])(?!\d)/g)) {
+    out.push({ prefix: m[1] as CodePrefix, code: m[2]!, month: Number(m[3]) });
   }
   return out;
 }

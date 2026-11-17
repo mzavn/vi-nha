@@ -1,11 +1,11 @@
 // Snapshot có khối `pockets` (ledger UC-103 AC-19, pocket UC-1203): số ba ngăn đúng, mọi trường khác trừ `nearSpend` không đổi vì
-// ngăn; không còn trường theo ví; Tích luỹ theo tháng, phần an tâm theo 3 tháng trọn, thứ tự mục tiêu trên hộ mẫu B (Đợt B, E; ADR-144).
+// ngăn; không còn trường theo ví; Tích luỹ theo tháng, Dự phòng chưa gắn mục tiêu, thứ tự mục tiêu trên hộ mẫu B (Đợt B, E; ADR-144).
 import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import type { Snapshot } from "../src/domain/snapshot";
-import { getSnapshot } from "../src/services/ledger";
+import { getSnapshot, goals } from "../src/services/ledger";
 import { asD1, openDb } from "./helpers/d1-sqlite";
-import { B_NOW, householdB, tx, vnAt } from "./helpers/household-b";
+import { B_NOW, householdB, tx } from "./helpers/household-b";
 import { householdParent, householdTopUp, PARENT_NOW, parentTx } from "./helpers/household-parent";
 
 const NOW = new Date("2026-11-12T03:00:00Z");
@@ -68,12 +68,10 @@ describe("snapshot.pockets", () => {
 
   const pocketsAt = async (raw: DatabaseSync, now = B_NOW) => (await getSnapshot(asD1(raw), null, now)).pockets;
 
-  it("UC-1203 AC-15: hộ mẫu B, 11/11 → savings.change { since 2026-11-01, +800.000, prevSince 2026-10-01, +700.000 }; peaceMonths 3 tháng (8, 9, 10), monthly 9.782.608 (= ⌊30.000.000 × 30 ÷ 92⌋); thêm tài khoản có số dư đầu, đổi ngăn tài khoản không có giao dịch → change không đổi", async () => {
+  it("UC-1203 AC-15: hộ mẫu B, 11/11 → savings.change { since 2026-11-01, +800.000, prevSince 2026-10-01, +700.000 }; thêm tài khoản có số dư đầu, đổi ngăn tài khoản không có giao dịch → change không đổi", async () => {
     const raw = householdB();
     const p = await pocketsAt(raw);
     expect(p.savings).toMatchObject({ total: 6_500_000, change: { since: "2026-11-01", amount: 800_000, prevSince: "2026-10-01", prevAmount: 700_000 } });
-    expect(p.reserve.peaceMonths).toMatchObject({ months: 3, monthly: 9_782_608 });
-    expect(p.reserve.peaceMonths).not.toHaveProperty("cycles");
 
     raw.exec("INSERT INTO accounts (id, name, kind, opening_balance, pocket, pocket_confirmed) VALUES ('new-saving', 'tài khoản mới', 'bank', 1000000, 'savings', 1)");
     expect((await pocketsAt(raw)).savings).toMatchObject({ total: 7_500_000, change: { amount: 800_000, prevAmount: 700_000 } });
@@ -90,29 +88,23 @@ describe("snapshot.pockets", () => {
     expect((await pocketsAt(raw)).savings).toMatchObject({ total: 6_500_000, change: { amount: -200_000, prevAmount: 700_000 } });
   });
 
-  it("UC-1203 AC-15: hôm nay 2026-12-01, trong ngày chưa có gì → since 2026-12-01, amount 0, prevSince 2026-11-01; tháng 11 vào cửa sổ tháng vận hành, tháng 8 ra", async () => {
+  it("UC-1203 AC-15: hôm nay 2026-12-01, trong ngày chưa có gì → since 2026-12-01, amount 0, prevSince 2026-11-01", async () => {
     const raw = householdB();
     tx(raw, { at: "2026-11-05 12:00", meaning: "spend", amount: 9_000_000, from: "vcb-husband" });
     const p = await pocketsAt(raw, new Date("2026-12-01T03:00:00Z"));
     expect(p.savings.change).toEqual({ since: "2026-12-01", amount: 0, prevSince: "2026-11-01", prevAmount: 800_000 });
-    // Tháng 9 (30 ngày) 10.500.000, tháng 10 (31) 10.500.000, tháng 11 (30) 9.000.000.
-    expect(p.reserve.peaceMonths).toMatchObject({ months: 3, monthly: Math.floor((30_000_000 * 30) / 91) });
   });
 
-  it("UC-1203 AC-6: hộ mẫu B → phần an tâm 31.500.000, { covered 3,2, target 6, monthly 9.782.608, months 3 }; chi từ tài khoản Dự phòng và chi tháng đang chạy không tính; hoàn vào tài khoản chính (counter_account_id) trừ đi; dữ liệu từ 15/8 → bỏ tháng 8", async () => {
+  it("UC-1203 AC-16: hộ mẫu B ngày 11/11 → pockets.reserve.peace 31.500.000 ở snapshot và goals, không có peaceMonths ở cả hai; đổi safety_fund_months trong DB không đổi gì ở snapshot", async () => {
     const raw = householdB();
-    expect((await pocketsAt(raw)).reserve).toMatchObject({ total: 38_000_000, peace: 31_500_000, peaceMonths: { covered: 3.2, target: 6, monthly: 9_782_608, months: 3 } });
-
-    tx(raw, { at: "2026-10-25 09:00", meaning: "spend", amount: 2_000_000, from: "mb-husband" });
-    tx(raw, { at: "2026-11-02 09:00", meaning: "spend", amount: 3_000_000, from: "vcb-husband" });
-    expect((await pocketsAt(raw)).reserve.peaceMonths.monthly).toBe(9_782_608);
-
-    tx(raw, { at: "2026-09-28 09:00", meaning: "refund", amount: 500_000, to: "vcb-husband" });
-    expect((await pocketsAt(raw)).reserve.peaceMonths).toMatchObject({ monthly: Math.floor(((9_000_000 + 10_000_000 + 10_500_000) * 30) / 92), months: 3 });
-
-    raw.prepare("UPDATE transactions SET status = 'void' WHERE meaning = 'refund'").run();
-    raw.prepare("UPDATE transactions SET at = ? WHERE at = ?").run(vnAt("2026-08-15 09:00"), vnAt("2026-07-01 09:00"));
-    expect((await pocketsAt(raw)).reserve.peaceMonths).toEqual({ covered: 2.8, target: 6, monthly: Math.floor((21_000_000 * 30) / 61), months: 2 });
+    const before = await getSnapshot(asD1(raw), null, B_NOW);
+    expect(before.pockets.reserve).toMatchObject({ total: 38_000_000, peace: 31_500_000 });
+    expect(before.pockets.reserve).not.toHaveProperty("peaceMonths");
+    const g = await goals(asD1(raw), null, B_NOW);
+    expect(g.reserve.peace).toBe(31_500_000);
+    expect(g.reserve).not.toHaveProperty("peaceMonths");
+    raw.exec("INSERT OR REPLACE INTO config (k, v) VALUES ('safety_fund_months', '3')");
+    expect(await getSnapshot(asD1(raw), null, B_NOW)).toEqual(before);
   });
 
   it("UC-1203 AC-7: hộ mẫu B → reserve.goals theo hạn: Trả nợ Vay người thân, Học phí, Bảo dưỡng xe, Thuế", async () => {
@@ -144,7 +136,6 @@ describe("snapshot: phần còn phải trả và nhắc chuyển thêm (ledger U
   it("UC-103 AC-25: Vận hành 1.000.000, R 3.500.000, ④ → Ví Thưởng 600.000 đang mở → topUp 2.500.000 từ BIDV 2.000.000 rồi Phao 500.000, đích Chi tiêu chồng (không Gửi 3 tháng, không Tích luỹ); chuyển đủ → null; không có chi trung bình → cùng kết quả (không ăn tiêu ước tính); chỉ tiền mặt → không đích", async () => {
     const raw = householdTopUp({ history: true });
     let s = await snap(raw);
-    expect(s.pockets.reserve.peaceMonths.monthly).toBe(13_500_000);
     expect(s.nearSpend).toMatchObject({ amount: 1_000_000, goalRemaining: 3_500_000 });
     expect(s.topUp).toEqual({
       amount: 2_500_000,

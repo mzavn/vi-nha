@@ -36,11 +36,12 @@ describe("đọc cài đặt", () => {
     expect((await call("GET", "/v1/settings", undefined, false)).status).toBe(401);
   });
 
-  it("UC-505 AC-1: trả đúng mười một phần, kèm URL webhook để dán vào SePay", async () => {
+  it("UC-505 AC-1: trả đúng mười hai phần (thêm goal_refunds — pocket UC-1209 AC-28), kèm URL webhook để dán vào SePay", async () => {
     const { json } = await call("GET", "/v1/settings");
-    expect(Object.keys(json.data).sort()).toEqual(["accounts", "categories", "categoryGroups", "config", "goal_groups", "goals", "incomeStreams", "integrations", "members", "notifySchedule", "rules"]);
+    expect(Object.keys(json.data).sort()).toEqual(["accounts", "categories", "categoryGroups", "config", "goal_groups", "goal_refunds", "goals", "incomeStreams", "integrations", "members", "notifySchedule", "rules"]);
     expect(json.data.integrations.webhook_url).toBe("https://app.example.com/webhooks/sepay");
-    expect(json.data.config).toMatchObject({ salary_min_amount: 1_000_000, salary_reminder_min: 5_000_000, safety_fund_months: 6, fi_swr_bps: 350, fi_safety_months: "6,12,24", fi_birth_year: null });
+    expect(json.data.config).toMatchObject({ salary_min_amount: 1_000_000, salary_reminder_min: 5_000_000, fi_swr_bps: 350, fi_safety_months: "6,12,24", fi_birth_year: null });
+    expect(json.data.config).not.toHaveProperty("safety_fund_months");
     expect(json.data.notifySchedule).toEqual({
       dailyTime: "07:00",
       weeklyDay: 1,
@@ -382,13 +383,19 @@ describe("thành viên, mã chuyển khoản, tham số", () => {
     expect(raw.prepare("SELECT priority FROM rules WHERE id = ?").get(rule.id)).toEqual({ priority: 5 });
   });
 
-  it("ngưỡng lương và số tháng phao", async () => {
+  it("UC-507 AC-3: ngưỡng lương 0 lưu được; safety_fund_months bị bỏ qua như khoá cũ (không ghi, không 400), config trả về không có khoá này", async () => {
+    const before = raw.prepare("SELECT v FROM config WHERE k = 'safety_fund_months'").get();
     const res = await call("PUT", "/v1/settings/config", { salary_min_amount: 0, safety_fund_months: 3 });
-    expect(res.json.data).toMatchObject({ salary_min_amount: 0, safety_fund_months: 3 });
-    expect((await call("PUT", "/v1/settings/config", { safety_fund_months: 0 })).status).toBe(400);
+    expect(res.status).toBe(200);
+    expect(res.json.data).toMatchObject({ salary_min_amount: 0 });
+    expect(res.json.data).not.toHaveProperty("safety_fund_months");
+    expect((await call("PUT", "/v1/settings/config", { safety_fund_months: 0 })).status).toBe(200);
+    expect(raw.prepare("SELECT v FROM config WHERE k = 'safety_fund_months'").get()).toEqual(before);
     // Khoá cũ emergency_months bị bỏ qua như trường lạ (0028 đổi tên).
-    expect((await call("PUT", "/v1/settings/config", { emergency_months: 12 })).json.data).toMatchObject({ salary_min_amount: 0, safety_fund_months: 3 });
-    expect((await call("GET", "/v1/settings")).json.data.config).toMatchObject({ salary_min_amount: 0, safety_fund_months: 3 });
+    expect((await call("PUT", "/v1/settings/config", { emergency_months: 12 })).json.data).toMatchObject({ salary_min_amount: 0 });
+    const config = (await call("GET", "/v1/settings")).json.data.config;
+    expect(config).toMatchObject({ salary_min_amount: 0 });
+    expect(config).not.toHaveProperty("safety_fund_months");
   });
 
   it("UC-709 AC-55: ngưỡng nhắc trích Tích luỹ salary_reminder_min mặc định 5.000.000, lưu riêng với salary_min_amount; số nguyên 0…1e12, sai → 400 invalid_input, không ghi gì", async () => {
@@ -666,17 +673,18 @@ describe("ba ngăn: cấu hình (261112-ba-ngan-nen-du-lieu)", () => {
     expect(data.accounts.find((a: any) => a.id === "mb-tuition")).toMatchObject({ pocket: "reserve", book_balance: 2_500_000 });
     expect(data.incomeStreams.every((s: any) => "pocket" in s)).toBe(true);
     expect(data.config.savings_pct).toBe(30);
+    const MATCH = { closed: false, closed_at: null, leftover: 0, over: 0, suggest_close: false, short_because: [], advance: 0, advance_from: [], pending_refund: 0, period_id: null };
     for (const g of data.goals) {
       expect(Object.keys(g).sort()).toEqual(
-        ["account_id", "active", "category_ids", "debt_id", "due_date", "held", "id", "monthly_amount", "name", "need", "pays_from", "remaining", "repeat_months", "short", "sort", "spent", "suggested_account_id", "target_amount", "target_pct"].sort(),
+        ["account_id", "active", "category_ids", "debt_id", "due_date", "held", "id", "monthly_amount", "name", "need", "pays_from", "remaining", "repeat_months", "short", "sort", "spent", "suggested_account_id", "target_amount", "target_pct", ...Object.keys(MATCH)].sort(),
       );
     }
     expect(data.goals).toEqual([
-      { id: "tuition", name: "Học phí", account_id: "mb-tuition", suggested_account_id: null, held: 2_500_000, need: 6_000_000, spent: 0, short: 3_500_000, target_amount: 6_000_000, target_pct: null, monthly_amount: 2_000_000, repeat_months: 3, due_date: "2027-01-15", debt_id: null, sort: 10, active: true, pays_from: "account", remaining: null, category_ids: [] },
-      { id: "car-service", name: "Bảo dưỡng xe", account_id: null, suggested_account_id: null, held: null, need: null, spent: 0, short: null, target_amount: 4_800_000, target_pct: null, monthly_amount: null, repeat_months: null, due_date: "2027-03-31", debt_id: null, sort: 20, active: true, pays_from: "account", remaining: null, category_ids: [] },
-      { id: "income-tax", name: "Thuế thu nhập", account_id: null, suggested_account_id: null, held: null, need: null, spent: 0, short: null, target_amount: null, target_pct: 10, monthly_amount: null, repeat_months: null, due_date: null, debt_id: null, sort: 30, active: true, pays_from: "account", remaining: null, category_ids: [] },
+      { id: "tuition", name: "Học phí", account_id: "mb-tuition", suggested_account_id: null, held: 2_500_000, need: 6_000_000, spent: 0, short: 3_500_000, target_amount: 6_000_000, target_pct: null, monthly_amount: 2_000_000, repeat_months: 3, due_date: "2027-01-15", debt_id: null, sort: 10, active: true, pays_from: "account", remaining: null, category_ids: [], ...MATCH },
+      { id: "car-service", name: "Bảo dưỡng xe", account_id: null, suggested_account_id: null, held: null, need: null, spent: 0, short: null, target_amount: 4_800_000, target_pct: null, monthly_amount: null, repeat_months: null, due_date: "2027-03-31", debt_id: null, sort: 20, active: true, pays_from: "account", remaining: null, category_ids: [], ...MATCH },
+      { id: "income-tax", name: "Thuế thu nhập", account_id: null, suggested_account_id: null, held: null, need: null, spent: 0, short: null, target_amount: null, target_pct: 10, monthly_amount: null, repeat_months: null, due_date: null, debt_id: null, sort: 30, active: true, pays_from: "account", remaining: null, category_ids: [], ...MATCH },
     ]);
-    expect(data.goal_groups).toEqual([{ account_id: "mb-tuition", balance: 2_500_000, need: 6_000_000, spent: 0, short: 3_500_000, extra: 0, goal_ids: ["tuition"], child_ids: [], interest: 0 }]);
+    expect(data.goal_groups).toEqual([{ account_id: "mb-tuition", balance: 2_500_000, need: 6_000_000, spent: 0, short: 3_500_000, extra: 0, goal_ids: ["tuition"], child_ids: [], interest: 0, pending: 0, free: 0, unmatched: 0 }]);
     // Mục tiêu đã tắt vẫn có trong danh sách.
     raw.exec("UPDATE reserve_goals SET active = 0 WHERE id = 'car-service'");
     expect((await call("GET", "/v1/settings")).json.data.goals.find((g: any) => g.id === "car-service")).toMatchObject({ active: false });
@@ -700,7 +708,7 @@ describe("ba ngăn: cấu hình (261112-ba-ngan-nen-du-lieu)", () => {
       expect(data.goals.find((g: any) => g.id === "nha-o")).toMatchObject({ held: 0, spent: 7_500_000, short: 0 });
       const snap = (await call("GET", "/v1/snapshot", undefined, true, as("husband"))).json.data.pockets.reserve;
       expect(data.goal_groups).toEqual(
-        snap.groups.map((g: any) => ({ account_id: g.accountId, balance: g.balance, need: g.need, spent: g.spent, short: g.short, extra: g.extra, goal_ids: g.goalIds, child_ids: g.childIds, interest: g.interest })),
+        snap.groups.map((g: any) => ({ account_id: g.accountId, balance: g.balance, need: g.need, spent: g.spent, short: g.short, extra: g.extra, goal_ids: g.goalIds, child_ids: g.childIds, interest: g.interest, pending: g.pending, free: g.free, unmatched: g.unmatched })),
       );
       expect(heldOf(data.goals)).toEqual(heldOf(snap.goals));
     } finally {

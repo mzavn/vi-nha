@@ -752,7 +752,6 @@ async function readConfig(db: D1Database) {
     salary_min_amount: await configNumber(db, "salary_min_amount", 1_000_000),
     salary_reminder_min: await configNumber(db, "salary_reminder_min", DEFAULT_SALARY_REMINDER_MIN),
     interest_max_amount: await interestMaxAmount(db),
-    safety_fund_months: await configNumber(db, "safety_fund_months", 6),
     payday_day: await configNumber(db, "payday_day", DEFAULT_PAYDAY_DAY),
     ...(await readFiConfig(db)),
     savings_pct: await configNumber(db, "savings_pct", DEFAULT_SAVINGS_PCT),
@@ -818,7 +817,7 @@ async function fiConfigWrites(db: D1Database, b: Input, now: Date): Promise<D1Pr
     const raw = b.fi_safety_months;
     const list = Array.isArray(raw) ? raw : typeof raw === "string" ? raw.split(",").map((s) => Number(s.trim())) : [];
     const ok = list.length === 3 && list.every((n, i) => Number.isInteger(n) && n >= 1 && n <= 60 && (i === 0 || n > list[i - 1]));
-    if (!ok) bad("fi_safety_months", "Mốc an tâm là ba số tháng 1–60, tăng dần (ví dụ 6,12,24).");
+    if (!ok) bad("fi_safety_months", "Mốc đệm là ba số tháng 1–60, tăng dần (ví dụ 6,12,24).");
     out.push(upsert("fi_safety_months", list.join(",")));
   }
   const year = Number(new Date(now.getTime() + 7 * 3600_000).getUTCFullYear());
@@ -853,7 +852,6 @@ export async function updateConfig(db: D1Database, b: Input, now: Date = new Dat
   }
   const salary = integer(b, "salary_min_amount", { min: 0, max: 1e12 });
   const reminder = integer(b, "salary_reminder_min", { min: 0, max: 1e12 });
-  const months = integer(b, "safety_fund_months", { min: 1, max: 36 });
   const payday = integer(b, "payday_day", { min: 1, max: 31 });
   const savingsPct = b.savings_pct;
   if (has(b, "savings_pct") && (typeof savingsPct !== "number" || !Number.isInteger(savingsPct) || savingsPct < 1 || savingsPct > 100)) {
@@ -868,7 +866,6 @@ export async function updateConfig(db: D1Database, b: Input, now: Date = new Dat
     ...(salary !== null ? [upsert("salary_min_amount", salary)] : []),
     ...(reminder !== null ? [upsert("salary_reminder_min", reminder)] : []),
     ...(has(b, "interest_max_amount") ? [upsert("interest_max_amount", interest as number)] : []),
-    ...(months !== null ? [upsert("safety_fund_months", months)] : []),
     ...(payday !== null ? [upsert("payday_day", payday)] : []),
     ...(await fiConfigWrites(db, b, now)),
     ...(await surplusConfigWrites(db, b)),

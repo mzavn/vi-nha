@@ -7,48 +7,91 @@
 
 import { useEffect, useRef, useState } from "preact/hooks";
 import { api, errorText } from "../lib/api";
-import { FROM_INTEREST, FROM_INTEREST_LABEL, IS_INTEREST_LABEL, NO_GOAL, OPERATING_UNSET_LABEL, type GoalRow } from "../lib/goal-choices";
+import { FROM_INTEREST, FROM_INTEREST_LABEL, GOAL_CHOICE_LABEL, IS_INTEREST_LABEL, NO_GOAL, OPERATING_UNSET_LABEL, type GoalRow } from "../lib/goal-choices";
+import { goalNameOf } from "../lib/goal-match";
 import { bookRefLabel } from "../lib/memo-books";
 import { overpaidHint, receivableEffect, receivableOptions } from "../lib/receivables";
 import { lendDiffText, linkCandidateLabel, linkPickHint, linkCandidatesPath, rankLinkCandidates, refundDiffText, type LinkKind } from "../lib/refunds";
 import type { LinkCandidate, Receivable, ReceivableRef } from "../lib/types";
 import { useResource } from "../state/resource";
 import { getState, refresh, setState, useApp } from "../state/store";
+import { Icon } from "../ui/icons";
+import { GoalPickerSheet } from "./goal-sheets";
 
 /**
  * Hàng chọn của khoản chi / chuyển ra (`goalChoices`). Mục tiêu để ở tài khoản: chip theo thứ tự ưu tiên (+ "Từ tiền lãi" khi
  * nhóm có tiền lãi, loại trừ nhau) + "Không cho mục tiêu nào"; chạm lại chip đang chọn là bỏ chọn (pwa UC-703 AC-17, QĐ2).
  * Khoản phải trả từ tiền chi tiêu: một dòng "Cho khoản phải trả: không ▾", không chọn sẵn (UC-703 AC-18). Không hàng → không vẽ.
+ * `row.picker` (Gán, ingest UC-305 AC-39): thêm hàng thu gọn "Cho mục tiêu ›" mở bộ chọn mục tiêu gom theo tài khoản (UC-715
+ * AC-21), không bắt buộc, mặc định không chọn; cùng giá trị `goal_id` với ô "Cho khoản phải trả" (chọn bên này là bỏ bên kia).
  */
-export function GoalRowField({ id, row, value, onChange }: { id: string; row: GoalRow | null; value: string | null; onChange: (value: string | null) => void }) {
+export function GoalRowField({ id, row, value, onChange, accountId = null }: { id: string; row: GoalRow | null; value: string | null; onChange: (value: string | null) => void; accountId?: string | null }) {
   if (!row) return null;
+  const pick = row.picker ? <GoalPickField id={`${id}-pick`} accountId={accountId} value={value && row.pickable.includes(value) ? value : null} onChange={onChange} /> : null;
   if (row.kind === "operating") {
+    const own = value && (value === NO_OPERATING_VALUE || row.choices.some((c) => c.id === value)) ? value : "";
     return (
-      <div class="field">
-        <label for={id}>{row.label}</label>
-        <select id={id} class="ctl" value={value ?? ""} onChange={(e) => onChange(e.currentTarget.value || null)}>
-          <option value="">{OPERATING_UNSET_LABEL}</option>
-          {row.choices.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-          <option value={NO_OPERATING_VALUE}>{row.noneLabel}</option>
-        </select>
-      </div>
+      <>
+        {row.choices.length > 0 && (
+          <div class="field">
+            <label for={id}>{row.label}</label>
+            <select id={id} class="ctl" value={own} onChange={(e) => onChange(e.currentTarget.value || null)}>
+              <option value="">{OPERATING_UNSET_LABEL}</option>
+              {row.choices.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+              <option value={NO_OPERATING_VALUE}>{row.noneLabel}</option>
+            </select>
+          </div>
+        )}
+        {pick}
+      </>
     );
   }
   const chips = [...row.choices, ...(row.fromInterest ? [{ id: FROM_INTEREST, name: FROM_INTEREST_LABEL }] : []), ...(row.choices.length > 0 ? [{ id: NO_GOAL, name: row.noneLabel }] : [])];
   return (
-    <div class="field goal-chips">
-      <span class="k">{row.label}</span>
-      <div class="goal-chip-row" role="group" aria-label={row.label}>
-        {chips.map((c) => (
-          <button type="button" key={c.id} class="goal-chip" aria-pressed={value === c.id} onClick={() => onChange(value === c.id ? null : c.id)}>
-            {c.name}
-          </button>
-        ))}
-      </div>
+    <>
+      {chips.length > 0 && (
+        <div class="field goal-chips">
+          <span class="k">{row.label}</span>
+          <div class="goal-chip-row" role="group" aria-label={row.label}>
+            {chips.map((c) => (
+              <button type="button" key={c.id} class="goal-chip" aria-pressed={value === c.id} onClick={() => onChange(value === c.id ? null : c.id)}>
+                {c.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {pick}
+    </>
+  );
+}
+
+/** Hàng thu gọn "Cho mục tiêu ›": chữ là mục tiêu đang chọn hoặc "không"; chạm mở bộ chọn. */
+function GoalPickField({ id, accountId, value, onChange }: { id: string; accountId: string | null; value: string | null; onChange: (value: string | null) => void }) {
+  const { snap } = useApp();
+  const [open, setOpen] = useState(false);
+  return (
+    <div class="field">
+      <label for={id}>{GOAL_CHOICE_LABEL}</label>
+      <button type="button" id={id} class="ctl goal-pick" aria-haspopup="dialog" onClick={() => setOpen(true)}>
+        <span>{goalNameOf(snap?.pockets, value) ?? "không"}</span>
+        <Icon name="chevron-right" size={16} />
+      </button>
+      {open && (
+        <GoalPickerSheet
+          accountId={accountId}
+          value={value}
+          onPick={(goalId) => {
+            onChange(goalId);
+            setOpen(false);
+          }}
+          onClose={() => setOpen(false)}
+        />
+      )}
     </div>
   );
 }

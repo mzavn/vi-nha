@@ -1507,12 +1507,6 @@ function Params({ d, ro, open }: SectionProps) {
           onClick={edit}
         />
       )}
-      <Row
-        title="Phần an tâm"
-        sub="Số tháng vận hành muốn có ở Dự phòng, ngoài các mục tiêu"
-        right={<span class="srow-v">{c.safety_fund_months} tháng</span>}
-        onClick={edit}
-      />
       {/* Bản cài đặt lưu offline từ trước ngày lương (ADR-118) thiếu khoá này thì chưa hiện hàng. */}
       {c.payday_day !== undefined && (
         <Row title="Ngày lương" sub="Thẻ Vận hành ở Hôm nay đếm ngược tới ngày này; tháng ít ngày hơn lấy ngày cuối tháng" right={<span class="srow-v">ngày {c.payday_day}</span>} onClick={edit} />

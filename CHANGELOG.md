@@ -6,6 +6,27 @@ bản cài cũ vẫn lên được bình thường (kể cả nâng database t�
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
 trước (xem README › Cập nhật bản mới).
 
+## v3.1.0 — 17/11/2026
+
+- **Khớp khoản chi vào mục tiêu:** chạm một mục tiêu ở Tài khoản › Ba ngăn để xem các khoản đã khớp và tích thêm khoản ngay trong sheet
+  (tìm theo ngày hoặc số tiền); ô "Cho mục tiêu" ở sheet giao dịch và màn Gán sửa được cả khoản ngân hàng đã tự gán. Hôm nay › Cần xem
+  nhắc "N khoản chưa khớp mục tiêu".
+- **"Xong" do bạn chốt:** đã chi đủ thì mục tiêu hiện "Đã chi đủ", bạn bấm "Chốt xong" khi việc thật sự xong; mở lại một chạm, có Hoàn tác.
+  Mục tiêu một lần (sửa xe, đám cưới) cộng số đã chi từ ngày tạo; mục tiêu lặp nhiều tháng (tiền nhà 3 tháng) tính theo từng đợt, trả trễ
+  vẫn đúng đợt.
+- **Trả hộ từ tài khoản khác:** khoản chi cho mục tiêu mà trả từ tài khoản khác thì app tạo việc "Chuyển về" có QR (nội dung `CV …`), tự
+  xong khi tiền chuyển về đủ.
+
+- **Thang mốc từ đệm tới tự do:** Báo cáo › Tự do gom một card Thang mốc — Khởi đầu (1 tháng chi), An tâm (6), An toàn (12), Vững vàng (24),
+  Nửa đường, Tự do cơ bản, Tự do hoàn toàn, Tự do trọn đời; mỗi bậc nói rõ quyết định nó giúp bạn đưa ra. **Đệm = tiền ngăn Tích luỹ**
+  (kể cả heo đất, không gồm vàng); thẻ Tích luỹ ghi "Đủ N tháng chi · mốc …". Bỏ "Phần an tâm" ở thẻ Dự phòng để chỉ còn một con số đệm.
+- **Chi phí tháng có số sớm hơn:** lấy trung bình các tháng đã kết thúc (tối thiểu 1, tối đa 3 tháng gần nhất) thay vì chờ đủ 3 tháng.
+- **Tài sản cho FIRE không đếm trùng:** không gồm tiền Vận hành, tiền của mục tiêu Dự phòng, Ví Thưởng và đệm tới 24 tháng chi.
+- Nút "Tách thêm dòng" và hai chỗ ở màn Gán không còn tràn chữ trên màn hẹp.
+- Sau khi cập nhật, **tải lại app một lần** nếu màn Tài khoản trắng (bản cũ còn trong bộ nhớ máy).
+
+Có nâng cấp database: `0049` (chốt mục tiêu, đợt mục tiêu lặp, việc chuyển về). Database tự nâng khi cập nhật; không xoá dòng nào.
+
 ## v3.0.1 — 13/11/2026
 
 - Báo cáo › Cân đối trên máy tính: "Vốn chủ sở hữu" không còn bị ép thành chữ dọc.

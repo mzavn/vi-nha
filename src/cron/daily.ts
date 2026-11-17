@@ -122,8 +122,6 @@ export async function daily(env: Env, now: Date): Promise<void> {
     limitNudges: nudges,
     unassignedCount: snapshot.attention.pendingLogs,
     reserveGoals: snapshot.pockets.reserve.goals,
-    peace: snapshot.pockets.reserve.peace,
-    peaceMonths: snapshot.pockets.reserve.peaceMonths,
     shortDebt: snapshot.pockets.shortDebt,
     day: today,
     driftAccounts,

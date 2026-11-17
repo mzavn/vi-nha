@@ -664,7 +664,7 @@ function ItemFormSheet({ item, today, onClose, onSaved }: { item: BalanceItem | 
           </Field>
         </>
       )}
-      <Check id="i-liquid" label="Tiền lỏng, tính vào Mốc an tâm" checked={f.liquid} onChange={(v) => set({ liquid: v })} />
+      <Check id="i-liquid" label="Tiền lỏng" checked={f.liquid} onChange={(v) => set({ liquid: v })} />
       <Check id="i-investable" label="Tài sản đầu tư, tính vào Mốc tự do" checked={f.investable} onChange={(v) => set({ investable: v })} />
       <Field id="i-kind" label="Loại mua qua app">
         <select id="i-kind" class="ctl" value={f.assetKind} onChange={(e) => set({ assetKind: e.currentTarget.value as ItemForm["assetKind"] })}>

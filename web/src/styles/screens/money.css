@@ -572,4 +572,62 @@ table.data.transfer-table .qr-row td {
     display: grid;
     gap: var(--s2);
   }
+
+/* Khớp chi mục tiêu (pwa UC-707 AC-45 / AC-46, UC-715 AC-21): phần trạng thái trên dòng phụ hàng mục tiêu theo tông; hàng có ô
+     check (cả hàng là nhãn bấm được, ô check bên phải số); hàng trong sheet cùng lề 14px với .srow. */
+.goal-st.warn {
+    color: var(--warn);
+  }
+
+/* Hàng mục tiêu: đúng một dòng phụ (K-010), dài thì cắt "…"; chi tiết đầy đủ ở sheet mục tiêu. */
+.goal-row .t .s {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+/* Nút chữ "Gỡ" trong hàng khoản đã khớp: vùng chạm 44px, không đệm to. */
+.match-row .match-undo {
+    flex: none;
+    min-height: 44px;
+    padding: 0 var(--s2);
+  }
+
+.sheet .match-row,
+  .sheet .goal-sum {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+.sheet .goal-sum {
+    border-top: 0;
+  }
+
+.match-row {
+    flex-wrap: nowrap;
+    cursor: pointer;
+  }
+
+.match-row input {
+    flex: none;
+    width: 20px;
+    height: 20px;
+    margin: 0;
+    accent-color: var(--fg);
+  }
+
+/* Hàng thu gọn "Cho mục tiêu ›" ở Gán (ingest UC-305 AC-39): trông như ô chọn, chữ trái, "›" phải. */
+.ctl.goal-pick {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s2);
+    text-align: left;
+    cursor: pointer;
+  }
+
+.ctl.goal-pick svg {
+    flex: none;
+    color: var(--fg-3);
+  }
 }

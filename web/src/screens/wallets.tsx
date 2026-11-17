@@ -18,13 +18,14 @@ import { monthKey, monthLabel, shortDate } from "../lib/period";
 import { SCREEN_TITLES, WALLETS_TAB_LABELS } from "../lib/nav";
 import { reserveCard, savingsCard } from "../lib/pocket-cards";
 import { monthFilter } from "../lib/tx-filter";
-import type { AccountRow, Bootstrap, TxRow } from "../lib/types";
+import type { AccountRow, Bootstrap, Freedom, TxRow } from "../lib/types";
 import { type Resource, useResource } from "../state/resource";
 import { go, openTx, setLookBackMonth, setWalletsTab, useApp, viewSnapshot, type WalletsTab } from "../state/store";
 import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
 import { Bar, Card, Chip, Empty, InfoTip, Loadable, PageHeader, Row, SectionNav } from "../ui/parts";
 import { useWide } from "../ui/shell";
+import { GoalRowSub, GoalSheet } from "./goal-sheets";
 import { CountSheet } from "./count-sheet";
 import { DebtsTab } from "./debts";
 import { ASSET_KINDS, OtherEntrySheet } from "./other-entry-sheet";
@@ -444,12 +445,15 @@ function AccountsTab() {
   );
   const nest = (rows: AccountRow[]) => nestAccounts(rows, (r) => ({ id: r.accountId, name: r.name, balance: r.bookBalance, parentId: parentOf.get(r.accountId) ?? null }));
   const [counting, setCounting] = useState<string | null>(null);
+  const [goalOpen, setGoalOpen] = useState<string | null>(null);
   const [buying, setBuying] = useState(false);
   const txs = useAssetBuys();
   const assets = (txs.data ?? []).filter((r) => r.status === "active");
   const assetLabel = (k: string | null) => ASSET_KINDS.find((a) => a.value === k)?.label ?? k ?? "";
-  const savings = savingsCard(snap?.pockets, snap?.month);
-  const reserve = reserveCard(snap?.pockets);
+  // Dòng đệm cần chi phí tháng và ba mốc đệm của GET /v1/freedom (UC-707 AC-47); chưa tải được thì không có dòng.
+  const freedom = useResource<Freedom>("/v1/freedom");
+  const savings = savingsCard(snap?.pockets, snap?.month, freedom.data?.params ?? null);
+  const reserve = reserveCard(snap?.pockets, snap?.day ?? null);
 
   const operatingIds = new Set(snap?.pockets?.operating.accounts.map((a) => a.id) ?? []);
   const savingsIds = new Set(snap?.pockets?.savings.accounts.map((a) => a.id) ?? []);
@@ -492,6 +496,7 @@ function AccountsTab() {
                 )}
                 {savings && !savings.empty && (
                   <div class="pocket-meta list-sec">
+                    {savings.cushion && <p>{savings.cushion}</p>}
                     <p>{savings.change}</p>
                     <p>{savings.prev}</p>
                     <div class="near-foot list-foot-row">
@@ -564,7 +569,7 @@ function AccountsTab() {
                             <Row
                               key={g.id}
                               title={g.name}
-                              sub={g.amount}
+                              sub={<GoalRowSub row={g} />}
                               subTone={g.over ? "neg" : undefined}
                               value={
                                 g.needsAccount ? (
@@ -573,11 +578,16 @@ function AccountsTab() {
                                   </button>
                                 ) : g.pct !== null ? (
                                   `${g.pct}%`
-                                ) : undefined
+                                ) : (
+                                  ""
+                                )
                               }
-                              valueSub={g.full && <Chip tone="pos">đủ</Chip>}
+                              valueSub={g.suggestClose ? <Chip tone="pos">Đã chi đủ</Chip> : g.full && <Chip tone="pos">đủ</Chip>}
                               track={g.pct !== null ? { pct: g.pct, pocket: "reserve", tone: g.full ? "pos" : undefined } : null}
                               indent={Boolean(grp.head)}
+                              arrow={!g.needsAccount}
+                              onClick={g.needsAccount ? undefined : () => setGoalOpen(g.id)}
+                              class="goal-row"
                             />
                           ))}
                           {grp.interest && <p class="row-note">{grp.interest}</p>}
@@ -585,18 +595,7 @@ function AccountsTab() {
                         </Fragment>
                       ))
                     )}
-                    <Row
-                      title={
-                        <>
-                          {reserve.peace.title}
-                          <InfoTip term="peace" />
-                        </>
-                      }
-                      sub={[reserve.peace.months, reserve.peace.note].filter(Boolean).join(" · ") || undefined}
-                      subTone={reserve.peace.bad ? "neg" : undefined}
-                      value={reserve.peace.pct !== null ? `${reserve.peace.pct}%` : undefined}
-                      track={reserve.peace.pct !== null ? { pct: reserve.peace.pct, pocket: "reserve" } : null}
-                    />
+                    {reserve.unassigned && <Row title={reserve.unassigned.bad ? <span class="neg">{reserve.unassigned.text}</span> : reserve.unassigned.text} />}
                     {reserve.reward && (
                       <Row
                         title={
@@ -623,6 +622,7 @@ function AccountsTab() {
         }}
       </Loadable>
       {counting && <CountSheet accountId={counting} onClose={() => setCounting(null)} />}
+      {goalOpen && <GoalSheet goalId={goalOpen} onClose={() => setGoalOpen(null)} />}
       {buying && <OtherEntrySheet kind="buy_asset" amount={0} title="Mua tài sản" onClose={() => setBuying(false)} />}
     </>
   );

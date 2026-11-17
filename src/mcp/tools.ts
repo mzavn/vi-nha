@@ -29,13 +29,15 @@ const OLD_SPLIT_FIELDS = ["wallet_id", "counter_wallet_id", "from_wallet_id", "w
 type Row = Record<string, unknown>;
 const rows = <T = Row>(r: D1Result) => (r.results ?? []) as T[];
 const vnd = (n: number) => `${Math.round(n).toLocaleString("vi-VN")} ₫`;
-/** Mô tả tham số `goal_id` của add_transaction / assign_log (mcp UC-603, UC-604; pocket UC-1209 bước 11). */
+/** Mô tả tham số `goal_id` của add_transaction / assign_log (mcp UC-603, UC-604; pocket UC-1209 bước 11, AC-28, AC-30). */
 const GOAL_ID_HINT =
   "the goal this spend / outgoing transfer uses money for. Account goals (goal ids per account: get_snapshot pockets accounts[].goalIds): " +
   "money leaves the goal's account or one of its term deposits (child accounts, parentId) — only needed when that account has two or more " +
-  "goals, which share one account; leave it out = for no goal (an account with one goal is filled in automatically). Goals paid from " +
-  "spending money (pockets.operating.goals): money leaves any operating account; never filled in automatically — send goal_id to count it. " +
-  "Any other goal is an error (invalid_goal).";
+  "goals, which share one account; leave it out = for no goal (an account with one open goal is filled in automatically). A spend from any " +
+  "other account may also name an account goal: that account advanced the money, so a transfer-back task (goal account → paying account, " +
+  "reserve.refunds) is created. Goals paid from spending money (pockets.operating.goals): money leaves any operating account; never filled " +
+  "in automatically — send goal_id to count it. A goal already closed (reserve.goals[].closed) is an error (goal_closed); any other goal is " +
+  "an error (invalid_goal).";
 /** Mô tả `is_interest` / `from_interest` (mcp UC-603, UC-604; pocket UC-1209 bước 9, ADR-140). */
 const INTEREST_HINT =
   "is_interest (income only) = this income is deposit interest into an account with goals or its term deposit: it is recorded as passive " +
@@ -88,13 +90,13 @@ export async function registerTools(
         "priority order, counting spent = what was spent for the goal this calendar month; null = no account yet; target or % of taxable income; " +
         "sorted by priority), reserve.groups = per account with goals: balance (the account plus its term deposits), interest (deposit interest " +
         "kept out of the goals; the goals split balance − interest), childIds, need, spent, short / extra; accounts[].goalIds = goals of each " +
-        "account; accounts[].parentId = the parent account of a term deposit (child account, same pocket); peace-of-mind amount " +
-        "(reserve accounts without a goal) and months of operating spend it covers (reserve.peace, reserve.peaceMonths), reward account " +
+        "account; accounts[].parentId = the parent account of a term deposit (child account, same pocket); unassigned reserve amount " +
+        "(reserve.peace = reserve accounts without a goal, not the reward account), reward account " +
         "(reserve.reward), short-term debts (shortDebt, reminder only — not subtracted). operating.goals = goals paid straight from spending " +
         "money each month ({ id, name, monthly, monthAmount (own amount for this month, null = monthly), note, categoryIds (spending in these categories counts as paid), spent, remaining }), operating.remaining = what is still to pay for them this month. " +
         "nearSpend: the operating pocket counted until the next payday, per day / per meal / per market trip, minus month tasks not done yet " +
         "(pendingTasks) and minus what goals paid from spending money still need this month (goalRemaining); nearSpend.salaryPayday = the upcoming payday when salary already arrived early (then days count to the payday after), else null. topUp: spending money will not " +
-        "last until payday — { amount, sources: [{ accountId, name, amount }] (reward account first, then peace-of-mind accounts), toAccountId, " +
+        "last until payday — { amount, sources: [{ accountId, name, amount }] (reward account first, then reserve accounts without a goal), toAccountId, " +
         "target (QR destination; null = cash only) }; null = enough. " +
         "month: month tasks — the savings reminder of each salary (transfer savings % to the savings pocket) and the month-end surplus split tasks — " +
         "{ key, tasks, openCount, savings (saved this month: amount, base, pct, level), goalHint (one optional reserve goal still short) }. " +
@@ -120,8 +122,8 @@ export async function registerTools(
       description:
         "Savings pocket total and change per calendar month, savings % and saved this month (savingsDone), reserve goals vs target (several goals can share one " +
         "account; held = what the goal has after splitting the account balance by priority, counting spent this month; null = no account yet), " +
-        "groups per account (balance incl. term deposits, interest kept out of the goals, childIds, need, spent, short / extra), peace-of-mind " +
-        "amount (reserve accounts without a goal) and months, short-term debts, and operating.goals = goals paid straight from spending money " +
+        "groups per account (balance incl. term deposits, interest kept out of the goals, childIds, need, spent, short / extra), unassigned " +
+        "reserve amount (reserve.peace = reserve accounts without a goal), short-term debts, and operating.goals = goals paid straight from spending money " +
         "each month ({ id, name, monthly, monthAmount (own amount for this month, null = monthly), note, categoryIds (spending in these categories counts as paid), spent, remaining }) with operating.remaining. Same numbers as get_snapshot pockets. No parameters.",
     },
     async () => {
@@ -484,9 +486,11 @@ export async function registerTools(
         "% of total and % of equity per row, the asset pyramid, real cash flow per month (cashflowMonthly) and after inflation (netCashflowMonthly), " +
         "and every manually tracked item with its lots, profit/loss, take-profit / stop-loss distance, status and CAGR. " +
         "Cash, receivables and debts always come from the books. date 'YYYY-MM-DD' optional (default today). Amounts are integer VND; pct fields have one decimal. " +
-        "freedom (always as of today): safety milestones A1–A3 (liquid assets vs 6/12/24 months of expenses), income milestones M2/M2p/M3, " +
-        "financial-freedom milestones F1–F3 on investable assets minus debts (with target age, year and inflation-adjusted amount), " +
-        "the parameters used (expenses manual or from the books, SWR, inflation) and this year's income plan vs actual.",
+        "freedom (always as of today) — the milestone ladder: cushion = savings pocket total (incl. piggy banks, not gold) with steps start 1×E, " +
+        "calm / safe / solid = fi_safety_months × E (need, pct, reached, next, monthsCovered); fireAssets = investable assets − debts − operating " +
+        "pocket − reserve goal accounts − reward account − cushion up to solid×E (net); halfway (fireAssets.net ≥ F1 ÷ 2 or net cash flow ≥ E ÷ 2); " +
+        "financial-freedom milestones F1–F3 on fireAssets.net (with target age, year and inflation-adjusted amount); income milestones M2/M2p/M3; " +
+        "the parameters used (expenses manual or from the books over the last 1–3 full months — expenseLedgerMonths, SWR, inflation) and this year's income plan vs actual.",
       inputSchema: { date: z.string().optional() },
     },
     async (args) => {

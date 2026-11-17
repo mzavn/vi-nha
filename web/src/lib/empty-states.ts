@@ -63,7 +63,7 @@ export const EMPTY_STATES: Record<EmptyStateKey, EmptyState> = {
   },
   pocketReserve: {
     title: "Chưa có tài khoản ở ngăn Dự phòng.",
-    hint: "Để tiền cho các việc đã biết sẽ phải trả và phần an tâm.",
+    hint: "Để tiền cho các việc đã biết sẽ phải trả.",
     action: { label: "Cài đặt tài khoản" },
   },
   pocketOther: {

@@ -15,6 +15,7 @@ import type {
   StatementLine,
 } from "../../../src/domain/reports";
 import type {
+  CushionStep,
   Freedom,
   FreedomMilestone,
   FreedomParams,
@@ -26,7 +27,6 @@ import type {
   IncomePlanYear,
   ProjectionIncomeLine,
   ProjectionStart,
-  SafetyMilestone,
 } from "../../../src/domain/freedom";
 import type { Snapshot as DomainSnapshot } from "../../../src/domain/snapshot";
 import type { BillItem } from "../../../src/domain/rental";
@@ -49,6 +49,7 @@ export type Snapshot = Omit<DomainSnapshot, "attention"> & {
 
 export type { CashFlow, CashFlowGroup, CashFlowLine, CashFlowLineKey, CashFlowMonth, IncomeStatement, IncomeStatementMonth, ReportClass, StatementLine };
 export type {
+  CushionStep,
   Freedom,
   FreedomMilestone,
   FreedomParams,
@@ -60,7 +61,6 @@ export type {
   IncomePlanYear,
   ProjectionIncomeLine,
   ProjectionStart,
-  SafetyMilestone,
 };
 
 export interface Bootstrap {
@@ -356,7 +356,7 @@ export interface ReserveGoal {
   held: number | null;
   /** Số cần (= B); null với mục tiêu % hoặc chưa gắn tài khoản. */
   need: number | null;
-  /** Đã chi cho mục tiêu trong tháng hiện tại. */
+  /** Đã chi cho mục tiêu trong kỳ của nó (một lần: từ ngày tạo tới khi chốt; lặp: kỳ hiện tại), gồm số các việc chuyển về. */
   spent: number;
   /** Còn thiếu = max(0, need − held − spent); null khi need null. */
   short: number | null;
@@ -369,6 +369,16 @@ export interface ReserveGoal {
   debt_id: string | null;
   sort: number;
   active: boolean;
+  /** Khớp chi mục tiêu (UC-1209 AC-25…28): bản lưu cũ thiếu = chưa chốt, 0. */
+  closed?: boolean;
+  closed_at?: string | null;
+  leftover?: number;
+  over?: number;
+  suggest_close?: boolean;
+  short_because?: { goal_id: string; amount: number }[];
+  advance?: number;
+  advance_from?: string[];
+  pending_refund?: number;
 }
 
 /** Nhóm mục tiêu của một tài khoản (GET /v1/settings › goal_groups) — cùng số với `snapshot.pockets.reserve.groups`. */
@@ -384,6 +394,50 @@ export interface SettingsGoalGroup {
   child_ids?: string[];
   /** Tiền lãi của nhóm: số chia cho mục tiêu = `balance − interest`. */
   interest?: number;
+  /** Phần chờ chuyển về của nhóm (trừ trước khi chia), phần không thuộc mục tiêu nào khi mọi mục tiêu đã chốt, số khoản chưa khớp. */
+  pending?: number;
+  free?: number;
+  unmatched?: number;
+}
+
+/** Một khoản đã khớp vào mục tiêu (GET /v1/goals/:id/transactions, UC-707 AC-45); `kind` `other` = trả từ tài khoản khác (kiểu B). */
+export interface GoalMatchedTx {
+  tx_id: number;
+  at: string;
+  note: string | null;
+  amount: number;
+  account_id: string;
+  account_name: string;
+  kind: "own" | "other";
+  refund_id: number | null;
+}
+
+/** Một khoản có thể khớp (GET /v1/goals/:id/candidates, UC-707 AC-46): `own` = từ tài khoản của mục tiêu. */
+export interface GoalCandidate {
+  tx_id: number;
+  at: string;
+  note: string | null;
+  amount: number;
+  account_id: string;
+  account_name: string;
+  goal_id: string | null;
+  goal_name: string | null;
+  own: boolean;
+}
+
+/** Một lần đổi `goal_id` của PUT /v1/goals/:id/transactions — đủ để Hoàn tác. */
+export interface GoalTxChange {
+  tx_id: number;
+  from_goal_id: string | null;
+  to_goal_id: string | null;
+}
+
+/** Kết quả PUT /v1/goals/:id/transactions. */
+export interface GoalMatchResult {
+  goal: unknown;
+  changes: GoalTxChange[];
+  refunds_created: { id: number; amount: number; from_account_id: string; to_account_id: string }[];
+  refunds_voided: number[];
 }
 
 /** Nhóm danh mục và hạn mức mềm mỗi tháng (UC-1204); `monthly_limit` null = không đặt. */
@@ -447,7 +501,6 @@ export interface SettingsConfig {
   salary_reminder_min?: number;
   /** Lãi tiền gửi: log tiền vào nhỏ hơn số này (nội dung rỗng / BankAPINotify / "lãi tiền gửi") thì máy tự ghi; 0 = tắt. */
   interest_max_amount: number;
-  safety_fund_months: number;
   /** Ngày lương 1–31 (tháng ít ngày hơn lấy ngày cuối tháng; mặc định 10). Optional: bản cài đặt lưu offline cũ chưa có. */
   payday_day?: number;
   /** Tham số bảng cân đối / Mốc tự do (phần vạn: 350 = 3,5%). */
@@ -456,7 +509,7 @@ export interface SettingsConfig {
   fi_fat_bps: number;
   fi_legacy_rate_bps: number;
   fi_high_interest_bps: number;
-  /** Ba số tháng Mốc an tâm, tăng dần: "6,12,24". */
+  /** Ba mốc đệm An tâm · An toàn · Vững vàng (tháng chi), tăng dần: "6,12,24". */
   fi_safety_months: string;
   /** null = theo sổ. */
   fi_expense_monthly: number | null;

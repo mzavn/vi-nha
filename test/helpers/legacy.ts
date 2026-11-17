@@ -1,7 +1,7 @@
 // Dữ liệu cũ dưới mô hình mới (ADR-123, ADR-131): DB 1.42 dựng từ docs/schema.sql không còn ví, không chèn được dòng có
 // loại chi cũ / fund / lần chia. Dựng DB như bản công khai ở v1.37 (baseline 0030 + 0031…0037), nạp hộ mẫu cũ có ví
 // (test/helpers/legacy-household.sql), áp 0038, nạp dữ liệu cũ của test (ví, dòng có ví, fund, lần chia, lệnh chuyển, chốt
-// tháng), rồi áp 0039…0047 — đúng đường một nhà đang dùng v1.x lên v2. Không tắt trigger. Chạy được ở cả repo gốc
+// tháng), rồi áp 0039…0049 — đúng đường một nhà đang dùng v1.x lên v2. Không tắt trigger. Chạy được ở cả repo gốc
 // (baseline ở publish/migrations/) lẫn bản công khai (baseline ở migrations/).
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -9,7 +9,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { applyMigration, applyMigrations, asD1, readSql } from "./d1-sqlite";
 
-const UPGRADE = ["0039_pay_cycles_no_wallets.sql", "0040_drop_wallet_model.sql", "0041_reward_goal_guard.sql", "0042_shared_goal_accounts.sql", "0043_tenant_bills.sql", "0044_parent_accounts_operating_goals.sql", "0045_goal_cycle_amounts.sql", "0046_month_not_pay_cycle.sql", "0047_task_codes.sql", "0048_undo_and_rule_marks.sql"] as const;
+const UPGRADE = ["0039_pay_cycles_no_wallets.sql", "0040_drop_wallet_model.sql", "0041_reward_goal_guard.sql", "0042_shared_goal_accounts.sql", "0043_tenant_bills.sql", "0044_parent_accounts_operating_goals.sql", "0045_goal_cycle_amounts.sql", "0046_month_not_pay_cycle.sql", "0047_task_codes.sql", "0048_undo_and_rule_marks.sql", "0049_goal_matching.sql"] as const;
 
 /** Baseline của bản công khai: repo gốc giữ ở publish/migrations/, bản công khai ở migrations/ (như test/baseline.test.ts). */
 export const BASELINE_SQL = existsSync(join(dirname(fileURLToPath(import.meta.url)), "../../publish/migrations/0030_baseline.sql"))

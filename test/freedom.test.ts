@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import { app } from "../src/index";
-import type { Freedom, IncomePlanSummary, IncomePlanYear, SettingsConfig, Snapshot } from "../web/src/lib/types";
+import type { Freedom, IncomePlanSummary, IncomePlanYear, SettingsConfig } from "../web/src/lib/types";
 import { asD1 } from "./helpers/d1-sqlite";
 import { legacyEmptyDb, openLegacyDb, upgradingD1 } from "./helpers/legacy";
 
@@ -79,18 +79,65 @@ async function sampleSheet() {
   await ok("POST", "/v1/debts", { name: "Vay tiêu dùng", amount: 20_000_000, interest_rate: 18 });
 }
 
+/**
+ * Sổ của UC-1103 AC-8 (ghi trước câu API đầu tiên — cột ví chỉ có trước khi app lên 1.40): giao dịch đầu ngày 3/10/2026; Thiết yếu /
+ * Mong muốn tháng 10 10.000.000 (gồm Lãi vay 200.000) / 4.200.000, tháng 11 11.000.000 / 4.800.000, tháng 12 9.000.000 / 6.000.000,
+ * tháng 1/2027 12.000.000 / 3.000.000; thu nhập 30.000.000 mỗi tháng; không kế hoạch thu nhập.
+ */
+function ledgerAC8() {
+  raw.exec("INSERT INTO debts (id, name, interest_rate_bps) VALUES ('vay', 'Vay tiêu dùng', 1800)");
+  tx({ at: "2026-10-03T03:00:00.000Z", amount: 9_800_000, meaning: "spend", counter_wallet_id: "food", account_id: "vcb", category_id: "an" });
+  spend("2026-10", 200_000, "loan-interest", { interest_debt_id: "vay" });
+  spend("2026-10", 4_200_000, "fun", { category_id: "mua" });
+  const months: [string, number, number][] = [["2026-11", 11_000_000, 4_800_000], ["2026-12", 9_000_000, 6_000_000], ["2027-01", 12_000_000, 3_000_000]];
+  for (const [m, must, flex] of months) {
+    spend(m, must, "food");
+    spend(m, flex, "fun", { category_id: "mua" });
+  }
+  for (const m of ["2026-10", "2026-11", "2026-12", "2027-01"]) income(m, 30_000_000);
+}
+
+/** Ngăn của UC-1103 AC-9: Tích luỹ = tài khoản tích luỹ 6.900.000 + Heo đất 510.000; Vàng 30.000.000 cờ Tiền lỏng; Dự phòng không gắn mục tiêu 5.000.000. */
+async function householdAC9() {
+  expect((await call("POST", "/v1/balance-items", { name: "Vàng", section: "A1", pyramid: "protective", measure: "value", value: 30_000_000, liquid: true })).status).toBeLessThan(300);
+  raw.exec(`
+    UPDATE accounts SET pocket = 'operating', pocket_confirmed = 1 WHERE id = 'vcb';
+    INSERT INTO accounts (id, name, kind, opening_balance, pocket, pocket_confirmed) VALUES
+      ('tich-luy', 'Tài khoản tích luỹ', 'bank', 6900000, 'savings', 1),
+      ('heo', 'Heo đất', 'cash', 510000, 'savings', 1),
+      ('du-phong', 'Dự phòng', 'bank', 5000000, 'reserve', 1);`);
+}
+
+/**
+ * Bảng UC-1102 AC-1 (A 806.000.000, L 320.000.000) với Tiền trong app 30.000.000 chia ngăn: Vận hành 4.000.000, Dự phòng tài khoản mục
+ * tiêu Học phí 8.000.000 và Ví Thưởng 2.000.000, Tích luỹ 16.000.000; E 20.000.000, E_must 15.000.000 nhập tay.
+ */
+async function householdAC10() {
+  await sampleSheet();
+  raw.exec(`
+    UPDATE accounts SET opening_balance = 4000000, pocket = 'operating', pocket_confirmed = 1 WHERE id = 'vcb';
+    INSERT INTO accounts (id, name, kind, opening_balance, pocket, pocket_confirmed) VALUES
+      ('hoc-phi', 'Tài khoản học phí', 'bank', 8000000, 'reserve', 1),
+      ('thuong', 'Ví Thưởng', 'bank', 2000000, 'reserve', 1),
+      ('tich-luy', 'Tài khoản tích luỹ', 'bank', 16000000, 'savings', 1);
+    INSERT INTO reserve_goals (id, name, account_id, target_amount) VALUES ('hoc-phi', 'Học phí', 'hoc-phi', 20000000);
+    INSERT OR REPLACE INTO config (k, v) VALUES ('surplus_reward_account', 'thuong');`);
+  await config({ fi_expense_monthly: 20_000_000, fi_expense_must_monthly: 15_000_000 });
+}
+
 describe("UC-1103 Mốc tự do", () => {
-  it("UC-1103 AC-1 (mốc Tự do): F1 5.142.857.143, F2 7.542.857.143, F3 8.800.000.000; A 806.000.000, A_ròng 486.000.000; F1 9,4%, F2 6,4%; dòng tiền ròng 104.166 / 15.000.000 chưa đạt", async () => {
+  it("UC-1103 AC-1 (mốc Tự do): F1 5.142.857.143, F2 7.542.857.143, F3 8.800.000.000; A 806.000.000, tài sản cho FIRE 486.000.000 (tài khoản ở ngoài ngăn nên không trừ gì); F1 9,4%, F2 6,4%; dòng tiền ròng 104.166 / 15.000.000 chưa đạt", async () => {
     await sampleSheet();
     await config({ fi_expense_monthly: 20_000_000, fi_expense_must_monthly: 15_000_000 });
     const f = await freedom();
-    expect([f.investable, f.liabilities, f.investableNet, f.netCashflowMonthly]).toEqual([806_000_000, 320_000_000, 486_000_000, 104_166]);
-    expect(f.params).toMatchObject({ expenseMonthly: 20_000_000, expenseSource: "manual", expenseMustMonthly: 15_000_000, expenseMustSource: "manual" });
-    expect(f.freedom.map(({ key, need, pct, cashflowNeed, reached }) => ({ key, need, pct, cashflowNeed, reached }))).toEqual([
-      { key: "F1", need: 5_142_857_143, pct: 9.4, cashflowNeed: 15_000_000, reached: false },
-      { key: "F2", need: 7_542_857_143, pct: 6.4, cashflowNeed: 22_000_000, reached: false },
-      { key: "F3", need: 8_800_000_000, pct: 5.5, cashflowNeed: 22_000_000, reached: false },
+    expect([f.investable, f.liabilities, f.fireAssets.net, f.netCashflowMonthly]).toEqual([806_000_000, 320_000_000, 486_000_000, 104_166]);
+    expect(f.params).toMatchObject({ expenseMonthly: 20_000_000, expenseSource: "manual", expenseMustMonthly: 15_000_000, expenseMustSource: "manual", expenseLedgerMonths: null });
+    expect(f.freedom.map(({ key, need, have, pct, cashflowNeed, reached }) => ({ key, need, have, pct, cashflowNeed, reached }))).toEqual([
+      { key: "F1", need: 5_142_857_143, have: 486_000_000, pct: 9.4, cashflowNeed: 15_000_000, reached: false },
+      { key: "F2", need: 7_542_857_143, have: 486_000_000, pct: 6.4, cashflowNeed: 22_000_000, reached: false },
+      { key: "F3", need: 8_800_000_000, have: 486_000_000, pct: 5.5, cashflowNeed: 22_000_000, reached: false },
     ]);
+    for (const gone of ["liquid", "monthsCovered", "safety", "investableNet"]) expect(f).not.toHaveProperty(gone);
   });
 
   it("UC-1103 AC-2 (tuổi, lạm phát): năm sinh 1990, F1 45 tuổi → năm 2035, còn 9 năm, ≈ 7,01 tỷ; F2 50 tuổi → 2040, còn 14 năm, ≈ 12,21 tỷ; SWR 3% → F1 6.000.000.000", async () => {
@@ -104,24 +151,6 @@ describe("UC-1103 Mốc tự do", () => {
     expect(byKey(f.freedom, "F3").target).toBeNull();
     await config({ fi_swr_bps: 300 });
     expect(byKey((await freedom()).freedom, "F1").need).toBe(6_000_000_000);
-  });
-
-  it("UC-1103 AC-3 (Mốc an tâm — vàng là tiền lỏng): Q_lỏng 156.000.000 = 7,8 tháng; A1 120.000.000 đạt, A2 65,0%, A3 32,5%; tiền vận hành và phần an tâm không đổi; tắt cờ Vàng → 30.000.000 = 1,5 tháng, A1 25,0%", async () => {
-    await sampleSheet();
-    await config({ fi_expense_monthly: 20_000_000, fi_expense_must_monthly: 15_000_000 });
-    const snapBefore = (await call<Snapshot>("GET", "/v1/snapshot")).json.data;
-    const f = await freedom();
-    expect([f.liquid, f.monthsCovered]).toEqual([156_000_000, 7.8]);
-    expect(f.safety).toEqual([
-      { key: "A1", months: 6, need: 120_000_000, have: 156_000_000, pct: 130, reached: true },
-      { key: "A2", months: 12, need: 240_000_000, have: 156_000_000, pct: 65, reached: false },
-      { key: "A3", months: 24, need: 480_000_000, have: 156_000_000, pct: 32.5, reached: false },
-    ]);
-    const snapAfter = (await call<Snapshot>("GET", "/v1/snapshot")).json.data;
-    expect([snapAfter.nearSpend, snapAfter.pockets]).toEqual([snapBefore.nearSpend, snapBefore.pockets]);
-    await call("PATCH", "/v1/balance-items/vang", { liquid: false });
-    const off = await freedom();
-    expect([off.liquid, off.monthsCovered, byKey(off.safety, "A1").pct]).toEqual([30_000_000, 1.5, 25]);
   });
 
   it("UC-1103 AC-4 (mốc thu nhập): thu nhập TB 3 tháng trọn 45.000.000, E 20.000.000, % Tích luỹ 30 + mục tiêu Thuế 10% → phần trích trước 40%; M2, M2′ (33.333.334), M3 đạt; chưa đủ 3 tháng → theo kế hoạch; không có cả hai → chưa có số", async () => {
@@ -154,12 +183,12 @@ describe("UC-1103 Mốc tự do", () => {
     expect((await freedom()).params.lockedBps).toBe(9900);
   });
 
-  it("UC-1103 AC-5 (chi phí từ sổ, gồm lãi vay): chưa đủ 3 tháng → mốc theo E cần chi phí", async () => {
+  it("UC-1103 AC-5 (chi phí từ sổ, gồm lãi vay): chưa hết tháng nào của sổ → E, E_must không có; mốc theo E cần chi phí", async () => {
     raw.exec("INSERT INTO debts (id, name, interest_rate_bps) VALUES ('vay', 'Vay tiêu dùng', 1800)");
-    spend("2026-10", 1_000, "food");
-    let f = await freedom();
-    expect([f.params.expenseMonthly, f.params.expenseSource, f.params.expenseMustMonthly]).toEqual([null, null, null]);
-    expect(byKey(f.safety, "A1").need).toBeNull();
+    spend("2026-11", 1_000, "food");
+    const f = await freedom();
+    expect([f.params.expenseMonthly, f.params.expenseSource, f.params.expenseMustMonthly, f.params.expenseLedgerMonths]).toEqual([null, null, null, null]);
+    expect(byKey(f.cushion.steps, "start").need).toBeNull();
     expect(byKey(f.freedom, "F1").need).toBeNull();
   });
 
@@ -174,10 +203,10 @@ describe("UC-1103 Mốc tự do", () => {
       spend(m, 2_000_000, "food", { debt_id: "vay" });
     }
     const f = await freedom();
-    expect(f.params).toMatchObject({ expenseMonthly: 20_000_000, expenseSource: "ledger", expenseMustMonthly: 15_000_000, expenseMustSource: "ledger" });
+    expect(f.params).toMatchObject({ expenseMonthly: 20_000_000, expenseSource: "ledger", expenseMustMonthly: 15_000_000, expenseMustSource: "ledger", expenseLedgerMonths: 3 });
   });
 
-  it("UC-1103 AC-6 (mặc định): DB mới → SWR 3,5%, lạm phát 3,5%, hệ số 110%, lãi thực F3 3%, lãi cao 15%, Mốc an tâm 6 / 12 / 24; chi phí tay, năm sinh, tuổi mục tiêu trống", async () => {
+  it("UC-1103 AC-6 (mặc định): DB mới → SWR 3,5%, lạm phát 3,5%, hệ số 110%, lãi thực F3 3%, lãi cao 15%, mốc đệm 6 / 12 / 24; chi phí tay, năm sinh, tuổi mục tiêu trống", async () => {
     const f = await freedom();
     expect(f.params).toMatchObject({
       swrBps: 350, inflationBps: 350, fatBps: 11000, legacyRateBps: 300, highInterestBps: 1500, safetyMonths: [6, 12, 24],
@@ -203,6 +232,126 @@ describe("UC-1103 Mốc tự do", () => {
     expect(f.params).toMatchObject({ expenseMonthly: 20_000_000, expenseSource: "ledger", expenseMustMonthly: 15_000_000, expenseMustSource: "ledger", lockedBps: 1000 });
   });
 
+  it("UC-1103 AC-8 (E cửa sổ trượt 1–3 tháng): 20/10 chưa có; 17/11 E 14.200.000, E_must 10.000.000, 1 tháng; 5/12 15.000.000 / 10.500.000, 2 tháng; 3/2/2027 15.266.667 / 10.666.667, 3 tháng; nhập tay E 20.000.000 thắng, E_must theo sổ; I chỉ có khi đủ 3 tháng trọn", async () => {
+    ledgerAC8();
+    const on = async (iso: string) => {
+      at(iso);
+      const { params } = await freedom();
+      return [params.expenseMonthly, params.expenseSource, params.expenseMustMonthly, params.expenseMustSource, params.expenseLedgerMonths, params.incomeMonthly, params.incomeSource];
+    };
+    expect(await on("2026-10-20T05:00:00.000Z")).toEqual([null, null, null, null, null, null, null]);
+    expect(await on("2026-11-17T05:00:00.000Z")).toEqual([14_200_000, "ledger", 10_000_000, "ledger", 1, null, null]);
+    expect(await on("2026-12-05T05:00:00.000Z")).toEqual([15_000_000, "ledger", 10_500_000, "ledger", 2, null, null]);
+    expect(await on("2027-02-03T05:00:00.000Z")).toEqual([15_266_667, "ledger", 10_666_667, "ledger", 3, 30_000_000, "ledger"]);
+    await config({ fi_expense_monthly: 20_000_000 });
+    expect(await on("2026-11-17T05:00:00.000Z")).toEqual([20_000_000, "manual", 10_000_000, "ledger", 1, null, null]);
+  });
+
+  it("UC-1103 AC-9 (bậc đệm đếm bằng ngăn Tích luỹ): đệm 7.410.000 = 0,5 tháng, Khởi đầu 52,1%, An tâm 8,6%, An toàn 4,3%, Vững vàng 2,1%, next start; vàng và Dự phòng không vào; rút Heo đất → 5.410.000, 0,3 tháng; 90.000.000 → 6,3 tháng, next safe; mốc 3,6,12 → next solid", async () => {
+    ledgerAC8();
+    at("2026-11-17T05:00:00.000Z");
+    await householdAC9();
+    const f = await freedom();
+    expect(f.params.expenseMonthly).toBe(14_200_000);
+    expect(f.cushion).toEqual({
+      amount: 7_410_000,
+      monthsCovered: 0.5,
+      steps: [
+        { key: "start", months: 1, need: 14_200_000, have: 7_410_000, pct: 52.1, reached: false },
+        { key: "calm", months: 6, need: 85_200_000, have: 7_410_000, pct: 8.6, reached: false },
+        { key: "safe", months: 12, need: 170_400_000, have: 7_410_000, pct: 4.3, reached: false },
+        { key: "solid", months: 24, need: 340_800_000, have: 7_410_000, pct: 2.1, reached: false },
+      ],
+      next: "start",
+    });
+    tx({ at: "2026-11-17T04:00:00.000Z", amount: 2_000_000, meaning: "transfer", account_id: "heo", counter_account_id: "vcb" });
+    let c = (await freedom()).cushion;
+    expect([c.amount, c.monthsCovered]).toEqual([5_410_000, 0.3]);
+    raw.exec("UPDATE accounts SET opening_balance = 91490000 WHERE id = 'tich-luy'");
+    c = (await freedom()).cushion;
+    expect([c.amount, c.monthsCovered, c.steps.map((s) => s.reached), c.next]).toEqual([90_000_000, 6.3, [true, true, false, false], "safe"]);
+    await config({ fi_safety_months: "3,6,12" });
+    c = (await freedom()).cushion;
+    expect(c.steps.map((s) => [s.key, s.months, s.need, s.reached])).toEqual([
+      ["start", 1, 14_200_000, true],
+      ["calm", 3, 42_600_000, true],
+      ["safe", 6, 85_200_000, true],
+      ["solid", 12, 170_400_000, false],
+    ]);
+    expect(c.next).toBe("solid");
+  });
+
+  it("UC-1103 AC-10 (tài sản cho FIRE không đếm trùng): trừ Vận hành 4.000.000, mục tiêu Dự phòng 8.000.000, Ví Thưởng 2.000.000, đệm 16.000.000 → 456.000.000; F1 8,8%, F2 6,0%, F3 5,1%; thẻ âm vào nợ không vào Vận hành; đệm vượt 24E vào tài sản; không có E → trừ cả đệm", async () => {
+    await householdAC10();
+    let f = await freedom();
+    expect(f.fireAssets).toEqual({ investable: 806_000_000, liabilities: 320_000_000, operating: 4_000_000, reserveGoals: 8_000_000, reward: 2_000_000, cushionKept: 16_000_000, net: 456_000_000 });
+    expect(f.freedom.map((m) => [m.key, m.have, m.pct])).toEqual([["F1", 456_000_000, 8.8], ["F2", 456_000_000, 6], ["F3", 456_000_000, 5.1]]);
+    raw.exec("INSERT INTO accounts (id, name, kind, opening_balance, pocket, pocket_confirmed) VALUES ('the', 'Thẻ tín dụng', 'credit', -800000, 'operating', 1)");
+    f = await freedom();
+    expect([f.fireAssets.liabilities, f.fireAssets.operating, f.fireAssets.net]).toEqual([320_800_000, 4_000_000, 455_200_000]);
+    raw.exec("UPDATE accounts SET active = 0 WHERE id = 'the'; UPDATE accounts SET opening_balance = 500000000 WHERE id = 'tich-luy'");
+    f = await freedom();
+    expect([f.fireAssets.investable, f.fireAssets.cushionKept, f.fireAssets.net]).toEqual([1_290_000_000, 480_000_000, 476_000_000]);
+    await config({ fi_expense_monthly: null, fi_expense_must_monthly: null });
+    f = await freedom();
+    expect([f.params.expenseMonthly, f.fireAssets.cushionKept, f.fireAssets.net]).toEqual([null, 500_000_000, 456_000_000]);
+    expect(f.freedom.map((m) => m.need)).toEqual([null, null, null]);
+  });
+
+  it("UC-1103 AC-11 (Nửa đường): cần 2.571.428.572 (17,7%) hoặc dòng tiền 10.000.000 / có 104.166 — chưa đạt; P_ròng 10.000.000 → đạt; E_must trống → cần tài sản null, đạt theo dòng tiền; cả hai không có → null", async () => {
+    await householdAC10();
+    let f = await freedom();
+    expect(f.halfway).toEqual({ need: 2_571_428_572, have: 456_000_000, pct: 17.7, cashflowNeed: 10_000_000, cashflowHave: 104_166, reached: false });
+    // P_ròng trừ phần lạm phát của giá trị mục: ⌈1.000.000 × 3,5% ÷ 12⌉ = 2.917.
+    await call("POST", "/v1/balance-items", { name: "Nhà cho thuê", section: "B3", pyramid: "income", measure: "value", value: 1_000_000, cashflow: 9_898_751, cashflow_period: "month" });
+    f = await freedom();
+    expect([f.halfway.cashflowHave, f.halfway.pct, f.halfway.reached]).toEqual([10_000_000, 17.7, true]);
+    await config({ fi_expense_must_monthly: null });
+    f = await freedom();
+    expect([f.params.expenseMustMonthly, f.halfway.need, f.halfway.pct, f.halfway.cashflowNeed, f.halfway.reached]).toEqual([null, null, null, 10_000_000, true]);
+    await config({ fi_expense_monthly: null });
+    f = await freedom();
+    expect([f.halfway.need, f.halfway.cashflowNeed, f.halfway.reached]).toEqual([null, null, null]);
+  });
+
+  it("UC-1103 AC-11: E = 0 theo sổ (tháng trọn chỉ có thu) hoặc E = 0 nhập tay → coi như chưa có E: bậc đệm, M2 / M2′ / M3, Nửa đường, F1–F3 không có số cần, reached null", async () => {
+    income("2026-10", 30_000_000);
+    const noE = (f: Freedom) => {
+      expect(f.cushion.steps.map((s) => [s.need, s.reached])).toEqual([[null, null], [null, null], [null, null], [null, null]]);
+      expect([f.cushion.monthsCovered, f.cushion.next]).toEqual([null, null]);
+      expect(f.income.map((m) => [m.need, m.reached])).toEqual([[null, null], [null, null], [null, null]]);
+      expect([f.halfway.need, f.halfway.cashflowNeed, f.halfway.reached]).toEqual([null, null, null]);
+      expect(f.freedom.map((m) => [m.need, m.cashflowNeed, m.reached])).toEqual([[null, null, null], [null, null, null], [null, null, null]]);
+    };
+    let f = await freedom();
+    expect([f.params.expenseMonthly, f.params.expenseSource, f.params.expenseMustMonthly, f.params.expenseLedgerMonths]).toEqual([0, "ledger", 0, 1]);
+    noE(f);
+    await config({ fi_expense_monthly: 0, fi_expense_must_monthly: 0 });
+    f = await freedom();
+    expect([f.params.expenseMonthly, f.params.expenseSource, f.params.expenseMustMonthly, f.params.expenseMustSource]).toEqual([0, "manual", 0, "manual"]);
+    noE(f);
+  });
+
+  it("UC-1103 AC-8: tháng theo giờ VN — khoản chi 31/10 17:30Z (0:30 ngày 1/11 giờ VN) thuộc tháng 11: ngày 15/11 E chỉ tính tháng 10; ngày 5/12 E = TB tháng 10 và 11", async () => {
+    const add = async (at: string, amount: number) =>
+      expect((await call("POST", "/v1/transactions", { meaning: "spend", amount, account_id: "vcb", category_id: "an", at })).status).toBeLessThan(300);
+    await add("2026-10-15T03:00:00.000Z", 10_000_000);
+    await add("2026-10-31T17:30:00.000Z", 5_000_000);
+    expect(raw.prepare("SELECT month_key AS m FROM transactions WHERE amount = 5000000").get()).toEqual({ m: "2026-11" });
+    expect((await freedom()).params).toMatchObject({ expenseMonthly: 10_000_000, expenseLedgerMonths: 1 });
+    at("2026-12-05T05:00:00.000Z");
+    expect((await freedom()).params).toMatchObject({ expenseMonthly: 7_500_000, expenseLedgerMonths: 2 });
+  });
+
+  it("UC-1103 AC-10: khoản gửi con của tài khoản mục tiêu vào reserveGoals, khoản gửi con của Ví Thưởng vào reward — tài sản cho FIRE không đổi (456.000.000)", async () => {
+    await householdAC10();
+    raw.exec(`INSERT INTO accounts (id, name, kind, opening_balance, pocket, pocket_confirmed, parent_account_id) VALUES
+      ('hoc-phi-gui', 'Gửi kỳ hạn học phí', 'bank', 5000000, 'reserve', 1, 'hoc-phi'),
+      ('thuong-gui', 'Gửi kỳ hạn Ví Thưởng', 'bank', 3000000, 'reserve', 1, 'thuong');`);
+    const f = await freedom();
+    expect(f.fireAssets).toEqual({ investable: 814_000_000, liabilities: 320_000_000, operating: 4_000_000, reserveGoals: 13_000_000, reward: 5_000_000, cushionKept: 16_000_000, net: 456_000_000 });
+  });
+
   it("projectionStart (UC-1107): điểm xuất phát là số thật — A, L, dòng thu nhập theo kế hoạch năm nay, E, lợi suất kỳ vọng bình quân theo giá trị", async () => {
     await sampleSheet();
     await config({ fi_expense_monthly: 20_000_000, fi_expense_must_monthly: 15_000_000, fi_birth_year: 1990, fi_target_age_f1: 45, fi_target_age_f2: 50 });
@@ -218,6 +367,20 @@ describe("UC-1103 Mốc tự do", () => {
     });
     // (50.000.000 × 12% + 600.000.000 × 6%) ÷ 650.000.000 = 6,46% → 646 phần vạn.
     expect(p.expectedReturnBps).toBe(646);
+  });
+
+  it("UC-1107 AC-4 (A_0 theo tài sản cho FIRE): hộ UC-1103 AC-10 → projectionStart.investable 776.000.000, liabilities 320.000.000, ròng 456.000.000 = fireAssets.net", async () => {
+    await householdAC10();
+    const f = await freedom();
+    expect([f.projectionStart.investable, f.projectionStart.liabilities]).toEqual([776_000_000, 320_000_000]);
+    expect(f.projectionStart.investable - f.projectionStart.liabilities).toBe(f.fireAssets.net);
+  });
+
+  it("UC-1107 AC-4 (E theo sổ 1 tháng): hộ UC-1103 AC-8 ngày 17/11/2026, không chi phí tay → expenseMonthly 14.200.000, expenseMustMonthly 10.000.000", async () => {
+    ledgerAC8();
+    at("2026-11-17T05:00:00.000Z");
+    const p = (await freedom()).projectionStart;
+    expect([p.expenseMonthly, p.expenseMustMonthly]).toEqual([14_200_000, 10_000_000]);
   });
 });
 

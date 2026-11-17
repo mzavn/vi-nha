@@ -175,7 +175,7 @@ describe("tool đọc số liệu", () => {
     expect(toolData(json!).nearSpend).not.toHaveProperty("misplaced");
   });
 
-  it("UC-602 AC-12: hộ mẫu B → tóm tắt có cả tổng và mỗi ngày; savings.change, reserve.peaceMonths, shortDebt bằng đúng GET /v1/snapshot; mô tả tool theo ba thẻ", async () => {
+  it("UC-602 AC-12: hộ mẫu B → tóm tắt có cả tổng và mỗi ngày; savings.change, shortDebt bằng đúng GET /v1/snapshot, không có reserve.peaceMonths; mô tả tool theo ba thẻ, không còn months of operating spend", async () => {
     raw = householdB();
     env.DB = asD1(raw);
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -188,7 +188,8 @@ describe("tool đọc số liệu", () => {
       const snap = toolData(json!);
       expect(snap.pockets.savings.change).toEqual(rest.pockets.savings.change);
       expect(snap.pockets.savings.change).toEqual({ since: "2026-11-01", amount: 800_000, prevSince: "2026-10-01", prevAmount: 700_000 });
-      expect(snap.pockets.reserve.peaceMonths).toEqual(rest.pockets.reserve.peaceMonths);
+      expect(snap.pockets.reserve.peace).toEqual(rest.pockets.reserve.peace);
+      expect(snap.pockets.reserve).not.toHaveProperty("peaceMonths");
       expect(snap.pockets.shortDebt).toEqual(rest.pockets.shortDebt);
       expect(snap.nearSpend).not.toHaveProperty("misplaced");
     } finally {
@@ -198,6 +199,23 @@ describe("tool đọc số liệu", () => {
     const description = list.find((t) => t.name === "get_snapshot")!.description;
     expect(description).toContain("pockets");
     expect(description).not.toContain("safety fund (safetyFund: months covered vs target)");
+    expect(description).not.toContain("months of operating spend");
+    expect(description).not.toContain("peaceMonths");
+  });
+
+  it("UC-602 AC-9: get_balance_sheet › freedom có cushion, halfway, fireAssets, không safety / liquid / monthsCovered / investableNet; mô tả nói thang mốc (đệm, Nửa đường, F1–F3)", async () => {
+    const sheet = toolData((await mcp(call("get_balance_sheet", {}))).json!);
+    const rest = ((await (await app.request("/v1/freedom", { headers: { Authorization: "Bearer tok" } }, env)).json()) as { data: Record<string, unknown> }).data;
+    expect(Object.keys(sheet.freedom)).toEqual(expect.arrayContaining(["cushion", "halfway", "fireAssets"]));
+    for (const gone of ["safety", "liquid", "monthsCovered", "investableNet"]) expect(sheet.freedom).not.toHaveProperty(gone);
+    expect(sheet.freedom.cushion).toEqual(rest.cushion);
+    expect(sheet.freedom.fireAssets).toEqual(rest.fireAssets);
+    const list = (await mcp({ jsonrpc: "2.0", id: 9, method: "tools/list", params: {} })).json!.result.tools as { name: string; description: string }[];
+    const description = list.find((t) => t.name === "get_balance_sheet")!.description;
+    expect(description).toMatch(/cushion/);
+    expect(description).toMatch(/halfway/);
+    expect(description).toMatch(/fireAssets/);
+    expect(description).not.toMatch(/safety milestones|liquid assets vs/);
   });
 
   it("UC-602 AC-17: hộ mẫu E sau 0040 → mô tả get_snapshot không nhắc tiers / wallet / safety fund / wealth building / earmark / hold, có conversion; kết quả bằng GET /v1/snapshot", async () => {
@@ -890,7 +908,7 @@ describe("mục tiêu chung một tài khoản qua MCP (UC-602 AC-18, UC-603 AC-
     expect(tools).toHaveLength(16);
   });
 
-  it("UC-603 AC-33: add_transaction chi 7.500.000 từ MB tiết kiệm goal_id nha-o → ghi, Nhà ở spent 7.500.000, nhật ký via mcp có goal_id; goal_id bao-duong-xe → lỗi invalid_goal, không ghi gì", async () => {
+  it("UC-603 AC-33: add_transaction chi 7.500.000 từ MB tiết kiệm goal_id nha-o → ghi, Nhà ở spent 7.500.000, nhật ký via mcp có goal_id; chuyển ra goal_id bao-duong-xe (tài khoản khác) → lỗi invalid_goal, không ghi gì", async () => {
     const r = await mcp(call("add_transaction", { meaning: "spend", amount: 7_500_000, category_id: "housing", account_id: "tk-tiet-kiem", goal_id: "nha-o" }));
     expect(r.json!.result.isError).toBeFalsy();
     expect(toolData(r.json!).tx.goal_id).toBe("nha-o");
@@ -900,7 +918,7 @@ describe("mục tiêu chung một tài khoản qua MCP (UC-602 AC-18, UC-603 AC-
     expect(logRow.via).toBe("mcp");
     expect(JSON.parse(logRow.detail)).toMatchObject({ goal_id: "nha-o" });
     const before = raw.prepare("SELECT COUNT(*) AS n FROM transactions").get();
-    const bad = await mcp(call("add_transaction", { meaning: "spend", amount: 7_500_000, category_id: "housing", account_id: "tk-tiet-kiem", goal_id: "bao-duong-xe" }));
+    const bad = await mcp(call("add_transaction", { meaning: "transfer", amount: 7_500_000, account_id: "tk-tiet-kiem", to_account_id: "cash-husband", goal_id: "bao-duong-xe" }));
     expect(bad.json!.result.isError).toBe(true);
     expect(bad.json!.result.content[0].text).toBe("Mục tiêu này không thuộc tài khoản chi.");
     expect(raw.prepare("SELECT COUNT(*) AS n FROM transactions").get()).toEqual(before);
@@ -971,5 +989,55 @@ describe("tài khoản con, tiền lãi, mục tiêu trả từ tiền chi tiêu
     const id = toolData(r.json!).transactions[0].id as number;
     expect(raw.prepare("SELECT report_class FROM transaction_report_classes WHERE transaction_id = ?").get(id)).toEqual({ report_class: "passive_income" });
     expect((await rest("/v1/snapshot")).pockets.reserve.groups[0]).toMatchObject({ accountId: "tk-tiet-kiem", interest: 3_000_000 });
+  });
+});
+
+describe("khớp khoản chi vào mục tiêu qua MCP (UC-602 AC-20, UC-604 AC-16)", () => {
+  beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(SHARED_NOW);
+    raw = householdShared();
+    raw.prepare("UPDATE accounts SET sepay_enabled = 0").run();
+    env = { DB: asD1(raw), OAUTH_KV: new MemoryKV() as unknown as KVNamespace, API_TOKEN: "tok", APP_PASSWORD: "mat-khau-chung" } as Env;
+    token = (await connectClaude(env, { memberId: "husband", password: "mat-khau-chung" })).access;
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const rest = async (path: string, method = "GET") =>
+    ((await (await app.request(`https://app.example.com${path}`, { method, headers: { Authorization: "Bearer tok", "X-Member-Id": "husband" } }, env)).json()) as { data: any }).data;
+  const goalOf = (goals: { reserve: { goals: { id: string }[] } }, id: string) => goals.reserve.goals.find((g) => g.id === id);
+
+  it("UC-602 AC-20: get_goals trả closed, leftover, over, suggestClose, pendingRefund — bằng đúng GET /v1/goals", async () => {
+    expect((await mcp(call("add_transaction", { meaning: "spend", amount: 8_000_000, category_id: "housing", account_id: "tk-tiet-kiem", goal_id: "nha-o" }))).json!.result.isError).toBeFalsy();
+    let goals = toolData((await mcp(call("get_goals", {}))).json!);
+    expect(goalOf(goals, "nha-o")).toMatchObject({ closed: false, leftover: 0, over: 500_000, suggestClose: true, pendingRefund: 0 });
+    await rest("/v1/goals/nha-o/close", "POST");
+    expect((await mcp(call("add_transaction", { meaning: "spend", amount: 1_000_000, category_id: "work-gear", account_id: "vcb-husband", goal_id: "hoc-tap" }))).json!.result.isError).toBeFalsy();
+    goals = toolData((await mcp(call("get_goals", {}))).json!);
+    expect(goalOf(goals, "nha-o")).toMatchObject({ closed: true, leftover: 0, over: 500_000, suggestClose: false });
+    expect(goalOf(goals, "hoc-tap")).toMatchObject({ closed: false, suggestClose: false, pendingRefund: 1_000_000 });
+    expect(goals).toEqual(await rest("/v1/goals"));
+  });
+
+  it("UC-604 AC-16: add_transaction / assign_log nhận goal_id của mục tiêu ở tài khoản khác → việc chuyển về; mục tiêu đã chốt → goal_closed; mô tả goal_id nói điều đó", async () => {
+    const added = await mcp(call("add_transaction", { meaning: "spend", amount: 1_000_000, category_id: "work-gear", account_id: "vcb-husband", goal_id: "hoc-tap" }));
+    expect(toolData(added.json!).tx.goal_id).toBe("hoc-tap");
+    raw.exec(`INSERT INTO bank_logs (id, at, amount, direction, account_id, content, source, status) VALUES ('m2', '${vnAt("2026-11-12 09:00")}', 700000, 'out', 'vcb-husband', 'SACH', 'webhook', 'pending')`);
+    const assigned = await mcp(call("assign_log", { log_id: "m2", splits: [{ meaning: "spend", amount: 700_000, category_id: "work-gear", goal_id: "hoc-tap" }] }));
+    expect(assigned.json!.result.isError).toBeFalsy();
+    expect(raw.prepare("SELECT goal_id, from_account_id AS fromId, to_account_id AS toId, amount, status FROM goal_refunds ORDER BY id").all()).toEqual([
+      { goal_id: "hoc-tap", fromId: "tk-tiet-kiem", toId: "vcb-husband", amount: 1_000_000, status: "open" },
+      { goal_id: "hoc-tap", fromId: "tk-tiet-kiem", toId: "vcb-husband", amount: 700_000, status: "open" },
+    ]);
+
+    await rest("/v1/goals/hoc-tap/close", "POST");
+    const closed = await mcp(call("add_transaction", { meaning: "spend", amount: 100_000, category_id: "work-gear", account_id: "tk-tiet-kiem", goal_id: "hoc-tap" }));
+    expect(closed.json!.result.isError).toBe(true);
+    expect(closed.json!.result.content[0].text).toBe("Mục tiêu này đã chốt xong: mở lại rồi mới khớp thêm được.");
+    const tools = (await mcp({ jsonrpc: "2.0", id: 1, method: "tools/list" })).json!.result.tools as { name: string; description: string }[];
+    for (const name of ["add_transaction", "assign_log"]) {
+      expect(tools.find((t) => t.name === name)!.description).toContain("goal_closed");
+      expect(tools.find((t) => t.name === name)!.description).toContain("transfer-back task");
+    }
   });
 });

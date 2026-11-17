@@ -1,8 +1,8 @@
 // Ba ngăn (pocket UC-1203, UC-1209, ADR-119, ADR-132): tổng ngăn = Σ sổ tài khoản theo ngăn, mục tiêu Dự phòng = tài khoản
-// thật (A = số dư), phần an tâm, Ví Thưởng, nợ ngắn hạn, Tích luỹ theo tháng, tháng vận hành — hàm thuần.
+// thật (A = số dư), Dự phòng chưa gắn mục tiêu, Ví Thưởng, nợ ngắn hạn, Tích luỹ theo tháng — hàm thuần.
 import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { blessingFor, fillGoals, goalOrder, groupInterest, peaceMonthsView, pocketsView, type PocketAccount, type PocketDebt, type PocketGoalInput, type PocketsInput, type PocketsView } from "../src/domain/pockets";
+import { blessingFor, fillGoals, goalOrder, groupInterest, pocketsView, type PocketAccount, type PocketDebt, type PocketGoalInput, type PocketsInput, type PocketsView } from "../src/domain/pockets";
 import type { Env } from "../src/env";
 import { app } from "../src/index";
 import { asD1, openDb } from "./helpers/d1-sqlite";
@@ -12,21 +12,17 @@ const goal = (id: string, accountId: string | null, o: Partial<PocketGoalInput> 
   id, name: id, accountId, target: null, targetPct: null, monthly: null, repeatMonths: null, dueDate: null, debtId: null, sort: 100, spent: 0, ...o,
 });
 const total = (v: PocketsView) => v.savings.total + v.reserve.total + v.operating.total + v.outside.total;
-/** Hôm nay 11/11/2026, ngày lương 10: không có lịch sử, chưa có chi vận hành, đích 6 tháng, chưa chọn Ví Thưởng — trừ khi ca nói khác. */
+/** Trường khớp chi (UC-1209 AC-25…AC-28) khi chưa chốt, chưa vượt, không kiểu B. */
+const NO_MATCH = { closed: false, closedAt: null, leftover: 0, over: 0, suggestClose: false, shortBecause: [], advance: 0, advanceFrom: [], pendingRefund: 0, periodId: null };
+const FILL_NO_MATCH = { closed: false, leftover: 0, over: 0, suggestClose: false, shortBecause: [] };
+const GROUP_NO_MATCH = { pending: 0, free: 0, unmatched: 0 };
+/** Hôm nay 11/11/2026, ngày lương 10: không có lịch sử, chưa chọn Ví Thưởng — trừ khi ca nói khác. */
 const view = (input: Pick<PocketsInput, "accounts" | "goals" | "debts" | "savingsPct"> & Partial<PocketsInput>) =>
   pocketsView({
     rewardAccountId: null,
     history: { since: "2026-11-01", prevSince: "2026-10-01", accounts: [] },
-    operatingSpend: { months: [], dataStart: null },
-    peaceTarget: 6,
     ...input,
   });
-/** Ba tháng dương lịch trọn trước tháng 11 (cũ trước): 31 + 30 + 31 = 92 ngày. */
-const months = (a: number, b: number, c: number) => [
-  { start: "2026-08-01", amount: a, days: 31 },
-  { start: "2026-09-01", amount: b, days: 30 },
-  { start: "2026-10-01", amount: c, days: 31 },
-];
 
 describe("pocketsView", () => {
   it("UC-1203 AC-1: nhiều tài khoản — tổng ngăn = Σ sổ tài khoản của ngăn, không chuyển số giữa ngăn; mục tiêu A = số dư tài khoản gắn; tổng = Σ sổ", () => {
@@ -45,8 +41,8 @@ describe("pocketsView", () => {
     expect(v.reserve.accounts).toEqual([{ id: "saving", name: "saving", balance: 10_000_000, goalIds: ["tuition"], parentId: null }]);
     expect(v.operating.accounts.find((a) => a.id === "card")).toEqual({ id: "card", name: "card", balance: -800_000, goalIds: [], parentId: null });
     expect(v.reserve.goals).toEqual([
-      { id: "tuition", name: "tuition", accountId: "saving", held: 10_000_000, need: 6_000_000, spent: 0, short: 0, target: 6_000_000, targetPct: null, monthly: 2_000_000, repeatMonths: 3, dueDate: "2027-01-15", debtId: null },
-      { id: "car", name: "car", accountId: null, held: null, need: null, spent: 0, short: null, target: 4_800_000, targetPct: null, monthly: null, repeatMonths: null, dueDate: "2027-03-31", debtId: null },
+      { id: "tuition", name: "tuition", accountId: "saving", held: 10_000_000, need: 6_000_000, spent: 0, short: 0, target: 6_000_000, targetPct: null, monthly: 2_000_000, repeatMonths: 3, dueDate: "2027-01-15", debtId: null, ...NO_MATCH },
+      { id: "car", name: "car", accountId: null, held: null, need: null, spent: 0, short: null, target: 4_800_000, targetPct: null, monthly: null, repeatMonths: null, dueDate: "2027-03-31", debtId: null, ...NO_MATCH },
     ]);
     expect([v.reserve.peace, v.reserve.reward]).toEqual([0, null]);
     expect(v).not.toHaveProperty("savings.holds");
@@ -104,30 +100,7 @@ describe("pocketsView", () => {
     expect(closedEarlier.savings.change).toMatchObject({ amount: 800_000, prevAmount: -300_000 });
   });
 
-  it("UC-1203 AC-6: phần an tâm = tài khoản Dự phòng không gắn mục tiêu (31.500.000); tháng vận hành chuẩn hoá theo ngày — Σ chi × 30 ÷ Σ ngày của tháng trọn đủ dữ liệu có chi > 0; 0 / 1 / 2 / 3 tháng; phần an tâm âm → 0", () => {
-    const at = (spend: PocketsInput["operatingSpend"], peaceBalance = 31_500_000) =>
-      view({
-        accounts: [acct("buffer", "reserve", peaceBalance), acct("tuition-acc", "reserve", 6_500_000)],
-        goals: [goal("tuition", "tuition-acc", { target: 9_000_000 })],
-        debts: [],
-        savingsPct: 10,
-        operatingSpend: spend,
-      }).reserve;
-    expect(at({ months: months(9_000_000, 10_500_000, 10_500_000), dataStart: "2026-07-01" })).toMatchObject({
-      total: 38_000_000,
-      peace: 31_500_000,
-      peaceMonths: { covered: 3.2, target: 6, monthly: 9_782_608, months: 3 },
-    });
-    // Ngày bắt đầu dữ liệu 15/8 → tháng 8 bị bỏ dù có chi: 21.000.000 × 30 ÷ 61.
-    expect(at({ months: months(9_000_000, 10_500_000, 10_500_000), dataStart: "2026-08-15" }).peaceMonths).toEqual({ covered: 3, target: 6, monthly: 10_327_868, months: 2 });
-    expect(at({ months: months(0, 0, 6_000_000), dataStart: "2026-07-01" }).peaceMonths).toEqual({ covered: 5.4, target: 6, monthly: 5_806_451, months: 1 });
-    expect(at({ months: months(9_000_000, 10_500_000, 10_500_000), dataStart: "2026-10-20" }).peaceMonths).toEqual({ covered: null, target: 6, monthly: null, months: 0 });
-    expect(at({ months: [], dataStart: null }).peaceMonths).toEqual({ covered: null, target: 6, monthly: null, months: 0 });
-    const short = at({ months: months(9_000_000, 10_500_000, 10_500_000), dataStart: "2026-07-01" }, -1_000_000);
-    expect([short.peace, short.peaceMonths.covered]).toEqual([-1_000_000, 0]);
-  });
-
-  it("UC-1203 AC-15: hộ mẫu B ngày 11/11 — Tích luỹ 8.500.000, tại 1/11 7.700.000, tại 1/10 7.000.000 → +800.000 / +700.000 với mốc ngày 1; chi vận hành tháng 8 / 9 / 10 là 11 / 9 / 10 triệu, dữ liệu từ 1/8 → 3 tháng, 9.782.608; dữ liệu từ 15/8 → bỏ tháng 8, 2 tháng; ngày 1/12 tháng 11 vào cửa sổ, tháng 8 ra", () => {
+  it("UC-1203 AC-15: hộ mẫu B ngày 11/11 — Tích luỹ 8.500.000, tại 1/11 7.700.000, tại 1/10 7.000.000 → +800.000 / +700.000 với mốc ngày 1; ngày 1/12 mốc dời theo tháng; reserve không có peaceMonths", () => {
     const accounts = [acct("main", "operating", 3_000_000), acct("wealth", "savings", 8_500_000)];
     const history: PocketsInput["history"] = {
       since: "2026-11-01",
@@ -137,29 +110,17 @@ describe("pocketsView", () => {
         { id: "wealth", pocket: "savings", since: 7_700_000, prevSince: 7_000_000 },
       ],
     };
-    const at = (operatingSpend: PocketsInput["operatingSpend"], h = history) => view({ accounts, goals: [], debts: [], savingsPct: 10, history: h, operatingSpend });
-    const nov = at({ months: months(11_000_000, 9_000_000, 10_000_000), dataStart: "2026-08-01" });
+    const nov = view({ accounts, goals: [], debts: [], savingsPct: 10, history });
     expect(nov.savings.change).toEqual({ since: "2026-11-01", amount: 800_000, prevSince: "2026-10-01", prevAmount: 700_000 });
-    expect(nov.reserve.peaceMonths).toMatchObject({ monthly: 9_782_608, months: 3 });
-    expect(at({ months: months(11_000_000, 9_000_000, 10_000_000), dataStart: "2026-08-15" }).reserve.peaceMonths).toMatchObject({ monthly: 9_344_262, months: 2 });
-
-    const dec = at(
-      { months: [{ start: "2026-09-01", amount: 9_000_000, days: 30 }, { start: "2026-10-01", amount: 10_000_000, days: 31 }, { start: "2026-11-01", amount: 9_000_000, days: 30 }], dataStart: "2026-08-15" },
-      { since: "2026-12-01", prevSince: "2026-11-01", accounts: [{ id: "main", pocket: "operating", since: 3_000_000, prevSince: 3_000_000 }, { id: "wealth", pocket: "savings", since: 8_500_000, prevSince: 7_700_000 }] },
-    );
+    expect(nov.reserve).not.toHaveProperty("peaceMonths");
+    const dec = view({
+      accounts,
+      goals: [],
+      debts: [],
+      savingsPct: 10,
+      history: { since: "2026-12-01", prevSince: "2026-11-01", accounts: [{ id: "main", pocket: "operating", since: 3_000_000, prevSince: 3_000_000 }, { id: "wealth", pocket: "savings", since: 8_500_000, prevSince: 7_700_000 }] },
+    });
     expect(dec.savings.change).toEqual({ since: "2026-12-01", amount: 0, prevSince: "2026-11-01", prevAmount: 800_000 });
-    expect(dec.reserve.peaceMonths).toMatchObject({ monthly: 9_230_769, months: 3 });
-  });
-
-  it("UC-1203 AC-6: peaceMonthsView — số nguyên phần mười: 23.000.000 / 10.000.000, đích 5 → 2,3 và thanh 46 (không phải 45); 31.300.000 → 3,1 / 51; monthly null → null", () => {
-    expect(peaceMonthsView(23_000_000, 10_000_000, 5)).toEqual({ covered: 2.3, pct: 46 });
-    expect(peaceMonthsView(31_500_000, 10_000_000, 6)).toEqual({ covered: 3.1, pct: 51 });
-    expect(peaceMonthsView(31_500_000 - 200_000, 10_000_000, 6)).toEqual({ covered: 3.1, pct: 51 });
-    expect(peaceMonthsView(31_500_000, 10_500_000, 6)).toEqual({ covered: 3, pct: 50 });
-    expect(peaceMonthsView(90_000_000, 10_000_000, 6)).toEqual({ covered: 9, pct: 100 });
-    expect(peaceMonthsView(0, 10_000_000, 6)).toEqual({ covered: 0, pct: 0 });
-    expect(peaceMonthsView(-1_000_000, 10_000_000, 6)).toEqual({ covered: 0, pct: 0 });
-    expect(peaceMonthsView(31_500_000, null, 6)).toEqual({ covered: null, pct: null });
   });
 
   it("UC-1203 AC-7: mục tiêu theo thứ tự ưu tiên (sort, rồi hạn — chưa có hạn xuống cuối, rồi tên); mỗi mục tiêu có accountId, held = số dư khi một mục tiêu một tài khoản; đổi sort của Thuế về 5 → Thuế đứng đầu", () => {
@@ -208,9 +169,9 @@ describe("pocketsView", () => {
     expect(v.reserve.total).toBe(27_500_000);
     expect(heldOf(v)).toEqual({ "hoa-don": 2_000_000, "nha-o": 7_500_000, "hoc-tap": 4_500_000, "bao-duong-xe": 4_800_000, "hieu-hi": 2_200_000, thue: 1_500_000 });
     expect(v.reserve.groups).toEqual([
-      { accountId: "tk-chung", name: "tk-chung", balance: 9_000_000, need: 9_800_000, spent: 0, short: 800_000, extra: 0, goalIds: ["hoa-don", "bao-duong-xe", "hieu-hi"], childIds: [], interest: 0 },
-      { accountId: "tk-tiet-kiem", name: "tk-tiet-kiem", balance: 12_000_000, need: 13_500_000, spent: 0, short: 1_500_000, extra: 0, goalIds: ["nha-o", "hoc-tap"], childIds: [], interest: 0 },
-      { accountId: "tk-thue", name: "tk-thue", balance: 1_500_000, need: null, spent: 0, short: null, extra: null, goalIds: ["thue"], childIds: [], interest: 0 },
+      { accountId: "tk-chung", name: "tk-chung", balance: 9_000_000, need: 9_800_000, spent: 0, short: 800_000, extra: 0, goalIds: ["hoa-don", "bao-duong-xe", "hieu-hi"], childIds: [], interest: 0, ...GROUP_NO_MATCH },
+      { accountId: "tk-tiet-kiem", name: "tk-tiet-kiem", balance: 12_000_000, need: 13_500_000, spent: 0, short: 1_500_000, extra: 0, goalIds: ["nha-o", "hoc-tap"], childIds: [], interest: 0, ...GROUP_NO_MATCH },
+      { accountId: "tk-thue", name: "tk-thue", balance: 1_500_000, need: null, spent: 0, short: null, extra: null, goalIds: ["thue"], childIds: [], interest: 0, ...GROUP_NO_MATCH },
     ]);
     for (const g of v.reserve.groups) expect(sumHeld(v, g.accountId)).toBe(g.balance);
     expect(v.reserve.peace).toBe(5_000_000);
@@ -310,7 +271,7 @@ describe("pocketsView", () => {
     const before = view({ accounts: [acct("tk-tiet-kiem", "reserve", 5_000_000), { ...acct("gui-6-thang", "reserve", 100_000_000), parentId: "tk-tiet-kiem" }], goals, debts: [], savingsPct: 10 });
     expect(before.reserve.goals.map((g) => g.held)).toEqual([60_000_000, 30_000_000, 15_000_000]);
     expect(before.reserve.groups).toEqual([
-      { accountId: "tk-tiet-kiem", name: "tk-tiet-kiem", balance: 105_000_000, need: 100_000_000, spent: 0, short: 0, extra: 5_000_000, goalIds: ["nha-o", "hoc-tap", "tap-luyen"], childIds: ["gui-6-thang"], interest: 0 },
+      { accountId: "tk-tiet-kiem", name: "tk-tiet-kiem", balance: 105_000_000, need: 100_000_000, spent: 0, short: 0, extra: 5_000_000, goalIds: ["nha-o", "hoc-tap", "tap-luyen"], childIds: ["gui-6-thang"], interest: 0, ...GROUP_NO_MATCH },
     ]);
     expect(before.reserve.peace).toBe(0);
     // Đáo hạn: con đã tắt (không còn trong danh sách tài khoản đang dùng), lãi 3.000.000 vẫn là tiền lãi của nhóm.
@@ -345,16 +306,17 @@ describe("fillGoals / goalOrder (pocket UC-1209 bước 9, bước 10)", () => {
   it("UC-1203 AC-11: ví dụ chủ nhà — 12.000.000 cho Nhà ở (7.500.000) trước Học tập (6.000.000) → 7.500.000 / 4.500.000, nhóm thiếu 1.500.000; một mục tiêu nhận cả số dư; mục tiêu % đi chung là lỗi lập trình", () => {
     expect(fillGoals(12_000_000, [{ id: "nha-o", need: 7_500_000, spent: 0 }, { id: "hoc-tap", need: 6_000_000, spent: 0 }])).toEqual({
       goals: [
-        { id: "nha-o", held: 7_500_000, spent: 0, short: 0 },
-        { id: "hoc-tap", held: 4_500_000, spent: 0, short: 1_500_000 },
+        { id: "nha-o", held: 7_500_000, spent: 0, short: 0, ...FILL_NO_MATCH },
+        { id: "hoc-tap", held: 4_500_000, spent: 0, short: 1_500_000, ...FILL_NO_MATCH },
       ],
       need: 13_500_000,
       spent: 0,
       short: 1_500_000,
       extra: 0,
+      free: 0,
     });
     expect(fillGoals(-300_000, [{ id: "a", need: 1_000_000, spent: 0 }]).goals[0]!.held).toBe(-300_000);
-    expect(fillGoals(1_500_000, [{ id: "thue", need: null, spent: 0 }])).toEqual({ goals: [{ id: "thue", held: 1_500_000, spent: 0, short: null }], need: null, spent: 0, short: null, extra: null });
+    expect(fillGoals(1_500_000, [{ id: "thue", need: null, spent: 0 }])).toEqual({ goals: [{ id: "thue", held: 1_500_000, spent: 0, short: null, ...FILL_NO_MATCH }], need: null, spent: 0, short: null, extra: null, free: 0 });
     expect(() => fillGoals(1_000_000, [{ id: "thue", need: null, spent: 0 }, { id: "a", need: 1, spent: 0 }])).toThrow();
     // spent âm (hoàn nhiều hơn chi) kẹp về 0
     expect(fillGoals(1_000_000, [{ id: "a", need: 500_000, spent: -200_000 }, { id: "b", need: 500_000, spent: 0 }]).goals.map((g) => g.held)).toEqual([500_000, 500_000]);

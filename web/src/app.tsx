@@ -2,7 +2,8 @@
 // Cài đặt (#settings), Sổ giao dịch (#ledger), Báo cáo (#net-worth) và "Chuyển sang ba ngăn" (#convert) là màn phụ.
 // Hướng dẫn mở GitBook ở tab mới. Máy tính (≥1024px): thanh bên thay thanh dưới và FAB, phím N mở Ghi khoản.
 
-import { useEffect, useRef } from "preact/hooks";
+import { createPortal } from "preact/compat";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { markInvited, shouldInvite } from "./lib/convert";
 import { bottomNav, ENTRY_LABEL, hasFab, showsBottomNav } from "./lib/nav";
 import { deviceStorage } from "./lib/pin";
@@ -185,34 +186,50 @@ function UpdateBar() {
 /**
  * Viên thuốc nền --fg, chữ --bg ở đáy màn (DESIGN.md §4.14, pwa UC-711 AC-34).
  * Có chỗ cho nút hành động (vd Hoàn tác) cao ≥ 44px, bấm là chạy run() và tắt toast.
+ * Đang mở sheet (`<dialog>` modal, nằm ở lớp trên cùng và làm phần còn lại không bấm được) thì toast vẽ vào trong sheet trên cùng
+ * để thấy và bấm được Hoàn tác; sheet đóng thì toast về lại thân trang.
  */
 function Toast() {
   const { toast } = useApp();
+  const [host, setHost] = useState<HTMLDialogElement | null>(null);
   useEffect(() => {
     if (!toast) return;
     const dur = toastDuration(toast.text, !!toast.action);
     const t = setTimeout(() => setState({ toast: null }), dur);
-    return () => clearTimeout(t);
+    // Chọn sheet sau khi khung vừa vẽ xong (sheet vừa đổi nội dung / vừa mở trong cùng lần vẽ).
+    let open: HTMLDialogElement | null = null;
+    const back = () => setHost(null);
+    const frame = requestAnimationFrame(() => {
+      open = [...document.querySelectorAll<HTMLDialogElement>("dialog[open]")].at(-1) ?? null;
+      setHost(open);
+      open?.addEventListener("close", back);
+    });
+    return () => {
+      clearTimeout(t);
+      cancelAnimationFrame(frame);
+      open?.removeEventListener("close", back);
+    };
   }, [toast?.id]);
+  const pill = toast && (
+    <div class="toast" key={toast.id}>
+      <span>{toast.text}</span>
+      {toast.action && (
+        <button
+          type="button"
+          class="toast-act"
+          onClick={() => {
+            toast.action?.run();
+            setState({ toast: null });
+          }}
+        >
+          {toast.action.label}
+        </button>
+      )}
+    </div>
+  );
   return (
     <div aria-live="polite" role="status">
-      {toast && (
-        <div class="toast" key={toast.id}>
-          <span>{toast.text}</span>
-          {toast.action && (
-            <button
-              type="button"
-              class="toast-act"
-              onClick={() => {
-                toast.action?.run();
-                setState({ toast: null });
-              }}
-            >
-              {toast.action.label}
-            </button>
-          )}
-        </div>
-      )}
+      {host && host.isConnected ? createPortal(pill, host) : pill}
     </div>
   );
 }

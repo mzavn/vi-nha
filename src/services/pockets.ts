@@ -8,6 +8,8 @@ import { monthStart } from "../domain/month-tasks";
 import { monthKey } from "../domain/period";
 import {
   checkGoal,
+  goalClosedInPeriod,
+  goalClosedSql,
   goalGroups,
   goalOrder,
   goalNeed,
@@ -17,12 +19,14 @@ import {
   type GoalDraft,
   type GoalGroup,
   type GoalPaysFrom,
+  type GoalRefundView,
   type OperatingGoal,
   type Pocket,
   type PocketGoalInput,
 } from "../domain/pockets";
 import { DomainError } from "../domain/types";
 import { groupInterestFrom, groupInterestStatements } from "./goal-groups";
+import { hiddenAccountIds, hiddenTxSql } from "./privacy";
 import { accountBatch, accountIdOf, accountInsert, assertNoGoal, pocketValue, readAccount, slug } from "./settings";
 
 type Row = Record<string, unknown>;
@@ -129,9 +133,13 @@ export async function confirmPockets(
 }
 
 // ── Mục tiêu Dự phòng (UC-1209) ─────────────────────────────────────
+/** Mục tiêu lặp N tháng (N > 1) bí danh `g`: id đợt đang mở (`goal_periods`); NULL = đợt đầu chưa có dòng / mục tiêu khác. */
+export const openPeriodSql = (g: string) =>
+  `(CASE WHEN ${g}.repeat_months > 1 THEN (SELECT p.id FROM goal_periods p WHERE p.goal_id = ${g}.id AND p.closed_at IS NULL ORDER BY p.id DESC LIMIT 1) END)`;
 const GOAL_SQL = `SELECT g.id, g.name, g.account_id, g.suggested_account_id,
   (SELECT b.book_balance FROM v_account_book b WHERE b.account_id = g.account_id) AS balance,
-  g.target_amount, g.target_pct, g.monthly_amount, g.repeat_months, g.due_date, g.debt_id, g.sort, g.active, g.pays_from FROM reserve_goals g`;
+  g.target_amount, g.target_pct, g.monthly_amount, g.repeat_months, g.due_date, g.debt_id, g.sort, g.active, g.pays_from, g.closed_at,
+  ${openPeriodSql("g")} AS period_id FROM reserve_goals g`;
 
 /** Một mục tiêu như `GET /v1/settings › goals[]`. */
 export interface GoalView {
@@ -145,7 +153,7 @@ export interface GoalView {
   held: number | null;
   /** Số cần (= B); null với mục tiêu %, chưa gắn hoặc đã tắt. */
   need: number | null;
-  /** Đã chi cho mục tiêu trong tháng VN hiện tại (UC-1209 bước 11). */
+  /** Đã chi cho mục tiêu trong cửa sổ của nó (UC-1209 bước 11, AC-24), gồm số các việc chuyển về kiểu B. */
   spent: number;
   short: number | null;
   target_amount: number | null;
@@ -162,6 +170,18 @@ export interface GoalView {
   remaining: number | null;
   /** Danh mục tự tính là đã trả (mục tiêu `operating`, ADR-143); mục tiêu khác []. */
   category_ids: string[];
+  /** Đã chốt xong trong kỳ hiện tại (UC-1209 AC-25); `closed_at` = lúc chốt khi `closed`, còn lại null. */
+  closed: boolean;
+  closed_at: string | null;
+  leftover: number;
+  over: number;
+  suggest_close: boolean;
+  short_because: { goal_id: string; amount: number }[];
+  advance: number;
+  advance_from: string[];
+  pending_refund: number;
+  /** Mục tiêu lặp N tháng: id đợt đang mở (gửi kèm chốt / mở lại); null với đợt đầu chưa có dòng / mục tiêu khác. */
+  period_id: number | null;
 }
 /** Nhóm mục tiêu của một tài khoản như `GET /v1/settings › goal_groups[]` — cùng số `snapshot.pockets.reserve.groups`. */
 export interface GoalGroupView {
@@ -176,38 +196,77 @@ export interface GoalGroupView {
   child_ids: string[];
   /** Tiền lãi của nhóm: không chia cho mục tiêu (số chia = `balance − interest`). */
   interest: number;
+  pending: number;
+  free: number;
+  unmatched: number;
 }
 
+/** 00:00 VN của ngày VN chứa thời điểm SQL `col` (ISO hoặc "YYYY-MM-DD HH:MM:SS" UTC), viết ISO như cột `transactions.at`. */
+const vnDayStartSql = (col: string) => `strftime('%Y-%m-%dT%H:%M:%fZ', date(${col}, '+7 hours'), '-7 hours')`;
+
 /**
- * Đã chi cho từng mục tiêu đang dùng từ `since` (pocket UC-1209 bước 11, 12): Σ chi / chuyển ra còn hiệu lực gắn mục tiêu, `at` ≥
- * đầu tháng, − hoàn tiền (`link_id` tới các khoản đó) về lại nơi tiền ra trong cùng cửa sổ. Mục tiêu tài khoản: tiền ra từ tài
+ * Cửa sổ "đã chi" của từng mục tiêu (pocket UC-1209 AC-24, ngày VN) — câu SELECT dùng làm CTE `w(id, since, until, closed)`:
+ * hằng tháng / trả từ tiền chi tiêu / theo % → từ 00:00 VN ngày 1 tháng này; lặp N tháng (N > 1) → từ đầu đợt đang mở
+ * (`goal_periods`; chưa có đợt nào → ngày tạo mục tiêu), khép khi người chốt; một lần → từ ngày tạo tới lúc chốt (`until`).
+ * `closed` = `goalClosedSql` theo tháng VN của `now`. Giá trị ghép sẵn từ `now` (không tham số) để câu nào cũng nhúng được.
+ */
+export function goalWindowSql(now: Date): string {
+  const month = monthKey(now);
+  return `SELECT g.id,
+    CASE WHEN g.pays_from = 'operating' OR g.target_pct IS NOT NULL OR g.repeat_months = 1 THEN '${monthStart(month)}'
+         WHEN g.repeat_months > 1 THEN COALESCE((SELECT p.started_at FROM goal_periods p WHERE p.goal_id = g.id AND p.closed_at IS NULL ORDER BY p.id DESC LIMIT 1), ${vnDayStartSql("g.created_at")})
+         ELSE ${vnDayStartSql("g.created_at")} END AS since,
+    CASE WHEN g.repeat_months IS NULL AND g.target_pct IS NULL AND g.pays_from = 'account' THEN g.closed_at END AS until,
+    ${goalClosedSql("g", `'${month}'`)} AS closed
+  FROM reserve_goals g`;
+}
+
+/** Khoản bí danh `t` nằm trong cửa sổ `w` của mục tiêu. */
+export const inWindowSql = (t: string) => `${t}.at >= w.since AND (w.until IS NULL OR ${t}.at < w.until)`;
+/** Tài khoản thuộc nhóm (mẹ + con) của mục tiêu bí danh `g`. */
+export const goalGroupSql = (g: string) => `SELECT id FROM accounts WHERE ${g}.account_id IN (id, parent_account_id)`;
+/** Khoản chi bí danh `s` từ tài khoản ngoài nhóm đã khớp vào mục tiêu tài khoản bí danh `g` (kiểu B, UC-1209 AC-28). */
+export const advanceSql = (s: string, g: string) =>
+  `${s}.meaning = 'spend' AND ${s}.status = 'active' AND ${s}.goal_id = ${g}.id AND ${g}.pays_from = 'account' AND ${g}.account_id IS NOT NULL
+   AND ${s}.account_id NOT IN (${goalGroupSql(g)})`;
+/** Phần của chuyển khoản bí danh `t` đã ghép vào việc chuyển về chưa huỷ (AC-29): không tính vào đã chi. */
+export const refundLinkedOfTxSql = (t: string) =>
+  `COALESCE((SELECT SUM(x.amount) FROM goal_refund_tx x JOIN goal_refunds f ON f.id = x.refund_id AND f.status <> 'void' WHERE x.tx_id = ${t}.id), 0)`;
+/** Σ hoàn tiền còn hiệu lực trỏ về khoản chi bí danh `s` (`link_id`). */
+export const returnedSql = (s: string) =>
+  `COALESCE((SELECT SUM(r.amount) FROM transactions r WHERE r.link_id = ${s}.id AND r.meaning = 'refund' AND r.status = 'active'), 0)`;
+
+/**
+ * Đã chi cho từng mục tiêu đang dùng trong cửa sổ của nó (pocket UC-1209 bước 11, 12, AC-24, AC-28, AC-29): Σ chi / chuyển ra còn
+ * hiệu lực gắn mục tiêu trong cửa sổ (trừ phần chuyển khoản đã ghép vào việc chuyển về), − hoàn tiền (`link_id` tới các khoản đó)
+ * về lại nơi tiền ra trong cửa sổ, + số các việc chuyển về chưa huỷ có khoản chi trong cửa sổ. Mục tiêu tài khoản: tiền ra từ tài
  * khoản mẹ hoặc con của nó và ra khỏi nhóm (chuyển nội bộ mẹ ↔ con không tính); mục tiêu trả từ tiền chi tiêu: tiền ra từ một
  * tài khoản ngăn Vận hành, cộng khoản chi từ Vận hành **không** gắn mục tiêu thuộc danh mục của nó (ADR-143) − hoàn tiền của
  * các khoản đó. Một câu, chạy trong batch của snapshot.
  */
-export const goalSpentStatement = (db: D1Database, since: string) => {
+export const goalSpentStatement = (db: D1Database, now: Date) => {
   const OPERATING = "SELECT id FROM accounts WHERE pocket = 'operating'";
-  const group = "SELECT id FROM accounts WHERE g.account_id IN (id, parent_account_id)";
+  const group = goalGroupSql("g");
   const from = (x: string) => `(CASE WHEN g.pays_from = 'operating' THEN ${x} IN (${OPERATING}) ELSE ${x} IN (${group}) END)`;
   const out = (t: string) =>
-    `${t}.goal_id = g.id AND ${t}.status = 'active' AND ${t}.at >= ?1 AND ${from(`${t}.account_id`)}
+    `${t}.goal_id = g.id AND ${t}.status = 'active' AND ${inWindowSql(t)} AND ${from(`${t}.account_id`)}
      AND (g.pays_from = 'operating' OR ${t}.counter_account_id IS NULL OR ${t}.counter_account_id NOT IN (${group}))`;
   const byCategory = (t: string) =>
-    `${t}.meaning = 'spend' AND ${t}.goal_id IS NULL AND ${t}.status = 'active' AND ${t}.at >= ?1 AND ${t}.account_id IN (${OPERATING})
+    `${t}.meaning = 'spend' AND ${t}.goal_id IS NULL AND ${t}.status = 'active' AND ${inWindowSql(t)} AND ${t}.account_id IN (${OPERATING})
      AND ${t}.category_id IN (SELECT category_id FROM reserve_goal_categories WHERE goal_id = g.id)`;
   const refunds = (match: string, to: string) =>
     `COALESCE((SELECT SUM(r.amount) FROM transactions r JOIN transactions s ON s.id = r.link_id
-       WHERE r.meaning = 'refund' AND r.status = 'active' AND r.at >= ?1 AND ${to} AND ${match}), 0)`;
-  return db
-    .prepare(
-      `SELECT g.id,
-         COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE ${out("t")}), 0) - ${refunds(out("s"), from("r.counter_account_id"))}
-         + CASE WHEN g.pays_from = 'operating' THEN
-             COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE ${byCategory("t")}), 0) - ${refunds(byCategory("s"), `r.counter_account_id IN (${OPERATING})`)}
-           ELSE 0 END AS spent
-       FROM reserve_goals g WHERE g.active = 1 AND (g.account_id IS NOT NULL OR g.pays_from = 'operating')`,
-    )
-    .bind(since);
+       WHERE r.meaning = 'refund' AND r.status = 'active' AND ${inWindowSql("r")} AND ${to} AND ${match}), 0)`;
+  return db.prepare(
+    `WITH w AS (${goalWindowSql(now)})
+     SELECT g.id,
+       COALESCE((SELECT SUM(t.amount - ${refundLinkedOfTxSql("t")}) FROM transactions t WHERE ${out("t")}), 0) - ${refunds(out("s"), from("r.counter_account_id"))}
+       + COALESCE((SELECT SUM(f.amount) FROM goal_refunds f JOIN transactions s ON s.id = f.spend_tx_id WHERE f.goal_id = g.id AND f.status <> 'void' AND ${inWindowSql("s")}), 0)
+       + CASE WHEN g.pays_from = 'operating' THEN
+           COALESCE((SELECT SUM(t.amount) FROM transactions t WHERE ${byCategory("t")}), 0) - ${refunds(byCategory("s"), `r.counter_account_id IN (${OPERATING})`)}
+         ELSE 0 END AS spent
+     FROM reserve_goals g JOIN w ON w.id = g.id WHERE g.active = 1 AND (g.account_id IS NOT NULL OR g.pays_from = 'operating')`,
+  );
 };
 
 /** `id → đã chi` từ kết quả của `goalSpentStatement`. */
@@ -239,7 +298,128 @@ export function currentMonth(now: Date): { start: string; key: string } {
   return { start: monthStart(key), key };
 }
 
-/** Mọi mục tiêu (kể cả đã tắt) đọc từ D1 kèm đã chi từ `since`, và kết quả chia số dư của các mục tiêu đang dùng. */
+/** Σ chuyển khoản còn hiệu lực đã ghép vào việc chuyển về bí danh `f` (UC-1209 AC-29). */
+export const refundLinkedSql = (f: string) =>
+  `COALESCE((SELECT SUM(x.amount) FROM goal_refund_tx x JOIN transactions t ON t.id = x.tx_id AND t.status = 'active' WHERE x.refund_id = ${f}), 0)`;
+
+/** Một dòng `goal_refunds` kèm số đã ghép (`refundLinkedSql`) và cờ khoản chi nằm trong cửa sổ của mục tiêu. */
+export interface RefundRow {
+  id: number;
+  goalId: string;
+  goalName: string;
+  spendTxId: number;
+  fromAccountId: string;
+  toAccountId: string;
+  amount: number;
+  status: "open" | "done" | "skipped" | "void";
+  reason: string | null;
+  code: string;
+  createdAt: string;
+  linked: number;
+  inWindow: number;
+}
+/** Câu đọc việc chuyển về (cần CTE `w` của `goalWindowSql`), thêm điều kiện sau `WHERE`. */
+export const refundRowsSql = (now: Date, where: string) =>
+  `WITH w AS (${goalWindowSql(now)})
+   SELECT f.id, f.goal_id AS goalId, g.name AS goalName, f.spend_tx_id AS spendTxId, f.from_account_id AS fromAccountId, f.to_account_id AS toAccountId,
+          f.amount, f.status, f.reason, f.code, f.created_at AS createdAt, ${refundLinkedSql("f.id")} AS linked, (${inWindowSql("s")}) AS inWindow
+   FROM goal_refunds f JOIN reserve_goals g ON g.id = f.goal_id JOIN w ON w.id = g.id JOIN transactions s ON s.id = f.spend_tx_id
+   WHERE ${where} ORDER BY f.id`;
+
+export type QrAccount = { id: string; name: string; bank: string | null; accountNo: string | null; subAccount: string | null };
+export const QR_ACCOUNTS_SQL = "SELECT id, name, bank, account_no AS accountNo, sub_account AS subAccount FROM accounts";
+
+/**
+ * Việc chuyển về như `reserve.refunds[]` (UC-1209 AC-28, AC-29, UC-702 AC-45): đang mở mà đã ghép đủ → xong (tự); nội dung QR "CV
+ * {mã} T{tháng VN của lúc tạo}"; QR tới tài khoản đã trả khi có số tài khoản; một đầu là tài khoản riêng tư bị giấu → `hidden`, không QR.
+ */
+export function refundView(r: RefundRow, accounts: QrAccount[], hidden: string[]): GoalRefundView {
+  const amount = Number(r.amount);
+  const linked = Number(r.linked);
+  const status = r.status === "open" && linked >= amount ? "done" : (r.status as GoalRefundView["status"]);
+  const isHidden = hidden.includes(r.fromAccountId) || hidden.includes(r.toAccountId);
+  const to = accounts.find((a) => a.id === r.toAccountId);
+  return {
+    id: Number(r.id),
+    goalId: r.goalId,
+    goalName: r.goalName,
+    spendTxId: Number(r.spendTxId),
+    fromAccountId: r.fromAccountId,
+    toAccountId: r.toAccountId,
+    amount,
+    linked,
+    missing: status === "open" ? amount - linked : 0,
+    status,
+    reason: r.reason,
+    code: r.code,
+    memo: `CV ${r.code} T${Number(monthKey(r.createdAt).slice(5, 7))}`,
+    qr: !isHidden && to?.accountNo ? { accountId: to.id, name: to.name, bank: to.bank, accountNo: to.accountNo, subAccount: to.subAccount } : null,
+    hidden: isHidden,
+    createdAt: r.createdAt,
+  };
+}
+
+/** Phần khớp chi của từng mục tiêu, việc chuyển về để hiện và `unmatched` theo tài khoản mẹ — cho snapshot và `GET /v1/settings`. */
+export interface GoalMatchState {
+  extras: (id: string) => Pick<PocketGoalInput, "pendingRefund" | "advance" | "advanceFrom">;
+  refunds: GoalRefundView[];
+  unmatched: Record<string, number>;
+}
+
+/**
+ * Đọc khoản chi kiểu B trong cửa sổ (`advance`, `advanceFrom`), việc chuyển về chưa huỷ (`pendingRefund` = Σ phần còn thiếu của việc
+ * đang mở; hiện việc đang mở hoặc có khoản chi trong cửa sổ) và `unmatched` (UC-1209 AC-27, AC-28; UC-702 AC-45): nhóm có từ hai mục
+ * tiêu chưa chốt → số khoản chi / chuyển ra khỏi nhóm, còn hiệu lực, chưa gắn mục tiêu, không rút từ lãi, từ đầu cửa sổ sớm nhất của
+ * các mục tiêu chưa chốt, không bị giấu với người xem.
+ */
+export async function goalMatchState(db: D1Database, now: Date, viewerId: string | null): Promise<GoalMatchState> {
+  const hidden = await hiddenAccountIds(db, viewerId);
+  const hiddenTx = hiddenTxSql("t", hidden);
+  const [advanceRes, refundRes, unmatchedRes, accountRes] = await db.batch([
+    db.prepare(
+      `WITH w AS (${goalWindowSql(now)})
+       SELECT s.goal_id AS goalId, s.amount - ${returnedSql("s")} AS net, a.name AS accountName
+       FROM transactions s JOIN reserve_goals g ON g.id = s.goal_id JOIN w ON w.id = g.id JOIN accounts a ON a.id = s.account_id
+       WHERE ${advanceSql("s", "g")} AND ${inWindowSql("s")} ORDER BY s.at, s.id`,
+    ),
+    db.prepare(refundRowsSql(now, "f.status <> 'void'")),
+    db
+      .prepare(
+        `WITH w AS (${goalWindowSql(now)}),
+         roots AS (SELECT g.account_id AS root, MIN(w.since) AS since FROM reserve_goals g JOIN w ON w.id = g.id
+           WHERE g.active = 1 AND g.pays_from = 'account' AND g.account_id IS NOT NULL AND NOT w.closed GROUP BY g.account_id HAVING COUNT(*) >= 2)
+         SELECT roots.root, (SELECT COUNT(*) FROM transactions t JOIN accounts a ON a.id = t.account_id
+           WHERE COALESCE(a.parent_account_id, a.id) = roots.root AND t.status = 'active' AND t.meaning IN ('spend', 'transfer') AND t.goal_id IS NULL
+             AND t.from_interest = 0 AND t.at >= roots.since
+             AND (t.counter_account_id IS NULL OR t.counter_account_id NOT IN (SELECT id FROM accounts WHERE roots.root IN (id, parent_account_id)))
+             AND NOT ${hiddenTx.sql}) AS n
+         FROM roots`,
+      )
+      .bind(...hiddenTx.binds),
+    db.prepare(QR_ACCOUNTS_SQL),
+  ]);
+  const accounts = rows<QrAccount>(accountRes!);
+  const all = rows<RefundRow>(refundRes!).map((r) => refundView(r, accounts, hidden));
+  const inWindow = new Set(rows<RefundRow>(refundRes!).filter((r) => Number(r.inWindow) === 1).map((r) => Number(r.id)));
+  const advance = new Map<string, { amount: number; from: string[] }>();
+  for (const a of rows<{ goalId: string; net: number; accountName: string }>(advanceRes!)) {
+    const cur = advance.get(a.goalId) ?? { amount: 0, from: [] };
+    cur.amount += Number(a.net);
+    if (!cur.from.includes(a.accountName)) cur.from.push(a.accountName);
+    advance.set(a.goalId, cur);
+  }
+  return {
+    extras: (id) => ({
+      pendingRefund: all.filter((r) => r.goalId === id && r.status === "open").reduce((s, r) => s + r.missing, 0),
+      advance: advance.get(id)?.amount ?? 0,
+      advanceFrom: advance.get(id)?.from ?? [],
+    }),
+    refunds: all.filter((r) => r.status === "open" || inWindow.has(r.id)),
+    unmatched: Object.fromEntries(rows<{ root: string; n: number }>(unmatchedRes!).map((u) => [u.root, Number(u.n)])),
+  };
+}
+
+/** Mọi mục tiêu (kể cả đã tắt) đọc từ D1 kèm đã chi trong cửa sổ, và kết quả chia số dư của các mục tiêu đang dùng. */
 export interface GoalFill {
   rows: Row[];
   inputs: PocketGoalInput[];
@@ -248,57 +428,93 @@ export interface GoalFill {
   filled: Map<string, FilledGoal>;
   /** Mục tiêu trả từ tiền chi tiêu đang dùng theo thứ tự ưu tiên (còn phải trả tháng này). */
   operating: OperatingGoal[];
+  refunds: GoalRefundView[];
 }
 
 /**
- * Chia `số dư gộp − tiền lãi` của từng nhóm mẹ + con cho mục tiêu tài khoản đang dùng với đã chi từ `since` (pocket UC-1209
- * bước 9, 11, QĐ2) — một luật (`goalGroups`) cho `GET /v1/settings`; snapshot đi cùng hàm đó qua `pocketsView`. Mục tiêu trả
- * từ tiền chi tiêu: còn phải trả = max(0, số tháng này (`monthKey`) − đã trả).
+ * Chia `số dư gộp − tiền lãi − pending` của từng nhóm mẹ + con cho mục tiêu tài khoản đang dùng với đã chi trong cửa sổ (pocket
+ * UC-1209 bước 9, 11, QĐ2, AC-24, AC-25, AC-28) — một luật (`goalGroups`) cho `GET /v1/settings`; snapshot đi cùng hàm đó qua
+ * `pocketsView`. Mục tiêu trả từ tiền chi tiêu: còn phải trả = max(0, số tháng này − đã trả).
  */
-export async function goalFill(db: D1Database, since: string, monthKey: string | null = null): Promise<GoalFill> {
-  const [goalRows, accounts, spentRows, interestAccounts, interestTxs, amountRows, categoryRows] = await db.batch([
-    db.prepare(GOAL_SQL),
-    db.prepare("SELECT b.account_id AS id, b.name, b.book_balance AS balance, a.parent_account_id AS parentId FROM v_account_book b JOIN accounts a ON a.id = b.account_id"),
-    goalSpentStatement(db, since),
-    ...groupInterestStatements(db),
-    ...operatingExtrasStatements(db, monthKey),
+export async function goalFill(db: D1Database, now: Date, viewerId: string | null = null): Promise<GoalFill> {
+  const [state, [goalRows, accounts, spentRows, interestAccounts, interestTxs, amountRows, categoryRows]] = await Promise.all([
+    goalMatchState(db, now, viewerId),
+    db.batch([
+      db.prepare(GOAL_SQL),
+      db.prepare("SELECT b.account_id AS id, b.name, b.book_balance AS balance, a.parent_account_id AS parentId FROM v_account_book b JOIN accounts a ON a.id = b.account_id"),
+      goalSpentStatement(db, now),
+      ...groupInterestStatements(db),
+      ...operatingExtrasStatements(db, monthKey(now)),
+    ]),
   ]);
   const spent = goalSpentMap(spentRows!);
   const extras = operatingExtrasFrom(amountRows!, categoryRows!);
   const all = rows(goalRows!);
-  const inputs: PocketGoalInput[] = all.map((r) => ({
-    id: String(r.id),
-    name: String(r.name),
-    accountId: (r.account_id as string | null) ?? null,
-    target: r.target_amount === null ? null : Number(r.target_amount),
-    targetPct: r.target_pct === null ? null : Number(r.target_pct),
-    monthly: r.monthly_amount === null ? null : Number(r.monthly_amount),
-    repeatMonths: r.repeat_months === null ? null : Number(r.repeat_months),
-    dueDate: (r.due_date as string | null) ?? null,
-    debtId: (r.debt_id as string | null) ?? null,
-    sort: Number(r.sort),
-    spent: spent.get(String(r.id)) ?? 0,
-    paysFrom: r.pays_from === "operating" ? "operating" : "account",
-    ...extras(String(r.id)),
-  }));
+  const inputs: PocketGoalInput[] = all.map((r) => {
+    const repeatMonths = r.repeat_months === null ? null : Number(r.repeat_months);
+    const closed = goalClosedInPeriod({ repeatMonths, closedAt: (r.closed_at as string | null) ?? null }, now);
+    return {
+      id: String(r.id),
+      name: String(r.name),
+      accountId: (r.account_id as string | null) ?? null,
+      target: r.target_amount === null ? null : Number(r.target_amount),
+      targetPct: r.target_pct === null ? null : Number(r.target_pct),
+      monthly: r.monthly_amount === null ? null : Number(r.monthly_amount),
+      repeatMonths,
+      dueDate: (r.due_date as string | null) ?? null,
+      debtId: (r.debt_id as string | null) ?? null,
+      sort: Number(r.sort),
+      spent: spent.get(String(r.id)) ?? 0,
+      paysFrom: r.pays_from === "operating" ? "operating" : "account",
+      closed,
+      closedAt: closed ? String(r.closed_at) : null,
+      periodId: r.period_id === null ? null : Number(r.period_id),
+      ...extras(String(r.id)),
+      ...state.extras(String(r.id)),
+    };
+  });
   const active = new Set(all.filter((r) => r.active).map((r) => String(r.id)));
   const live = inputs.filter((g) => active.has(g.id)).sort(goalOrder);
   const { groups, filled } = goalGroups(
     rows<{ id: string; name: string; balance: number; parentId: string | null }>(accounts!).map((a) => ({ ...a, balance: Number(a.balance) })),
     live,
     groupInterestFrom(interestAccounts!, interestTxs!),
+    state.unmatched,
   );
-  return { rows: all, inputs, active, groups, filled, operating: operatingGoals(live) };
+  return { rows: all, inputs, active, groups, filled, operating: operatingGoals(live), refunds: state.refunds };
+}
+
+/** Việc chuyển về như `GET /v1/settings › goal_refunds[]` — cùng trường `snapshot.pockets.reserve.refunds[]`, snake_case. */
+export interface GoalRefundSettingsView {
+  id: number;
+  goal_id: string;
+  goal_name: string;
+  spend_tx_id: number;
+  from_account_id: string;
+  to_account_id: string;
+  amount: number;
+  linked: number;
+  missing: number;
+  status: GoalRefundView["status"];
+  reason: string | null;
+  code: string;
+  memo: string;
+  qr: GoalRefundView["qr"];
+  hidden: boolean;
+  created_at: string;
 }
 
 /**
  * Mọi mục tiêu (kể cả đã tắt) theo thứ tự ưu tiên và nhóm theo tài khoản mẹ (`GET /v1/settings`, UC-505): mục tiêu tài khoản
- * đang dùng chia số dư gộp − tiền lãi bằng `goalGroups` với đã chi từ đầu tháng — cùng luật, cùng mốc snapshot; mục tiêu trả từ
- * tiền chi tiêu có `spent`, `remaining`, không `held`.
+ * đang dùng chia số dư gộp − tiền lãi − pending bằng `goalGroups` với đã chi trong cửa sổ — cùng luật, cùng mốc snapshot; mục tiêu
+ * trả từ tiền chi tiêu có `spent`, `remaining`, không `held`. `viewerId`: người xem (`unmatched`, việc chuyển về bị giấu).
  */
-export async function listGoals(db: D1Database, now: Date): Promise<{ goals: GoalView[]; groups: GoalGroupView[] }> {
-  const month = currentMonth(now);
-  const { rows: all, inputs, groups, filled, operating } = await goalFill(db, month.start, month.key);
+export async function listGoals(
+  db: D1Database,
+  now: Date,
+  viewerId: string | null = null,
+): Promise<{ goals: GoalView[]; groups: GoalGroupView[]; refunds: GoalRefundSettingsView[] }> {
+  const { rows: all, inputs, groups, filled, operating, refunds } = await goalFill(db, now, viewerId);
   const order = new Map([...inputs].sort(goalOrder).map((g, i) => [g.id, i]));
   const operatingOf = new Map(operating.map((o) => [o.id, o]));
   const goals = all
@@ -318,6 +534,16 @@ export async function listGoals(db: D1Database, now: Date): Promise<{ goals: Goa
         pays_from: g.paysFrom!,
         remaining: o ? o.remaining : null,
         category_ids: g.categoryIds ?? [],
+        closed: g.closed ?? false,
+        closed_at: g.closedAt ?? null,
+        leftover: f ? f.leftover : 0,
+        over: f ? f.over : 0,
+        suggest_close: f ? f.suggestClose : false,
+        short_because: f ? f.shortBecause.map((s) => ({ goal_id: s.goalId, amount: s.amount })) : [],
+        advance: g.advance ?? 0,
+        advance_from: g.advanceFrom ?? [],
+        pending_refund: g.pendingRefund ?? 0,
+        period_id: g.periodId ?? null,
       };
     })
     .sort((a, b) => order.get(a.id)! - order.get(b.id)!);
@@ -333,12 +559,33 @@ export async function listGoals(db: D1Database, now: Date): Promise<{ goals: Goa
       goal_ids: g.goalIds,
       child_ids: g.childIds,
       interest: g.interest,
+      pending: g.pending,
+      free: g.free,
+      unmatched: g.unmatched,
+    })),
+    refunds: refunds.map((r) => ({
+      id: r.id,
+      goal_id: r.goalId,
+      goal_name: r.goalName,
+      spend_tx_id: r.spendTxId,
+      from_account_id: r.fromAccountId,
+      to_account_id: r.toAccountId,
+      amount: r.amount,
+      linked: r.linked,
+      missing: r.missing,
+      status: r.status,
+      reason: r.reason,
+      code: r.code,
+      memo: r.memo,
+      qr: r.qr,
+      hidden: r.hidden,
+      created_at: r.createdAt,
     })),
   };
 }
 
-async function readGoal(db: D1Database, id: string, now: Date): Promise<GoalView> {
-  return (await listGoals(db, now)).goals.find((g) => g.id === id) ?? fail("not_found", "Không có mục tiêu này.", 404);
+export async function readGoal(db: D1Database, id: string, now: Date, viewerId: string | null = null): Promise<GoalView> {
+  return (await listGoals(db, now, viewerId)).goals.find((g) => g.id === id) ?? fail("not_found", "Không có mục tiêu này.", 404);
 }
 
 const TAX_SHARED = "Thuế cần tài khoản riêng: thuế đã nộp tính mọi khoản chi từ tài khoản này.";
@@ -509,10 +756,10 @@ export async function createGoal(db: D1Database, b: Input, now: Date): Promise<G
   const sort = intOrNull(b, "sort");
   const insert = db
     .prepare(
-      `INSERT INTO reserve_goals (id, name, account_id, target_amount, target_pct, monthly_amount, repeat_months, due_date, debt_id, sort, pays_from)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO reserve_goals (id, name, account_id, target_amount, target_pct, monthly_amount, repeat_months, due_date, debt_id, sort, pays_from, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .bind(id, name, accountId, draft.target_amount, draft.target_pct, draft.monthly_amount, draft.repeat_months, draft.due_date, draft.debt_id, sort ?? 0, paysFrom);
+    .bind(id, name, accountId, draft.target_amount, draft.target_pct, draft.monthly_amount, draft.repeat_months, draft.due_date, draft.debt_id, sort ?? 0, paysFrom, now.toISOString());
   if (sort !== undefined && sort !== null) {
     await goalWrite(() => db.batch([insert, ...links]));
   } else {
@@ -612,7 +859,7 @@ export async function setGoalMonthAmount(
         )
         .bind(goalId, month.key, amount, note)
   ).run();
-  const after = (await goalFill(db, month.start, month.key)).operating.find((o) => o.id === goalId)!;
+  const after = (await goalFill(db, now)).operating.find((o) => o.id === goalId)!;
   return { goal: after, month: month.key, amount: { from: before ? Number(before.amount) : goal!.monthly!, to: amount ?? goal!.monthly! } };
 }
 

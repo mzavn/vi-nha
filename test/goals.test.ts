@@ -25,7 +25,8 @@ describe("Tích luỹ và Dự phòng: GET /v1/goals", () => {
     expect(g.reserve.goals.map((x: { held: number }) => x.held)).toEqual(s.pockets.reserve.goals.map((x: { held: number }) => x.held));
     expect(g.reserve.goals[0]).toMatchObject({ target: 6_000_000, targetPct: null, monthlyAmount: 2_000_000, repeatMonths: 3, dueDate: "2027-01-15" });
     expect(g.reserve.goals[2]).toMatchObject({ target: null, targetPct: 10 });
-    expect([g.reserve.total, g.reserve.peace, g.reserve.peaceMonths, g.shortDebt]).toEqual([s.pockets.reserve.total, s.pockets.reserve.peace, s.pockets.reserve.peaceMonths, s.pockets.shortDebt]);
+    expect([g.reserve.total, g.reserve.peace, g.shortDebt]).toEqual([s.pockets.reserve.total, s.pockets.reserve.peace, s.pockets.shortDebt]);
+    expect(g.reserve).not.toHaveProperty("peaceMonths");
     expect(JSON.stringify(g)).not.toMatch(/wealthBuilding|safetyFund|walletId/);
   });
 });

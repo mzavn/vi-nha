@@ -2,7 +2,7 @@
 // Chỉ điều chỉnh theo đúng công thức của domain cho những tài khoản bị ảnh hưởng — không tính lại cả màn. Không ví (Đợt C):
 // khoản chuyển trong hàng đợi không tự tick nhắc trích Tích luỹ, phần chưa chuyển (`pendingTasks`) không trừ tạm (chỉ server tick).
 
-import { goalGroups, peaceMonthsView, type PocketAccountLine, type PocketsView } from "../../../src/domain/pockets";
+import { goalGroups, type PocketAccountLine, type PocketsView } from "../../../src/domain/pockets";
 import { nearSpendView, topUpView } from "../../../src/domain/snapshot";
 import type { QueuedEntry } from "../offline/queue";
 import { formatVnd, moneyDigits } from "./money";
@@ -29,27 +29,51 @@ function accountEffects(items: QueuedEntry[]): Map<string, number> {
 /** Khoản chi / chuyển ra trong hàng đợi có tài khoản tiền ra. */
 const outflows = (items: QueuedEntry[]) => items.map((q) => q.body).filter((b) => (b.meaning === "spend" || b.meaning === "transfer") && b.account_id);
 
+interface QueuedGoal {
+  spent: number;
+  /** Phần chờ chuyển về của khoản kiểu B xếp hàng (pocket UC-1209 AC-28). */
+  pending: number;
+  /** Σ khoản kiểu B xếp hàng ("Trả từ … X") và tên tài khoản đã trả. */
+  advance: number;
+  from: string[];
+}
+
 /**
  * Đã chi cho mục tiêu của các khoản chi / chuyển ra trong hàng đợi: theo `goal_id`; không gửi `goal_id` (và không "Từ tiền lãi") từ
- * tài khoản đúng một mục tiêu thì server tự gắn mục tiêu đó (pocket UC-1209 bước 11) — tính như đã gắn.
+ * tài khoản còn đúng một mục tiêu chưa chốt thì server tự gắn mục tiêu đó (pocket UC-1209 bước 11, AC-30) — tính như đã gắn. Gắn
+ * mục tiêu đã chốt → server từ chối, không tính. Khoản chi từ tài khoản ngoài nhóm của mục tiêu (kiểu B, AC-28): đã chi và phần chờ
+ * chuyển về cộng min(khoản, max(0, cần − đã chi)); `spent` của server đã gồm số các việc chuyển về.
  */
-function goalSpends(items: QueuedEntry[], accounts: PocketAccountLine[]): Map<string, number> {
-  const out = new Map<string, number>();
+function goalSpends(items: QueuedEntry[], r: PocketsView["reserve"], rootOf: Map<string, string>, nameOf: (id: string) => string): Map<string, QueuedGoal> {
+  const out = new Map<string, QueuedGoal>();
+  const byId = new Map(r.goals.map((g) => [g.id, g]));
   for (const b of outflows(items)) {
-    const own = accounts.find((a) => a.id === b.account_id)?.goalIds ?? [];
+    const own = (r.accounts.find((a) => a.id === b.account_id)?.goalIds ?? []).filter((id) => !byId.get(id)?.closed);
     const goalId = b.goal_id ?? (own.length === 1 && !b.from_interest ? own[0] : undefined);
-    if (goalId) out.set(goalId, (out.get(goalId) ?? 0) + b.amount);
+    const g = goalId ? byId.get(goalId) : undefined;
+    if (!goalId || g?.closed) continue;
+    const q = out.get(goalId) ?? { spent: 0, pending: 0, advance: 0, from: [] };
+    const root = rootOf.get(b.account_id!) ?? b.account_id!;
+    if (g && g.accountId && root !== g.accountId && b.meaning === "spend") {
+      const part = Math.min(b.amount, Math.max(0, (g.need ?? 0) - g.spent - q.spent));
+      const from = nameOf(b.account_id!);
+      out.set(goalId, { spent: q.spent + part, pending: q.pending + part, advance: q.advance + b.amount, from: q.from.includes(from) ? q.from : [...q.from, from] });
+    } else out.set(goalId, { ...q, spent: q.spent + b.amount });
   }
   return out;
 }
 
 /**
- * Chia lại cho mục tiêu bằng `goalGroups` dùng chung (UC-704 AC-29, ADR-140): số dư gộp mẹ + con đã trừ tạm (`accounts`), tiền lãi
- * trừ phần "Từ tiền lãi" xếp hàng (kẹp 0 … số dư gộp), `spent` cộng khoản xếp hàng gắn mục tiêu.
+ * Chia lại cho mục tiêu bằng `goalGroups` dùng chung (UC-704 AC-29, ADR-140, pocket UC-1209 AC-25 / AC-28): số dư gộp mẹ + con đã
+ * trừ tạm (`accounts`), tiền lãi trừ phần "Từ tiền lãi" xếp hàng (kẹp 0 … số dư gộp), `spent` cộng khoản xếp hàng gắn mục tiêu;
+ * mục tiêu đã chốt giữ phần cố định; phần chờ chuyển về (`pendingRefund`, gồm khoản kiểu B xếp hàng) trừ trước khi chia.
  */
-function refillGoals(r: PocketsView["reserve"], accounts: PocketAccountLine[], items: QueuedEntry[]): Pick<PocketsView["reserve"], "goals" | "groups"> {
-  const queued = goalSpends(items, r.accounts);
-  const rootOf = new Map(accounts.map((a) => [a.id, a.parentId ?? a.id]));
+function refillGoals(p: PocketsView, accounts: PocketAccountLine[], items: QueuedEntry[]): Pick<PocketsView["reserve"], "goals" | "groups"> {
+  const r = p.reserve;
+  const all = [...p.reserve.accounts, ...p.operating.accounts, ...p.savings.accounts, ...p.outside.accounts];
+  const rootOf = new Map(all.map((a) => [a.id, a.parentId ?? a.id]));
+  const nameOf = (id: string) => all.find((a) => a.id === id)?.name ?? id;
+  const queued = goalSpends(items, r, rootOf, nameOf);
   const drawn = new Map<string, number>();
   for (const b of outflows(items)) {
     const root = rootOf.get(b.account_id!);
@@ -62,9 +86,19 @@ function refillGoals(r: PocketsView["reserve"], accounts: PocketAccountLine[], i
     }),
   );
   // `reserve.goals` đã theo thứ tự ưu tiên của server: thứ tự trong mảng làm `sort`.
-  const goals = r.goals.map((g, sort) => ({ ...g, sort, spent: g.spent + (queued.get(g.id) ?? 0) }));
-  const { groups, filled } = goalGroups(accounts.map((a) => ({ ...a, parentId: a.parentId ?? null })), goals, interest);
-  return { groups, goals: r.goals.map((g) => (filled.has(g.id) ? { ...g, ...filled.get(g.id)! } : g)) };
+  const shifted = r.goals.map((g) => {
+    const q = queued.get(g.id);
+    if (!q) return g;
+    const from = [...(g.advanceFrom ?? []), ...q.from.filter((f) => !(g.advanceFrom ?? []).includes(f))];
+    return { ...g, spent: g.spent + q.spent, pendingRefund: (g.pendingRefund ?? 0) + q.pending, advance: (g.advance ?? 0) + q.advance, advanceFrom: from };
+  });
+  const { groups, filled } = goalGroups(
+    accounts.map((a) => ({ ...a, parentId: a.parentId ?? null })),
+    shifted.map((g, sort) => ({ ...g, sort })),
+    interest,
+    Object.fromEntries(r.groups.map((g) => [g.accountId, g.unmatched ?? 0])),
+  );
+  return { groups, goals: shifted.map((g) => (filled.has(g.id) ? { ...g, ...filled.get(g.id)! } : g)) };
 }
 
 /**
@@ -90,10 +124,10 @@ function shiftOperatingGoals(o: PocketsView["operating"], items: QueuedEntry[]):
 /**
  * Ba ngăn trừ / cộng tạm khoản trong hàng đợi vào số của tài khoản liên quan và tổng ngăn chứa nó (UC-704, ADR-122, ADR-140,
  * ADR-141): tiền vận hành = tổng ngăn Vận hành; R giảm theo khoản xếp hàng gắn mục tiêu trả từ tiền chi tiêu; số mỗi ngày tính lại
- * bằng `nearSpendView`; phần an tâm đổi đúng bằng khoản trên tài khoản Dự phòng không gắn mục tiêu, không phải Ví Thưởng, không phải
- * con của tài khoản có mục tiêu hay của Ví Thưởng; đã có (A) của mục tiêu chia lại bằng `goalGroups`; số tháng tính lại bằng
- * `peaceMonthsView`; nhắc chuyển thêm tính lại bằng `topUpView` (giữ đích QR của server; không gợi ý tài khoản riêng tư của người
- * khác — `hidden`, từ `accounts[].hiddenFromMe` ở bootstrap, access UC-504). Số đo theo tháng (`savings.change`, `monthly`, `months`)
+ * bằng `nearSpendView`; phần Dự phòng chưa gắn mục tiêu (`peace`) đổi đúng bằng khoản trên tài khoản Dự phòng không gắn mục tiêu,
+ * không phải Ví Thưởng, không phải con của tài khoản có mục tiêu hay của Ví Thưởng; đã có (A) của mục tiêu chia lại bằng
+ * `goalGroups`; nhắc chuyển thêm tính lại bằng `topUpView` (giữ đích QR của server; không gợi ý tài khoản riêng tư của người
+ * khác — `hidden`, từ `accounts[].hiddenFromMe` ở bootstrap, access UC-504). Số đo theo tháng (`savings.change`)
  * và việc tháng (nhắc trích, chia dư — `pendingTasks`) không trừ tạm.
  */
 export function applyQueue(s: Snapshot, items: QueuedEntry[], hidden: readonly string[] = []): Snapshot {
@@ -120,7 +154,6 @@ export function applyQueue(s: Snapshot, items: QueuedEntry[], hidden: readonly s
   const moved = (keep: (a: PocketAccountLine) => boolean) => r.accounts.filter(keep).reduce((sum, a) => sum + (fx.get(a.id) ?? 0), 0);
   const peace = r.peace + moved((a) => a.goalIds.length === 0 && !goalRoots.has(owner(a)) && owner(a) !== rewardId);
   const rewardDelta = rewardId === null ? 0 : moved((a) => owner(a) === rewardId);
-  const { monthly, target } = r.peaceMonths;
   const pockets = {
     ...p,
     savings,
@@ -128,9 +161,8 @@ export function applyQueue(s: Snapshot, items: QueuedEntry[], hidden: readonly s
     outside,
     reserve: {
       ...reserve,
-      ...refillGoals(r, reserve.accounts, items),
+      ...refillGoals(p, reserve.accounts, items),
       peace,
-      peaceMonths: { ...r.peaceMonths, covered: peaceMonthsView(peace, monthly, target).covered },
       reward: r.reward && rewardDelta ? { ...r.reward, balance: r.reward.balance + rewardDelta } : r.reward,
     },
   };

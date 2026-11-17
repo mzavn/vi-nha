@@ -111,6 +111,10 @@
 --                     lịch sử (chặn ghi, model_changed)
 --  v1.47 (12/11/2026): mã việc trong nội dung chuyển khoản — month_tasks.code (cột sinh từ id, 4 ký tự không 0 O 1 I;
 --                     idx_month_tasks_code) · month_task_tx.by_code (ghép theo mã, không xét ngưỡng tự nhận)
+--  v1.49 (17/11/2026): khớp khoản chi vào mục tiêu — reserve_goals.closed_at (chốt xong) · goal_periods (đợt của mục tiêu lặp N
+--                     tháng) · goal_refunds (việc chuyển về kiểu B, mã CV, trg_goal_refunds_reason(_insert) → reason_required)
+--                     + goal_refund_tx · trg_tx_goal(_insert) dựng lại (khoản chi từ tài khoản ngoài nhóm) ·
+--                     trg_tx_goal_closed(_insert) → goal_closed
 -- ============================================================
 --  NGUYÊN TẮC ENCODE:
 --   1. Hai lớp: bank_logs (thô, BẤT BIẾN) vs transactions (đã diễn giải)
@@ -935,6 +939,7 @@ CREATE TABLE reserve_goals (
   active               INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
   created_at           TEXT NOT NULL DEFAULT (datetime('now')),
   pays_from            TEXT NOT NULL DEFAULT 'account' CHECK (pays_from IN ('account','operating')),  -- operating = trả thẳng từ tiền chi tiêu (v1.44, ADR-141)
+  closed_at            TEXT,                                -- chốt xong (v1.49): một lần / hằng tháng (chỉ trong tháng VN chứa lúc chốt); NULL = chưa chốt
   CHECK ((target_amount IS NULL) <> (target_pct IS NULL)),
   CHECK ((monthly_amount IS NULL) = (repeat_months IS NULL)),
   CHECK (monthly_amount IS NULL OR target_amount = monthly_amount * repeat_months),
@@ -1002,13 +1007,14 @@ WHEN NEW.active = 1 AND NEW.account_id IS NOT NULL
 BEGIN
   SELECT RAISE(ABORT, 'tax_account_shared');
 END;
--- Khoản chi / chuyển ra cho mục tiêu (v1.42, QĐ3; v1.44): mục tiêu tài khoản — tiền ra từ tài khoản của nó hoặc con của nó;
---  mục tiêu trả từ tiền chi tiêu — tiền ra từ một tài khoản ngăn Vận hành.
+-- Khoản chi / chuyển ra cho mục tiêu (v1.42, QĐ3; v1.44; v1.49): mục tiêu tài khoản — tiền ra từ tài khoản của nó hoặc con của nó,
+--  hoặc khoản chi từ tài khoản khác (kiểu B, có việc chuyển về); mục tiêu trả từ tiền chi tiêu — tiền ra từ một tài khoản ngăn Vận hành.
 CREATE TRIGGER trg_tx_goal_insert BEFORE INSERT ON transactions
 WHEN NEW.goal_id IS NOT NULL
   AND (NEW.meaning NOT IN ('spend', 'transfer')
     OR NOT EXISTS (SELECT 1 FROM reserve_goals g JOIN accounts a ON a.id = NEW.account_id WHERE g.id = NEW.goal_id AND g.active = 1
       AND ((g.pays_from = 'account' AND g.account_id = COALESCE(a.parent_account_id, a.id))
+        OR (g.pays_from = 'account' AND g.account_id IS NOT NULL AND NEW.meaning = 'spend')
         OR (g.pays_from = 'operating' AND a.pocket = 'operating'))))
 BEGIN
   SELECT RAISE(ABORT, 'invalid_goal');
@@ -1018,9 +1024,25 @@ WHEN NEW.goal_id IS NOT NULL
   AND (NEW.meaning NOT IN ('spend', 'transfer')
     OR NOT EXISTS (SELECT 1 FROM reserve_goals g JOIN accounts a ON a.id = NEW.account_id WHERE g.id = NEW.goal_id AND g.active = 1
       AND ((g.pays_from = 'account' AND g.account_id = COALESCE(a.parent_account_id, a.id))
+        OR (g.pays_from = 'account' AND g.account_id IS NOT NULL AND NEW.meaning = 'spend')
         OR (g.pays_from = 'operating' AND a.pocket = 'operating'))))
 BEGIN
   SELECT RAISE(ABORT, 'invalid_goal');
+END;
+-- Mục tiêu đã chốt trong kỳ chứa lúc chốt (v1.49, `goalClosedSql` ở src/domain/pockets.ts) không nhận khoản mới.
+CREATE TRIGGER trg_tx_goal_closed_insert BEFORE INSERT ON transactions
+WHEN NEW.goal_id IS NOT NULL
+  AND EXISTS (SELECT 1 FROM reserve_goals g WHERE g.id = NEW.goal_id AND g.closed_at IS NOT NULL
+    AND (g.repeat_months IS NULL OR (g.repeat_months = 1 AND strftime('%Y-%m', g.closed_at, '+7 hours') = strftime('%Y-%m', 'now', '+7 hours'))))
+BEGIN
+  SELECT RAISE(ABORT, 'goal_closed');
+END;
+CREATE TRIGGER trg_tx_goal_closed BEFORE UPDATE OF goal_id ON transactions
+WHEN NEW.goal_id IS NOT NULL AND NEW.goal_id IS NOT OLD.goal_id
+  AND EXISTS (SELECT 1 FROM reserve_goals g WHERE g.id = NEW.goal_id AND g.closed_at IS NOT NULL
+    AND (g.repeat_months IS NULL OR (g.repeat_months = 1 AND strftime('%Y-%m', g.closed_at, '+7 hours') = strftime('%Y-%m', 'now', '+7 hours'))))
+BEGIN
+  SELECT RAISE(ABORT, 'goal_closed');
 END;
 -- Tài khoản con (v1.44, ADR-140): một tầng, mẹ và con đều là ngân hàng, mẹ đang dùng và không ở Vận hành, con không SePay,
 --  không là Ví Thưởng, không có con, không gắn mục tiêu đang dùng; con luôn cùng ngăn / xác nhận / riêng tư / chủ với mẹ
@@ -1363,5 +1385,62 @@ CREATE TABLE goal_month_amounts (
   PRIMARY KEY (goal_id, month_key)
 );
 
+-- Đợt của mục tiêu lặp N tháng (v1.49, Q1): đợt hiện tại = dòng mới nhất chưa khép; chưa có dòng = đợt đầu (từ ngày tạo mục tiêu).
+--  Chốt → khép dòng hiện tại + thêm dòng mới (bắt đầu lúc chốt, hạn + N tháng); mở lại → xoá dòng mới, mở lại dòng cũ.
+CREATE TABLE goal_periods (
+  id         INTEGER PRIMARY KEY,
+  goal_id    TEXT NOT NULL REFERENCES reserve_goals(id),
+  started_at TEXT NOT NULL,
+  due_date   TEXT,
+  closed_at  TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+CREATE INDEX idx_goal_periods_goal ON goal_periods(goal_id, id);
+
+-- Việc chuyển về kiểu B (v1.49, UC-1209 AC-28): khoản chi từ tài khoản ngoài nhóm đã khớp vào mục tiêu → chuyển `amount` (chốt lúc
+--  tạo) từ tài khoản mục tiêu về tài khoản đã trả. Mỗi khoản chi một việc chưa huỷ; bỏ qua phải có lý do; mã như month_tasks.code.
+CREATE TABLE goal_refunds (
+  id              INTEGER PRIMARY KEY,
+  goal_id         TEXT NOT NULL REFERENCES reserve_goals(id),
+  spend_tx_id     INTEGER NOT NULL REFERENCES transactions(id),
+  from_account_id TEXT NOT NULL REFERENCES accounts(id),
+  to_account_id   TEXT NOT NULL REFERENCES accounts(id),
+  amount          INTEGER NOT NULL CHECK (amount > 0),
+  status          TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','done','skipped','void')),
+  reason          TEXT CHECK (reason IS NULL OR length(reason) BETWEEN 1 AND 500),
+  by_member_id    TEXT REFERENCES members(id),
+  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  code            TEXT GENERATED ALWAYS AS (
+    substr('23456789ABCDEFGHJKLMNPQRSTUVWXYZ', (((id * 742297) % 1048576) >> 15 & 31) + 1, 1) ||
+    substr('23456789ABCDEFGHJKLMNPQRSTUVWXYZ', (((id * 742297) % 1048576) >> 10 & 31) + 1, 1) ||
+    substr('23456789ABCDEFGHJKLMNPQRSTUVWXYZ', (((id * 742297) % 1048576) >> 5 & 31) + 1, 1) ||
+    substr('23456789ABCDEFGHJKLMNPQRSTUVWXYZ', (((id * 742297) % 1048576) & 31) + 1, 1)
+  ) VIRTUAL
+);
+CREATE UNIQUE INDEX idx_goal_refunds_spend ON goal_refunds(spend_tx_id) WHERE status <> 'void';
+CREATE INDEX idx_goal_refunds_status ON goal_refunds(status, goal_id);
+CREATE INDEX idx_goal_refunds_code ON goal_refunds(code);
+CREATE TRIGGER trg_goal_refunds_reason_insert BEFORE INSERT ON goal_refunds
+WHEN NEW.status = 'skipped' AND NEW.reason IS NULL
+BEGIN
+  SELECT RAISE(ABORT, 'reason_required');
+END;
+CREATE TRIGGER trg_goal_refunds_reason BEFORE UPDATE OF status, reason ON goal_refunds
+WHEN NEW.status = 'skipped' AND NEW.reason IS NULL
+BEGIN
+  SELECT RAISE(ABORT, 'reason_required');
+END;
+-- Chuyển khoản đã ghép vào việc chuyển về (tự tick / mã CV), ghép trước việc tháng.
+CREATE TABLE goal_refund_tx (
+  refund_id  INTEGER NOT NULL REFERENCES goal_refunds(id),
+  tx_id      INTEGER NOT NULL REFERENCES transactions(id),
+  amount     INTEGER NOT NULL CHECK (amount > 0),
+  by_code    INTEGER NOT NULL DEFAULT 0 CHECK (by_code IN (0,1)),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  PRIMARY KEY (refund_id, tx_id)
+);
+CREATE INDEX idx_goal_refund_tx ON goal_refund_tx(tx_id);
+
 -- Phiên bản schema — /v1/health đọc từ đây
-INSERT INTO config (k,v) VALUES ('schema_version','1.48');
+INSERT INTO config (k,v) VALUES ('schema_version','1.49');

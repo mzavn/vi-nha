@@ -33,8 +33,9 @@ export function migratedDb(until = "9999"): DatabaseSync {
 }
 /**
  * Thêm các cột / bảng mà code hiện tại đọc (0044: tài khoản con, nơi để tiền của mục tiêu, rút từ tiền lãi; 0045: danh mục
- * của khoản phải trả; 0046: lương theo khoản, việc tháng, chia dư, số riêng theo tháng, cột đổi tên) vào DB còn ở schema cũ —
- * để test migration cũ đo số bằng service hiện tại trước / sau migration của nó. Không thêm trigger, không đổi schema_version.
+ * của khoản phải trả; 0046: lương theo khoản, việc tháng, chia dư, số riêng theo tháng, cột đổi tên; 0049: chốt xong, đợt mục tiêu
+ * lặp, việc chuyển về) vào DB còn ở schema cũ — để test migration cũ đo số bằng service hiện tại trước / sau migration của nó.
+ * Không thêm trigger, không đổi schema_version.
  */
 export function addCurrentColumns(db: DatabaseSync): void {
   db.exec(`
@@ -53,6 +54,11 @@ export function addCurrentColumns(db: DatabaseSync): void {
       held_payables INTEGER NOT NULL, held_to_payday INTEGER NOT NULL, surplus INTEGER NOT NULL, savings_pct INTEGER NOT NULL, status TEXT NOT NULL,
       note TEXT, by_member_id TEXT, at TEXT NOT NULL);
     CREATE TABLE goal_month_amounts (goal_id TEXT NOT NULL, month_key TEXT NOT NULL, amount INTEGER NOT NULL, note TEXT, updated_at TEXT, PRIMARY KEY (goal_id, month_key));
+    ALTER TABLE reserve_goals ADD COLUMN closed_at TEXT;
+    CREATE TABLE goal_periods (id INTEGER PRIMARY KEY, goal_id TEXT NOT NULL, started_at TEXT NOT NULL, due_date TEXT, closed_at TEXT, created_at TEXT);
+    CREATE TABLE goal_refunds (id INTEGER PRIMARY KEY, goal_id TEXT NOT NULL, spend_tx_id INTEGER NOT NULL, from_account_id TEXT NOT NULL, to_account_id TEXT NOT NULL,
+      amount INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'open', reason TEXT, by_member_id TEXT, created_at TEXT, updated_at TEXT, code TEXT);
+    CREATE TABLE goal_refund_tx (refund_id INTEGER NOT NULL, tx_id INTEGER NOT NULL, amount INTEGER NOT NULL, by_code INTEGER NOT NULL DEFAULT 0, created_at TEXT, PRIMARY KEY (refund_id, tx_id));
   `);
 }
 
@@ -72,13 +78,22 @@ export function schemaShape(db: DatabaseSync) {
 
 /**
  * DB trong bộ nhớ của hộ mẫu: `docs/schema.sql` + `docs/seed.sql`. Seed đặt `opened_at = date('now')` theo đồng hồ thật,
- * còn test ghim `now` vào ngày cố định — nên bỏ mốc mở sổ (ADR-76) của tài khoản mẫu; test nào cần mốc tự đặt.
+ * còn test ghim `now` vào ngày cố định — nên bỏ mốc mở sổ (ADR-76) của tài khoản mẫu; test nào cần mốc tự đặt. Cùng lẽ đó, mục
+ * tiêu ghi với `created_at` mặc định (`datetime('now')` đồng hồ thật) coi như có từ trước mọi khoản của test (cửa sổ "đã chi" của
+ * mục tiêu một lần tính từ ngày tạo, UC-1209 AC-24); test nào cần ngày tạo tự đặt.
  */
 export function openDb(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
   db.exec(readSql("docs/schema.sql"));
   db.exec(readSql("docs/seed.sql"));
   db.exec("UPDATE accounts SET opened_at = NULL");
+  db.exec(`
+    UPDATE reserve_goals SET created_at = '2000-01-01 00:00:00';
+    CREATE TEMP TRIGGER test_goal_created AFTER INSERT ON reserve_goals WHEN NEW.created_at = datetime('now')
+    BEGIN
+      UPDATE reserve_goals SET created_at = '2000-01-01 00:00:00' WHERE id = NEW.id;
+    END;
+  `);
   return db;
 }
 

@@ -41,6 +41,7 @@ import { dayKey, monthKey } from "../domain/period";
 import { DEFAULT_SAVINGS_PCT, type Pocket } from "../domain/pockets";
 import { DEFAULT_PAYDAY_DAY, nextPayday } from "../domain/snapshot";
 import { DomainError, type Refs } from "../domain/types";
+import { codedRefund, linkRefundStatement, reconcileRefunds, REFUND_USED_SQL, type RefundEffects } from "./goals";
 import { assertTxChangeable, hiddenAccountIds, txNotFound, txVisibility } from "./privacy";
 
 type Row = Record<string, unknown>;
@@ -282,12 +283,13 @@ const COPIED_CYCLE = "(SELECT id FROM pay_cycles WHERE status = 'active' ORDER B
 /**
  * Phần đã dùng của một chuyển khoản (UC-1206): Σ liên kết của việc tháng chưa void + Σ liên kết của việc kỳ cũ chưa void không
  * được chép (② / ③ / ④ và ① của kỳ cũ hơn kỳ hiện tại lúc nâng cấp) — liên kết ① đã chép không đếm hai lần, liên kết ② / ④ cũ
- * không bị nhả ra dùng lại.
+ * không bị nhả ra dùng lại — + Σ liên kết của việc chuyển về chưa huỷ (pocket UC-1209 AC-29: ghép trước TL / CD / VT).
  */
-const USED_SQL = (tx: string) => `(COALESCE((SELECT SUM(x.amount) FROM month_task_tx x JOIN month_tasks k ON k.id = x.task_id
+export const USED_SQL = (tx: string) => `(COALESCE((SELECT SUM(x.amount) FROM month_task_tx x JOIN month_tasks k ON k.id = x.task_id
     WHERE x.tx_id = ${tx} AND k.status <> 'void'), 0)
   + COALESCE((SELECT SUM(x.amount) FROM pay_cycle_task_tx x JOIN pay_cycle_tasks k ON k.id = x.task_id
-    WHERE x.tx_id = ${tx} AND k.status <> 'void' AND NOT (k.kind = 'savings' AND k.cycle_id IS ${COPIED_CYCLE})), 0))`;
+    WHERE x.tx_id = ${tx} AND k.status <> 'void' AND NOT (k.kind = 'savings' AND k.cycle_id IS ${COPIED_CYCLE})), 0)
+  + ${REFUND_USED_SQL(tx)})`;
 
 /**
  * Câu ghi một liên kết việc ← chuyển khoản: chỉ thành khi, TẠI LÚC GHI, chuyển khoản còn đủ phần chưa dùng và việc còn mở,
@@ -309,13 +311,22 @@ async function openTaskRows(db: D1Database): Promise<TaskRow[]> {
 }
 
 /**
- * Ghép mọi chuyển khoản nội bộ S → D (D thuộc ngăn Tích luỹ khác ngăn S; hoặc D là đúng tài khoản Ví Thưởng của việc) vào các
- * việc đang mở có mốc ≤ thời điểm chuyển khoản, theo thời gian rồi theo thứ tự việc. Chỉ ghi liên kết, không dòng sổ nào. Trả các
- * việc vừa tự xong.
+ * Sau mỗi lần ghi (nhập tay, sửa, Gán, ingest, MCP, khớp mục tiêu): đối soát việc chuyển về của mục tiêu trước (`reconcileRefunds` —
+ * tạo / huỷ việc, tự tick), rồi ghép mọi chuyển khoản nội bộ S → D (D thuộc ngăn Tích luỹ khác ngăn S; hoặc D là đúng tài khoản Ví
+ * Thưởng của việc) vào các việc tháng đang mở có mốc ≤ thời điểm chuyển khoản, theo thời gian rồi theo thứ tự việc. Chỉ ghi liên
+ * kết, không dòng sổ nào. Trả các việc tháng vừa tự xong và việc chuyển về vừa tạo / huỷ.
  */
-export async function afterWrite(db: D1Database, now = new Date()): Promise<{ tasksDone: { id: number; kind: TaskKind }[] }> {
+export async function afterWrite(
+  db: D1Database,
+  now = new Date(),
+): Promise<{ tasksDone: { id: number; kind: TaskKind }[]; refundsCreated: RefundEffects["created"]; refundsVoided: number[] }> {
+  const refunds = await reconcileRefunds(db, now);
+  return { tasksDone: await matchTasks(db, now), refundsCreated: refunds.created, refundsVoided: refunds.voided };
+}
+
+async function matchTasks(db: D1Database, now: Date): Promise<{ id: number; kind: TaskKind }[]> {
   const tasks = (await openTaskRows(db)).filter((t) => taskState(t, t.linked).state === "open");
-  if (tasks.length === 0) return { tasksDone: [] };
+  if (tasks.length === 0) return [];
   const open: MatchTask[] = tasks.map((t) => ({ id: t.id, toPocket: t.to_account_id ? null : t.to_pocket, toAccountId: t.to_account_id, missing: t.amount - t.linked, since: t.since }));
   const from = open.reduce((m, t) => (t.since < m ? t.since : m), open[0]!.since);
   type TransferRow = { id: number; at: string; amount: number; used: number; fromId: string; fromPocket: Pocket | null; fromParent: string | null; toId: string; toPocket: Pocket | null; toParent: string | null };
@@ -344,11 +355,11 @@ export async function afterWrite(db: D1Database, now = new Date()): Promise<{ ta
       statements.push(linkTaskStatement(db, l.taskId, tr.id, l.amount, now));
     }
   }
-  if (statements.length === 0) return { tasksDone: [] };
+  if (statements.length === 0) return [];
   await db.batch(statements);
   const wasOpen = new Set(open.map((t) => t.id));
   const after = await openTaskRows(db);
-  return { tasksDone: after.filter((t) => wasOpen.has(t.id) && taskState(t, t.linked).state === "done").map((t) => ({ id: t.id, kind: t.kind })) };
+  return after.filter((t) => wasOpen.has(t.id) && taskState(t, t.linked).state === "done").map((t) => ({ id: t.id, kind: t.kind }));
 }
 
 // ── Ghép theo mã trong nội dung chuyển khoản (UC-1206 AC-20, ingest UC-303 AC-33) ──
@@ -370,10 +381,16 @@ async function codedTask(db: D1Database, content: string | null): Promise<CodedT
 }
 
 /**
- * Tài khoản đích cho log tiền ra có mã việc (UC-303 AC-33): → Ví Thưởng = tài khoản của việc; ① / chia dư → Tích luỹ = tài khoản
- * ngăn Tích luỹ đầu tiên có số tài khoản (đúng đích QR mặc định, `monthView.targets[0]`). null = không mã, việc đã đủ, không đích.
+ * Tài khoản đích cho log tiền ra có mã việc (UC-303 AC-33, AC-34): việc chuyển về (CV) = tài khoản đã trả; → Ví Thưởng = tài khoản
+ * của việc; ① / chia dư → Tích luỹ = tài khoản ngăn Tích luỹ đầu tiên có số tài khoản (đúng đích QR mặc định, `monthView.targets[0]`).
+ * null = không mã, việc đã đủ, không đích.
  */
-export async function codeTarget(db: D1Database, content: string | null): Promise<{ taskId: number; accountId: string } | null> {
+export async function codeTarget(db: D1Database, content: string | null): Promise<{ accountId: string } | null> {
+  const refund = await codedRefund(db, content);
+  if (refund) {
+    const to = await db.prepare("SELECT id FROM accounts WHERE id = ? AND active = 1").bind(refund.toId).first<{ id: string }>();
+    if (to) return { accountId: to.id };
+  }
   const t = await codedTask(db, content);
   if (!t) return null;
   const target = t.to_account_id
@@ -381,13 +398,14 @@ export async function codeTarget(db: D1Database, content: string | null): Promis
     : await db
         .prepare("SELECT id FROM accounts WHERE active = 1 AND pocket = 'savings' AND account_no IS NOT NULL AND account_no <> '' ORDER BY kind, name LIMIT 1")
         .first<{ id: string }>();
-  return target ? { taskId: Number(t.id), accountId: target.id } : null;
+  return target ? { accountId: target.id } : null;
 }
 
 /**
  * Ghép chuyển khoản `txId` vào việc có mã trong nội dung log của nó (chân ra hoặc chân vào) — trước tự tick theo luật, không xét
- * ngưỡng `AUTO_MATCH_MIN` (liên kết `by_code`). Đích phải hợp với việc: → Ví Thưởng = đúng tài khoản đó hoặc con của nó; ① / chia
- * dư → Tích luỹ = tài khoản ngăn Tích luỹ, nguồn khác ngăn. Không hợp / không mã → không làm gì (tự tick thường lo tiếp).
+ * ngưỡng `AUTO_MATCH_MIN` (liên kết `by_code`). Mã CV (UC-303 AC-34): việc chuyển về đang mở, đích thuộc nhóm tài khoản đã trả.
+ * Đích phải hợp với việc: → Ví Thưởng = đúng tài khoản đó hoặc con của nó; ① / chia dư → Tích luỹ = tài khoản ngăn Tích luỹ, nguồn
+ * khác ngăn. Không hợp / không mã → không làm gì (tự tick thường lo tiếp).
  */
 export async function linkByCode(db: D1Database, txId: number, now = new Date()): Promise<void> {
   const tx = await db
@@ -400,6 +418,12 @@ export async function linkByCode(db: D1Database, txId: number, now = new Date())
     .bind(txId)
     .first<{ id: number; amount: number; used: number; fromPocket: Pocket | null; toId: string; toPocket: Pocket | null; toParent: string | null; c1: string | null; c2: string | null }>();
   if (!tx) return;
+  const refund = (await codedRefund(db, tx.c1)) ?? (await codedRefund(db, tx.c2));
+  if (refund) {
+    const amount = Math.min(Number(tx.amount) - Number(tx.used), Number(refund.amount) - Number(refund.linked));
+    if ((tx.toParent ?? tx.toId) === refund.toRoot && amount > 0) await linkRefundStatement(db, Number(refund.id), Number(tx.id), amount, now, true).run();
+    return;
+  }
   const t = (await codedTask(db, tx.c1)) ?? (await codedTask(db, tx.c2));
   if (!t) return;
   const fits = t.to_account_id ? tx.toId === t.to_account_id || tx.toParent === t.to_account_id : tx.toPocket === "savings" && tx.fromPocket !== "savings";

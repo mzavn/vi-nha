@@ -43,8 +43,6 @@ describe("thẻ Vận hành ở Hôm nay (ADR-122)", () => {
       debts: [],
       savingsPct: 10,
       history: { since: "2026-11-10", prevSince: "2026-10-10", accounts: [] },
-      operatingSpend: { months: [], dataStart: null },
-      peaceTarget: 6,
     });
     const v = nearSpendCard(nearSpend(p.operating, [{ id: "main", name: "tài khoản chính", pocket: "operating" }], TODAY, 10, { salaryPayday: null, pendingTasks: 0 }), TODAY, p);
     expect(v.amount).toBe(`12.000.000${NBSP}₫`);

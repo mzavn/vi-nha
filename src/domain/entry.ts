@@ -66,8 +66,9 @@ export interface EntryInput {
   is_salary?: boolean;
   /**
    * Chỉ dùng cho `spend` / `transfer`: mục tiêu mà khoản này dùng tiền (pocket UC-1209 bước 11) — mục tiêu tài khoản: tiền ra
-   * từ tài khoản của mục tiêu hoặc con của nó; mục tiêu trả từ tiền chi tiêu: tiền ra từ một tài khoản Vận hành. Không gửi: tài
-   * khoản đúng một mục tiêu tài khoản thì tự gắn khi ghi (`insertTx`), còn lại NULL — mục tiêu trả từ tiền chi tiêu không tự gắn.
+   * từ tài khoản của mục tiêu hoặc con của nó, hoặc khoản chi từ tài khoản khác (kiểu B, sinh việc chuyển về — AC-28); mục tiêu
+   * trả từ tiền chi tiêu: tiền ra từ một tài khoản Vận hành. Mục tiêu đã chốt → 409 `goal_closed` (AC-30). Không gửi: tài khoản
+   * đúng một mục tiêu tài khoản chưa chốt thì tự gắn khi ghi (`insertTx`), còn lại NULL — mục tiêu trả từ tiền chi tiêu không tự gắn.
    */
   goal_id?: string | null;
   /** Chỉ dùng cho `income` vào tài khoản mẹ có mục tiêu hoặc con của nó: khoản lãi (ghi phân loại `passive_income`, ADR-140). */
@@ -108,6 +109,7 @@ export interface TxRow {
 }
 
 export const INVALID_GOAL = "Mục tiêu này không thuộc tài khoản chi.";
+export const GOAL_CLOSED = "Mục tiêu này đã chốt xong: mở lại rồi mới khớp thêm được.";
 export const INVALID_INTEREST = "Khoản này không lấy từ tiền lãi được: chỉ dùng khi chi hoặc chuyển khỏi tài khoản mục tiêu (hay khoản gửi), không kèm mục tiêu.";
 const INTEREST_INCOME_ONLY = "Tiền lãi chỉ ghi cho khoản thu vào tài khoản có mục tiêu hoặc khoản gửi của nó.";
 
@@ -286,7 +288,9 @@ export function buildEntry(input: EntryInput, refs: Refs, memberId: string | nul
     const from = ref(row.account_id);
     const forAccount = rootOf(row.account_id)?.goalIds?.includes(input.goal_id) ?? false;
     const forOperating = from?.pocket === "operating" && (refs.operatingGoalIds ?? []).includes(input.goal_id);
-    if (!outFlow || !(forAccount || forOperating)) fail("invalid_goal", INVALID_GOAL);
+    const advance = row.meaning === "spend" && (refs.accountGoalIds ?? []).includes(input.goal_id);
+    if (!outFlow || !(forAccount || forOperating || advance)) fail("invalid_goal", INVALID_GOAL);
+    if ((refs.closedGoalIds ?? []).includes(input.goal_id)) throw new DomainError("goal_closed", GOAL_CLOSED, 409);
     row.goal_id = input.goal_id;
   }
   if (input.is_interest) {

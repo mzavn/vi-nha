@@ -4,22 +4,13 @@
 
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { api, errorText } from "../lib/api";
-import {
-  freedomCashflowText,
-  freedomHaveText,
-  freedomTargetText,
-  incomeMilestoneText,
-  incomeSourceText,
-  MILESTONE_LABEL,
-  paramsSummary,
-  safetyText,
-} from "../lib/freedom";
+import { cushionCoveredText, incomeMilestoneText, incomeSourceText, ladderNote, ladderRows, MILESTONE_LABEL, paramsSummary, swrNote, type LadderRowView } from "../lib/freedom";
 import { editedText, memberPlanText, planFormFrom, planHeadline, planPayload, planSplitHint, planSub, planYearRow, type PlanForm } from "../lib/income-plan";
 import { EMPTY_STATES } from "../lib/empty-states";
 import { formatVnd } from "../lib/money";
 import { pctText } from "../lib/net-worth";
 import { formToInput, keepDraft, keptDraft, project, reachText, startToForm, type ProjectionForm, type ProjectionRow } from "../lib/projection";
-import type { Freedom, FreedomMilestone, IncomePlanSummary, IncomePlanYear, ProjectionStart, SettingsData } from "../lib/types";
+import type { Freedom, IncomePlanSummary, IncomePlanYear, ProjectionStart, SettingsData } from "../lib/types";
 import { useResource } from "../state/resource";
 import { refresh, toast, useApp } from "../state/store";
 import { AmountInput } from "../ui/fields";
@@ -66,39 +57,12 @@ function Milestones({ f, onOpen }: { f: Freedom; onOpen: (o: Open) => void }) {
         <p class="nw-line">{paramsSummary(f.params)}</p>
       </Card>
 
-      <Card
-        title="Mốc an tâm"
-        flush
-        note="Mất thu nhập thì cả nhà sống bình thường được bao lâu: gồm vàng và tài sản Tiền lỏng, không phải tiền chi tiêu. Khác phần an tâm ở thẻ Dự phòng (Hôm nay)."
-      >
-        <div class="blist">
-          {f.safety.map((s) => (
-            <TierRow
-              key={s.key}
-              name={`${s.months} tháng chi phí`}
-              dot={null}
-              chip={<ReachChip reached={s.reached} />}
-              amount={pctText(s.pct)}
-              left={safetyText(s)}
-              bar={s.pct !== null ? { pct: s.pct, tone: s.reached ? "ok" : undefined } : null}
-            />
-          ))}
-        </div>
-        {f.monthsCovered !== null && <p class="fhint">Tiền lỏng {formatVnd(f.liquid)} đủ {String(f.monthsCovered).replace(".", ",")} tháng chi phí.</p>}
-      </Card>
+      <LadderCard f={f} />
 
       <Card title="Thu nhập" flush note={source ? `Thu nhập nhà ${source}.` : undefined}>
         <div class="blist">
           {f.income.map((m) => (
             <TierRow key={m.key} name={MILESTONE_LABEL[m.key].name} dot={null} chip={<ReachChip reached={m.reached} />} amount="" left={incomeMilestoneText(m)} />
-          ))}
-        </div>
-      </Card>
-
-      <Card title="Tự do" flush note="Tài sản đầu tư đã trừ nợ, so với mốc theo tỷ lệ rút an toàn; hoặc dòng tiền ròng (sau bù lạm phát) đủ chi.">
-        <div class="blist">
-          {f.freedom.map((m) => (
-            <FreedomRow key={m.key} m={m} />
           ))}
         </div>
       </Card>
@@ -113,29 +77,57 @@ function ReachChip({ reached }: { reached: boolean | null }) {
   return reached ? <span class="chip ok">đạt</span> : <span class="chip">chưa đạt</span>;
 }
 
-function FreedomRow({ m }: { m: FreedomMilestone }) {
-  const cash = freedomCashflowText(m);
+/** Thang mốc (UC-1103 bước 3): bốn bậc đệm, câu số tháng đệm, rồi Nửa đường và F1–F3; chú SWR cuối card. */
+function LadderCard({ f }: { f: Freedom }) {
+  const rows = ladderRows(f);
+  const covered = cushionCoveredText(f.cushion);
+  return (
+    <Card title="Thang mốc" flush note={ladderNote(f.params)}>
+      <div class="blist">
+        {rows
+          .filter((r) => r.group === "cushion")
+          .map((r) => (
+            <LadderRow key={r.key} r={r} />
+          ))}
+      </div>
+      {covered && <p class="fhint">{covered}</p>}
+      <div class="blist">
+        {rows
+          .filter((r) => r.group === "fire")
+          .map((r) => (
+            <LadderRow key={r.key} r={r} />
+          ))}
+      </div>
+      <p class="fhint">{swrNote(f.params)}</p>
+    </Card>
+  );
+}
+
+function LadderRow({ r }: { r: LadderRowView }) {
   return (
     <div class="tier">
       <div class="nm">
-        {MILESTONE_LABEL[m.key].name}
-        <ReachChip reached={m.reached} />
+        {r.name}
+        <ReachChip reached={r.reached} />
       </div>
-      <div class="amt">{pctText(m.pct)}</div>
+      <div class="amt num">{pctText(r.pct)}</div>
       <div class="tsub nw-sub">
-        <span>{freedomHaveText(m)}</span>
+        <span>{r.have}</span>
       </div>
-      {m.pct !== null && <Bar pct={m.pct} tone={m.reached ? "ok" : undefined} />}
-      {cash && (
+      {r.pct !== null && <Bar pct={r.pct} tone={r.reached ? "ok" : undefined} />}
+      {r.cashflow && (
         <div class="tsub nw-sub">
-          <span>{cash}</span>
+          <span>{r.cashflow}</span>
         </div>
       )}
-      {m.target && (
+      {r.target && (
         <div class="tsub nw-sub">
-          <span>{freedomTargetText(m.target)}</span>
+          <span>{r.target}</span>
         </div>
       )}
+      <div class="tsub nw-sub">
+        <span>{r.decision}</span>
+      </div>
     </div>
   );
 }

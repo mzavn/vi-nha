@@ -156,7 +156,7 @@ export interface TopUpSource {
 export interface TopUp {
   /** Y = cần cho tới ngày lương − tiền chi tiêu, làm tròn lên 100.000. */
   amount: number;
-  /** Ví Thưởng (số dư của chính nó) trước, rồi phần an tâm theo số dư lớn trước; không tài khoản con / Tích luỹ / có mục tiêu, không tài khoản riêng tư bị giấu với người xem (access UC-504). Σ < amount = phần chưa có nguồn. */
+  /** Ví Thưởng (số dư của chính nó) trước, rồi các tài khoản Dự phòng chưa gắn mục tiêu theo số dư lớn trước; không tài khoản con / Tích luỹ / có mục tiêu, không tài khoản riêng tư bị giấu với người xem (access UC-504). Σ < amount = phần chưa có nguồn. */
   sources: TopUpSource[];
   /** Đích QR; null (vd chỉ có tiền mặt) → "Chuyển vào tiền chi tiêu", không QR. */
   toAccountId: string | null;

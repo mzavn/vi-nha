@@ -21,6 +21,7 @@ import { go, openTx, refresh, setState, toast, useApp, voidEntry } from "../stat
 import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
 import { NeedsNetwork, Sheet } from "../ui/parts";
+import { TxGoalRow } from "./goal-sheets";
 import { ASSET_KINDS, OtherEntrySheet } from "./other-entry-sheet";
 
 export function TxSheet() {
@@ -163,6 +164,9 @@ function TxSheetBody({ id, row, boot }: { id: number; row?: TxRow; boot: Bootstr
           <span class="srow-v">{v}</span>
         </div>
       ))}
+      {tx.meaning === "spend" && tx.status === "active" && !tx.from_interest && (can.edit || can.reassign) && (
+        <TxGoalRow txId={tx.id} accountId={tx.account_id} goalId={tx.goal_id ?? null} onSaved={res.reload} />
+      )}
       {tx.rule_id != null && (
         <div class="srow">
           <span class="srow-s">Tự gán</span>

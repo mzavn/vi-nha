@@ -23,11 +23,12 @@ async function body(c: Context<AppEnv>): Promise<Record<string, unknown>> {
 
 // Mục tiêu Dự phòng và nhóm danh mục (pocket UC-1209, UC-1204) đọc ở services/pockets, cùng một phản hồi (UC-505).
 settingsRoutes.get("/", async (c) => {
-  const { goals, groups } = await pockets.listGoals(c.env.DB, new Date());
+  const { goals, groups, refunds } = await pockets.listGoals(c.env.DB, new Date(), c.get("memberId"));
   return ok(c, {
     ...(await settings.getSettings(c.env, new URL(c.req.url).origin)),
     goals,
     goal_groups: groups,
+    goal_refunds: refunds,
     categoryGroups: await pockets.listCategoryGroups(c.env.DB),
   });
 });

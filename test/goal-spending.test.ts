@@ -74,14 +74,15 @@ describe("chi cho mục tiêu (UC-1209 AC-13)", () => {
 });
 
 describe("ghi goal_id đúng luật (UC-1209 AC-14, UC-101 AC-30)", () => {
-  it("UC-1209 AC-14: goal_id sai tài khoản / sai loại / mục tiêu đã tắt → 400 invalid_goal, không ghi gì; chuyển ra gắn Học tập; tài khoản một mục tiêu tự gắn; tài khoản chung bỏ trống → null; hoàn tiền trừ spent; INSERT thẳng bị trigger huỷ", async () => {
+  it("UC-1209 AC-14: goal_id sai tài khoản (chuyển khoản từ tài khoản khác — khoản chi từ tài khoản khác là kiểu B, UC-1209 AC-28) / sai loại / mục tiêu đã tắt → 400 invalid_goal, không ghi gì; chuyển ra gắn Học tập; tài khoản một mục tiêu tự gắn; tài khoản chung bỏ trống → null; hoàn tiền trừ spent; INSERT thẳng bị trigger huỷ", async () => {
     const big = await spend("tk-tiet-kiem", 7_500_000, { goal_id: "nha-o", at: vnAt("2026-11-12 09:00") });
     raw.exec("UPDATE reserve_goals SET active = 0 WHERE id = 'hieu-hi'");
     const before = txCount();
+    const out = (from: string, goal: string) => call("POST", "/v1/transactions", { meaning: "transfer", amount: 100_000, account_id: from, to_account_id: "cash-husband", goal_id: goal });
     const bad = [
-      await spend("phao", 500_000, { goal_id: "nha-o" }),
+      await out("phao", "nha-o"),
       await call("POST", "/v1/transactions", { meaning: "income", amount: 100_000, account_id: "tk-tiet-kiem", goal_id: "nha-o" }),
-      await spend("tk-tiet-kiem", 100_000, { goal_id: "bao-duong-xe" }),
+      await out("tk-tiet-kiem", "bao-duong-xe"),
       await spend("tk-chung", 100_000, { goal_id: "hieu-hi" }),
     ];
     for (const r of bad) {
@@ -102,15 +103,15 @@ describe("ghi goal_id đúng luật (UC-1209 AC-14, UC-101 AC-30)", () => {
     expect(() =>
       raw
         .prepare(
-          `INSERT INTO transactions (at, amount, meaning, account_id, category_id, week_key, month_key, source, goal_id)
-           VALUES (?, 100000, 'spend', 'phao', 'groceries', '2026-W46', '2026-11', 'manual', 'nha-o')`,
+          `INSERT INTO transactions (at, amount, meaning, account_id, counter_account_id, week_key, month_key, source, goal_id)
+           VALUES (?, 100000, 'transfer', 'phao', 'cash-husband', '2026-W46', '2026-11', 'manual', 'nha-o')`,
         )
         .run(vnAt("2026-11-12 09:00")),
     ).toThrow(/invalid_goal/);
   });
 
   it("UC-101 AC-30: POST /v1/transactions nhận goal_id — 400 invalid_goal khi sai, tự gắn thue ở tài khoản một mục tiêu, null khi bỏ trống ở tài khoản chung; GET /v1/transactions/:id trả goal_id", async () => {
-    expect(err(await spend("phao", 500_000, { goal_id: "nha-o" }))).toEqual([400, "invalid_goal"]);
+    expect(err(await call("POST", "/v1/transactions", { meaning: "transfer", amount: 500_000, account_id: "phao", to_account_id: "cash-husband", goal_id: "nha-o" }))).toEqual([400, "invalid_goal"]);
     const tax = await spend("tk-thue", 300_000);
     expect(tax.json.data.tx.goal_id).toBe("thue");
     const shared = await spend("tk-tiet-kiem", 100_000);
@@ -123,7 +124,7 @@ describe("ghi goal_id đúng luật (UC-1209 AC-14, UC-101 AC-30)", () => {
 });
 
 describe("sửa khoản có goal_id (UC-102 AC-28)", () => {
-  it("UC-102 AC-28: sửa số giữ goal_id → spent theo số mới; sang phao mà vẫn gửi goal_id → 400, khoản cũ giữ; sang phao không goal_id → null, spent 0; huỷ → spent 0", async () => {
+  it("UC-102 AC-28: sửa số giữ goal_id → spent theo số mới; sang chuyển khoản từ phao mà vẫn gửi goal_id → 400, khoản cũ giữ; sang phao không goal_id → null, spent 0; huỷ → spent 0", async () => {
     const first = await spend("tk-tiet-kiem", 7_500_000, { goal_id: "nha-o", at: vnAt("2026-11-12 09:00") });
     const edited = await call<{ tx: Tx }>("POST", `/v1/transactions/${first.json.data.tx.id}/replace`, {
       meaning: "spend", amount: 7_000_000, category_id: "housing", account_id: "tk-tiet-kiem", goal_id: "nha-o", at: vnAt("2026-11-12 09:00"),
@@ -131,7 +132,7 @@ describe("sửa khoản có goal_id (UC-102 AC-28)", () => {
     expect(edited.status).toBe(201);
     expect(goalIn(await reserve(), "nha-o").spent).toBe(7_000_000);
     const id = edited.json.data.tx.id;
-    const wrong = await call("POST", `/v1/transactions/${id}/replace`, { meaning: "spend", amount: 7_000_000, category_id: "housing", account_id: "phao", goal_id: "nha-o" });
+    const wrong = await call("POST", `/v1/transactions/${id}/replace`, { meaning: "transfer", amount: 7_000_000, account_id: "phao", to_account_id: "cash-husband", goal_id: "nha-o" });
     expect(err(wrong)).toEqual([400, "invalid_goal"]);
     expect(raw.prepare("SELECT status, goal_id FROM transactions WHERE id = ?").get(id)).toEqual({ status: "active", goal_id: "nha-o" });
     const moved = await call<{ tx: Tx }>("POST", `/v1/transactions/${id}/replace`, { meaning: "spend", amount: 7_000_000, category_id: "housing", account_id: "phao" });

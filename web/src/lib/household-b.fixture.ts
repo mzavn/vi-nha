@@ -62,16 +62,6 @@ export function pocketsB(over: Partial<PocketsInput> = {}): PocketsView {
         { id: "saving", pocket: "reserve", since: 31_500_000, prevSince: 31_500_000 },
       ],
     },
-    // Ba tháng trọn gần nhất, ghi 30 ngày mỗi tháng cho gọn số: tháng vận hành chuẩn hoá theo ngày (UC-1203) bằng đúng trung bình.
-    operatingSpend: {
-      months: [
-        { start: "2026-08-01", amount: 9_000_000, days: 30 },
-        { start: "2026-09-01", amount: 10_500_000, days: 30 },
-        { start: "2026-10-01", amount: 10_500_000, days: 30 },
-      ],
-      dataStart: "2026-07-01",
-    },
-    peaceTarget: 6,
     ...over,
   });
 }
@@ -107,8 +97,6 @@ export function pocketsShared({ saving = 12_000_000, spent = {} }: { saving?: nu
     debts: [],
     savingsPct: 10,
     history: { since: "2026-11-01", prevSince: "2026-10-01", accounts: [] },
-    operatingSpend: { months: [], dataStart: null },
-    peaceTarget: 6,
   });
 }
 
@@ -139,20 +127,18 @@ export const OPERATING_V23 = [
 
 /**
  * Hộ v2.3: Ví Thưởng BIDV 2.000.000; Phao 4.000.000 có con "Gửi 3 tháng" 20.000.000; MB tiết kiệm 5.000.000 có con "Gửi 6 tháng"
- * 100.000.000 (`matured`: con đã tắt, MB tiết kiệm 108.000.000, lãi 3.000.000); tích luỹ 50.000.000; chi vận hành 13.500.000 / tháng.
+ * 100.000.000 (`matured`: con đã tắt, MB tiết kiệm 108.000.000, lãi 3.000.000); tích luỹ 50.000.000.
  */
 export function pocketsV23({
   operating = OPERATING_V23,
   matured = false,
   spent,
   month,
-  spendMonths = [{ start: "2026-10-01", amount: 13_500_000, days: 30 }],
 }: {
   operating?: { id: string; name: string; balance: number }[];
   matured?: boolean;
   spent?: Record<string, number>;
   month?: Record<string, { amount: number; note: string | null }>;
-  spendMonths?: { start: string; amount: number; days: number }[];
 } = {}): PocketsView {
   const acc = (id: string, name: string, pocket: "savings" | "reserve" | "operating", balance: number, parentId: string | null = null) => ({ id, name, pocket, confirmed: true, balance, parentId });
   return pocketsView({
@@ -169,8 +155,6 @@ export function pocketsV23({
     debts: [],
     savingsPct: 10,
     history: { since: "2026-11-01", prevSince: "2026-10-01", accounts: [] },
-    operatingSpend: { months: spendMonths, dataStart: spendMonths.length ? "2026-10-01" : null },
-    peaceTarget: 6,
     interest: matured ? { "tk-tiet-kiem": 3_000_000 } : {},
   });
 }

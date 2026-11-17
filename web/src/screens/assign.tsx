@@ -178,8 +178,9 @@ function initialRows(log: BankLog, boot: Bootstrap): Row[] {
 function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot: Bootstrap; onClose: () => void; onDone: () => void; wide?: boolean }) {
   const { online, snap } = useApp();
   // "Cho mục tiêu" / "Cho khoản phải trả" / "Từ tiền lãi" (pwa UC-706 AC-39, QĐ2): chỉ log tiền ra — tài khoản của log là tài
-  // khoản tiền ra của chi / chuyển; chuyển sang tài khoản cùng nhóm mẹ + con thì không có chip "Từ tiền lãi".
-  const goalsTo = (toAccountId: string | null) => (log.direction === "out" ? goalChoices(log.account_id, snap?.pockets, { toAccountId }) : null);
+  // khoản tiền ra của chi / chuyển; chuyển sang tài khoản cùng nhóm mẹ + con thì không có chip "Từ tiền lãi". Dòng chi từ tài khoản
+  // không có mục tiêu có thêm hàng thu gọn "Cho mục tiêu ›" (ingest UC-305 AC-39, kiểu B).
+  const goalsTo = (toAccountId: string | null, spend = false) => (log.direction === "out" ? goalChoices(log.account_id, snap?.pockets, { toAccountId, picker: spend }) : null);
   const isIn = log.direction === "in";
   // "Đây là tiền lãi" (QĐ2): log tiền vào của mẹ có mục tiêu / con của nó; bật sẵn khi là khoản gửi.
   const interestOffer = isIn ? incomeInterest(log.account_id, snap?.pockets) : null;
@@ -376,7 +377,7 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
       )}
       {log.direction === "out" && (
         <div style={{ padding: "4px 16px 0" }}>
-          <button type="button" class="btn" style={{ width: "100%" }} onClick={cashWithdrawal}>
+          <button type="button" class="btn" style={{ width: "100%", whiteSpace: "normal", textAlign: "center" }} onClick={cashWithdrawal}>
             Rút tiền mặt chỉ là đổi chỗ, không phải chi tiêu
           </button>
         </div>
@@ -487,7 +488,8 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
           {(r.meaning === "spend" || r.meaning === "transfer") && (
             <GoalRowField
               id={`s-g-${r.key}`}
-              row={goalsTo(r.meaning === "transfer" ? (r.other_account_id ?? null) : null)}
+              row={goalsTo(r.meaning === "transfer" ? (r.other_account_id ?? null) : null, r.meaning === "spend")}
+              accountId={log.account_id}
               value={r.goal_id ?? null}
               onChange={(id) => update(r.key, { goal_id: id })}
             />
@@ -575,7 +577,7 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
         </fieldset>
       ))}
 
-      <div class="field" style={{ justifyContent: "space-between" }}>
+      <div class="field split-row">
           {!interestRow && (
             <button
               type="button"
@@ -586,7 +588,7 @@ function AssignSheet({ log, boot, onClose, onDone, wide }: { log: BankLog; boot:
               Tách thêm dòng
             </button>
           )}
-          <span class={check.ok && !blocked ? "sub-line" : "err"} role="status" style={{ textAlign: "right" }}>
+          <span class={check.ok && !blocked ? "sub-line" : "err"} role="status">
             {noTenant ? "Chọn người thuê." : naming.length > 0 ? "Bấm Thêm người trước khi gán." : check.ok ? `Khớp ${formatVnd(log.amount)}` : check.message}
           </span>
       </div>

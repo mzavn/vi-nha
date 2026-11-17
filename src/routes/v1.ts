@@ -10,6 +10,7 @@ import { debtInterest } from "../services/debts";
 import * as conversion from "../services/conversion";
 import * as ledger from "../services/ledger";
 import * as monthTasks from "../services/month-tasks";
+import * as goals from "../services/goals";
 import { setGoalMonthAmount } from "../services/pockets";
 
 export const v1 = new Hono<AppEnv>();
@@ -274,6 +275,39 @@ v1.put("/goal-month-amounts/:goalId", async (c) => {
   await recordChange(c, "goal.month_amount", `goal:${goal.id}`, { month, amount });
   return ok(c, { goal });
 });
+
+// ── Khớp khoản chi vào mục tiêu (pocket UC-1209 AC-25, AC-27, AC-28, AC-29) ──
+// Chốt / mở lại gọi lại vẫn 200 (mục tiêu lặp N tháng gửi `period_id` của đợt đang xem); nhật ký chỉ khi thật sự đổi.
+const goalStateRoute = (action: typeof goals.closeGoal) => async (c: Context<AppEnv>) => {
+  const b = c.req.header("content-length") === "0" ? {} : await c.req.json().catch(() => ({}));
+  const input = b && typeof b === "object" && !Array.isArray(b) ? (b as Record<string, unknown>) : {};
+  const { goal, audit } = await action(c.env.DB, c.req.param("id")!, input, c.get("memberId"), now());
+  if (audit) await recordChange(c, audit.action, `goal:${goal.id}`, audit.detail);
+  return ok(c, { goal });
+};
+v1.post("/goals/:id/close", goalStateRoute(goals.closeGoal));
+v1.post("/goals/:id/reopen", goalStateRoute(goals.reopenGoal));
+v1.get("/goals/:id/transactions", async (c) => ok(c, await goals.goalTransactions(c.env.DB, c.req.param("id"), c.get("memberId"), now())));
+v1.get("/goals/:id/candidates", async (c) =>
+  ok(c, await goals.goalCandidates(c.env.DB, c.req.param("id"), { q: c.req.query("q"), amount: c.req.query("amount"), from: c.req.query("from"), to: c.req.query("to") }, c.get("memberId"), now())),
+);
+v1.put("/goals/:id/transactions", async (c) => {
+  const { audits, ...result } = await goals.matchGoalTransactions(c.env.DB, c.req.param("id"), await body(c), c.get("memberId"), now());
+  for (const a of audits) await recordChange(c, a.action, `goal:${result.goal.id}`, a.detail);
+  return ok(c, result);
+});
+// Việc chuyển về kiểu B: Đã chuyển / Bỏ qua (lý do bắt buộc) / Mở lại.
+const refundRoute = (action: (db: D1Database, id: number, b: Record<string, unknown>, memberId: string | null, at: Date) => Promise<goals.RefundActionResult>) =>
+  async (c: Context<AppEnv>) => {
+    const id = idParam(c);
+    const b = c.req.header("content-length") === "0" ? {} : await c.req.json().catch(() => ({}));
+    const result = await action(c.env.DB, id, b && typeof b === "object" && !Array.isArray(b) ? (b as Record<string, unknown>) : {}, c.get("memberId"), now());
+    await recordChange(c, result.audit.action, `goal_refund:${id}`, result.audit.detail);
+    return ok(c, { refund: result.refund });
+  };
+v1.post("/goal-refunds/:id/done", refundRoute((db, id, _b, memberId, at) => goals.markRefundDone(db, id, memberId, at)));
+v1.post("/goal-refunds/:id/skip", refundRoute(goals.skipRefund));
+v1.post("/goal-refunds/:id/reopen", refundRoute((db, id, _b, memberId, at) => goals.reopenRefund(db, id, memberId, at)));
 
 // ── Đường của mô hình ví cũ (ADR-123): chia tiền, chốt tháng, lệnh chuyển đã bỏ → 410 ─────────
 const gone = (c: Context<AppEnv>) =>

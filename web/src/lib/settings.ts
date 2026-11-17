@@ -461,7 +461,7 @@ export function memberPayload(f: { name: string; tg_chat_id: string }, current: 
   }));
 }
 
-type ConfigFields = "salary_min_amount" | "interest_max_amount" | "safety_fund_months" | "payday_day";
+type ConfigFields = "salary_min_amount" | "interest_max_amount" | "payday_day";
 
 /** Trần ngưỡng nhắc trích Tích luỹ (`salary_reminder_min`, access UC-507). */
 export const SALARY_REMINDER_MIN_LIMIT = 1e12;
@@ -471,7 +471,6 @@ export function configPayload(f: {
   /** Ngưỡng nhắc trích Tích luỹ (Q1-B, UC-709 AC-55); undefined = bản cài đặt cũ chưa có, không gửi. */
   salary_reminder_min?: number;
   interest_max_amount: number;
-  safety_fund_months: string;
   payday_day: string;
   /** % Tích luỹ khi lương về (UC-507); undefined = bản cài đặt cũ chưa có, không gửi. */
   savings_pct?: string;
@@ -481,8 +480,6 @@ export function configPayload(f: {
   surplus_reward_account?: string;
 }): Result<Required<Pick<SettingsConfig, ConfigFields>> & { salary_reminder_min?: number; savings_pct?: number; surplus_savings_pct?: number; surplus_reward_account?: string | null }> {
   const errors: Errors = {};
-  const months = parseInteger(f.safety_fund_months, 1, 24);
-  if (months === null) errors.safety_fund_months = "Số tháng là số nguyên từ 1 đến 24.";
   if (f.salary_min_amount < 0) errors.salary_min_amount = "Ngưỡng không âm.";
   if (f.salary_reminder_min !== undefined && (!Number.isInteger(f.salary_reminder_min) || f.salary_reminder_min < 0 || f.salary_reminder_min > SALARY_REMINDER_MIN_LIMIT))
     errors.salary_reminder_min = "Ngưỡng là số nguyên không âm.";
@@ -497,7 +494,6 @@ export function configPayload(f: {
     salary_min_amount: f.salary_min_amount,
     ...(f.salary_reminder_min === undefined ? {} : { salary_reminder_min: f.salary_reminder_min }),
     interest_max_amount: f.interest_max_amount,
-    safety_fund_months: months!,
     payday_day: payday!,
     ...(savingsPct === undefined ? {} : { savings_pct: savingsPct! }),
     ...(surplusPct === undefined ? {} : { surplus_savings_pct: surplusPct! }),
@@ -977,9 +973,12 @@ export function fiConfigPayload(f: FiConfigForm, year: number): Result<FiConfig>
   }));
 }
 
-/** Một dòng tóm tắt ở Cài đặt › Tham số: "SWR 3,5% · lạm phát 3,5% · lãi cao từ 15% · Mốc an tâm 6/12/24 tháng". */
+/** Một dòng tóm tắt ở Cài đặt › Tham số: "SWR 3,5% · lạm phát 3,5% · lãi cao từ 15% · Mốc đệm 6/12/24 tháng". */
 export const fiConfigSummary = (c: FiConfig): string =>
-  `SWR ${pctOfBps(c.fi_swr_bps)}% · lạm phát ${pctOfBps(c.fi_inflation_bps)}% · lãi cao từ ${pctOfBps(c.fi_high_interest_bps)}% · Mốc an tâm ${c.fi_safety_months.replace(/,/g, "/")} tháng`;
+  `SWR ${pctOfBps(c.fi_swr_bps)}% · lạm phát ${pctOfBps(c.fi_inflation_bps)}% · lãi cao từ ${pctOfBps(c.fi_high_interest_bps)}% · Mốc đệm ${c.fi_safety_months.replace(/,/g, "/")} tháng`;
+
+/** Ô `fi_safety_months` ở sheet Tài sản & tự do: ba mốc đệm của Thang mốc (UC-1103 công thức 10). */
+export const FI_SAFETY_FIELD = { label: "Mốc đệm (số tháng)", hint: "Ba mốc đệm An tâm · An toàn · Vững vàng (tháng chi), tăng dần." };
 
 // ── Giờ nhắc (cả nhà) ─────────────────────────────────────────────
 
@@ -1135,6 +1134,13 @@ export const AUDIT_ACTION: Record<AuditAction | "income.allocate" | "month.close
   "pockets.confirm": "Xác nhận ngăn tài khoản",
   "goal.order": "Đổi thứ tự mục tiêu",
   "goal.cycle_amount": "Đặt số kỳ này cho khoản phải trả",
+  "goal.close": "Chốt xong mục tiêu",
+  "goal.reopen": "Mở lại mục tiêu",
+  "goal.match": "Khớp khoản chi vào mục tiêu",
+  "goal.unmatch": "Gỡ khoản chi khỏi mục tiêu",
+  "goal_refund.done": "Đã chuyển về (việc chuyển về)",
+  "goal_refund.skip": "Bỏ qua việc chuyển về",
+  "goal_refund.reopen": "Mở lại việc chuyển về",
   "config.update": "Sửa ngưỡng và tỉ lệ",
   "member.create": "Thêm thành viên",
   "member.activate": "Bật lại thành viên",

@@ -40,6 +40,7 @@ import {
   type FeedMode,
   feedFromSuggestion,
   feedFromText,
+  FI_SAFETY_FIELD,
   type FiConfigForm,
   fiConfigPayload,
   fiConfigToForm,
@@ -1137,7 +1138,6 @@ export function ConfigSheet({ d, onClose, onSaved }: { d: SettingsData; onClose:
   const [reminder, setReminder] = useState(config.salary_reminder_min);
   // Bản cài đặt lưu offline từ trước bản lãi tiền gửi thiếu khoá này: mặc định như server.
   const [interest, setInterest] = useState(config.interest_max_amount ?? 10_000);
-  const [months, setMonths] = useState(String(config.safety_fund_months));
   // Bản cài đặt lưu offline từ trước Đợt C thiếu hai khoá này: không hiện ô, không gửi.
   const [surplusPct, setSurplusPct] = useState(config.surplus_savings_pct === undefined ? undefined : String(config.surplus_savings_pct));
   const [reward, setReward] = useState(config.surplus_reward_account ?? "");
@@ -1166,10 +1166,6 @@ export function ConfigSheet({ d, onClose, onSaved }: { d: SettingsData; onClose:
         <AmountInput id="c-interest" value={interest} onChange={setInterest} />
       </Field>
       <Hint>Tiền vào nhỏ hơn mức này mà nội dung trống, chỉ "BankAPINotify" hay có "lãi tiền gửi" thì máy tự ghi là lãi vào chính tài khoản nhận (Thu nhập thụ động). Để 0 là tắt.</Hint>
-      <Field id="c-months" label="Phần an tâm (số tháng vận hành)" error={errors.safety_fund_months}>
-        <input id="c-months" class="ctl money" inputMode="numeric" pattern="[0-9]*" autocomplete="off" value={months} onInput={(ev) => setMonths(ev.currentTarget.value)} {...invalid(errors, "safety_fund_months", "c-months")} />
-      </Field>
-      <Hint>Thẻ Dự phòng ở Hôm nay so phần an tâm với số tháng này (chi vận hành trung bình 3 tháng trọn gần nhất).</Hint>
       <Field id="c-payday" label="Ngày lương" error={errors.payday_day}>
         <input id="c-payday" class="ctl money" inputMode="numeric" pattern="[0-9]*" autocomplete="off" value={payday} onInput={(ev) => setPayday(ev.currentTarget.value)} {...invalid(errors, "payday_day", "c-payday")} />
       </Field>
@@ -1230,7 +1226,6 @@ export function ConfigSheet({ d, onClose, onSaved }: { d: SettingsData; onClose:
               salary_min_amount: salary,
               salary_reminder_min: reminder,
               interest_max_amount: interest,
-              safety_fund_months: months,
               surplus_savings_pct: surplusPct,
               ...(surplusPct === undefined ? {} : { surplus_reward_account: reward }),
               payday_day: payday,
@@ -1263,17 +1258,17 @@ export function FiConfigSheet({ config, onClose, onSaved }: { config: SettingsCo
       {pct("fi-legacy", "legacy", "Lãi thực Tự do 3 %")}
       {pct("fi-high", "highInterest", "Lãi cao từ %/năm")}
       <Hint>Khoản nợ có lãi suất từ mức này xếp vào nhóm Lãi cao ở bảng cân đối.</Hint>
-      <Field id="fi-safe" label="Mốc an tâm (tháng)" error={errors.safetyMonths}>
+      <Field id="fi-safe" label={FI_SAFETY_FIELD.label} error={errors.safetyMonths}>
         <input id="fi-safe" class="ctl money" autocomplete="off" value={f.safetyMonths} onInput={(ev) => set({ safetyMonths: ev.currentTarget.value })} {...invalid(errors, "safetyMonths", "fi-safe")} />
       </Field>
-      <Hint>Ba số tháng chi phí, tăng dần. Khác phần an tâm ở thẻ Dự phòng.</Hint>
+      <Hint>{FI_SAFETY_FIELD.hint}</Hint>
       <Field id="fi-exp" label="Chi phí tháng">
         <AmountInput id="fi-exp" value={f.expense} onChange={(n) => set({ expense: n })} />
       </Field>
       <Field id="fi-must" label="Chi thiết yếu tháng">
         <AmountInput id="fi-must" value={f.expenseMust} onChange={(n) => set({ expenseMust: n })} />
       </Field>
-      <Hint>Để trống là lấy từ sổ (trung bình 3 tháng đã kết thúc).</Hint>
+      <Hint>Để trống là lấy từ sổ (trung bình các tháng đã kết thúc, tối đa 3 tháng gần nhất).</Hint>
       <Field id="fi-birth" label="Năm sinh" error={errors.birthYear}>
         <input id="fi-birth" class="ctl money" inputMode="numeric" autocomplete="off" placeholder="chưa đặt" value={f.birthYear} onInput={(ev) => set({ birthYear: ev.currentTarget.value })} />
       </Field>

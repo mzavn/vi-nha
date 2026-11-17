@@ -23,6 +23,7 @@ import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
 import { Banner, Card, CardHead, Empty, FirstLoadFailed, InfoTip, PageHeader, Sheet, Skeleton, TxRow as TxRowView } from "../ui/parts";
 import { MonthCloseCard } from "./month-close-card";
+import { GoalReviewRows, useGoalReviewCount } from "./goal-sheets";
 import { QrSheet, SavingsDoneRow, SavingsTaskCard } from "./savings-card";
 import { OtherEntrySheet } from "./other-entry-sheet";
 
@@ -129,7 +130,8 @@ function NeedReviewBlock({ snap, rejected }: { snap: Snapshot; rejected: number 
     return amount === null ? [] : [{ name: d.name, amount }];
   });
 
-  const hasItems = rejected > 0 || drift.length > 0 || a.pendingLogs > 0;
+  const goalRows = useGoalReviewCount();
+  const hasItems = rejected > 0 || drift.length > 0 || a.pendingLogs > 0 || goalRows > 0;
   if (!hasItems) return null;
 
   return (
@@ -161,6 +163,7 @@ function NeedReviewBlock({ snap, rejected }: { snap: Snapshot; rejected: number 
             </span>
           </button>
         ))}
+        <GoalReviewRows />
         {a.pendingLogs > 0 && (
           <button type="button" class="srow" onClick={() => go("assign")}>
             <span class="srow-main">

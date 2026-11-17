@@ -26,7 +26,7 @@ describe("trừ tạm khoản chưa đồng bộ vào số đang hiển thị", 
     expect(applyQueue(snapB, [])).toBe(snapB);
   });
 
-  it("UC-704 bước 7a: hàng đợi chi 200.000 từ tài khoản chính và chuyển nội bộ 500.000 sang tài khoản tích luỹ → Vận hành 3.400.000, 117.000/ngày, Tích luỹ 7.000.000, tháng này vẫn +800.000; chi 200.000 từ tài khoản tiết kiệm → phần an tâm 31.300.000, đủ 3,1 tháng; chi 500.000 từ tài khoản học phí → Học phí đã có 3.500.000, phần an tâm không đổi", () => {
+  it("UC-704 AC-12: hàng đợi chi 200.000 từ tài khoản chính và chuyển nội bộ 500.000 sang tài khoản tích luỹ → Vận hành 3.400.000, 117.000/ngày, Tích luỹ 7.000.000, tháng này vẫn +800.000; chi 200.000 từ tài khoản tiết kiệm → chưa gắn mục tiêu 31.300.000 (không số tháng); chi 500.000 từ tài khoản học phí → Học phí đã có 3.500.000, chưa gắn mục tiêu không đổi", () => {
     expect(snapB.nearSpend).toMatchObject({ amount: 4_100_000, daysLeft: 29, perDay: 141_000 });
     const after = applyQueue(snapB, [
       item({ meaning: "spend", amount: 200_000, category_id: "groceries", account_id: "main" }),
@@ -37,7 +37,8 @@ describe("trừ tạm khoản chưa đồng bộ vào số đang hiển thị", 
     expect(after.nearSpend.accounts.find((a) => a.accountId === "main")!.balance).toBe(2_300_000);
     expect(after.pockets.savings).toMatchObject({ total: 7_000_000, change: { amount: 800_000, prevAmount: 700_000 } });
     const reserve = applyQueue(snapB, [item({ meaning: "spend", amount: 200_000, category_id: "groceries", account_id: "saving" })]).pockets.reserve;
-    expect(reserve).toMatchObject({ total: 37_800_000, peace: 31_300_000, peaceMonths: { covered: 3.1, monthly: 10_000_000, months: 3 } });
+    expect(reserve).toMatchObject({ total: 37_800_000, peace: 31_300_000 });
+    expect("peaceMonths" in reserve).toBe(false);
     const goal = applyQueue(snapB, [item({ meaning: "spend", amount: 500_000, category_id: "school", account_id: "tuition-acc" })]).pockets.reserve;
     expect(goal).toMatchObject({ total: 37_500_000, peace: 31_500_000 });
     expect(goal.goals.find((g) => g.id === "tuition")!.held).toBe(3_500_000);
@@ -72,8 +73,6 @@ describe("trừ tạm khoản chưa đồng bộ vào số đang hiển thị", 
       debts: [],
       savingsPct: 10,
       history: { since: "2026-12-01", prevSince: "2026-11-01", accounts: [] },
-      operatingSpend: { months: [], dataStart: null },
-      peaceTarget: 6,
     });
     const ctx = { salaryPayday: "2026-12-10", pendingTasks: 6_160_000 };
     const month = { key: "2026-12", openCount: 1 } as Snapshot["month"];
@@ -91,7 +90,7 @@ describe("trừ tạm khoản chưa đồng bộ vào số đang hiển thị", 
     expect(applyQueue(snapB, [legacy])).toBe(snapB);
   });
 
-  it("UC-704 bước 7a: trừ tạm theo nhóm mẹ + con — chi 15.000.000 từ 'Gửi 6 tháng' gắn Nhà ở → nhóm MB tiết kiệm 90.000.000, Nhà ở đã có 45.000.000 + đã chi 15.000.000; chuyển nội bộ mẹ → con không đổi mục tiêu; sau đáo hạn chi 1.000.000 không chọn → Tập luyện 14.000.000, 'Từ tiền lãi' → tiền lãi 2.000.000, mục tiêu không đổi; chi từ con của Phao trừ phần an tâm, từ con của tài khoản có mục tiêu / Ví Thưởng thì không", () => {
+  it("UC-704 bước 7a: trừ tạm theo nhóm mẹ + con — chi 15.000.000 từ 'Gửi 6 tháng' gắn Nhà ở → nhóm MB tiết kiệm 90.000.000, Nhà ở đã có 45.000.000 + đã chi 15.000.000; chuyển nội bộ mẹ → con không đổi mục tiêu; sau đáo hạn chi 1.000.000 không chọn → Tập luyện 14.000.000, 'Từ tiền lãi' → tiền lãi 2.000.000, mục tiêu không đổi; chi từ con của Phao trừ phần chưa gắn mục tiêu, từ con của tài khoản có mục tiêu / Ví Thưởng thì không", () => {
     const p = pocketsV23();
     const snap = snapOf("2026-11-20", p, nearSpendV23(p));
     const goalOf = (s: Snapshot, id: string) => s.pockets.reserve.goals.find((g) => g.id === id)!;
@@ -174,6 +173,41 @@ describe("trừ tạm khoản chưa đồng bộ vào số đang hiển thị", 
     expect(more.topUp).toMatchObject({ amount: 3_500_000, sources: [{ accountId: "phao", name: "Phao", amount: 3_500_000 }] });
     const hiddenTarget = applyQueue(snapOf("2026-11-20", p, ns, null, server), [item({ meaning: "spend", amount: 1_000_000, category_id: "groceries", account_id: "tk-chi-tieu-chong" })], ["tk-bidv", TOP_UP_TARGET.accountId]);
     expect(hiddenTarget.topUp).toMatchObject({ amount: 3_500_000, toAccountId: null, target: null });
+  });
+});
+
+describe("trừ tạm khoản xếp hàng khi khớp chi mục tiêu (pocket UC-1209 AC-28, AC-30; pwa UC-707 AC-45)", () => {
+  type Goal = Snapshot["pockets"]["reserve"]["goals"][number];
+  const goalOf = (s: Snapshot, id: string) => s.pockets.reserve.goals.find((g) => g.id === id)!;
+  const withGoals = (patch: Record<string, Partial<Goal>>): Snapshot => {
+    const p = pocketsV23();
+    const goals = p.reserve.goals.map((g) => ({ ...g, ...patch[g.id] }) as Goal);
+    return snapOf("2026-11-20", { ...p, reserve: { ...p.reserve, goals } }, nearSpendV23(p));
+  };
+
+  it("UC-707 AC-45: chi 1.200.000 từ VCB chi tiêu vợ gắn Tập luyện (kiểu B) → Tập luyện đã chi 1.200.000, chờ chuyển về 1.200.000, 'Trả từ VCB chi tiêu vợ'; phần chờ trừ khỏi số chia của MB tiết kiệm (Tập luyện đã có 13.800.000); Vận hành giảm", () => {
+    const s = withGoals({});
+    const after = applyQueue(s, [item({ meaning: "spend", amount: 1_200_000, category_id: "gift", account_id: "tk-chi-tieu-vo", goal_id: "tap-luyen" })]);
+    expect(goalOf(after, "tap-luyen")).toMatchObject({ spent: 1_200_000, pendingRefund: 1_200_000, advance: 1_200_000, advanceFrom: ["VCB chi tiêu vợ"], held: 13_800_000 });
+    expect(goalOf(after, "nha-o")).toMatchObject({ held: 60_000_000, spent: 0 });
+    expect(after.pockets.operating.total).toBe(13_800_000);
+  });
+
+  it("UC-707 AC-45: kiểu B chỉ tính tới số mục tiêu còn cần — Học tập cần 30.000.000 đã chi 29.500.000, xếp hàng 1.200.000 từ tài khoản chi tiêu → đã chi 30.000.000, chờ chuyển về 500.000, trả từ 1.200.000", () => {
+    const s = withGoals({ "hoc-tap": { spent: 29_500_000 } });
+    const after = applyQueue(s, [item({ meaning: "spend", amount: 1_200_000, category_id: "gift", account_id: "tk-chi-tieu-chong", goal_id: "hoc-tap" })]);
+    expect(goalOf(after, "hoc-tap")).toMatchObject({ spent: 30_000_000, pendingRefund: 500_000, advance: 1_200_000, advanceFrom: ["MB chi tiêu chồng"] });
+  });
+
+  it("UC-707 AC-45: Nhà ở và Học tập đã chốt → chi 1.000.000 từ MB tiết kiệm không gửi goal_id tự gắn mục tiêu chưa chốt còn lại (Tập luyện); gửi goal_id của mục tiêu đã chốt → không tính (server từ chối 409)", () => {
+    const s = withGoals({ "nha-o": { closed: true }, "hoc-tap": { closed: true } });
+    const auto = applyQueue(s, [item({ meaning: "spend", amount: 1_000_000, category_id: "gym", account_id: "tk-tiet-kiem" })]);
+    expect(goalOf(auto, "tap-luyen").spent).toBe(1_000_000);
+    const toClosed = applyQueue(s, [item({ meaning: "spend", amount: 1_000_000, category_id: "rent", account_id: "tk-tiet-kiem", goal_id: "nha-o" })]);
+    expect(goalOf(toClosed, "nha-o").spent).toBe(0);
+    expect(goalOf(toClosed, "tap-luyen").spent).toBe(0);
+    const open = applyQueue(withGoals({}), [item({ meaning: "spend", amount: 1_000_000, category_id: "gym", account_id: "tk-tiet-kiem" })]);
+    expect(goalOf(open, "tap-luyen").spent).toBe(0);
   });
 });
 

@@ -80,6 +80,10 @@ export interface Refs {
   salaryReminderMin?: number;
   /** Mục tiêu trả thẳng từ tiền chi tiêu đang dùng, theo thứ tự ưu tiên (ADR-141). `loadRefs` luôn điền. */
   operatingGoalIds?: string[];
+  /** Mục tiêu tài khoản đang dùng đã gắn tài khoản — nhận khoản chi từ tài khoản khác (kiểu B, UC-1209 AC-28). `loadRefs` luôn điền. */
+  accountGoalIds?: string[];
+  /** Mục tiêu đã chốt xong trong kỳ hiện tại (`goalClosedInPeriod`, UC-1209 AC-30): không nhận khoản mới. `loadRefs` luôn điền. */
+  closedGoalIds?: string[];
 }
 
 export class DomainError extends Error {

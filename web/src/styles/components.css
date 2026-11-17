@@ -777,6 +777,17 @@ table.data tr.total td {
     flex: none;
   }
 
+/* Màn Gán, nút "Tách thêm dòng" cạnh dòng trạng thái (UC-706 AC-42): nút giữ đủ bề rộng chữ, dòng trạng thái co và xuống dòng. */
+.split-row > .btn {
+    flex: none;
+  }
+
+.split-row > [role="status"] {
+    flex: 0 1 auto;
+    min-width: 0;
+    text-align: right;
+  }
+
 .ctl {
     border: 1px solid var(--line-strong);
     background: var(--surface);
@@ -877,6 +888,12 @@ select.ctl {
     gap: var(--s3);
     min-height: 44px;
     cursor: pointer;
+  }
+
+/* Ô check nằm trong .field: thắng `flex: none` của nhãn ô để chữ co và xuống dòng thay vì đẩy ô check ra ngoài lề (máy 320px). */
+.field > label.check {
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
 .check input {

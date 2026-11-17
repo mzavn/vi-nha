@@ -18,6 +18,7 @@ import { Money } from "../ui/money";
 import { Card, Banner, Empty, FirstLoadFailed, PageHeader, Skeleton } from "../ui/parts";
 import { LogRow } from "./assign";
 import { MonthCloseCard } from "./month-close-card";
+import { GoalReviewRows, useGoalReviewCount } from "./goal-sheets";
 import { SavingsTaskCard } from "./savings-card";
 import { OtherEntrySheet } from "./other-entry-sheet";
 import { FreshnessRow, NearSpendCard, NearStatusCard } from "./today";
@@ -30,7 +31,8 @@ export function TodayDesk() {
   const rejected = app.queue.filter((q) => q.memberId === app.member?.id && q.status === "rejected").length;
   const a = snap?.attention;
   const convert = snap ? conversionBanner(snap.conversion) : null;
-  const hasTodo = !!a && (!!convert || rejected > 0 || a.drift.some((d) => driftOf(d) !== null) || a.pendingLogs > 0);
+  const goalRows = useGoalReviewCount();
+  const hasTodo = !!a && (!!convert || rejected > 0 || a.drift.some((d) => driftOf(d) !== null) || a.pendingLogs > 0 || goalRows > 0);
 
   return (
     <>
@@ -90,7 +92,7 @@ function Todo({ snap, rejected, convert }: { snap: Snapshot; rejected: number; c
     const amount = driftOf(d);
     return amount === null ? [] : [{ accountId: d.accountId, name: d.name, amount }];
   });
-  const total = (convert ? 1 : 0) + rejected + drift.length + a.pendingLogs;
+  const total = (convert ? 1 : 0) + rejected + drift.length + a.pendingLogs + useGoalReviewCount();
   const SHOW = 5;
 
   return (
@@ -142,6 +144,7 @@ function Todo({ snap, rejected, convert }: { snap: Snapshot; rejected: number; c
           </>
         )}
 
+        <GoalReviewRows head />
         {a.pendingLogs > 0 && (
           <>
             <div class="set-sub">

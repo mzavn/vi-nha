@@ -6,7 +6,7 @@
 
 import { limitFigures, NEAR_LIMIT_PCT, weeklyRhythm, type LimitNudge } from "../domain/look-back";
 import type { MonthClose } from "../domain/month-tasks";
-import { blessingFor, type PeaceMonths, type PocketGoal, type PocketsView, type ShortDebtItem } from "../domain/pockets";
+import { blessingFor, type PocketGoal, type PocketsView, type ShortDebtItem } from "../domain/pockets";
 import type { NearSpend, TopUp } from "../domain/snapshot";
 import type { PushText } from "../services/push";
 import { escapeHtml } from "./telegram";
@@ -58,9 +58,6 @@ export function formatMoney(amount: number): string {
   const grouped = Math.abs(rounded).toLocaleString("vi-VN");
   return `${rounded < 0 ? MINUS : ""}${grouped} ₫`;
 }
-
-/** `3,2` — một chữ số thập phân, dấu phẩy kiểu vi-VN. */
-const formatDecimal1 = (n: number) => n.toFixed(1).replace(".", ",");
 
 /** `2.000.000` — số tiền không kèm "₫", cho các mục bản ngắn kiểu "Mua sắm 1.200.000/1.000.000 ₫". */
 const plainMoney = (amount: number) => formatMoney(amount).replace(" ₫", "");
@@ -114,9 +111,6 @@ export interface DailyMessageInput {
    * không vào dòng Mục tiêu.
    */
   reserveGoals: Pick<PocketGoal, "name" | "held" | "target" | "spent">[];
-  /** Phần an tâm (`reserve.peace`), âm = thiếu. */
-  peace: number;
-  peaceMonths: Pick<PeaceMonths, "covered" | "target">;
   /** Nợ ngắn hạn cần trả (`pockets.shortDebt`) — dòng nợ ngắn hạn luôn có: còn nợ thì nhắc, hết thì lời chúc. */
   shortDebt: Pick<PocketsView["shortDebt"], "total" | "count"> & { items: Pick<ShortDebtItem, "heldFor">[] };
   /** Ngày VN hôm nay (`YYYY-MM-DD`) — chọn lời chúc. */
@@ -213,8 +207,6 @@ export function dailyMessage(input: DailyMessageInput): NotifyMessage {
   const goalChips = input.reserveGoals.flatMap((g) =>
     g.held === null || g.target === null || g.target <= 0 ? [] : [`${escapeHtml(g.name)} ${Math.max(0, Math.min(100, Math.floor(((g.held + g.spent) * 100) / g.target)))}%`],
   );
-  if (input.peace < 0) goalChips.push(`Phần an tâm thiếu ${formatMoney(-input.peace)}`);
-  else if (input.peace > 0 && input.peaceMonths.covered !== null) goalChips.push(`Phần an tâm đủ ${formatDecimal1(input.peaceMonths.covered)}/${input.peaceMonths.target} tháng`);
   if (goalChips.length > 0) lines.push(`Mục tiêu: ${goalChips.join(" · ")}`);
 
   const short = input.shortDebt;

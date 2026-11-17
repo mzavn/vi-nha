@@ -53,7 +53,7 @@ describe("cron 07:00 VN: gửi tin & chống gửi trùng", () => {
     const now = new Date("2026-09-22T00:00:00Z"); // thứ Ba, còn 18 ngày tới ngày lương 10/10
     await daily(env, now);
     const [{ text }] = sentMessages();
-    // Không có phần an tâm (tài khoản Dự phòng còn lại là Ví Thưởng); Thuế thu nhập theo % và Bảo dưỡng xe chưa gắn tài khoản không vào dòng Mục tiêu.
+    // Tin không còn mục phần an tâm; Thuế thu nhập theo % và Bảo dưỡng xe chưa gắn tài khoản không vào dòng Mục tiêu.
     expect(text).toBe(
       ["Tiền vận hành đã hết (0 ₫), còn 18 ngày", "Mục tiêu: Học phí 0%", "Không nợ ngắn hạn nào. Giữ nhịp này nhé", "Đối soát: khớp"].join("\n"),
     );
@@ -67,7 +67,7 @@ describe("cron 07:00 VN: gửi tin & chống gửi trùng", () => {
     const lines = sentMessages()[0]!.text.split("\n");
     // Không có khoản chắc chắn nào vượt tiền vận hành → không nhắc chuyển thêm (ADR-141, không ăn tiêu ước tính).
     expect(lines[0]).toBe("Vận hành 4.100.000 ₫ · chi khoảng 141.000 ₫/ngày tới ngày lương 10/12 (còn 29 ngày)");
-    expect(lines).toContain("Mục tiêu: Trả nợ Vay người thân 100% · Học phí 66% · Bảo dưỡng xe 20% · Phần an tâm đủ 3,2/6 tháng");
+    expect(lines).toContain("Mục tiêu: Trả nợ Vay người thân 100% · Học phí 66% · Bảo dưỡng xe 20%");
     expect(lines).toContain("Nợ ngắn hạn còn 8.000.000 ₫ (2 khoản) · đã có 1.000.000 ₫ trong tài khoản Trả nợ · tất cả khoản nợ còn 58.000.000 ₫ (3 khoản)");
 
     b.exec("DELETE FROM notifications WHERE kind = 'daily'; UPDATE accounts SET pocket = 'savings' WHERE id = 'vcb-wife'");

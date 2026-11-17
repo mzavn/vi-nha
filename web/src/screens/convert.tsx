@@ -346,7 +346,7 @@ function GoalsStep({ data, offline, postStep, reloadSettings }: StepProps) {
         </div>
         {peace !== undefined && (
           <div class="field">
-            <span class="k">Phần an tâm: {formatVnd(peace)}</span>
+            <span class="k">Chưa gắn mục tiêu: {formatVnd(peace)}</span>
           </div>
         )}
         <Hint>Để sau: mục tiêu giữ nguyên, chưa có việc nạp ở ngày lương; thẻ Dự phòng nhắc mở tài khoản thật.</Hint>
