@@ -1,11 +1,12 @@
-// Khớp khoản chi vào mục tiêu Dự phòng (pwa UC-715 AC-21, UC-702 AC-45, UC-707 AC-45 / AC-46; ingest UC-305 AC-39): bộ chọn
-// "Cho mục tiêu", sheet mục tiêu (khoản đã khớp, gỡ, chốt / mở lại), sheet Khớp giao dịch (tích nhiều khoản), sheet việc chuyển
+// Khớp khoản chi vào mục tiêu Dự phòng (pwa UC-715 AC-21, UC-702 AC-45 / AC-46, UC-707 AC-45 / AC-46 / AC-49 / AC-50; ingest UC-305
+// AC-39): bộ chọn "Cho mục tiêu", sheet mục tiêu (khoản đã khớp, gỡ, chốt / mở lại, bỏ qua khoản chưa khớp), sheet Khớp giao dịch (tích nhiều khoản), sheet việc chuyển
 // về (QR, Đã chuyển, Bỏ qua). Mọi thao tác ghi thẳng lên server nên cần mạng; toast có Hoàn tác. Chữ và trạng thái ở
 // `lib/goal-match.ts` / `lib/pocket-cards.ts` (thuần, có test).
 
 import { useEffect, useState } from "preact/hooks";
 import { api, errorText } from "../lib/api";
 import {
+  canSkip,
   candidateQuery,
   candidatesPath,
   candidateTag,
@@ -15,6 +16,7 @@ import {
   goalNameOf,
   goalPickerGroups,
   goalTxPath,
+  type GoalTxBody,
   pickableGoalIds,
   matchedRowSub,
   matchFooter,
@@ -28,6 +30,10 @@ import {
   refundToast,
   REOPEN_LABEL,
   reopenToast,
+  SKIP_ONE_LABEL,
+  skipAllIds,
+  skipAllLabel,
+  skipToast,
   undoRequests,
   unmatchToast,
 } from "../lib/goal-match";
@@ -37,7 +43,7 @@ import { reserveCard, type ReserveGoalRow } from "../lib/pocket-cards";
 import { TOAST_UNDO_DONE } from "../lib/undo";
 import type { GoalCandidate, GoalMatchedTx, GoalMatchResult } from "../lib/types";
 import { useResource } from "../state/resource";
-import { refresh, toast, useApp, viewSnapshot } from "../state/store";
+import { refresh, setState, toast, useApp, viewSnapshot } from "../state/store";
 import { Icon } from "../ui/icons";
 import { Money } from "../ui/money";
 import { NeedsNetwork, Sheet, Skeleton } from "../ui/parts";
@@ -61,12 +67,30 @@ async function undoMatch(res: Pick<GoalMatchResult, "changes">) {
 }
 
 /** PUT khớp / gỡ một mục tiêu, tải lại số, toast có Hoàn tác. Lỗi ném ra cho nơi gọi hiện. */
-export async function putGoalTx(goalId: string, goalName: string, body: { add?: number[]; remove?: number[] }): Promise<GoalMatchResult> {
+export async function putGoalTx(goalId: string, goalName: string, body: GoalTxBody): Promise<GoalMatchResult> {
   const res = await api.put<GoalMatchResult>(goalTxPath(goalId), body);
   await refresh(true);
   const text = body.add?.length ? matchToast(goalName, res) : unmatchToast(goalName, res.changes.length);
   toast(text, { label: "Hoàn tác", run: () => void undoMatch(res) });
   return res;
+}
+
+/** Bỏ qua khoản chưa khớp (UC-707 AC-49, AC-50): PUT `{ skip }`, tải lại số, toast có Hoàn tác (`{ unskip }` đúng các khoản vừa đổi). */
+async function skipGoalTx(goalId: string, ids: number[]): Promise<void> {
+  const res = await api.put<GoalMatchResult>(goalTxPath(goalId), { skip: ids });
+  await refresh(true);
+  const undo = async () => {
+    try {
+      if (res.skipped.length > 0) await api.put(goalTxPath(goalId), { unskip: res.skipped });
+      await refresh(true);
+      toast(TOAST_UNDO_DONE);
+    } catch (err) {
+      toast(errorText(err));
+    }
+  };
+  // Đếm khoản thật sự đổi: bấm lại lúc danh sách chưa tải xong thì không có gì để hoàn tác.
+  if (res.skipped.length === 0) return;
+  toast(skipToast(res.skipped.length), { label: "Hoàn tác", run: () => void undo() });
 }
 
 // ── Bộ chọn "Cho mục tiêu" (UC-715 AC-21, UC-305 AC-39) ───────────
@@ -128,9 +152,10 @@ export function GoalRowSub({ row }: { row: ReserveGoalRow }) {
 
 /**
  * Sheet mục tiêu — một sheet duy nhất (UC-707 AC-45 / AC-46): đầu là tóm tắt + chi tiết; "Đã khớp" gỡ từng khoản (có Hoàn tác);
- * "Khớp thêm" có ô tìm tại chỗ (ngày / số tiền, kể cả khoản từ tài khoản khác) và danh sách tích; chân dính một nút chính: tích
- * ≥ 1 khoản → "Khớp N khoản · Y", chưa tích → "Chốt xong" / "Mở lại". `choices` (mở từ Cần xem): mục tiêu chưa chốt của tài khoản
- * chung để đổi mục tiêu ngay trong sheet; mặc định mục tiêu đầu.
+ * "Khớp thêm" có ô tìm tại chỗ (ngày / số tiền, kể cả khoản từ tài khoản khác) và danh sách tích, mỗi hàng chưa gắn mục tiêu có
+ * "Không cho mục tiêu", cuối danh sách mặc định "Bỏ qua N khoản còn lại" (AC-49, AC-50); chân dính một nút chính: tích ≥ 1 khoản →
+ * "Khớp N khoản · Y", chưa tích → "Chốt xong" / "Mở lại". `choices` (mở từ Cần xem): mục tiêu chưa chốt của tài khoản chung để đổi
+ * mục tiêu ngay trong sheet; mặc định mục tiêu đầu (cửa sổ sớm nhất, UC-702 AC-46).
  */
 export function GoalSheet({ goalId, choices, onClose }: { goalId: string; choices?: string[]; onClose: () => void }) {
   const app = useApp();
@@ -155,6 +180,7 @@ export function GoalSheet({ goalId, choices, onClose }: { goalId: string; choice
   const items = list.data?.items ?? [];
   const candidates = cands.data?.items ?? [];
   const footer = matchFooter(picked);
+  const skipAll = skipAllIds(candidates, { searching: text.trim() !== "" || query !== "", picked: picked.length });
 
   async function run(work: () => Promise<void>) {
     setBusy(true);
@@ -174,6 +200,11 @@ export function GoalSheet({ goalId, choices, onClose }: { goalId: string; choice
       await putGoalTx(current, goal.name, { add: picked.map((c) => c.tx_id) });
       setPicked([]);
       setText("");
+    });
+  const skip = (ids: number[]) =>
+    run(async () => {
+      await skipGoalTx(current, ids);
+      setPicked((p) => p.filter((x) => !ids.includes(x.tx_id)));
     });
   const switchGoal = (id: string) => {
     setCurrent(id);
@@ -281,30 +312,46 @@ export function GoalSheet({ goalId, choices, onClose }: { goalId: string; choice
             (candidates.length === 0 ? (
               <p class="note pad">{query ? "Không có khoản nào khớp tìm kiếm trong kỳ của mục tiêu." : "Không còn khoản chi nào chưa khớp trong kỳ của mục tiêu."}</p>
             ) : (
-              candidates.map((c) => {
-                const tag = candidateTag(c, current);
-                return (
-                  <label key={c.tx_id} class="row match-row">
-                    <span class="t">
-                      <span class="tt">{c.note ? maskAmounts(c.note) : "Khoản chi"}</span>
-                      <span class="s">
-                        {shortDate(c.at)}
-                        {tag && ` · ${tag}`}
-                      </span>
-                    </span>
-                    <span class="v num">
-                      <Money value={c.amount} unit={false} tone={false} />
-                    </span>
-                    <input
-                      type="checkbox"
-                      aria-label={`Chọn khoản ${shortDate(c.at)}`}
-                      checked={picked.some((x) => x.tx_id === c.tx_id)}
-                      disabled={busy}
-                      onChange={(e) => setPicked((p) => (e.currentTarget.checked ? [...p, c] : p.filter((x) => x.tx_id !== c.tx_id)))}
-                    />
-                  </label>
-                );
-              })
+              <>
+                {candidates.map((c) => {
+                  const tag = candidateTag(c, current);
+                  return (
+                    <div key={c.tx_id} class="row match-row">
+                      <label class="match-pick">
+                        <span class="t">
+                          <span class="tt">{c.note ? maskAmounts(c.note) : "Khoản chi"}</span>
+                          <span class="s">
+                            {shortDate(c.at)}
+                            {tag && ` · ${tag}`}
+                          </span>
+                        </span>
+                        <span class="v num">
+                          <Money value={c.amount} unit={false} tone={false} />
+                        </span>
+                        <input
+                          type="checkbox"
+                          aria-label={`Chọn khoản ${shortDate(c.at)}`}
+                          checked={picked.some((x) => x.tx_id === c.tx_id)}
+                          disabled={busy}
+                          onChange={(e) => setPicked((p) => (e.currentTarget.checked ? [...p, c] : p.filter((x) => x.tx_id !== c.tx_id)))}
+                        />
+                      </label>
+                      {canSkip(c) && (
+                        <button type="button" class="btn btn-ghost match-undo" disabled={locked} aria-label={`${SKIP_ONE_LABEL}: khoản ${shortDate(c.at)}`} onClick={() => void skip([c.tx_id])}>
+                          {SKIP_ONE_LABEL}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+                {skipAll.length > 0 && (
+                  <div class="match-skip-all">
+                    <button type="button" class="btn btn-ghost" disabled={locked} onClick={() => void skip(skipAll)}>
+                      {skipAllLabel(skipAll.length)}
+                    </button>
+                  </div>
+                )}
+              </>
             ))}
         </>
       ) : (
@@ -433,14 +480,18 @@ export function GoalReviewRows({ head }: { head?: boolean }) {
   const app = useApp();
   const snap = viewSnapshot(app);
   const nameOf = useAccountName();
-  const [open, setOpen] = useState<{ kind: "match"; goalIds: string[] } | { kind: "refund"; id: number } | null>(null);
   const rows = needReviewGoalRows(snap?.pockets, nameOf);
   if (rows.length === 0) return null;
   return (
     <>
       {head && <div class="set-sub">Mục tiêu Dự phòng</div>}
       {rows.map((r) => (
-        <button type="button" key={r.key} class="srow" onClick={() => setOpen(r.kind === "unmatched" ? { kind: "match", goalIds: r.goalIds } : { kind: "refund", id: r.refundId })}>
+        <button
+          type="button"
+          key={r.key}
+          class="srow"
+          onClick={() => setState({ goalReview: r.kind === "unmatched" ? { kind: "match", goalIds: r.goalIds } : { kind: "refund", id: r.refundId } })}
+        >
           <span class="srow-main">
             <span class="srow-t">{r.title}</span>
             {r.kind === "refund" && <span class="srow-s">{r.sub}</span>}
@@ -451,10 +502,17 @@ export function GoalReviewRows({ head }: { head?: boolean }) {
           </span>
         </button>
       ))}
-      {open?.kind === "match" && <GoalSheet goalId={open.goalIds[0]!} choices={open.goalIds} onClose={() => setOpen(null)} />}
-      {open?.kind === "refund" && <RefundSheet refundId={open.id} onClose={() => setOpen(null)} />}
     </>
   );
+}
+
+/** Sheet mở từ hàng Cần xem — đặt ở gốc app (cạnh TxSheet) để vẫn mở khi hàng Cần xem về 0 (UC-702 AC-46, UC-707 AC-50). */
+export function GoalReviewSheet() {
+  const open = useApp().goalReview;
+  const close = () => setState({ goalReview: null });
+  if (open?.kind === "match") return <GoalSheet goalId={open.goalIds[0]!} choices={open.goalIds} onClose={close} />;
+  if (open?.kind === "refund") return <RefundSheet refundId={open.id} onClose={close} />;
+  return null;
 }
 
 /** Số hàng Cần xem của khớp chi (đếm "việc" ở Cần xem máy tính). */

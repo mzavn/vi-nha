@@ -398,6 +398,8 @@ export interface SettingsGoalGroup {
   pending?: number;
   free?: number;
   unmatched?: number;
+  /** Mục tiêu chưa chốt có cửa sổ bắt đầu sớm nhất của nhóm đang đếm `unmatched`; không đếm → null. */
+  unmatched_goal_id?: string | null;
 }
 
 /** Một khoản đã khớp vào mục tiêu (GET /v1/goals/:id/transactions, UC-707 AC-45); `kind` `other` = trả từ tài khoản khác (kiểu B). */
@@ -412,7 +414,7 @@ export interface GoalMatchedTx {
   refund_id: number | null;
 }
 
-/** Một khoản có thể khớp (GET /v1/goals/:id/candidates, UC-707 AC-46): `own` = từ tài khoản của mục tiêu. */
+/** Một khoản có thể khớp (GET /v1/goals/:id/candidates, UC-707 AC-46): `own` = từ tài khoản của mục tiêu; `skipped` = đã bỏ qua (chỉ khi tìm). */
 export interface GoalCandidate {
   tx_id: number;
   at: string;
@@ -423,19 +425,23 @@ export interface GoalCandidate {
   goal_id: string | null;
   goal_name: string | null;
   own: boolean;
+  skipped: boolean;
 }
 
-/** Một lần đổi `goal_id` của PUT /v1/goals/:id/transactions — đủ để Hoàn tác. */
+/** Một lần đổi `goal_id` của PUT /v1/goals/:id/transactions — đủ để Hoàn tác; `from_skipped` = khoản đã bỏ qua trước lúc khớp. */
 export interface GoalTxChange {
   tx_id: number;
   from_goal_id: string | null;
   to_goal_id: string | null;
+  from_skipped?: true;
 }
 
-/** Kết quả PUT /v1/goals/:id/transactions. */
+/** Kết quả PUT /v1/goals/:id/transactions; `skipped` / `unskipped` = khoản thật sự đổi cờ bỏ qua. */
 export interface GoalMatchResult {
   goal: unknown;
   changes: GoalTxChange[];
+  skipped: number[];
+  unskipped: number[];
   refunds_created: { id: number; amount: number; from_account_id: string; to_account_id: string }[];
   refunds_voided: number[];
 }

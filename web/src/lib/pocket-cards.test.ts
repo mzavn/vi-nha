@@ -304,8 +304,8 @@ describe("hàng mục tiêu khi khớp chi (pwa UC-707 AC-45)", () => {
         ...p.reserve,
         goals: [...list, ...extra],
         groups: [
-          { accountId: "t", name: "VCB chung", balance: 2_350_000, need: 4_500_000, spent: 1_200_000, short: 1_150_000, extra: 0, goalIds: list.map((x) => x.id), childIds: [], interest: 0, pending: 0, free: 0, unmatched: 0 },
-          ...extra.map((x) => ({ accountId: x.accountId!, name: "MB tiết kiệm", balance: 7_500_000, need: x.need, spent: x.spent, short: 0, extra: 0, goalIds: [x.id], childIds: [], interest: 0, pending: 0, free: 0, unmatched: 0 })),
+          { accountId: "t", name: "VCB chung", balance: 2_350_000, need: 4_500_000, spent: 1_200_000, short: 1_150_000, extra: 0, goalIds: list.map((x) => x.id), childIds: [], interest: 0, pending: 0, free: 0, unmatched: 0, unmatchedGoalId: null },
+          ...extra.map((x) => ({ accountId: x.accountId!, name: "MB tiết kiệm", balance: 7_500_000, need: x.need, spent: x.spent, short: 0, extra: 0, goalIds: [x.id], childIds: [], interest: 0, pending: 0, free: 0, unmatched: 0, unmatchedGoalId: null })),
         ],
         refunds: [],
       },

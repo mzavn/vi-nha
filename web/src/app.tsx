@@ -11,6 +11,7 @@ import { toastDuration } from "./lib/toast";
 import { Assign } from "./screens/assign";
 import { Convert } from "./screens/convert";
 import { Entry } from "./screens/entry";
+import { GoalReviewSheet } from "./screens/goal-sheets";
 import { LedgerBook } from "./screens/ledger-book";
 import { Login } from "./screens/login";
 import { Lock } from "./screens/lock";
@@ -141,6 +142,7 @@ export function App() {
       )}
 
       <TxSheet />
+      <GoalReviewSheet />
       <Toast />
     </>
   );
@@ -164,6 +166,7 @@ function DesktopApp() {
         {app.tab === "convert" && <Convert />}
       </main>
       <TxSheet />
+      <GoalReviewSheet />
       <Toast />
     </div>
   );

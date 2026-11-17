@@ -209,6 +209,14 @@ describe("trừ tạm khoản xếp hàng khi khớp chi mục tiêu (pocket UC-
     const open = applyQueue(withGoals({}), [item({ meaning: "spend", amount: 1_000_000, category_id: "gym", account_id: "tk-tiet-kiem" })]);
     expect(goalOf(open, "tap-luyen").spent).toBe(0);
   });
+
+  it("UC-702 AC-46: dựng lại nhóm khi có khoản chờ gửi giữ unmatched và unmatchedGoalId của server (Cần xem vẫn mở sheet ở mục tiêu cửa sổ sớm nhất)", () => {
+    const s = withGoals({});
+    const groups = s.pockets.reserve.groups.map((g) => (g.accountId === "tk-tiet-kiem" ? { ...g, unmatched: 3, unmatchedGoalId: "hoc-tap" } : g));
+    const snap = { ...s, pockets: { ...s.pockets, reserve: { ...s.pockets.reserve, groups } } } as Snapshot;
+    const after = applyQueue(snap, [item({ meaning: "spend", amount: 100_000, category_id: "gym", account_id: "tk-tiet-kiem" })]);
+    expect(after.pockets.reserve.groups.find((g) => g.accountId === "tk-tiet-kiem")).toMatchObject({ unmatched: 3, unmatchedGoalId: "hoc-tap" });
+  });
 });
 
 describe("toast sau khi ghi (pwa UC-703)", () => {

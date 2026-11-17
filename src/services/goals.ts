@@ -27,7 +27,7 @@ import {
   type QrAccount,
   type RefundRow,
 } from "./pockets";
-import { assertTxChangeable, hiddenAccountIds, hiddenTxSql, txNotFound } from "./privacy";
+import { assertTxChangeable, assertTxReadable, hiddenAccountIds, hiddenTxSql, txNotFound } from "./privacy";
 
 type Row = Record<string, unknown>;
 const rows = <T = Row>(r: D1Result) => (r.results ?? []) as T[];
@@ -189,10 +189,10 @@ const CANDIDATE_LIMIT = 200;
 const isDay = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(`${s}T00:00:00Z`));
 
 /**
- * `GET /v1/goals/:id/candidates?q=&amount=&from=&to=` (UC-707 AC-46, Q2, Q3, Q4): mặc định khoản chi / chuyển ra khỏi nhóm từ tài
- * khoản của mục tiêu, chưa gắn mục tiêu, trong kỳ, mới trước; có `q` (ghi chú / tên tài khoản), `amount` (đúng số), `from`–`to` (ngày
- * VN) thì mở rộng sang khoản chi từ tài khoản khác (kiểu B, chỉ mục tiêu để ở tài khoản) và khoản đang ở mục tiêu khác — vẫn trong
- * kỳ. Không rút từ lãi, không bị giấu với người xem.
+ * `GET /v1/goals/:id/candidates?q=&amount=&from=&to=` (UC-707 AC-46, UC-1209 AC-33, Q2, Q3, Q4): mặc định khoản chi / chuyển ra khỏi
+ * nhóm từ tài khoản của mục tiêu, chưa gắn mục tiêu, chưa bỏ qua, trong kỳ, mới trước; có `q` (ghi chú / tên tài khoản), `amount` (đúng
+ * số), `from`–`to` (ngày VN) thì mở rộng sang khoản chi từ tài khoản khác (kiểu B, chỉ mục tiêu để ở tài khoản), khoản đang ở mục tiêu
+ * khác và khoản đã bỏ qua (`skipped`) — vẫn trong kỳ. Không rút từ lãi, không bị giấu với người xem.
  */
 export async function goalCandidates(db: D1Database, id: string, q: { q?: string; amount?: string; from?: string; to?: string }, viewerId: string | null, now: Date) {
   await liveGoal(db, id, now);
@@ -225,12 +225,13 @@ export async function goalCandidates(db: D1Database, id: string, q: { q?: string
       filters.push("t.at < ?");
       binds.push(vnMidnight(addDays(q.to, 1)));
     }
-  } else filters.push(own, "t.goal_id IS NULL");
-  const list = rows<{ tx_id: number; at: string; note: string | null; amount: number; account_id: string; account_name: string | null; counter_account_id: string | null; goal_id: string | null; goal_name: string | null; own: number }>(
+  } else filters.push(own, "t.goal_id IS NULL", "t.goal_skipped_at IS NULL");
+  const list = rows<{ tx_id: number; at: string; note: string | null; amount: number; account_id: string; account_name: string | null; counter_account_id: string | null; goal_id: string | null; goal_name: string | null; own: number; skipped: number }>(
     await db
       .prepare(
         `WITH w AS (${goalWindowSql(now)})
-         SELECT t.id AS tx_id, t.at, t.note, t.amount, t.account_id, a.name AS account_name, t.counter_account_id, t.goal_id, o.name AS goal_name, ${ownSql("t", "g")} AS own
+         SELECT t.id AS tx_id, t.at, t.note, t.amount, t.account_id, a.name AS account_name, t.counter_account_id, t.goal_id, o.name AS goal_name, ${ownSql("t", "g")} AS own,
+                t.goal_skipped_at IS NOT NULL AS skipped
          FROM reserve_goals g JOIN w ON w.id = g.id JOIN transactions t LEFT JOIN accounts a ON a.id = t.account_id LEFT JOIN reserve_goals o ON o.id = t.goal_id
          WHERE g.id = ? AND t.status = 'active' AND t.from_interest = 0 AND ${inWindowSql("t")} AND ${filters.join(" AND ")} AND NOT ${hiddenTx.sql}
          ORDER BY t.at DESC, t.id DESC LIMIT ${CANDIDATE_LIMIT}`,
@@ -249,50 +250,79 @@ export async function goalCandidates(db: D1Database, id: string, q: { q?: string
       goal_id: r.goal_id,
       goal_name: r.goal_name,
       own: Number(r.own) === 1,
+      skipped: Number(r.skipped) === 1,
     })),
   };
 }
 
-// ── Khớp / gỡ khớp (UC-1209 AC-27, AC-28) ───────────────────────────
+// ── Khớp / gỡ khớp / bỏ qua (UC-1209 AC-27, AC-28, AC-32) ───────────
+
+const MATCH_LIMIT = 200;
 
 const idList = (v: unknown, field: string): number[] => {
   if (v === undefined || v === null) return [];
   if (!Array.isArray(v) || v.some((x) => typeof x !== "number" || !Number.isInteger(x) || x <= 0)) fail("invalid_input", "Danh sách mã giao dịch là các số nguyên dương.", 400, field);
-  return [...new Set(v as number[])];
+  const ids = [...new Set(v as number[])];
+  if (ids.length > MATCH_LIMIT) fail("invalid_input", `Tối đa ${MATCH_LIMIT} khoản một lần.`, 400, field);
+  return ids;
 };
 
 export interface MatchResult {
   goal: GoalView;
-  changes: { tx_id: number; from_goal_id: string | null; to_goal_id: string | null }[];
+  changes: { tx_id: number; from_goal_id: string | null; to_goal_id: string | null; from_skipped?: true }[];
+  skipped: number[];
+  unskipped: number[];
   refunds_created: { id: number; amount: number; from_account_id: string; to_account_id: string }[];
   refunds_voided: number[];
   audits: Audit[];
 }
 
 /**
- * `PUT /v1/goals/:id/transactions { add?, remove? }` (UC-1209 AC-27, AC-28, Q2, Q4): khớp thêm / gỡ khớp nhiều khoản một lần — UPDATE
- * `goal_id` tại chỗ (khoản ngân hàng không qua gỡ gán), khoản đang ở mục tiêu khác thì chuyển sang; `changes` để Hoàn tác. Mục tiêu đã
- * chốt mà có `add` → 409 `goal_closed`; khoản bị giấu / không có → 404; khoản thu / mua tài sản / đã huỷ / rút từ lãi / không hợp
- * mục tiêu → 400 `invalid_goal`; ngoài kỳ → 400 `outside_window`. Sau đó đối soát việc chuyển về (`afterWrite`).
+ * `PUT /v1/goals/:id/transactions { add?, remove?, skip?, unskip? }` (UC-1209 AC-27, AC-28, AC-32, Q2, Q4): khớp thêm / gỡ khớp nhiều
+ * khoản một lần — UPDATE `goal_id` tại chỗ (khoản ngân hàng không qua gỡ gán), khoản đang ở mục tiêu khác thì chuyển sang; `changes`
+ * để Hoàn tác (`from_skipped` khi khoản đã bỏ qua trước lúc khớp). Rồi bỏ qua (`skip`: khoản chi / chuyển ra khỏi nhóm từ tài khoản của
+ * mục tiêu, sau `remove` không gắn mục tiêu nào, trong kỳ) / bỏ bỏ-qua (`unskip`: chỉ cần khoản có và không bị giấu); `skipped` /
+ * `unskipped` = khoản thật sự đổi. Mỗi danh sách ≤ 200 id, truyền một tham số JSON (`json_each`, giới hạn 100 tham số của D1); trùng
+ * `skip`–`add`, `skip`–`unskip`, `remove`–`unskip` → 400 `invalid_input`. Mục tiêu đã chốt mà có `add` / `skip` → 409 `goal_closed`;
+ * khoản bị giấu / không có → 404; khoản thu / mua tài sản / đã huỷ / rút từ lãi / không hợp mục tiêu → 400 `invalid_goal`; ngoài kỳ →
+ * 400 `outside_window`. Kiểm hết rồi mới ghi, một batch. Sau đó đối soát việc chuyển về (`afterWrite`).
  */
 export async function matchGoalTransactions(db: D1Database, id: string, b: Record<string, unknown>, viewerId: string | null, now: Date): Promise<MatchResult> {
   const g = await liveGoal(db, id, now);
   const add = idList(b.add, "add");
-  const remove = idList(b.remove, "remove").filter((x) => !add.includes(x));
-  if (add.length > 0 && Number(g.closed) === 1) fail("goal_closed", GOAL_CLOSED, 409);
+  const asked = idList(b.remove, "remove");
+  const remove = asked.filter((x) => !add.includes(x));
+  const skip = idList(b.skip, "skip");
+  const unskip = idList(b.unskip, "unskip");
+  const overlap = (x: number[], y: number[]) => x.some((v) => y.includes(v));
+  if (overlap(skip, add) || overlap(skip, unskip) || overlap(asked, unskip)) fail("invalid_input", "Một khoản không vừa bỏ qua vừa khớp, hay vừa bỏ qua vừa hoàn tác.", 400, "skip");
+  if ((add.length > 0 || skip.length > 0) && Number(g.closed) === 1) fail("goal_closed", GOAL_CLOSED, 409);
   const hidden = await hiddenAccountIds(db, viewerId);
-  const ids = [...add, ...remove];
-  type TxCheck = { id: number; status: string; meaning: string; account_id: string | null; counter_account_id: string | null; goal_id: string | null; from_interest: number; own: number; other: number; inWin: number };
+  const changing = [...new Set([...add, ...remove, ...skip])];
+  const ids = [...new Set([...changing, ...unskip])];
+  type TxCheck = {
+    id: number;
+    status: string;
+    meaning: string;
+    account_id: string | null;
+    counter_account_id: string | null;
+    goal_id: string | null;
+    goal_skipped_at: string | null;
+    from_interest: number;
+    own: number;
+    other: number;
+    inWin: number;
+  };
   const found = ids.length
     ? rows<TxCheck>(
         await db
           .prepare(
             `WITH w AS (${goalWindowSql(now)})
-             SELECT t.id, t.status, t.meaning, t.account_id, t.counter_account_id, t.goal_id, t.from_interest, ${ownSql("t", "g")} AS own,
+             SELECT t.id, t.status, t.meaning, t.account_id, t.counter_account_id, t.goal_id, t.goal_skipped_at, t.from_interest, ${ownSql("t", "g")} AS own,
                     (g.pays_from = 'account' AND t.account_id NOT IN (${goalGroupSql("g")})) AS other, (${inWindowSql("t")}) AS inWin
-             FROM reserve_goals g JOIN w ON w.id = g.id JOIN transactions t WHERE g.id = ? AND t.id IN (${ids.map(() => "?").join(", ")})`,
+             FROM reserve_goals g JOIN w ON w.id = g.id JOIN transactions t WHERE g.id = ? AND t.id IN (SELECT value FROM json_each(?))`,
           )
-          .bind(id, ...ids)
+          .bind(id, JSON.stringify(ids))
           .all(),
       )
     : [];
@@ -300,7 +330,8 @@ export async function matchGoalTransactions(db: D1Database, id: string, b: Recor
   for (const txId of ids) {
     const t = byId.get(txId);
     if (!t) throw txNotFound();
-    assertTxChangeable(t, hidden);
+    if (changing.includes(txId)) assertTxChangeable(t, hidden);
+    else assertTxReadable(t, hidden);
   }
   const changes: MatchResult["changes"] = [];
   for (const txId of add) {
@@ -308,25 +339,52 @@ export async function matchGoalTransactions(db: D1Database, id: string, b: Recor
     const fits = Number(t.own) === 1 ? t.meaning === "spend" || t.meaning === "transfer" : Number(t.other) === 1 && t.meaning === "spend";
     if (t.status !== "active" || !fits || Number(t.from_interest) === 1) fail("invalid_goal", INVALID_GOAL);
     if (Number(t.inWin) !== 1) fail("outside_window", "Khoản này ngoài kỳ của mục tiêu.");
-    if (t.goal_id !== id) changes.push({ tx_id: txId, from_goal_id: t.goal_id, to_goal_id: id });
+    if (t.goal_id !== id) changes.push({ tx_id: txId, from_goal_id: t.goal_id, to_goal_id: id, ...(t.goal_skipped_at !== null ? { from_skipped: true as const } : {}) });
   }
   for (const txId of remove) if (byId.get(txId)!.goal_id === id) changes.push({ tx_id: txId, from_goal_id: id, to_goal_id: null });
-  if (changes.length > 0) {
+  for (const txId of skip) {
+    const t = byId.get(txId)!;
+    const goalAfter = remove.includes(txId) && t.goal_id === id ? null : t.goal_id;
+    const fits = Number(t.own) === 1 && (t.meaning === "spend" || t.meaning === "transfer");
+    if (t.status !== "active" || !fits || goalAfter !== null || Number(t.from_interest) === 1) fail("invalid_goal", INVALID_GOAL);
+    if (Number(t.inWin) !== 1) fail("outside_window", "Khoản này ngoài kỳ của mục tiêu.");
+  }
+  const skipped = skip.filter((txId) => byId.get(txId)!.goal_skipped_at === null);
+  const unskipped = unskip.filter((txId) => byId.get(txId)!.goal_skipped_at !== null);
+  const matched = changes.filter((c) => c.to_goal_id === id);
+  const unmatched = changes.filter((c) => c.to_goal_id === null);
+  const setGoal = (goalId: string | null, list: MatchResult["changes"]) =>
+    db.prepare("UPDATE transactions SET goal_id = ? WHERE status = 'active' AND id IN (SELECT value FROM json_each(?))").bind(goalId, JSON.stringify(list.map((c) => c.tx_id)));
+  const writes = [
+    ...(matched.length ? [setGoal(id, matched)] : []),
+    ...(unmatched.length ? [setGoal(null, unmatched)] : []),
+    ...(skipped.length
+      ? [
+          db
+            .prepare("UPDATE transactions SET goal_skipped_at = ? WHERE status = 'active' AND goal_id IS NULL AND goal_skipped_at IS NULL AND id IN (SELECT value FROM json_each(?))")
+            .bind(now.toISOString(), JSON.stringify(skipped)),
+        ]
+      : []),
+    ...(unskipped.length
+      ? [db.prepare("UPDATE transactions SET goal_skipped_at = NULL WHERE goal_skipped_at IS NOT NULL AND id IN (SELECT value FROM json_each(?))").bind(JSON.stringify(unskipped))]
+      : []),
+  ];
+  if (writes.length > 0) {
     try {
-      await db.batch(changes.map((c) => db.prepare("UPDATE transactions SET goal_id = ? WHERE id = ? AND status = 'active'").bind(c.to_goal_id, c.tx_id)));
+      await db.batch(writes);
     } catch (err) {
       rethrowEntryTrigger(err);
       throw err;
     }
   }
   const { refundsCreated, refundsVoided } = await afterWrite(db, now);
-  const matched = changes.filter((c) => c.to_goal_id === id);
-  const unmatched = changes.filter((c) => c.to_goal_id === null);
   const audits: Audit[] = [
     ...(matched.length ? [{ action: "goal.match" as const, detail: { changes: matched } }] : []),
     ...(unmatched.length ? [{ action: "goal.unmatch" as const, detail: { changes: unmatched } }] : []),
+    ...(skipped.length ? [{ action: "goal.skip" as const, detail: { tx_ids: skipped } }] : []),
+    ...(unskipped.length ? [{ action: "goal.unskip" as const, detail: { tx_ids: unskipped } }] : []),
   ];
-  return { goal: await readGoal(db, id, now, viewerId), changes, refunds_created: refundsCreated, refunds_voided: refundsVoided, audits };
+  return { goal: await readGoal(db, id, now, viewerId), changes, skipped, unskipped, refunds_created: refundsCreated, refunds_voided: refundsVoided, audits };
 }
 
 // ── Việc chuyển về kiểu B (UC-1209 AC-28, AC-29) ─────────────────────

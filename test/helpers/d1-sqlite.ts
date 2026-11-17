@@ -34,7 +34,7 @@ export function migratedDb(until = "9999"): DatabaseSync {
 /**
  * Thêm các cột / bảng mà code hiện tại đọc (0044: tài khoản con, nơi để tiền của mục tiêu, rút từ tiền lãi; 0045: danh mục
  * của khoản phải trả; 0046: lương theo khoản, việc tháng, chia dư, số riêng theo tháng, cột đổi tên; 0049: chốt xong, đợt mục tiêu
- * lặp, việc chuyển về) vào DB còn ở schema cũ — để test migration cũ đo số bằng service hiện tại trước / sau migration của nó.
+ * lặp, việc chuyển về; 0050: bỏ qua khoản chưa khớp) vào DB còn ở schema cũ — để test migration cũ đo số bằng service hiện tại trước / sau migration của nó.
  * Không thêm trigger, không đổi schema_version.
  */
 export function addCurrentColumns(db: DatabaseSync): void {
@@ -59,6 +59,7 @@ export function addCurrentColumns(db: DatabaseSync): void {
     CREATE TABLE goal_refunds (id INTEGER PRIMARY KEY, goal_id TEXT NOT NULL, spend_tx_id INTEGER NOT NULL, from_account_id TEXT NOT NULL, to_account_id TEXT NOT NULL,
       amount INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'open', reason TEXT, by_member_id TEXT, created_at TEXT, updated_at TEXT, code TEXT);
     CREATE TABLE goal_refund_tx (refund_id INTEGER NOT NULL, tx_id INTEGER NOT NULL, amount INTEGER NOT NULL, by_code INTEGER NOT NULL DEFAULT 0, created_at TEXT, PRIMARY KEY (refund_id, tx_id));
+    ALTER TABLE transactions ADD COLUMN goal_skipped_at TEXT;
   `);
 }
 

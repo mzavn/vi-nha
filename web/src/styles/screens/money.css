@@ -616,6 +616,22 @@ table.data.transfer-table .qr-row td {
     accent-color: var(--fg);
   }
 
+/* Hàng gợi ý (UC-707 AC-49): chữ + số + ô tích là một label; nút "Không cho mục tiêu" nằm ngoài label để không tích nhầm. */
+.match-pick {
+    display: flex;
+    align-items: center;
+    gap: var(--s3);
+    flex: 1 1 0;
+    min-width: 0;
+    cursor: pointer;
+  }
+
+/* "Bỏ qua N khoản còn lại" (UC-707 AC-50): nút chữ ở cuối danh sách, chữ thẳng mép chữ các hàng (đệm 14px của nút = đệm hàng). */
+.match-skip-all {
+    border-top: 1px solid var(--line);
+    padding: var(--s1) 0;
+  }
+
 /* Hàng thu gọn "Cho mục tiêu ›" ở Gán (ingest UC-305 AC-39): trông như ô chọn, chữ trái, "›" phải. */
 .ctl.goal-pick {
     display: flex;

@@ -6,6 +6,15 @@ bản cài cũ vẫn lên được bình thường (kể cả nâng database t�
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
 trước (xem README › Cập nhật bản mới).
 
+## v3.2.0 — 17/11/2026
+
+- **Bỏ qua khoản chưa khớp mục tiêu:** trong sheet mục tiêu, mỗi khoản gợi ý có nút "Không cho mục tiêu", cuối danh sách có "Bỏ qua N khoản
+  còn lại" — dùng cho các khoản tiêu từ trước; có Hoàn tác. Khoản đã bỏ qua không còn tính ở Hôm nay › Cần xem, ô tìm vẫn ra (nhãn "đã bỏ
+  qua"), khớp lại thì tự thôi bỏ qua. Số tiền không đổi.
+- Khớp hơn 98 khoản một lần vào mục tiêu không còn lỗi.
+
+Có nâng cấp database: `0050` (đánh dấu khoản đã bỏ qua). Database tự nâng khi cập nhật; không xoá dòng nào.
+
 ## v3.1.0 — 17/11/2026
 
 - **Khớp khoản chi vào mục tiêu:** chạm một mục tiêu ở Tài khoản › Ba ngăn để xem các khoản đã khớp và tích thêm khoản ngay trong sheet

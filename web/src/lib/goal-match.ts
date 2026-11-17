@@ -94,22 +94,33 @@ export const goalTxPath = (goalId: string) => `/v1/goals/${encodeURIComponent(go
 export const closeBody = (g: { repeatMonths: number | null; periodId?: number | null }): { period_id?: number | null } =>
   (g.repeatMonths ?? 0) > 1 ? { period_id: g.periodId ?? null } : {};
 
+/** Thân PUT /v1/goals/:id/transactions: `add` / `remove` chạy trước, rồi `skip` / `unskip` (UC-1209 AC-32). */
+export type GoalTxBody = { add?: number[]; remove?: number[]; skip?: number[]; unskip?: number[] };
+
 /**
- * Hoàn tác một lần khớp / gỡ (`changes` của PUT): khoản trước đó chưa gắn → gỡ khỏi mục tiêu mới; trước đó ở mục tiêu khác → khớp
- * lại vào mục tiêu đó (server tự chuyển, Q2). Gom theo mục tiêu, giữ thứ tự gặp.
+ * Hoàn tác một lần khớp / gỡ (`changes` của PUT): khoản trước đó chưa gắn → gỡ khỏi mục tiêu mới (đã bỏ qua trước lúc khớp →
+ * bỏ qua lại trong cùng lần gọi, UC-1209 AC-33); trước đó ở mục tiêu khác → khớp lại vào mục tiêu đó (server tự chuyển, Q2). Gom
+ * theo mục tiêu, giữ thứ tự gặp.
  */
-export function undoRequests(changes: GoalTxChange[]): { path: string; body: { add?: number[]; remove?: number[] } }[] {
-  const out = new Map<string, { path: string; body: { add?: number[]; remove?: number[] } }>();
+export function undoRequests(changes: GoalTxChange[]): { path: string; body: GoalTxBody }[] {
+  const out = new Map<string, { path: string; body: GoalTxBody }>();
   for (const c of changes) {
     const [goalId, op] = c.from_goal_id ? ([c.from_goal_id, "add"] as const) : c.to_goal_id ? ([c.to_goal_id, "remove"] as const) : [null, null];
     if (!goalId || !op) continue;
     const key = `${goalId}:${op}`;
     const req = out.get(key) ?? { path: goalTxPath(goalId), body: {} };
     req.body[op] = [...(req.body[op] ?? []), c.tx_id];
+    if (op === "remove" && c.from_skipped) req.body.skip = [...(req.body.skip ?? []), c.tx_id];
     out.set(key, req);
   }
   return [...out.values()];
 }
+
+/** "Đã bỏ qua N khoản" (UC-707 AC-49, AC-50). */
+export const skipToast = (count: number): string => `Đã bỏ qua ${count} khoản`;
+/** Nút cuối danh sách gợi ý mặc định (UC-707 AC-50). */
+export const skipAllLabel = (count: number): string => `Bỏ qua ${count} khoản còn lại`;
+export const SKIP_ONE_LABEL = "Không cho mục tiêu";
 
 // ── Hôm nay › Cần xem (UC-702 AC-45) ───────────────────────────────
 
@@ -119,15 +130,18 @@ export type NeedReviewGoalRow =
 
 /**
  * Hàng "N khoản ở {T} chưa khớp mục tiêu" (chỉ nhóm có từ hai mục tiêu chưa chốt — server đặt `unmatched`; `goalIds` = mục tiêu
- * chưa chốt để chọn khi khớp) và "Chuyển X từ {T} về {V}" cho mỗi việc chuyển về đang mở (X = phần còn thiếu).
+ * chưa chốt để chọn khi khớp, mục tiêu có cửa sổ sớm nhất `unmatchedGoalId` đứng đầu — sheet mở ở đó, UC-702 AC-46) và "Chuyển X từ
+ * {T} về {V}" cho mỗi việc chuyển về đang mở (X = phần còn thiếu).
  */
 export function needReviewGoalRows(p: Pockets | null | undefined, nameOf: (accountId: string) => string): NeedReviewGoalRow[] {
   if (!p) return [];
   const byId = new Map(p.reserve.goals.map((g) => [g.id, g]));
   const unmatched: NeedReviewGoalRow[] = p.reserve.groups.flatMap((grp) => {
     const open = grp.goalIds.filter((id) => byId.has(id) && !byId.get(id)!.closed);
+    const first = grp.unmatchedGoalId && open.includes(grp.unmatchedGoalId) ? grp.unmatchedGoalId : null;
+    const goalIds = first ? [first, ...open.filter((id) => id !== first)] : open;
     const n = grp.unmatched ?? 0;
-    return n > 0 && open.length >= 2 ? [{ kind: "unmatched" as const, key: `unmatched-${grp.accountId}`, accountId: grp.accountId, goalIds: open, title: `${n} khoản ở ${grp.name} chưa khớp mục tiêu` }] : [];
+    return n > 0 && open.length >= 2 ? [{ kind: "unmatched" as const, key: `unmatched-${grp.accountId}`, accountId: grp.accountId, goalIds, title: `${n} khoản ở ${grp.name} chưa khớp mục tiêu` }] : [];
   });
   const refunds: NeedReviewGoalRow[] = (p.reserve.refunds ?? [])
     .filter((r) => r.status === "open")
@@ -165,10 +179,25 @@ export function refundToast(action: "done" | "skip", r: Refund, nameOf: (account
 /** Dòng phụ hàng khoản đã khớp: "20/11 · VCB chung"; kiểu B: "2/11 · trả từ V chi tiêu". */
 export const matchedRowSub = (t: GoalMatchedTx): string => `${shortDate(t.at)} · ${t.kind === "other" ? `trả từ ${t.account_name}` : t.account_name}`;
 
-/** Nhãn của một khoản có thể khớp: từ tài khoản khác "từ {tài khoản} · sẽ chờ chuyển về"; đang ở mục tiêu khác "đang ở {mục tiêu}". */
+/** Nhãn của một khoản có thể khớp: từ tài khoản khác "từ {tài khoản} · sẽ chờ chuyển về"; đang ở mục tiêu khác "đang ở {mục tiêu}"; đã bỏ qua "đã bỏ qua". */
 export function candidateTag(c: GoalCandidate, goalId: string): string | null {
-  const parts = [c.own ? null : `từ ${c.account_name} · sẽ chờ chuyển về`, c.goal_id && c.goal_id !== goalId ? `đang ở ${c.goal_name ?? c.goal_id}` : null].filter(Boolean);
+  const parts = [
+    c.own ? null : `từ ${c.account_name} · sẽ chờ chuyển về`,
+    c.goal_id && c.goal_id !== goalId ? `đang ở ${c.goal_name ?? c.goal_id}` : null,
+    c.skipped ? "đã bỏ qua" : null,
+  ].filter(Boolean);
   return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+/** Hàng gợi ý có nút "Không cho mục tiêu" (UC-707 AC-49): từ tài khoản của mục tiêu, chưa gắn mục tiêu nào, chưa bỏ qua. */
+export const canSkip = (c: GoalCandidate): boolean => c.own && c.goal_id === null && !c.skipped;
+
+/**
+ * Id gửi đi của "Bỏ qua N khoản còn lại" (UC-707 AC-50) = các hàng đang hiện bỏ qua được — chỉ ở danh sách mặc định (ô tìm trống),
+ * chưa tích ô nào; rỗng = ẩn nút.
+ */
+export function skipAllIds(candidates: GoalCandidate[], o: { searching: boolean; picked: number }): number[] {
+  return o.searching || o.picked > 0 ? [] : candidates.filter(canSkip).map((c) => c.tx_id);
 }
 
 /** Chân sheet "Khớp N khoản · Y"; chưa chọn → null. */

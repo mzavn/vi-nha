@@ -1,5 +1,5 @@
 -- ============================================================
---  PROFIT FIRST — HỘ GIA ĐÌNH · SCHEMA (D1 / SQLite)  v1.47
+--  PROFIT FIRST — HỘ GIA ĐÌNH · SCHEMA (D1 / SQLite)  v1.50
 --  v1.2 (20/9/2026): danh mục · tiền mặt · đa TK · thuế taxable ·
 --  lệnh chuyển tiền · thông báo
 --  v1.3 (21/9/2026): ngân sách theo kỳ chuyển sang query có tham số ·
@@ -115,6 +115,8 @@
 --                     tháng) · goal_refunds (việc chuyển về kiểu B, mã CV, trg_goal_refunds_reason(_insert) → reason_required)
 --                     + goal_refund_tx · trg_tx_goal(_insert) dựng lại (khoản chi từ tài khoản ngoài nhóm) ·
 --                     trg_tx_goal_closed(_insert) → goal_closed
+--  v1.50 (17/11/2026): bỏ qua khoản chưa khớp mục tiêu — transactions.goal_skipped_at (người xác nhận khoản không cho mục
+--                     tiêu nào) · trg_tx_goal_skip_clear (đặt goal_id thì xoá cờ)
 -- ============================================================
 --  NGUYÊN TẮC ENCODE:
 --   1. Hai lớp: bank_logs (thô, BẤT BIẾN) vs transactions (đã diễn giải)
@@ -293,6 +295,7 @@ CREATE TABLE transactions (
   from_interest INTEGER NOT NULL DEFAULT 0 CHECK (from_interest IN (0,1)),  -- chi / chuyển ra khỏi nhóm mẹ + con, lấy từ tiền lãi (v1.44, ADR-140)
   is_salary    INTEGER NOT NULL DEFAULT 0 CHECK (is_salary IN (0,1)),  -- income: khoản lương, có nhắc ① trích Tích luỹ (v1.46, pocket UC-1205)
   rule_id      INTEGER REFERENCES rules(id),           -- mẫu đã tự gán khoản này (v1.48, ingest UC-307 AC-25); NULL = không do mẫu
+  goal_skipped_at TEXT,                                -- spend / transfer chưa gắn mục tiêu: người xác nhận không cho mục tiêu nào (v1.50, BR-07); NULL = chưa bỏ qua
   CHECK (meaning <> 'spend'  OR category_id IS NOT NULL)
 );
 CREATE INDEX idx_tx_cat          ON transactions(category_id, month_key) WHERE status='active';
@@ -1044,6 +1047,12 @@ WHEN NEW.goal_id IS NOT NULL AND NEW.goal_id IS NOT OLD.goal_id
 BEGIN
   SELECT RAISE(ABORT, 'goal_closed');
 END;
+-- Đặt goal_id (mọi đường ghi) thì xoá cờ bỏ qua (v1.50). Không đệ quy: recursive_triggers tắt, điều kiện đã sai sau lần một.
+CREATE TRIGGER trg_tx_goal_skip_clear AFTER UPDATE OF goal_id ON transactions
+WHEN NEW.goal_id IS NOT NULL AND NEW.goal_skipped_at IS NOT NULL
+BEGIN
+  UPDATE transactions SET goal_skipped_at = NULL WHERE id = NEW.id;
+END;
 -- Tài khoản con (v1.44, ADR-140): một tầng, mẹ và con đều là ngân hàng, mẹ đang dùng và không ở Vận hành, con không SePay,
 --  không là Ví Thưởng, không có con, không gắn mục tiêu đang dùng; con luôn cùng ngăn / xác nhận / riêng tư / chủ với mẹ
 --  (sửa mẹ thì con theo trong cùng câu ghi); mẹ có con đang dùng không tắt, không sang Vận hành, không đổi loại.
@@ -1443,4 +1452,4 @@ CREATE TABLE goal_refund_tx (
 CREATE INDEX idx_goal_refund_tx ON goal_refund_tx(tx_id);
 
 -- Phiên bản schema — /v1/health đọc từ đây
-INSERT INTO config (k,v) VALUES ('schema_version','1.49');
+INSERT INTO config (k,v) VALUES ('schema_version','1.50');

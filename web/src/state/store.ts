@@ -61,6 +61,11 @@ export interface AppState {
   version: number;
   /** Giao dịch đang mở ở sheet chi tiết (UC-715): id, kèm dòng sổ nếu danh sách đã có sẵn. */
   txOpen: { id: number; row?: TxRow } | null;
+  /**
+   * Sheet mở từ Cần xem › mục tiêu Dự phòng (pwa UC-702 AC-45, AC-46): sống ở gốc app để không đóng khi hàng Cần xem biến mất
+   * (bỏ qua / khớp khoản cuối, UC-707 AC-50).
+   */
+  goalReview: { kind: "match"; goalIds: string[] } | { kind: "refund"; id: number } | null;
   /** Khoản chi đang sửa ở màn Nhập, và màn quay về khi sửa xong / bỏ sửa. */
   editTx: { tx: TxRow; back: Tab } | null;
   /** Bộ lọc đang xem ở Sổ giao dịch (UC-716) — giữ khi rời màn rồi quay lại, và trên địa chỉ `#ledger?…` để F5 giữ; null = tháng hiện tại, không lọc. */
@@ -101,6 +106,7 @@ let state: AppState = {
   lastEntry: null,
   version: 0,
   txOpen: null,
+  goalReview: null,
   editTx: null,
   book: route.ledger ? bookFromHashQuery(route.ledger, new Date()) : null,
   updateReady: false,
@@ -471,7 +477,7 @@ export const lastMemberId = (): string | null => {
 /** Về màn đăng nhập (chưa có phiên, phiên hết hạn): PIN gắn với phiên của người đó nên xoá luôn (pwa UC-719). */
 function toLogin() {
   clearPin(deviceStorage());
-  setState({ phase: "login", member: null, locked: false, txOpen: null, editTx: null, entryPreset: null, book: null });
+  setState({ phase: "login", member: null, locked: false, txOpen: null, goalReview: null, editTx: null, entryPreset: null, book: null });
 }
 
 /** Người khác vào máy này: xoá mọi số liệu đã cache của người trước (kể cả cache API của service worker). */
@@ -558,7 +564,7 @@ export async function signedOut(): Promise<void> {
   await cacheClear();
   if ("caches" in window) await caches.delete("vi-nha-api").catch(() => false);
   lastEntryQueued = null;
-  setState({ phase: "login", member: null, locked: false, boot: null, snap: null, stale: false, lastEntry: null, txOpen: null, editTx: null, entryPreset: null, book: null });
+  setState({ phase: "login", member: null, locked: false, boot: null, snap: null, stale: false, lastEntry: null, txOpen: null, goalReview: null, editTx: null, entryPreset: null, book: null });
 }
 
 // ── Che số tiền trên máy này (pwa UC-718) ─────────────────────────

@@ -1138,6 +1138,8 @@ export const AUDIT_ACTION: Record<AuditAction | "income.allocate" | "month.close
   "goal.reopen": "Mở lại mục tiêu",
   "goal.match": "Khớp khoản chi vào mục tiêu",
   "goal.unmatch": "Gỡ khoản chi khỏi mục tiêu",
+  "goal.skip": "Bỏ qua khoản chưa khớp mục tiêu",
+  "goal.unskip": "Hoàn tác bỏ qua khoản chưa khớp mục tiêu",
   "goal_refund.done": "Đã chuyển về (việc chuyển về)",
   "goal_refund.skip": "Bỏ qua việc chuyển về",
   "goal_refund.reopen": "Mở lại việc chuyển về",

@@ -199,6 +199,8 @@ export interface GoalGroupView {
   pending: number;
   free: number;
   unmatched: number;
+  /** Mục tiêu chưa chốt có cửa sổ bắt đầu sớm nhất của nhóm đang đếm `unmatched` (bằng nhau → ưu tiên trước); không đếm → null. */
+  unmatched_goal_id: string | null;
 }
 
 /** 00:00 VN của ngày VN chứa thời điểm SQL `col` (ISO hoặc "YYYY-MM-DD HH:MM:SS" UTC), viết ISO như cột `transactions.at`. */
@@ -359,23 +361,25 @@ export function refundView(r: RefundRow, accounts: QrAccount[], hidden: string[]
   };
 }
 
-/** Phần khớp chi của từng mục tiêu, việc chuyển về để hiện và `unmatched` theo tài khoản mẹ — cho snapshot và `GET /v1/settings`. */
+/** Phần khớp chi của từng mục tiêu, việc chuyển về để hiện, `unmatched` và `unmatchedGoalId` theo tài khoản mẹ — cho snapshot và `GET /v1/settings`. */
 export interface GoalMatchState {
   extras: (id: string) => Pick<PocketGoalInput, "pendingRefund" | "advance" | "advanceFrom">;
   refunds: GoalRefundView[];
   unmatched: Record<string, number>;
+  unmatchedGoalId: Record<string, string>;
 }
 
 /**
  * Đọc khoản chi kiểu B trong cửa sổ (`advance`, `advanceFrom`), việc chuyển về chưa huỷ (`pendingRefund` = Σ phần còn thiếu của việc
- * đang mở; hiện việc đang mở hoặc có khoản chi trong cửa sổ) và `unmatched` (UC-1209 AC-27, AC-28; UC-702 AC-45): nhóm có từ hai mục
- * tiêu chưa chốt → số khoản chi / chuyển ra khỏi nhóm, còn hiệu lực, chưa gắn mục tiêu, không rút từ lãi, từ đầu cửa sổ sớm nhất của
- * các mục tiêu chưa chốt, không bị giấu với người xem.
+ * đang mở; hiện việc đang mở hoặc có khoản chi trong cửa sổ) và `unmatched` (UC-1209 AC-27, AC-28, AC-33; UC-702 AC-45): nhóm có từ hai
+ * mục tiêu chưa chốt → số khoản chi / chuyển ra khỏi nhóm, còn hiệu lực, chưa gắn mục tiêu, chưa bỏ qua, không rút từ lãi, từ đầu cửa
+ * sổ sớm nhất của các mục tiêu chưa chốt, không bị giấu với người xem; `unmatchedGoalId` = mục tiêu chưa chốt có cửa sổ đó (bằng nhau →
+ * theo `goalOrder`).
  */
 export async function goalMatchState(db: D1Database, now: Date, viewerId: string | null): Promise<GoalMatchState> {
   const hidden = await hiddenAccountIds(db, viewerId);
   const hiddenTx = hiddenTxSql("t", hidden);
-  const [advanceRes, refundRes, unmatchedRes, accountRes] = await db.batch([
+  const [advanceRes, refundRes, unmatchedRes, openRes, accountRes] = await db.batch([
     db.prepare(
       `WITH w AS (${goalWindowSql(now)})
        SELECT s.goal_id AS goalId, s.amount - ${returnedSql("s")} AS net, a.name AS accountName
@@ -389,13 +393,18 @@ export async function goalMatchState(db: D1Database, now: Date, viewerId: string
          roots AS (SELECT g.account_id AS root, MIN(w.since) AS since FROM reserve_goals g JOIN w ON w.id = g.id
            WHERE g.active = 1 AND g.pays_from = 'account' AND g.account_id IS NOT NULL AND NOT w.closed GROUP BY g.account_id HAVING COUNT(*) >= 2)
          SELECT roots.root, (SELECT COUNT(*) FROM transactions t JOIN accounts a ON a.id = t.account_id
-           WHERE COALESCE(a.parent_account_id, a.id) = roots.root AND t.status = 'active' AND t.meaning IN ('spend', 'transfer') AND t.goal_id IS NULL
+           WHERE COALESCE(a.parent_account_id, a.id) = roots.root AND t.status = 'active' AND t.meaning IN ('spend', 'transfer') AND t.goal_id IS NULL AND t.goal_skipped_at IS NULL
              AND t.from_interest = 0 AND t.at >= roots.since
              AND (t.counter_account_id IS NULL OR t.counter_account_id NOT IN (SELECT id FROM accounts WHERE roots.root IN (id, parent_account_id)))
              AND NOT ${hiddenTx.sql}) AS n
          FROM roots`,
       )
       .bind(...hiddenTx.binds),
+    db.prepare(
+      `WITH w AS (${goalWindowSql(now)})
+       SELECT g.account_id AS root, g.id, g.sort, g.due_date AS dueDate, g.name, w.since FROM reserve_goals g JOIN w ON w.id = g.id
+       WHERE g.active = 1 AND g.pays_from = 'account' AND g.account_id IS NOT NULL AND NOT w.closed`,
+    ),
     db.prepare(QR_ACCOUNTS_SQL),
   ]);
   const accounts = rows<QrAccount>(accountRes!);
@@ -408,6 +417,13 @@ export async function goalMatchState(db: D1Database, now: Date, viewerId: string
     if (!cur.from.includes(a.accountName)) cur.from.push(a.accountName);
     advance.set(a.goalId, cur);
   }
+  const unmatched = rows<{ root: string; n: number }>(unmatchedRes!);
+  const open = rows<{ root: string; id: string; sort: number; dueDate: string | null; name: string; since: string }>(openRes!).map((g) => ({ ...g, sort: Number(g.sort) }));
+  const earliest = (root: string) => {
+    const list = open.filter((g) => g.root === root);
+    const since = list.reduce((m, g) => (g.since < m ? g.since : m), list[0]!.since);
+    return list.filter((g) => g.since === since).sort(goalOrder)[0]!.id;
+  };
   return {
     extras: (id) => ({
       pendingRefund: all.filter((r) => r.goalId === id && r.status === "open").reduce((s, r) => s + r.missing, 0),
@@ -415,7 +431,8 @@ export async function goalMatchState(db: D1Database, now: Date, viewerId: string
       advanceFrom: advance.get(id)?.from ?? [],
     }),
     refunds: all.filter((r) => r.status === "open" || inWindow.has(r.id)),
-    unmatched: Object.fromEntries(rows<{ root: string; n: number }>(unmatchedRes!).map((u) => [u.root, Number(u.n)])),
+    unmatched: Object.fromEntries(unmatched.map((u) => [u.root, Number(u.n)])),
+    unmatchedGoalId: Object.fromEntries(unmatched.filter((u) => Number(u.n) > 0).map((u) => [u.root, earliest(u.root)])),
   };
 }
 
@@ -480,6 +497,7 @@ export async function goalFill(db: D1Database, now: Date, viewerId: string | nul
     live,
     groupInterestFrom(interestAccounts!, interestTxs!),
     state.unmatched,
+    state.unmatchedGoalId,
   );
   return { rows: all, inputs, active, groups, filled, operating: operatingGoals(live), refunds: state.refunds };
 }
@@ -562,6 +580,7 @@ export async function listGoals(
       pending: g.pending,
       free: g.free,
       unmatched: g.unmatched,
+      unmatched_goal_id: g.unmatchedGoalId,
     })),
     refunds: refunds.map((r) => ({
       id: r.id,

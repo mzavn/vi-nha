@@ -419,6 +419,14 @@ export async function replaceTransaction(db: D1Database, id: number, input: Entr
        WHERE id IN (SELECT id FROM ${LINKED_RETURNS}) AND EXISTS (SELECT 1 FROM transactions WHERE id = ? AND status = 'active')`,
     )
     .bind(id, id);
+  // Khoản cũ đã bỏ qua khớp mục tiêu (UC-1209 AC-33) và khoản mới không gắn mục tiêu: khoản mới vẫn đã bỏ qua. UPDATE không đổi last_insert_rowid().
+  const keepSkip = db
+    .prepare(
+      `UPDATE transactions SET goal_skipped_at = (SELECT goal_skipped_at FROM transactions WHERE id = ?1)
+       WHERE id = last_insert_rowid() AND goal_id IS NULL
+         AND EXISTS (SELECT 1 FROM transactions WHERE id = ?1 AND status = 'active' AND goal_skipped_at IS NOT NULL)`,
+    )
+    .bind(id);
   // Phân loại lại cho báo cáo (BR-15) đi theo khoản mới — khi khoản mới vẫn xếp được: đúng một phía tài khoản, Thu nhập thụ
   // động chỉ cho khoản thu, và không khi người sửa bỏ "Đây là tiền lãi" (`is_interest: false`). `is_interest: true` → đúng
   // một dòng `passive_income`. Đặt ngay sau relink: last_insert_rowid() vẫn là khoản mới (UPDATE không đổi nó).
@@ -443,6 +451,7 @@ export async function replaceTransaction(db: D1Database, id: number, input: Entr
       ...undo,
       insert,
       relink,
+      keepSkip,
       ...classes,
       ...income.statements,
       ...(linked.length ? [markLinked(db, linked)] : []),
@@ -951,6 +960,7 @@ export async function getSnapshot(db: D1Database, viewerId: string | null, now: 
     },
     interest: groupInterestFrom(groupAccounts!, groupTxs!),
     unmatched: matchState.unmatched,
+    unmatchedGoalId: matchState.unmatchedGoalId,
     refunds: matchState.refunds,
   });
   return buildSnapshot({

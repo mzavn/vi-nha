@@ -15,7 +15,7 @@ const total = (v: PocketsView) => v.savings.total + v.reserve.total + v.operatin
 /** Trường khớp chi (UC-1209 AC-25…AC-28) khi chưa chốt, chưa vượt, không kiểu B. */
 const NO_MATCH = { closed: false, closedAt: null, leftover: 0, over: 0, suggestClose: false, shortBecause: [], advance: 0, advanceFrom: [], pendingRefund: 0, periodId: null };
 const FILL_NO_MATCH = { closed: false, leftover: 0, over: 0, suggestClose: false, shortBecause: [] };
-const GROUP_NO_MATCH = { pending: 0, free: 0, unmatched: 0 };
+const GROUP_NO_MATCH = { pending: 0, free: 0, unmatched: 0, unmatchedGoalId: null };
 /** Hôm nay 11/11/2026, ngày lương 10: không có lịch sử, chưa chọn Ví Thưởng — trừ khi ca nói khác. */
 const view = (input: Pick<PocketsInput, "accounts" | "goals" | "debts" | "savingsPct"> & Partial<PocketsInput>) =>
   pocketsView({

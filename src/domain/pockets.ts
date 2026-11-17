@@ -203,6 +203,8 @@ export interface GoalGroup {
   free: number;
   /** Số khoản chi / chuyển ra khỏi nhóm chưa gắn mục tiêu trong cửa sổ sớm nhất của các mục tiêu chưa chốt; 0 khi nhóm có < 2 mục tiêu chưa chốt. */
   unmatched: number;
+  /** Mục tiêu chưa chốt có cửa sổ bắt đầu sớm nhất (mốc `unmatched` đếm; bằng nhau → ưu tiên trước) — Cần xem mở sheet ở đây; nhóm không đếm → null. */
+  unmatchedGoalId: string | null;
 }
 
 /** Việc chuyển về kiểu B (UC-1209 AC-28, AC-29) như `snapshot.pockets.reserve.refunds[]`. */
@@ -305,8 +307,9 @@ export interface PocketsInput {
   history: { since: string; prevSince: string; accounts: PocketAccountAt[] };
   /** Tiền lãi theo tài khoản mẹ có mục tiêu (`groupInterest`); thiếu = 0. */
   interest?: Record<string, number>;
-  /** `unmatched` theo tài khoản mẹ có mục tiêu; thiếu = 0. */
+  /** `unmatched` / `unmatchedGoalId` theo tài khoản mẹ có mục tiêu; thiếu = 0 / null. */
   unmatched?: Record<string, number>;
+  unmatchedGoalId?: Record<string, string>;
   /** Việc chuyển về để hiện (`reserve.refunds`); thiếu = []. */
   refunds?: GoalRefundView[];
 }
@@ -440,13 +443,14 @@ export type FilledGoal = FillGoals["goals"][number];
  * Nhóm mục tiêu tài khoản đang dùng theo tài khoản mẹ (đang dùng) và chia `số dư gộp − tiền lãi − pending` của từng nhóm (UC-1209
  * bước 9, QĐ2, AC-25, AC-28) — một luật cho snapshot, `GET /v1/settings`, việc ②, trừ tạm hàng đợi. Số dư gộp = mẹ + Σ con đang
  * dùng (`parentId`); `pending` = Σ `pendingRefund` của các mục tiêu trong nhóm. `goals` đã xếp theo `goalOrder`; nhóm theo mục tiêu
- * đầu tiên của nhóm; mục tiêu trả từ tiền chi tiêu bị bỏ qua. `unmatched` theo tài khoản mẹ (đếm ở services); thiếu = 0.
+ * đầu tiên của nhóm; mục tiêu trả từ tiền chi tiêu bị bỏ qua. `unmatched` / `unmatchedGoalId` theo tài khoản mẹ (đếm ở services); thiếu = 0 / null.
  */
 export function goalGroups(
   accounts: Pick<PocketAccount, "id" | "name" | "balance" | "parentId">[],
   goals: PocketGoalInput[],
   interest: Record<string, number> = {},
   unmatched: Record<string, number> = {},
+  unmatchedGoalId: Record<string, string> = {},
 ): { groups: GoalGroup[]; filled: Map<string, FilledGoal> } {
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const goalsOf = new Map<string, PocketGoalInput[]>();
@@ -478,6 +482,7 @@ export function goalGroups(
       pending,
       free: fill.free,
       unmatched: unmatched[accountId] ?? 0,
+      unmatchedGoalId: unmatchedGoalId[accountId] ?? null,
     });
   }
   return { groups, filled };
@@ -541,11 +546,11 @@ export function operatingGoals(goals: PocketGoalInput[]): OperatingGoal[] {
  * khoản có mục tiêu hay của Ví Thưởng. Mục tiêu trả từ tiền chi tiêu không vào ngăn Dự phòng (`operating.goals`). Tích luỹ tại
  * mỗi mốc theo trạng thái tại mốc (ADR-100), ngăn theo giá trị đang lưu.
  */
-export function pocketsView({ accounts, goals, rewardAccountId, debts, savingsPct, history, interest, unmatched, refunds = [] }: PocketsInput): PocketsView {
+export function pocketsView({ accounts, goals, rewardAccountId, debts, savingsPct, history, interest, unmatched, unmatchedGoalId, refunds = [] }: PocketsInput): PocketsView {
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const ordered = [...goals].sort(goalOrder);
   const accountGoals = ordered.filter((g) => g.paysFrom !== "operating");
-  const { groups, filled } = goalGroups(accounts, accountGoals, interest, unmatched);
+  const { groups, filled } = goalGroups(accounts, accountGoals, interest, unmatched, unmatchedGoalId);
   const goalIdsOf = new Map(groups.map((g) => [g.accountId, g.goalIds]));
   const totals = pocketTotals(accounts);
   const lines: Record<Pocket | "outside", PocketAccountLine[]> = { savings: [], reserve: [], operating: [], outside: [] };

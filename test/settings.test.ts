@@ -684,7 +684,7 @@ describe("ba ngăn: cấu hình (261112-ba-ngan-nen-du-lieu)", () => {
       { id: "car-service", name: "Bảo dưỡng xe", account_id: null, suggested_account_id: null, held: null, need: null, spent: 0, short: null, target_amount: 4_800_000, target_pct: null, monthly_amount: null, repeat_months: null, due_date: "2027-03-31", debt_id: null, sort: 20, active: true, pays_from: "account", remaining: null, category_ids: [], ...MATCH },
       { id: "income-tax", name: "Thuế thu nhập", account_id: null, suggested_account_id: null, held: null, need: null, spent: 0, short: null, target_amount: null, target_pct: 10, monthly_amount: null, repeat_months: null, due_date: null, debt_id: null, sort: 30, active: true, pays_from: "account", remaining: null, category_ids: [], ...MATCH },
     ]);
-    expect(data.goal_groups).toEqual([{ account_id: "mb-tuition", balance: 2_500_000, need: 6_000_000, spent: 0, short: 3_500_000, extra: 0, goal_ids: ["tuition"], child_ids: [], interest: 0, pending: 0, free: 0, unmatched: 0 }]);
+    expect(data.goal_groups).toEqual([{ account_id: "mb-tuition", balance: 2_500_000, need: 6_000_000, spent: 0, short: 3_500_000, extra: 0, goal_ids: ["tuition"], child_ids: [], interest: 0, pending: 0, free: 0, unmatched: 0, unmatched_goal_id: null }]);
     // Mục tiêu đã tắt vẫn có trong danh sách.
     raw.exec("UPDATE reserve_goals SET active = 0 WHERE id = 'car-service'");
     expect((await call("GET", "/v1/settings")).json.data.goals.find((g: any) => g.id === "car-service")).toMatchObject({ active: false });
@@ -708,7 +708,7 @@ describe("ba ngăn: cấu hình (261112-ba-ngan-nen-du-lieu)", () => {
       expect(data.goals.find((g: any) => g.id === "nha-o")).toMatchObject({ held: 0, spent: 7_500_000, short: 0 });
       const snap = (await call("GET", "/v1/snapshot", undefined, true, as("husband"))).json.data.pockets.reserve;
       expect(data.goal_groups).toEqual(
-        snap.groups.map((g: any) => ({ account_id: g.accountId, balance: g.balance, need: g.need, spent: g.spent, short: g.short, extra: g.extra, goal_ids: g.goalIds, child_ids: g.childIds, interest: g.interest, pending: g.pending, free: g.free, unmatched: g.unmatched })),
+        snap.groups.map((g: any) => ({ account_id: g.accountId, balance: g.balance, need: g.need, spent: g.spent, short: g.short, extra: g.extra, goal_ids: g.goalIds, child_ids: g.childIds, interest: g.interest, pending: g.pending, free: g.free, unmatched: g.unmatched, unmatched_goal_id: g.unmatchedGoalId })),
       );
       expect(heldOf(data.goals)).toEqual(heldOf(snap.goals));
     } finally {

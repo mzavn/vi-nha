@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  canSkip,
   candidateQuery,
   candidateTag,
   closeBody,
@@ -14,6 +15,9 @@ import {
   refundQr,
   refundToast,
   reopenToast,
+  skipAllIds,
+  skipAllLabel,
+  skipToast,
   undoRequests,
   unmatchToast,
 } from "./goal-match";
@@ -48,7 +52,7 @@ const refund = (over: Partial<Refund> = {}): Refund =>
     ...over,
   }) as Refund;
 
-function pockets(o: { goals?: Goal[]; refunds?: Refund[]; unmatched?: number } = {}): Pockets {
+function pockets(o: { goals?: Goal[]; refunds?: Refund[]; unmatched?: number; unmatchedGoalId?: string | null } = {}): Pockets {
   const goals = o.goals ?? [
     goal("dam-cuoi", "Đám cưới", "t"),
     goal("tap-luyen", "Tập luyện", "t", { need: 1_500_000, target: 1_500_000, monthly: 1_500_000, repeatMonths: 1 }),
@@ -63,8 +67,8 @@ function pockets(o: { goals?: Goal[]; refunds?: Refund[]; unmatched?: number } =
       accounts: [line("t", "VCB chung", ["dam-cuoi", "tap-luyen", "hoc-tap", "sua-xe"]), line("mb", "MB tiết kiệm", ["nha-o"]), line("phao", "Phao")],
       goals,
       groups: [
-        { accountId: "t", name: "VCB chung", balance: 3_550_000, need: 4_500_000, spent: 0, short: 950_000, extra: 0, goalIds: ["dam-cuoi", "tap-luyen", "hoc-tap", "sua-xe"], childIds: [], interest: 0, pending: 0, free: 0, unmatched: o.unmatched ?? 2 },
-        { accountId: "mb", name: "MB tiết kiệm", balance: 22_500_000, need: 22_500_000, spent: 0, short: 0, extra: 0, goalIds: ["nha-o"], childIds: [], interest: 0, pending: 0, free: 0, unmatched: 0 },
+        { accountId: "t", name: "VCB chung", balance: 3_550_000, need: 4_500_000, spent: 0, short: 950_000, extra: 0, goalIds: ["dam-cuoi", "tap-luyen", "hoc-tap", "sua-xe"], childIds: [], interest: 0, pending: 0, free: 0, unmatched: o.unmatched ?? 2, unmatchedGoalId: o.unmatchedGoalId ?? null },
+        { accountId: "mb", name: "MB tiết kiệm", balance: 22_500_000, need: 22_500_000, spent: 0, short: 0, extra: 0, goalIds: ["nha-o"], childIds: [], interest: 0, pending: 0, free: 0, unmatched: 0, unmatchedGoalId: null },
       ],
       refunds: o.refunds ?? [],
       peace: 0,
@@ -106,7 +110,7 @@ describe("bộ chọn 'Cho mục tiêu' (pwa UC-715 AC-21, ingest UC-305 AC-39)"
   });
 
   it("UC-715 AC-21: toast 'Đã khớp vào {mục tiêu}' (+ '· chờ chuyển về X' khi tạo việc chuyển về), gỡ → 'Đã gỡ khỏi {mục tiêu}'; che số 5 chấm", () => {
-    const plain: GoalMatchResult = { goal: {}, changes: [{ tx_id: 501, from_goal_id: null, to_goal_id: "dam-cuoi" }], refunds_created: [], refunds_voided: [] };
+    const plain: GoalMatchResult = { goal: {}, changes: [{ tx_id: 501, from_goal_id: null, to_goal_id: "dam-cuoi" }], skipped: [], unskipped: [], refunds_created: [], refunds_voided: [] };
     expect(matchToast("Đám cưới", plain)).toBe("Đã khớp vào Đám cưới");
     const b = { ...plain, refunds_created: [{ id: 7, amount: 1_000_000, from_account_id: "t", to_account_id: "v" }] };
     expect(matchToast("Đám cưới", b)).toBe(`Đã khớp vào Đám cưới · chờ chuyển về ${vnd("1.000.000")}`);
@@ -166,7 +170,7 @@ describe("Hôm nay › Cần xem (pwa UC-702 AC-45)", () => {
 });
 
 describe("sheet Khớp giao dịch (pwa UC-707 AC-46)", () => {
-  const c = (o: Partial<GoalCandidate>): GoalCandidate => ({ tx_id: 1, at: "2026-11-20T03:00:00Z", note: "SUA XE", amount: 500_000, account_id: "t", account_name: "VCB chung", goal_id: null, goal_name: null, own: true, ...o });
+  const c = (o: Partial<GoalCandidate>): GoalCandidate => ({ tx_id: 1, at: "2026-11-20T03:00:00Z", note: "SUA XE", amount: 500_000, account_id: "t", account_name: "VCB chung", goal_id: null, goal_name: null, own: true, skipped: false, ...o });
 
   it("UC-707 AC-46: khoản từ tài khoản mục tiêu không nhãn; từ tài khoản khác 'từ {tài khoản} · sẽ chờ chuyển về'; đang ở mục tiêu khác 'đang ở {mục tiêu}'", () => {
     expect(candidateTag(c({}), "sua-xe")).toBeNull();
@@ -205,5 +209,45 @@ describe("sheet Khớp giao dịch (pwa UC-707 AC-46)", () => {
   it("UC-707 AC-45: toast Chốt xong / Mở lại", () => {
     expect(closeToast("Sửa xe")).toBe("Đã chốt xong Sửa xe");
     expect(reopenToast("Sửa xe")).toBe("Đã mở lại Sửa xe");
+  });
+});
+
+// Ví dụ chung của proposal 261117-bo-qua-khop-muc-tieu: Sửa xe (một lần, cửa sổ từ 20/10) trên VCB chung; #101 ăn sáng 35.000, #102 cà
+// phê 45.000, #103 đổ xăng 80.000 (cuối tháng 10), #104 thay nhớt 600.000 (12/11).
+describe("bỏ qua khoản chưa khớp mục tiêu (pwa UC-707 AC-49, AC-50; UC-702 AC-46)", () => {
+  const c = (o: Partial<GoalCandidate>): GoalCandidate => ({ tx_id: 101, at: "2026-10-28T00:00:00Z", note: "AN SANG", amount: 35_000, account_id: "t", account_name: "VCB chung", goal_id: null, goal_name: null, own: true, skipped: false, ...o });
+
+  it("UC-707 AC-49: nút 'Không cho mục tiêu' chỉ ở hàng từ tài khoản của mục tiêu chưa gắn mục tiêu nào; khoản đã bỏ qua (khi tìm) có nhãn 'đã bỏ qua', không nút; toast 'Đã bỏ qua 1 khoản'; Hoàn tác lần khớp khoản đã bỏ qua → { remove, skip }", () => {
+    expect(canSkip(c({}))).toBe(true);
+    expect(canSkip(c({ own: false, account_id: "v", account_name: "V chi tiêu" }))).toBe(false);
+    expect(canSkip(c({ goal_id: "hoc-tap", goal_name: "Học tập" }))).toBe(false);
+    expect(canSkip(c({ skipped: true }))).toBe(false);
+    expect(candidateTag(c({ skipped: true }), "sua-xe")).toBe("đã bỏ qua");
+    expect(candidateTag(c({}), "sua-xe")).toBeNull();
+    expect(skipToast(1)).toBe("Đã bỏ qua 1 khoản");
+    expect(
+      undoRequests([
+        { tx_id: 101, from_goal_id: null, to_goal_id: "sua-xe", from_skipped: true },
+        { tx_id: 104, from_goal_id: null, to_goal_id: "sua-xe" },
+      ]),
+    ).toEqual([{ path: "/v1/goals/sua-xe/transactions", body: { remove: [101, 104], skip: [101] } }]);
+  });
+
+  it("UC-707 AC-50: 'Bỏ qua 3 khoản còn lại' gửi đúng id đang hiện; ẩn khi đang tìm, khi có ô tích, khi danh sách trống; toast 'Đã bỏ qua 3 khoản'", () => {
+    const list = [c({ tx_id: 104, amount: 600_000 }), c({ tx_id: 103, amount: 80_000 }), c({ tx_id: 102, amount: 45_000 })];
+    expect(skipAllIds(list, { searching: false, picked: 0 })).toEqual([104, 103, 102]);
+    expect(skipAllLabel(3)).toBe("Bỏ qua 3 khoản còn lại");
+    expect(skipToast(3)).toBe("Đã bỏ qua 3 khoản");
+    expect(skipAllIds(list, { searching: true, picked: 0 })).toEqual([]);
+    expect(skipAllIds(list, { searching: false, picked: 1 })).toEqual([]);
+    expect(skipAllIds([], { searching: false, picked: 0 })).toEqual([]);
+  });
+
+  it("UC-702 AC-46: sheet mở ở mục tiêu cửa sổ sớm nhất (unmatchedGoalId) — đứng đầu goalIds, chip vẫn đủ; hàng 4 → 1 → ẩn theo unmatched", () => {
+    const row = (unmatched: number) => needReviewGoalRows(pockets({ unmatched, unmatchedGoalId: "sua-xe" }), names);
+    expect(row(4)).toEqual([{ kind: "unmatched", key: "unmatched-t", accountId: "t", goalIds: ["sua-xe", "dam-cuoi", "tap-luyen", "hoc-tap"], title: "4 khoản ở VCB chung chưa khớp mục tiêu" }]);
+    expect(row(1).map((r) => r.title)).toEqual(["1 khoản ở VCB chung chưa khớp mục tiêu"]);
+    expect(row(0)).toEqual([]);
+    expect(needReviewGoalRows(pockets({ unmatched: 2 }), names)[0]).toMatchObject({ goalIds: ["dam-cuoi", "tap-luyen", "hoc-tap", "sua-xe"] });
   });
 });

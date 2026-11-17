@@ -249,7 +249,7 @@ describe("nhiều mục tiêu dùng chung một tài khoản (UC-1209 bước 9,
     expect(r.goals.find((g) => g.id === "hoc-tap")!.spent).toBe(0);
     expect(r.groups.find((g) => g.accountId === "tk-tiet-kiem")).toEqual({
       accountId: "tk-tiet-kiem", name: "MB tiết kiệm", balance: 12_000_000, need: 13_500_000, spent: 0, short: 1_500_000, extra: 0, goalIds: ["nha-o", "hoc-tap"], childIds: [], interest: 0,
-      pending: 0, free: 0, unmatched: 0,
+      pending: 0, free: 0, unmatched: 0, unmatchedGoalId: null,
     });
     const txBefore = Number((raw.prepare("SELECT COUNT(*) AS n FROM transactions").get() as { n: number }).n);
     expect((await call("POST", "/v1/transactions", { meaning: "transfer", amount: 3_000_000, account_id: "vcb-husband", to_account_id: "tk-tiet-kiem" })).status).toBe(201);

@@ -97,6 +97,7 @@ function refillGoals(p: PocketsView, accounts: PocketAccountLine[], items: Queue
     shifted.map((g, sort) => ({ ...g, sort })),
     interest,
     Object.fromEntries(r.groups.map((g) => [g.accountId, g.unmatched ?? 0])),
+    Object.fromEntries(r.groups.flatMap((g) => (g.unmatchedGoalId ? [[g.accountId, g.unmatchedGoalId]] : []))),
   );
   return { groups, goals: shifted.map((g) => (filled.has(g.id) ? { ...g, ...filled.get(g.id)! } : g)) };
 }
