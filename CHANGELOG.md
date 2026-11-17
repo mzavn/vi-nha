@@ -6,6 +6,12 @@ bản cài cũ vẫn lên được bình thường (kể cả nâng database t�
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
 trước (xem README › Cập nhật bản mới).
 
+## v3.3.0 — 17/11/2026
+
+- **Cài đặt › Mục tiêu Dự phòng gọn lại:** mỗi hàng chỉ ghi cách đặt (tên, số cần, một lần / mỗi tháng / N tháng một lần, hạn); tiến độ
+  chỉ xem ở Tài khoản › Ba ngăn (và Hôm nay cho khoản trả từ tiền chi tiêu) — hết cảnh hai nơi hiện khác nhau. Sheet Đổi thứ tự hiện mục
+  tiêu đã chốt là "Xong".
+
 ## v3.2.1 — 17/11/2026
 
 - Chuyển khoản trả lại tiền cho việc "Chuyển về" không còn bị đếm là "khoản chưa khớp mục tiêu"; hàng chuyển khoản trong sheet mục tiêu

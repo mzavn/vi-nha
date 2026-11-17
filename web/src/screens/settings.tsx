@@ -1161,12 +1161,12 @@ function Accounts({ d, ro, wide, open }: SectionProps) {
 // ── Ba ngăn ──────────────────────────────────────────────────────
 
 /**
- * Hàng mục tiêu (UC-709 AC-36, AC-53; DESIGN §4.5): `Row` tên · số bên phải, chip "Thiếu …" / "Đủ" nhỏ dưới số, một dòng phụ,
- * thanh 2px màu Dự phòng (đủ thì --pos). Mục tiêu của tài khoản chung thụt 16px dưới hàng đầu nhóm. Chưa có tài khoản thật thì
- * bên phải là "Mở tài khoản ›" (chạm hàng mở sheet mục tiêu để gắn / tạo tài khoản).
+ * Hàng mục tiêu (UC-709 AC-36, AC-53; DESIGN §4.5) là cấu hình: `Row` tên · số cần bên phải, một dòng phụ cách đặt · hạn — không
+ * chip, không thanh. Mục tiêu của tài khoản chung thụt 16px dưới hàng đầu nhóm. Chưa có tài khoản thật thì "Mở tài khoản ›" (dưới
+ * số khi có số, đứng chỗ số khi mục tiêu %; chạm hàng mở sheet mục tiêu để gắn / tạo tài khoản).
  */
 function GoalRow({ v, off, indent, onClick }: { v: GoalRowView; off: boolean; indent?: boolean; onClick?: () => void }) {
-  const full = v.chip?.tone === "ok";
+  const act = v.needsAccount && <span class="row-act">Mở tài khoản ›</span>;
   return (
     <ListRow
       title={
@@ -1176,9 +1176,8 @@ function GoalRow({ v, off, indent, onClick }: { v: GoalRowView; off: boolean; in
         </>
       }
       sub={v.sub}
-      value={v.needsAccount ? <span class="row-act">Mở tài khoản ›</span> : (v.amount ?? undefined)}
-      valueSub={v.chip && <Chip tone={full ? "pos" : "warn"}>{v.chip.text}</Chip>}
-      track={v.pct !== null ? { pct: v.pct, pocket: "reserve", tone: full ? "pos" : undefined } : null}
+      value={v.amount ?? (act || undefined)}
+      valueSub={v.amount !== null ? act || undefined : undefined}
       indent={indent}
       onClick={onClick}
     />
@@ -1202,7 +1201,7 @@ function Pockets({ d, ro, open }: SectionProps) {
   const saving = goalGroups.filter((g) => g.key !== "+off" && g.key !== "+none");
   const loose = goalGroups.filter((g) => g.key === "+none");
   const stopped = goalGroups.filter((g) => g.key === "+off");
-  const monthly = operatingGoalRows(d.goals, new Map(snap?.pockets?.operating.goals.map((g) => [g.id, g.monthAmount])));
+  const monthly = operatingGoalRows(d.goals);
   const openGoal = (g: ReserveGoal) => (ro ? undefined : () => open({ kind: "goal", item: g }));
   const goalGroupView = (grp: GoalListGroup) => (
     <Fragment key={grp.key}>
@@ -1210,8 +1209,7 @@ function Pockets({ d, ro, open }: SectionProps) {
         <ListRow
           title={grp.head.name}
           sub={grp.head.meta}
-          value={grp.head.balance}
-          valueSub={
+          value={
             grp.reorder && !ro ? (
               <button type="button" class="row-act" onClick={() => open({ kind: "goal-order", accountId: grp.accountId! })}>
                 Đổi thứ tự
@@ -1223,7 +1221,6 @@ function Pockets({ d, ro, open }: SectionProps) {
       {grp.goals.map((g) => (
         <GoalRow key={g.id} v={goalRowView(g)} off={!g.active} indent={Boolean(grp.head)} onClick={openGoal(g)} />
       ))}
-      {grp.note && <p class="row-note">{grp.note}</p>}
     </Fragment>
   );
   const groups = [...(d.categoryGroups ?? [])].sort((a, b) => Number(b.active) - Number(a.active) || a.sort - b.sort);

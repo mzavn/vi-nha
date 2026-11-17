@@ -581,64 +581,55 @@ export function goalSubmitError(err: unknown, accounts: { id: string; name: stri
   return { field: null, message: errorText(err) };
 }
 
-/** Phần "đã có A / B" của một mục tiêu kèm "đã chi X tháng này" và "đủ" (A + đã chi ≥ B) — chung cho dòng danh sách và xem trước. */
-function heldText(held: number, need: number | null, spent: number, where: string | null): string {
+/**
+ * Phần "đã có A / B" của một mục tiêu kèm "đã chi X tháng này" và "đủ" (A + đã chi ≥ B) — xem trước Đổi thứ tự. Đã chốt: "Xong ·
+ * đã chi X / cần B" như thẻ Dự phòng (không "thiếu").
+ */
+function heldText(held: number, need: number | null, spent: number, closed: boolean): string {
+  if (closed && need !== null) return `Xong · đã chi ${moneyDigits(spent)} / cần ${moneyDigits(need)}`;
   const parts = [`đã có ${moneyDigits(held)}${need !== null ? ` / ${moneyDigits(need)}` : ""}`];
-  if (where !== null) parts.push(`trong ${where}`);
   if (spent > 0) parts.push(`đã chi ${moneyDigits(spent)} tháng này`);
   if (need !== null && held + spent >= need) parts.push("đủ");
   return parts.join(" · ");
 }
 
 /**
- * Một hàng ở Cài đặt › Ba ngăn › Mục tiêu Dự phòng (UC-709 AC-36; DESIGN §4.5 tối đa một dòng phụ): tên nổi bật; bên phải đã có
- * (quá B hiện bằng B — phần dư chỉ ở dòng nhóm); chip "Đủ" / "Thiếu X" theo đã có + đã chi; thanh tiến độ (đã có + đã chi) / B;
- * dòng phụ ngắn "10% thu chịu thuế" / "hạn …" (chip đã nói phần thiếu nên không lặp "cần B" — 390px vẫn một dòng). Đã chi, số
- * mỗi tháng, mấy tháng một lần, tài khoản chỉ ở sheet mục tiêu. Chưa gắn tài khoản → không số, không chip, `needsAccount`,
- * dòng phụ "cần B · hạn …".
+ * Dòng phụ cách đặt của một mục tiêu · "hạn {dd/mm/yyyy}" (khi có): "{p}% thu chịu thuế" · "mỗi tháng" (lặp 1) · "{N} tháng một
+ * lần" (lặp N ≥ 2) · "một lần" — chung cho hàng để dành và hàng trả từ tiền chi tiêu.
+ */
+function goalTermsText(g: ReserveGoal): string {
+  const how =
+    g.target_pct !== null ? `${g.target_pct}% thu chịu thuế` : g.repeat_months === 1 ? "mỗi tháng" : g.repeat_months ? `${g.repeat_months} tháng một lần` : "một lần";
+  return g.due_date ? `${how} · hạn ${dueText(g.due_date)}` : how;
+}
+
+/**
+ * Một hàng ở Cài đặt › Ba ngăn › Mục tiêu Dự phòng (UC-709 AC-36; DESIGN §4.5 tối đa một dòng phụ) là cấu hình, không tiến độ:
+ * tên; bên phải số cần B (mục tiêu % không số); dòng phụ cách đặt · hạn (`goalTermsText`). Không đọc số dư hay đã chi — tiến độ
+ * mục tiêu để dành ở Tài khoản › Ba ngăn (UC-707). `needsAccount` = mục tiêu đang dùng chưa gắn tài khoản (kể cả mục tiêu %).
  */
 export interface GoalRowView {
   name: string;
   amount: string | null;
-  chip: { text: string; tone: "ok" | "warn" } | null;
-  pct: number | null;
   sub: string | null;
   needsAccount: boolean;
 }
 
 export function goalRowView(g: ReserveGoal): GoalRowView {
-  const sub: string[] = [];
-  let amount: string | null = null;
-  let chip: GoalRowView["chip"] = null;
-  let pct: number | null = null;
-  const need = g.target_pct !== null ? null : g.target_amount;
-  if (!g.account_id) {
-    if (need !== null) sub.push(`cần ${moneyDigits(need)}`);
-  } else if (need === null) amount = formatVnd(g.held ?? 0);
-  else {
-    const held = g.held ?? 0;
-    const covered = held + g.spent;
-    amount = formatVnd(Math.min(held, need));
-    pct = need > 0 ? Math.min(100, (Math.max(0, covered) / need) * 100) : 100;
-    chip = covered >= need ? { text: "Đủ", tone: "ok" } : { text: `Thiếu ${moneyDigits(need - covered)}`, tone: "warn" };
-  }
-  if (g.target_pct !== null) sub.push(`${g.target_pct}% thu chịu thuế`);
-  if (g.due_date) sub.push(`hạn ${dueText(g.due_date)}`);
-  return { name: g.name, amount, chip, pct, sub: sub.length ? sub.join(" · ") : null, needsAccount: g.active && !g.account_id };
+  const amount = g.target_pct === null && g.target_amount !== null ? formatVnd(g.target_amount) : null;
+  return { name: g.name, amount, sub: goalTermsText(g), needsAccount: g.active && !g.account_id };
 }
 
 /**
- * Một nhóm của danh sách mục tiêu (UC-709 bước 4u): `head` = đầu nhóm tài khoản chung (tên, số dư gộp, một dòng phụ "{n} mục
- * tiêu · thiếu X / đủ / dư X"), null = mục tiêu một mình / chưa có tài khoản / đã ngừng dùng; `reorder` = có nút Đổi thứ tự;
- * `note` = "Tiền lãi {I} (không tính vào mục tiêu)" dưới nhóm khi tài khoản có tiền lãi.
+ * Một nhóm của danh sách mục tiêu (UC-709 bước 4u, AC-48): `head` = đầu nhóm tài khoản chung (tên, dòng phụ "{n} mục tiêu"; không
+ * số dư, không thiếu / đủ / dư), null = mục tiêu một mình / chưa có tài khoản / đã ngừng dùng; `reorder` = có nút Đổi thứ tự.
  */
 export interface GoalListGroup {
   key: string;
   accountId: string | null;
-  head: { name: string; balance: string; meta: string } | null;
+  head: { name: string; meta: string } | null;
   shared: boolean;
   reorder: boolean;
-  note: string | null;
   goals: ReserveGoal[];
 }
 
@@ -648,9 +639,9 @@ export const GOAL_SECTION_LABEL = { account: "Để dành ở tài khoản", non
 const paysOperating = (g: ReserveGoal) => g.pays_from === "operating";
 
 /**
- * Phần "Để dành ở tài khoản": nhóm theo tài khoản mẹ như thẻ Dự phòng (`goal_groups`, thứ tự server, số dư gộp); mục tiêu tài
- * khoản đang dùng chưa gắn ở nhóm `+none` (phần "Chưa có tài khoản"); mục tiêu ngừng dùng ở nhóm `+off` cuối. Mục tiêu trả từ
- * tiền chi tiêu đang dùng ở `operatingGoalRows`.
+ * Phần "Để dành ở tài khoản": nhóm theo tài khoản mẹ như thẻ Dự phòng (`goal_groups`, thứ tự server); mục tiêu tài khoản đang
+ * dùng chưa gắn ở nhóm `+none` (phần "Chưa có tài khoản"); mục tiêu ngừng dùng ở nhóm `+off` cuối. Mục tiêu trả từ tiền chi tiêu
+ * đang dùng ở `operatingGoalRows`.
  */
 export function goalListGroups(d: Pick<SettingsData, "accounts" | "goals" | "goal_groups">): GoalListGroup[] {
   const byId = new Map(d.goals.map((g) => [g.id, g]));
@@ -658,51 +649,40 @@ export function goalListGroups(d: Pick<SettingsData, "accounts" | "goals" | "goa
     const goals = grp.goal_ids.flatMap((id) => byId.get(id) ?? []);
     const shared = goals.length > 1;
     const name = d.accounts.find((a) => a.id === grp.account_id)?.name ?? grp.account_id;
-    const state = grp.short ? `thiếu ${formatVnd(grp.short)}` : grp.extra ? `dư ${formatVnd(grp.extra)}` : "đủ";
-    const head = shared ? { name, balance: formatVnd(grp.balance), meta: `${goals.length} mục tiêu · ${state}` } : null;
-    // Tiền lãi là câu ghi chú dưới nhóm, không chen vào dòng phụ đầu nhóm (một dòng phụ — DESIGN §4.5, K-010).
-    const note = grp.interest ? `Tiền lãi ${formatVnd(grp.interest)} (không tính vào mục tiêu)` : null;
-    return { key: grp.account_id, accountId: grp.account_id, head, shared, reorder: shared, note, goals };
+    const head = shared ? { name, meta: `${goals.length} mục tiêu` } : null;
+    return { key: grp.account_id, accountId: grp.account_id, head, shared, reorder: shared, goals };
   });
   const loose = d.goals.filter((g) => g.active && g.account_id === null && !paysOperating(g));
-  if (loose.length) out.push({ key: "+none", accountId: null, head: null, shared: false, reorder: false, note: null, goals: loose });
+  if (loose.length) out.push({ key: "+none", accountId: null, head: null, shared: false, reorder: false, goals: loose });
   const off = d.goals.filter((g) => !g.active);
-  if (off.length) out.push({ key: "+off", accountId: null, head: null, shared: false, reorder: false, note: null, goals: off });
+  if (off.length) out.push({ key: "+off", accountId: null, head: null, shared: false, reorder: false, goals: off });
   return out;
 }
 
 /**
- * Phần "Trả từ tiền chi tiêu mỗi tháng", theo thứ tự ưu tiên: tên; bên phải "còn {R_g} tháng này"; dòng phụ "{mỗi tháng}/tháng"
- * kèm "tháng này đặt X" khi tháng này có số riêng (`monthAmounts`: mã → số riêng, từ `snapshot.pockets.operating.goals`).
- * Tháng này đặt 0 (bỏ tháng này): bên phải "Tháng này: 0 ₫", dòng phụ chỉ còn "{mỗi tháng}/tháng" — không lặp "còn 0 tháng này".
+ * Phần "Trả từ tiền chi tiêu mỗi tháng" (UC-709 AC-53), theo thứ tự ưu tiên: tên; bên phải số mỗi tháng; dòng phụ "mỗi tháng" ·
+ * "hạn …" (khi có). Tiến độ tháng này ở Hôm nay › thẻ Vận hành (UC-702), không ở đây.
  */
-export function operatingGoalRows(goals: ReserveGoal[], monthAmounts: ReadonlyMap<string, number | null> = new Map()): { goal: ReserveGoal; amount: string; sub: string }[] {
-  return goals
-    .filter((g) => g.active && paysOperating(g))
-    .map((g) => {
-      const monthly = g.monthly_amount ?? 0;
-      const own = monthAmounts.get(g.id) ?? null;
-      const perMonth = `${moneyDigits(monthly)}/tháng`;
-      if (own === 0) return { goal: g, amount: "Tháng này: 0 ₫", sub: perMonth };
-      const remaining = g.remaining ?? Math.max(0, (own ?? monthly) - g.spent);
-      const sub = [perMonth, ...(own !== null ? [`tháng này đặt ${moneyDigits(own)}`] : [])].join(" · ");
-      return { goal: g, amount: `còn ${moneyDigits(remaining)} tháng này`, sub };
-    });
+export function operatingGoalRows(goals: ReserveGoal[]): { goal: ReserveGoal; amount: string; sub: string }[] {
+  return goals.filter((g) => g.active && paysOperating(g)).map((g) => ({ goal: g, amount: formatVnd(g.monthly_amount ?? 0), sub: goalTermsText(g) }));
 }
 
 /**
  * Xem trước số mới khi đổi thứ tự trong một tài khoản (UC-709 AC-48): luật chia chung `goalGroups` với số dư gộp của nhóm,
- * tiền lãi của nhóm (số chia = `balance − interest`, QĐ2) và `goals[].spent`.
+ * tiền lãi của nhóm (số chia = `balance − interest`, QĐ2), `goals[].spent`, `closed` và `pendingRefund` như thẻ Dự phòng.
  */
 export function goalOrderPreview(d: Pick<SettingsData, "goals" | "goal_groups">, accountId: string, ids: string[]): { id: string; name: string; text: string }[] {
   const group = d.goal_groups.find((g) => g.account_id === accountId);
   const goals = ids.flatMap((id) => d.goals.find((g) => g.id === id) ?? []);
   const { filled } = goalGroups(
     [{ id: accountId, name: accountId, balance: group?.balance ?? 0, parentId: null }],
-    goals.map((g) => pocketGoal(g, accountId)),
+    goals.map((g) => ({ ...pocketGoal(g, accountId), closed: g.closed ?? false, pendingRefund: g.pending_refund ?? 0 })),
     { [accountId]: group?.interest ?? 0 },
   );
-  return goals.map((g) => ({ id: g.id, name: g.name, text: heldText(filled.get(g.id)?.held ?? 0, g.need, g.spent, null) }));
+  return goals.map((g) => {
+    const f = filled.get(g.id);
+    return { id: g.id, name: g.name, text: heldText(f?.held ?? 0, g.need, g.spent, f?.closed ?? false) };
+  });
 }
 
 /** Mục tiêu ở dạng đầu vào của luật chia chung (`goalGroups`); `accountId` = tài khoản đang xét (lựa chọn chưa lưu). */
