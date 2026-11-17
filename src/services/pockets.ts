@@ -394,7 +394,7 @@ export async function goalMatchState(db: D1Database, now: Date, viewerId: string
            WHERE g.active = 1 AND g.pays_from = 'account' AND g.account_id IS NOT NULL AND NOT w.closed GROUP BY g.account_id HAVING COUNT(*) >= 2)
          SELECT roots.root, (SELECT COUNT(*) FROM transactions t JOIN accounts a ON a.id = t.account_id
            WHERE COALESCE(a.parent_account_id, a.id) = roots.root AND t.status = 'active' AND t.meaning IN ('spend', 'transfer') AND t.goal_id IS NULL AND t.goal_skipped_at IS NULL
-             AND t.from_interest = 0 AND t.at >= roots.since
+             AND t.from_interest = 0 AND t.at >= roots.since AND ${refundLinkedOfTxSql("t")} < t.amount
              AND (t.counter_account_id IS NULL OR t.counter_account_id NOT IN (SELECT id FROM accounts WHERE roots.root IN (id, parent_account_id)))
              AND NOT ${hiddenTx.sql}) AS n
          FROM roots`,

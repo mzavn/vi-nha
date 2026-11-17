@@ -390,6 +390,19 @@ describe("việc chuyển về tự xong, đã chuyển, bỏ qua, gỡ (UC-1209
       "goal.match", "goal.match", "goal_refund.done", "goal.match", "goal_refund.skip", "goal_refund.reopen", "goal.unmatch", "goal.match",
     ]);
   });
+
+  it("UC-1209 AC-29: chuyển khoản T → tài khoản đã trả đã ghép đủ vào việc chuyển về thì không còn là khoản chưa khớp, không hiện trong Khớp thêm; ghép một phần thì phần còn lại vẫn hiện", async () => {
+    const s = (await spend("vcb-husband", 500_000, "2026-11-12 09:00")).json.data.tx.id;
+    await match("sua-xe", { add: [s] });
+    const before = groupT(await reserve()).unmatched;
+    const back = (await transfer("tk-t", "vcb-husband", 500_000, "2026-11-13 09:00")).json.data.tx.id;
+    expect(groupT(await reserve()).unmatched).toBe(before);
+    const items = (await call<{ items: { tx_id: number }[] }>("GET", "/v1/goals/hoc-tap/candidates")).json.data.items.map((i) => i.tx_id);
+    expect(items).not.toContain(back);
+    const more = (await transfer("tk-t", "vcb-husband", 800_000, "2026-11-14 09:00")).json.data.tx.id;
+    expect(groupT(await reserve()).unmatched).toBe(before + 1);
+    expect((await call<{ items: { tx_id: number }[] }>("GET", "/v1/goals/hoc-tap/candidates")).json.data.items.map((i) => i.tx_id)).toContain(more);
+  });
 });
 
 describe("mục tiêu đã chốt không nhận khoản mới (UC-1209 AC-30)", () => {

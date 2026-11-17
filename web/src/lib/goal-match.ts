@@ -3,7 +3,7 @@
 // toast có Hoàn tác. Thuần để test: không DOM, không mạng. Mọi số tiền qua `formatVnd` (che số, UC-718); ngày, số đếm không che.
 
 import { transferQr } from "../../../src/domain/vietqr";
-import { formatVnd } from "./money";
+import { formatVnd, maskAmounts } from "./money";
 import { shortDate } from "./period";
 import type { GoalCandidate, GoalMatchedTx, GoalMatchResult, GoalTxChange, Snapshot } from "./types";
 
@@ -175,6 +175,10 @@ export function refundToast(action: "done" | "skip", r: Refund, nameOf: (account
 }
 
 // ── Sheet mục tiêu và Khớp giao dịch (UC-707 AC-45 / AC-46) ────────
+
+/** Tiêu đề hàng khoản (đã khớp / có thể khớp): ghi chú nếu có; chuyển khoản "Chuyển sang {tài khoản}"; còn lại "Khoản chi". */
+export const matchTxTitle = (t: { note: string | null; counter_account_id: string | null }, nameOf: (id: string) => string): string =>
+  t.note ? maskAmounts(t.note) : t.counter_account_id ? `Chuyển sang ${nameOf(t.counter_account_id)}` : "Khoản chi";
 
 /** Dòng phụ hàng khoản đã khớp: "20/11 · VCB chung"; kiểu B: "2/11 · trả từ V chi tiêu". */
 export const matchedRowSub = (t: GoalMatchedTx): string => `${shortDate(t.at)} · ${t.kind === "other" ? `trả từ ${t.account_name}` : t.account_name}`;

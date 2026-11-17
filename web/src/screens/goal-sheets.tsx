@@ -21,6 +21,7 @@ import {
   matchedRowSub,
   matchFooter,
   matchToast,
+  matchTxTitle,
   needReviewGoalRows,
   NO_GOAL_PICK,
   REFUND_SKIP_REASON_REQUIRED,
@@ -159,6 +160,7 @@ export function GoalRowSub({ row }: { row: ReserveGoalRow }) {
  */
 export function GoalSheet({ goalId, choices, onClose }: { goalId: string; choices?: string[]; onClose: () => void }) {
   const app = useApp();
+  const nameOf = useAccountName();
   const snap = viewSnapshot(app);
   const [current, setCurrent] = useState(goalId);
   const today = snap?.day ?? dayKey(new Date());
@@ -284,7 +286,7 @@ export function GoalSheet({ goalId, choices, onClose }: { goalId: string; choice
           items.map((t) => (
             <div key={t.tx_id} class="row match-row">
               <span class="t">
-                <span class="tt">{t.note ? maskAmounts(t.note) : "Khoản chi"}</span>
+                <span class="tt">{matchTxTitle(t, nameOf)}</span>
                 <span class="s">{matchedRowSub(t)}</span>
               </span>
               <span class="v num">
@@ -319,7 +321,7 @@ export function GoalSheet({ goalId, choices, onClose }: { goalId: string; choice
                     <div key={c.tx_id} class="row match-row">
                       <label class="match-pick">
                         <span class="t">
-                          <span class="tt">{c.note ? maskAmounts(c.note) : "Khoản chi"}</span>
+                          <span class="tt">{matchTxTitle(c, nameOf)}</span>
                           <span class="s">
                             {shortDate(c.at)}
                             {tag && ` · ${tag}`}

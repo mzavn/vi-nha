@@ -10,6 +10,7 @@ import {
   matchFooter,
   matchedRowSub,
   matchToast,
+  matchTxTitle,
   needReviewGoalRows,
   NO_GOAL_PICK,
   refundQr,
@@ -170,13 +171,20 @@ describe("Hôm nay › Cần xem (pwa UC-702 AC-45)", () => {
 });
 
 describe("sheet Khớp giao dịch (pwa UC-707 AC-46)", () => {
-  const c = (o: Partial<GoalCandidate>): GoalCandidate => ({ tx_id: 1, at: "2026-11-20T03:00:00Z", note: "SUA XE", amount: 500_000, account_id: "t", account_name: "VCB chung", goal_id: null, goal_name: null, own: true, skipped: false, ...o });
+  const c = (o: Partial<GoalCandidate>): GoalCandidate => ({ tx_id: 1, at: "2026-11-20T03:00:00Z", note: "SUA XE", amount: 500_000, account_id: "t", account_name: "VCB chung", counter_account_id: null, goal_id: null, goal_name: null, own: true, skipped: false, ...o });
 
   it("UC-707 AC-46: khoản từ tài khoản mục tiêu không nhãn; từ tài khoản khác 'từ {tài khoản} · sẽ chờ chuyển về'; đang ở mục tiêu khác 'đang ở {mục tiêu}'", () => {
     expect(candidateTag(c({}), "sua-xe")).toBeNull();
     expect(candidateTag(c({ own: false, account_id: "v", account_name: "V chi tiêu" }), "sua-xe")).toBe("từ V chi tiêu · sẽ chờ chuyển về");
     expect(candidateTag(c({ goal_id: "hoc-tap", goal_name: "Học tập" }), "sua-xe")).toBe("đang ở Học tập");
     expect(candidateTag(c({ own: false, account_name: "V chi tiêu", goal_id: "hoc-tap", goal_name: "Học tập" }), "sua-xe")).toBe("từ V chi tiêu · sẽ chờ chuyển về · đang ở Học tập");
+  });
+
+  it("UC-707 AC-46: tiêu đề hàng — có ghi chú thì ghi chú; chuyển khoản không ghi chú 'Chuyển sang {tài khoản}' (không gọi là 'Khoản chi'); khoản chi không ghi chú 'Khoản chi'", () => {
+    const nameOf = (id: string) => (id === "v" ? "V chi tiêu" : id);
+    expect(matchTxTitle({ note: "SUA XE", counter_account_id: "v" }, nameOf)).toBe("SUA XE");
+    expect(matchTxTitle({ note: null, counter_account_id: "v" }, nameOf)).toBe("Chuyển sang V chi tiêu");
+    expect(matchTxTitle({ note: null, counter_account_id: null }, nameOf)).toBe("Khoản chi");
   });
 
   it("UC-707 AC-46: chân sheet 'Khớp N khoản · Y'; chưa chọn → null; che số", () => {
@@ -196,8 +204,8 @@ describe("sheet Khớp giao dịch (pwa UC-707 AC-46)", () => {
   });
 
   it("UC-707 AC-45: hàng khoản đã khớp — 'ngày · tài khoản', kiểu B 'ngày · trả từ {tài khoản}'", () => {
-    expect(matchedRowSub({ tx_id: 1, at: "2026-11-20T03:00:00Z", note: null, amount: 1, account_id: "t", account_name: "VCB chung", kind: "own", refund_id: null })).toBe("20/11 · VCB chung");
-    expect(matchedRowSub({ tx_id: 2, at: "2026-11-02T03:00:00Z", note: null, amount: 1, account_id: "v", account_name: "V chi tiêu", kind: "other", refund_id: 7 })).toBe("2/11 · trả từ V chi tiêu");
+    expect(matchedRowSub({ tx_id: 1, at: "2026-11-20T03:00:00Z", note: null, amount: 1, account_id: "t", account_name: "VCB chung", counter_account_id: null, kind: "own", refund_id: null })).toBe("20/11 · VCB chung");
+    expect(matchedRowSub({ tx_id: 2, at: "2026-11-02T03:00:00Z", note: null, amount: 1, account_id: "v", account_name: "V chi tiêu", counter_account_id: null, kind: "other", refund_id: 7 })).toBe("2/11 · trả từ V chi tiêu");
   });
 
   it("UC-707 AC-45: chốt / mở lại mục tiêu lặp N tháng gửi đợt đang thấy (`period_id`, kể cả null); mục tiêu một lần / hằng tháng không gửi gì", () => {
@@ -215,7 +223,7 @@ describe("sheet Khớp giao dịch (pwa UC-707 AC-46)", () => {
 // Ví dụ chung của proposal 261117-bo-qua-khop-muc-tieu: Sửa xe (một lần, cửa sổ từ 20/10) trên VCB chung; #101 ăn sáng 35.000, #102 cà
 // phê 45.000, #103 đổ xăng 80.000 (cuối tháng 10), #104 thay nhớt 600.000 (12/11).
 describe("bỏ qua khoản chưa khớp mục tiêu (pwa UC-707 AC-49, AC-50; UC-702 AC-46)", () => {
-  const c = (o: Partial<GoalCandidate>): GoalCandidate => ({ tx_id: 101, at: "2026-10-28T00:00:00Z", note: "AN SANG", amount: 35_000, account_id: "t", account_name: "VCB chung", goal_id: null, goal_name: null, own: true, skipped: false, ...o });
+  const c = (o: Partial<GoalCandidate>): GoalCandidate => ({ tx_id: 101, at: "2026-10-28T00:00:00Z", note: "AN SANG", amount: 35_000, account_id: "t", account_name: "VCB chung", counter_account_id: null, goal_id: null, goal_name: null, own: true, skipped: false, ...o });
 
   it("UC-707 AC-49: nút 'Không cho mục tiêu' chỉ ở hàng từ tài khoản của mục tiêu chưa gắn mục tiêu nào; khoản đã bỏ qua (khi tìm) có nhãn 'đã bỏ qua', không nút; toast 'Đã bỏ qua 1 khoản'; Hoàn tác lần khớp khoản đã bỏ qua → { remove, skip }", () => {
     expect(canSkip(c({}))).toBe(true);

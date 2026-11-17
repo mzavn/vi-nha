@@ -6,6 +6,11 @@ bản cài cũ vẫn lên được bình thường (kể cả nâng database t�
 Bản nào cần nâng cấp database thì có ghi rõ. Database tự nâng khi bạn cập nhật, không phải làm gì thêm — nhưng nên sao lưu
 trước (xem README › Cập nhật bản mới).
 
+## v3.2.1 — 17/11/2026
+
+- Chuyển khoản trả lại tiền cho việc "Chuyển về" không còn bị đếm là "khoản chưa khớp mục tiêu"; hàng chuyển khoản trong sheet mục tiêu
+  ghi "Chuyển sang {tài khoản}" thay vì "Khoản chi".
+
 ## v3.2.0 — 17/11/2026
 
 - **Bỏ qua khoản chưa khớp mục tiêu:** trong sheet mục tiêu, mỗi khoản gợi ý có nút "Không cho mục tiêu", cuối danh sách có "Bỏ qua N khoản

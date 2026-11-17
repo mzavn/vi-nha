@@ -410,6 +410,7 @@ export interface GoalMatchedTx {
   amount: number;
   account_id: string;
   account_name: string;
+  counter_account_id: string | null;
   kind: "own" | "other";
   refund_id: number | null;
 }
@@ -422,6 +423,7 @@ export interface GoalCandidate {
   amount: number;
   account_id: string;
   account_name: string;
+  counter_account_id: string | null;
   goal_id: string | null;
   goal_name: string | null;
   own: boolean;

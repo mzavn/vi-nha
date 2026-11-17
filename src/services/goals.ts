@@ -19,6 +19,7 @@ import {
   inWindowSql,
   QR_ACCOUNTS_SQL,
   readGoal,
+  refundLinkedOfTxSql,
   refundLinkedSql,
   refundRowsSql,
   refundView,
@@ -179,6 +180,7 @@ export async function goalTransactions(db: D1Database, id: string, viewerId: str
       amount: Number(r.amount),
       account_id: r.account_id,
       account_name: r.account_name,
+      counter_account_id: r.counter_account_id,
       kind: Number(r.own) === 1 ? ("own" as const) : ("other" as const),
       refund_id: r.refund_id === null ? null : Number(r.refund_id),
     })),
@@ -226,6 +228,8 @@ export async function goalCandidates(db: D1Database, id: string, q: { q?: string
       binds.push(vnMidnight(addDays(q.to, 1)));
     }
   } else filters.push(own, "t.goal_id IS NULL", "t.goal_skipped_at IS NULL");
+  // Chuyển khoản đã ghép đủ vào việc chuyển về là tiền trả lại, không phải khoản cần khớp (UC-1209 AC-29).
+  filters.push(`${refundLinkedOfTxSql("t")} < t.amount`);
   const list = rows<{ tx_id: number; at: string; note: string | null; amount: number; account_id: string; account_name: string | null; counter_account_id: string | null; goal_id: string | null; goal_name: string | null; own: number; skipped: number }>(
     await db
       .prepare(
@@ -247,6 +251,7 @@ export async function goalCandidates(db: D1Database, id: string, q: { q?: string
       amount: Number(r.amount),
       account_id: r.account_id,
       account_name: r.account_name,
+      counter_account_id: r.counter_account_id,
       goal_id: r.goal_id,
       goal_name: r.goal_name,
       own: Number(r.own) === 1,
